@@ -29,10 +29,10 @@ ezu-style = { version = "0.1.0", path = "crates/ezu-style" }
 ezu = { version = "0.1.0", path = "crates/ezu" }
 
 # Brush engine
-hokusai = { version = "0.1.1", default-features = false }
+hokusai = { version = "0.2", default-features = false }
 
 # Graphics
-tiny-skia = "0.11"
+tiny-skia = "0.12"
 libblur = "0.24"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
