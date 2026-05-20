@@ -1,0 +1,26 @@
+[package]
+name = "ezu-server"
+description = "Live editor and tile server for the Ezu Style Spec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+ezu = { workspace = true }
+hokusai = { workspace = true, features = ["myb-json"] }
+bytes = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "signal", "sync", "net"] }
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+dashmap = "6"
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -7,6 +7,7 @@ members = [
     "crates/ezu-pmtiles",
     "crates/ezu-paint",
     "crates/ezu-style",
+    "crates/ezu-server",
 ]
 
 [workspace.package]
@@ -25,6 +26,7 @@ ezu-mvt = { version = "0.1.0", path = "crates/ezu-mvt" }
 ezu-pmtiles = { version = "0.1.0", path = "crates/ezu-pmtiles" }
 ezu-paint = { version = "0.1.0", path = "crates/ezu-paint" }
 ezu-style = { version = "0.1.0", path = "crates/ezu-style" }
+ezu = { version = "0.1.0", path = "crates/ezu" }
 
 # Brush engine
 hokusai = { version = "0.1.1", default-features = false }
@@ -44,6 +46,7 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 # Serde / utility
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+schemars = "1"
 thiserror = "2"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 

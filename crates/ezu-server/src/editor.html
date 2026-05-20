@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>ezu — Ezu Style live editor</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<style>
+  :root { color-scheme: light; }
+  html, body { margin: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  .container { display: flex; height: 100vh; }
+  .panel { width: 38%; min-width: 320px; display: flex; flex-direction: column; border-right: 1px solid #d8d2bf; background: #fdfbf1; }
+  .toolbar { padding: 10px 12px; background: #f5eedc; border-bottom: 1px solid #d8d2bf; display: flex; gap: 10px; align-items: center; }
+  .toolbar h1 { margin: 0; font-size: 14px; font-weight: 600; color: #5a4636; letter-spacing: 0.02em; }
+  .toolbar .sp { flex: 1; }
+  .toolbar button { padding: 6px 14px; background: #5a4636; color: #fdfbf1; border: 0; border-radius: 4px; font-weight: 600; cursor: pointer; }
+  .toolbar button:hover { background: #4a3424; }
+  .toolbar .status { font-size: 12px; color: #6a5040; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .toolbar .status.error { color: #a03434; }
+  .toolbar .status.ok { color: #387a45; }
+  textarea {
+    flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.45;
+    padding: 12px; border: 0; outline: none; resize: none; background: #fdfbf1; color: #382a1f;
+    tab-size: 2;
+  }
+  #map { flex: 1; }
+  .leaflet-container { background: #f8f5e8; }
+  kbd { background: #e6dfc8; padding: 1px 5px; border-radius: 3px; font-family: inherit; font-size: 11px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <aside class="panel">
+    <div class="toolbar">
+      <h1>Ezu Style</h1>
+      <span class="sp"></span>
+      <span class="status" id="status">loading…</span>
+      <button id="apply" title="Apply (⌘↵ / Ctrl+↵)">Apply</button>
+    </div>
+    <textarea id="json" spellcheck="false" placeholder="Loading style..."></textarea>
+  </aside>
+  <div id="map"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+(() => {
+  const $json = document.getElementById('json');
+  const $apply = document.getElementById('apply');
+  const $status = document.getElementById('status');
+
+  // Tokyo Station as the default view.
+  const map = L.map('map', { zoomSnap: 1, zoomDelta: 1, wheelDebounceTime: 40 })
+    .setView([35.681, 139.767], 13);
+
+  let version = 0;
+  let tilesLayer = null;
+  let tileSize = 512;
+
+  function setStatus(text, cls = '') {
+    $status.textContent = text;
+    $status.className = 'status' + (cls ? ' ' + cls : '');
+  }
+
+  function mountTiles() {
+    if (tilesLayer) tilesLayer.remove();
+    tilesLayer = L.tileLayer(`/tiles/{z}/{x}/{y}.png?v=${version}`, {
+      tileSize,
+      // tileSize 512 doubles the area per tile vs Leaflet's default 256px
+      // assumption — shift z down by 1 so URL coords match standard slippy.
+      zoomOffset: tileSize >= 512 ? -1 : 0,
+      maxZoom: 15,
+      minZoom: 0,
+      attribution:
+        '© <a href="https://github.com/reearth/ezu">ezu</a> | © OpenStreetMap contributors | © Protomaps',
+    }).addTo(map);
+  }
+
+  async function loadStyle() {
+    const r = await fetch('/style');
+    const text = await r.text();
+    $json.value = text;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed['tile-size']) tileSize = parsed['tile-size'];
+    } catch (_) {}
+    version = 1;
+    mountTiles();
+    setStatus(`loaded (v${version})`, 'ok');
+  }
+
+  async function apply() {
+    const body = $json.value;
+    setStatus('applying…');
+    try {
+      const r = await fetch('/style', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+      if (!r.ok) {
+        const detail = await r.text();
+        setStatus('error: ' + detail.slice(0, 200), 'error');
+        return;
+      }
+      const { version: v } = await r.json();
+      version = v;
+      try {
+        const parsed = JSON.parse(body);
+        if (parsed['tile-size'] && parsed['tile-size'] !== tileSize) {
+          tileSize = parsed['tile-size'];
+        }
+      } catch (_) {}
+      mountTiles();
+      setStatus(`applied (v${v})`, 'ok');
+    } catch (e) {
+      setStatus('error: ' + e, 'error');
+    }
+  }
+
+  $apply.addEventListener('click', apply);
+  $json.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault();
+      apply();
+    }
+  });
+
+  loadStyle();
+})();
+</script>
+</body>
+</html>

@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 
+use schemars::JsonSchema;
 use serde::Deserialize;
 
 #[derive(Debug, thiserror::Error)]
@@ -22,7 +23,7 @@ pub enum StyleError {
 }
 
 /// A parsed Ezu Style document.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Style {
     pub name: String,
@@ -50,7 +51,7 @@ fn default_tile_size() -> u32 {
 }
 
 /// One layer in the render pipeline. Discriminated by `type`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum LayerSpec {
     /// `tiny-skia` solid fill + optional outline + gaussian blur.
@@ -61,7 +62,7 @@ pub enum LayerSpec {
     Line(LineSpec),
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct FillSolidSpec {
     pub id: String,
@@ -81,7 +82,7 @@ pub struct FillSolidSpec {
     pub blur_sigma: f32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct FillDabsSpec {
     pub id: String,
@@ -109,7 +110,7 @@ pub struct FillDabsSpec {
     pub value_jitter: f32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct LineSpec {
     pub id: String,
@@ -179,6 +180,21 @@ impl HexColor {
     }
 }
 
+impl JsonSchema for HexColor {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "HexColor".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        serde_json::from_value(serde_json::json!({
+            "type": "string",
+            "title": "HexColor",
+            "description": "sRGB color: `#rrggbb` or `#rrggbbaa`",
+            "pattern": "^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$"
+        }))
+        .unwrap()
+    }
+}
+
 impl<'de> Deserialize<'de> for HexColor {
     fn deserialize<D>(d: D) -> Result<Self, D::Error>
     where
@@ -220,7 +236,7 @@ fn parse_hex(s: &str) -> Option<HexColor> {
 pub type FeatureFilter = HashMap<String, FilterMatch>;
 
 /// A single filter clause: exact match or membership test.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum FilterMatch {
     One(FilterAtom),
@@ -228,7 +244,7 @@ pub enum FilterMatch {
 }
 
 /// Scalar literal used inside a filter clause.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum FilterAtom {
     Bool(bool),

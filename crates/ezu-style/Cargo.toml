@@ -13,4 +13,5 @@ authors.workspace = true
 ezu-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+schemars = { workspace = true }
 thiserror = { workspace = true }

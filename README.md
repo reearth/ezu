@@ -25,7 +25,8 @@ Tokyo example below renders central Tokyo from the public Protomaps daily build.
 | [`ezu-mvt`](crates/ezu-mvt) | MVT decoding (via `geozero`) |
 | [`ezu-pmtiles`](crates/ezu-pmtiles) | PMTiles reader, local (`mmap`) and HTTP (range requests) |
 | [`ezu-paint`](crates/ezu-paint) | Painting features onto a `hokusai`-backed canvas |
-| [`ezu-style`](crates/ezu-style) | Ezu Style Spec parser (`serde`) |
+| [`ezu-style`](crates/ezu-style) | Ezu Style Spec parser (`serde` + `schemars`) |
+| [`ezu-server`](crates/ezu-server) | Live editor + tile server (`axum`) |
 
 ## How it paints
 
@@ -104,6 +105,45 @@ a tile's properties is also handy while writing styles:
 ```sh
 cargo run --release -p ezu --example inspect -- 13 7276 3225 roads
 ```
+
+## Live editor
+
+`ezu-server` is a tiny `axum` server that ships a textarea + Leaflet split-view
+editor. Edit the Ezu Style JSON on the left, click **Apply** (or `⌘↵` /
+`Ctrl+↵`), and the Leaflet map on the right refreshes with the freshly rendered
+tiles.
+
+```sh
+cargo run --release -p ezu-server
+# then open http://127.0.0.1:8080
+```
+
+Endpoints:
+
+| Method | Path | Description |
+|---|---|---|
+| `GET`  | `/` | Inline HTML editor |
+| `GET`  | `/style` | Current style as raw JSON |
+| `PUT`  | `/style` | Validate + replace style, returns `{ "version": N }` |
+| `GET`  | `/tiles/{z}/{x}/{y}.png` | Render the tile under the current style |
+| `GET`  | `/schemas/ezu-style.json` | JSON Schema for the spec |
+
+Upstream MVT bytes are cached in process so editing the style re-renders
+without hitting the PMTiles archive again.
+
+## JSON Schema
+
+The Ezu Style Spec is fully derivable via `schemars`. The current schema is
+checked in at [`schemas/ezu-style.json`](schemas/ezu-style.json) and can be
+regenerated from source:
+
+```sh
+cargo run --bin dump-schema -p ezu-style > schemas/ezu-style.json
+```
+
+The same schema is served at `/schemas/ezu-style.json` by `ezu-server`, so the
+editor (or any JSON Schema-aware tool) can pick it up over HTTP for completion
+and validation.
 
 ## License
 

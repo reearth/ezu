@@ -3,20 +3,20 @@
   "version": "1",
   "tile-size": 512,
   "pad": 24,
-  "background": "#f8f5e8",
+  "background": "#fbf6e6",
   "layers": [
     {
       "type": "fill-solid",
       "id": "earth",
       "source-layer": "earth",
-      "fill": "#f5eedc"
+      "fill": "#e8d9b0"
     },
     {
       "type": "fill-solid",
       "id": "landuse",
       "source-layer": "landuse",
-      "fill": "#d6dfc5",
-      "fill-alpha": 0.55
+      "fill": "#a6c084",
+      "fill-alpha": 0.7
     },
     {
       "type": "fill-dabs",
