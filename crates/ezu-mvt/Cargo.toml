@@ -1,0 +1,15 @@
+[package]
+name = "ezu-mvt"
+description = "MVT (Mapbox Vector Tile) decoding for ezu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+ezu-core = { workspace = true }
+geozero = { workspace = true }
+thiserror = { workspace = true }

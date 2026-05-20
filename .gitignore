@@ -1,0 +1,10 @@
+/target
+.claude/
+**/*.rs.bk
+Cargo.lock.bak
+.DS_Store
+.idea/
+.vscode/
+*.swp
+/tmp/
+/out/

@@ -1,0 +1,17 @@
+[package]
+name = "ezu-pmtiles"
+description = "PMTiles reader for ezu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+ezu-core = { workspace = true }
+pmtiles = { workspace = true }
+bytes = { workspace = true }
+reqwest = { workspace = true }
+thiserror = { workspace = true }

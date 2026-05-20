@@ -1,0 +1,39 @@
+[package]
+name = "ezu"
+description = "Painterly cartography engine: render vector tiles as paintings (umbrella crate)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["map", "cartography", "vector-tile", "rendering", "painterly"]
+categories = ["graphics", "rendering", "science::geo"]
+
+[features]
+default = ["mvt", "pmtiles", "paint", "style-json"]
+mvt = ["dep:ezu-mvt"]
+pmtiles = ["dep:ezu-pmtiles", "mvt"]
+paint = ["dep:ezu-paint"]
+style-json = ["dep:ezu-style"]
+
+[dependencies]
+ezu-core = { workspace = true }
+ezu-mvt = { workspace = true, optional = true }
+ezu-pmtiles = { workspace = true, optional = true }
+ezu-paint = { workspace = true, optional = true }
+ezu-style = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros", "fs"] }
+tiny-skia = { workspace = true }
+hokusai = { workspace = true, features = ["myb-json"] }
+
+[[example]]
+name = "tokyo"
+required-features = ["mvt", "pmtiles", "paint"]
+
+[[example]]
+name = "inspect"
+required-features = ["mvt", "pmtiles"]
