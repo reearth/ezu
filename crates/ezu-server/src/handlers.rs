@@ -20,6 +20,7 @@ pub fn router() -> Router<AppState> {
         .route("/style", get(get_style).put(put_style))
         .route("/schemas/ezu-style.json", get(get_schema))
         .route("/tiles/{z}/{x}/{y_png}", get(get_tile))
+        .route("/mvt/{z}/{x}/{y}", get(get_mvt))
 }
 
 async fn index() -> Html<&'static str> {
@@ -88,6 +89,34 @@ async fn get_tile(
         .header(header::CONTENT_TYPE, "image/png")
         .header(header::CACHE_CONTROL, "no-store")
         .body(Body::from(png))
+        .unwrap())
+}
+
+/// Return raw decompressed MVT bytes for `(z, x, y)`. Used by the WASM demo,
+/// which does its own decoding + rendering client-side.
+async fn get_mvt(
+    State(s): State<AppState>,
+    Path((z, x, y)): Path<(u8, u32, u32)>,
+) -> Result<Response, (StatusCode, String)> {
+    let tile = TileId::new(z, x, y);
+    let mvt = match s.mvt_cache.get(&tile).map(|r| r.clone()) {
+        Some(b) => Some(b),
+        None => match s.archive.get_tile(tile).await {
+            Ok(Some(b)) => {
+                s.mvt_cache.insert(tile, b.clone());
+                Some(b)
+            }
+            Ok(None) => None,
+            Err(e) => return Err((StatusCode::BAD_GATEWAY, e.to_string())),
+        },
+    };
+    let Some(bytes) = mvt else {
+        return Err((StatusCode::NOT_FOUND, "tile not in archive".into()));
+    };
+    Ok(Response::builder()
+        .header(header::CONTENT_TYPE, "application/vnd.mapbox-vector-tile")
+        .header(header::CACHE_CONTROL, "public, max-age=300")
+        .body(Body::from(bytes.to_vec()))
         .unwrap())
 }
 

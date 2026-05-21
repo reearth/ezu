@@ -26,7 +26,8 @@ Tokyo example below renders central Tokyo from the public Protomaps daily build.
 | [`ezu-pmtiles`](crates/ezu-pmtiles) | PMTiles reader, local (`mmap`) and HTTP (range requests) |
 | [`ezu-paint`](crates/ezu-paint) | Painting features onto a `hokusai`-backed canvas |
 | [`ezu-style`](crates/ezu-style) | Ezu Style Spec parser (`serde` + `schemars`) |
-| [`ezu-server`](crates/ezu-server) | Live editor + tile server (`axum`) |
+| [`ezu-server`](crates/ezu-server) | Live editor + tile server (`axum`, unpublished) |
+| [`ezu-wasm`](crates/ezu-wasm) | WebAssembly bindings (`wasm-bindgen`, unpublished) |
 
 ## How it paints
 
@@ -144,6 +145,25 @@ cargo run --bin dump-schema -p ezu-style > schemas/ezu-style.json
 The same schema is served at `/schemas/ezu-style.json` by `ezu-server`, so the
 editor (or any JSON Schema-aware tool) can pick it up over HTTP for completion
 and validation.
+
+## WebAssembly
+
+`ezu` runs in the browser via [`ezu-wasm`](crates/ezu-wasm), which exposes a
+`Renderer` over `wasm-bindgen`. JS handles HTTP (PMTiles, brush files); WASM
+handles parsing, painting, and PNG encoding. A self-contained demo and a
+SIMD vs scalar benchmark live in that crate's README.
+
+```sh
+# Build both flavors
+cd crates/ezu-wasm
+wasm-pack build --target web --release --out-dir ../../target/wasm/scalar
+RUSTFLAGS="-C target-feature=+simd128" \
+  wasm-pack build --target web --release --out-dir ../../target/wasm/simd
+
+# Serve the demo (also serves the editor, brushes, and /mvt)
+cargo run --release -p ezu-server
+# Open http://127.0.0.1:8080/wasm-demo/
+```
 
 ## License
 

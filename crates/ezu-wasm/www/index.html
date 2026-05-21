@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>ezu — WASM single-tile demo</title>
+<style>
+  :root { color-scheme: light; }
+  html, body { margin: 0; padding: 0; height: 100%; background: #fbf6e6; color: #382a1f;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { display: flex; gap: 24px; padding: 24px; align-items: flex-start; }
+  aside { width: 320px; font-size: 13px; line-height: 1.55; }
+  h1 { margin: 0 0 8px; font-size: 16px; color: #5a4636; }
+  .row { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
+  label { font-weight: 600; min-width: 56px; }
+  input, select, button {
+    font: inherit; padding: 4px 8px; border: 1px solid #c8b896; border-radius: 4px; background: #fdfbf1;
+  }
+  button { background: #5a4636; color: #fdfbf1; border: 0; cursor: pointer; padding: 6px 14px; font-weight: 600; }
+  button:hover { background: #4a3424; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  .stat { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: #6a5040; }
+  .stat .v { color: #382a1f; font-weight: 600; }
+  .log { background: #f0e8d0; padding: 8px 10px; border-radius: 4px; font-family: ui-monospace, Menlo, monospace;
+         font-size: 11px; min-height: 60px; white-space: pre-wrap; }
+  canvas { background: #fff; box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08); display: block; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .badge.simd { background: #d6e2c8; color: #345122; }
+  .badge.scalar { background: #efd9b4; color: #6a4f3a; }
+</style>
+</head>
+<body>
+<main>
+  <aside>
+    <h1>ezu WASM single-tile demo</h1>
+    <p>JS owns HTTP (fetches MVT bytes from <code>ezu-server</code>'s
+       <code>/mvt</code> endpoint and <code>.myb</code> brushes from
+       <code>/assets/brushes</code>); WASM owns parse + paint + PNG.</p>
+
+    <div class="row"><label>Build</label>
+      <select id="build">
+        <option value="simd">SIMD (+simd128)</option>
+        <option value="scalar">Scalar</option>
+      </select>
+    </div>
+    <div class="row"><label>Tile</label>
+      <input id="z" type="number" value="13" min="0" max="15" style="width:50px" />
+      <input id="x" type="number" value="7276" style="width:80px" />
+      <input id="y" type="number" value="3225" style="width:80px" />
+    </div>
+    <div class="row">
+      <button id="render">Render</button>
+      <button id="bench">Bench × 10</button>
+      <span id="badge"></span>
+    </div>
+    <div class="stat">
+      module:&nbsp;<span class="v" id="mod-ms">—</span>&nbsp;ms ·
+      mvt:&nbsp;<span class="v" id="mvt-ms">—</span>&nbsp;ms ·
+      render:&nbsp;<span class="v" id="render-ms">—</span>&nbsp;ms
+    </div>
+    <div class="stat" id="bench-stats"></div>
+    <div class="log" id="log"></div>
+  </aside>
+  <canvas id="cv" width="512" height="512"></canvas>
+</main>
+
+<script type="module">
+  const BRUSHES = [
+    "watercolor_glazing",
+    "watercolor_expressive",
+    "large_watercolor_fringe",
+    "only_water_fringe",
+  ];
+
+  const $ = (id) => document.getElementById(id);
+  const log = (...m) => { $("log").textContent += m.join(" ") + "\n"; };
+
+  let renderer = null;
+  let activeBuild = null;
+  let style = null;
+
+  async function loadStyle() {
+    const r = await fetch("/style");
+    return await r.text();
+  }
+
+  async function loadBuild(name) {
+    if (activeBuild === name && renderer) return;
+    const t = performance.now();
+    log(`loading ${name}…`);
+    const mod = await import(`/wasm/${name}/ezu_wasm.js`);
+    await mod.default();
+    const styleJson = style ?? (style = await loadStyle());
+    renderer = new mod.Renderer(styleJson);
+    for (const b of BRUSHES) {
+      const r = await fetch(`/assets/brushes/${b}.myb`);
+      renderer.registerBrush(b, await r.text());
+    }
+    activeBuild = name;
+    const elapsed = (performance.now() - t).toFixed(1);
+    $("mod-ms").textContent = elapsed;
+    const cls = mod.simdEnabled() ? "simd" : "scalar";
+    $("badge").className = "badge " + cls;
+    $("badge").textContent = mod.simdEnabled() ? "SIMD" : "Scalar";
+    log(`  ${name}: ${renderer.brushCount()} brushes, ${mod.simdEnabled() ? "+simd128 ✓" : "no SIMD"}`);
+  }
+
+  async function render(once = true) {
+    const z = +$("z").value, x = +$("x").value, y = +$("y").value;
+    await loadBuild($("build").value);
+
+    const t0 = performance.now();
+    const mvtResp = await fetch(`/mvt/${z}/${x}/${y}`);
+    if (!mvtResp.ok) { log(`mvt fetch failed: ${mvtResp.status}`); return; }
+    const mvt = new Uint8Array(await mvtResp.arrayBuffer());
+    const tMvt = performance.now() - t0;
+    $("mvt-ms").textContent = tMvt.toFixed(1);
+
+    const t1 = performance.now();
+    const png = renderer.render(mvt, z, x, y);
+    const tRender = performance.now() - t1;
+    $("render-ms").textContent = tRender.toFixed(1);
+
+    if (once) {
+      const blob = new Blob([png], { type: "image/png" });
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => {
+        const cv = $("cv");
+        const w = renderer.tileSize, h = renderer.tileSize;
+        cv.width = w; cv.height = h;
+        cv.getContext("2d").drawImage(img, 0, 0);
+        URL.revokeObjectURL(url);
+      };
+      img.src = url;
+    }
+    return { tMvt, tRender, mvtLen: mvt.length, pngLen: png.length };
+  }
+
+  $("render").onclick = () => render(true);
+
+  $("bench").onclick = async () => {
+    $("bench-stats").textContent = "running…";
+    await loadBuild($("build").value);
+    const z = +$("z").value, x = +$("x").value, y = +$("y").value;
+    // Warm the MVT cache on the server and locally so we time pure render.
+    const mvt = new Uint8Array(await (await fetch(`/mvt/${z}/${x}/${y}`)).arrayBuffer());
+    const samples = [];
+    for (let i = 0; i < 10; i++) {
+      const t = performance.now();
+      renderer.render(mvt, z, x, y);
+      samples.push(performance.now() - t);
+    }
+    samples.sort((a, b) => a - b);
+    const median = samples[5];
+    const min = samples[0];
+    const max = samples[9];
+    const mean = samples.reduce((a, b) => a + b, 0) / samples.length;
+    $("bench-stats").textContent =
+      `bench (${activeBuild}): min=${min.toFixed(1)} median=${median.toFixed(1)} mean=${mean.toFixed(1)} max=${max.toFixed(1)} ms over 10 runs`;
+    log($("bench-stats").textContent);
+    // Update render-ms with median so headline number is comparable
+    $("render-ms").textContent = median.toFixed(1);
+  };
+
+  // Initial draw
+  render(true);
+</script>
+</body>
+</html>

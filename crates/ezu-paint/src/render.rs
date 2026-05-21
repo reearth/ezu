@@ -51,9 +51,12 @@ pub fn render_style(
     tile: TileId,
     resolve_brush: BrushResolver<'_>,
 ) -> Result<(), RenderError> {
-    let trace = std::env::var_os("EZU_TRACE").is_some();
+    // Tracing relies on `Instant::now()`, which panics on
+    // `wasm32-unknown-unknown` (no monotonic clock). Gate everything on the
+    // env flag so the timing call is not even materialized on WASM.
+    let trace = trace_enabled();
     for layer in &style.layers {
-        let t = std::time::Instant::now();
+        let t = trace.then(std::time::Instant::now);
         let (kind, id) = match layer {
             LayerSpec::FillSolid(spec) => {
                 apply_fill_solid(canvas, decoded, tile, spec);
@@ -68,7 +71,7 @@ pub fn render_style(
                 ("line", spec.id.as_str())
             }
         };
-        if trace {
+        if let Some(t) = t {
             eprintln!(
                 "    [{:>10}] {:<10} {:>6.1}ms",
                 kind,
@@ -78,6 +81,16 @@ pub fn render_style(
         }
     }
     Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn trace_enabled() -> bool {
+    std::env::var_os("EZU_TRACE").is_some()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn trace_enabled() -> bool {
+    false
 }
 
 fn apply_fill_solid(canvas: &mut Canvas, decoded: &DecodedTile, tile: TileId, spec: &FillSolidSpec) {

@@ -19,7 +19,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "signal", "sync", "net"] }
 axum = "0.8"
-tower-http = { version = "0.6", features = ["cors", "trace"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
 dashmap = "6"
 clap = { version = "4", features = ["derive", "env"] }
 tracing = "0.1"

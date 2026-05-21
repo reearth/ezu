@@ -19,6 +19,7 @@ use clap::Parser;
 use ezu::paint::Brush;
 use std::collections::HashMap;
 use tower_http::cors::CorsLayer;
+use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
@@ -77,8 +78,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = AppState::new(archive, parsed, style_text, brushes, args.schema.clone());
 
-    let app = handlers::router()
-        .with_state(state)
+    let mut app = handlers::router().with_state(state);
+
+    // Static directories — present only when they exist on disk so the
+    // server stays useful even when run from a published binary.
+    for (route, dir) in [
+        ("/wasm-demo", "crates/ezu-wasm/www"),
+        ("/wasm/scalar", "target/wasm/scalar"),
+        ("/wasm/simd", "target/wasm/simd"),
+        ("/assets", "assets"),
+    ] {
+        if std::path::Path::new(dir).is_dir() {
+            tracing::info!("serving {} from {}", route, dir);
+            app = app.nest_service(route, ServeDir::new(dir));
+        }
+    }
+
+    let app = app
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
 
