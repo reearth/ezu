@@ -301,3 +301,16 @@ pub fn take_input_ref(
         }),
     }
 }
+
+/// Like [`take_input_ref`] but returns `None` if the field is absent
+/// or JSON `null`. Use for optional input ports.
+pub fn take_optional_input_ref(
+    fields: &serde_json::Map<String, serde_json::Value>,
+    name: &str,
+) -> Result<Option<String>, FactoryError> {
+    match fields.get(name) {
+        None => Ok(None),
+        Some(v) if v.is_null() => Ok(None),
+        Some(_) => Ok(Some(take_input_ref(fields, name)?)),
+    }
+}

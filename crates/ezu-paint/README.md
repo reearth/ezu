@@ -83,7 +83,7 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 | `solid` | `() → Raster` | Constant-color fill |
 | `circle` | `() → Raster` | Centered disk with optional edge falloff |
 | `blur` | `Raster → Raster` | Gaussian (libblur); grows upstream pad |
-| `blend` | `Raster + Raster → Raster` | Premul source-over with opacity |
+| `blend` | `Raster base + Raster over [+ Raster mask] → Raster` | W3C blend modes (normal/multiply/screen/overlay/darken/lighten/color-dodge/color-burn/hard-light/soft-light/difference/exclusion/hue/saturation/color/luminosity), optional `clip` (source-atop, PS clipping mask), optional alpha `mask`, `opacity` |
 
 **Feature sources** (`nodes::source`)
 

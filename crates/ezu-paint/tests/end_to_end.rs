@@ -123,6 +123,75 @@ fn blur_softens_disk_edge() {
 }
 
 #[test]
+fn blend_multiply_darkens_base() {
+    // Multiply two opaque mid-grays: 0x80 * 0x80 / 0xff ≈ 0x40.
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 8,
+      "nodes": {
+        "a":   { "op": "solid", "color": "#808080" },
+        "b":   { "op": "solid", "color": "#808080" },
+        "out": { "op": "blend", "base": "@a", "over": "@b", "mode": "multiply" }
+      },
+      "output": "@out"
+    }"##;
+    let r = render(json, 8, 0);
+    let p = r.pixel(4, 4);
+    // Expect close to 0x40 (64). Allow ±2 for rounding.
+    assert!((p[0] as i32 - 0x40).abs() <= 2, "got {p:?}");
+    assert_eq!(p[3], 0xff, "fully opaque");
+}
+
+#[test]
+fn blend_clip_confines_to_base_alpha() {
+    // base is a circle (alpha varies); over is solid red. With clip,
+    // pixels outside the circle stay transparent.
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 32,
+      "nodes": {
+        "base": { "op": "circle", "color": "#0000ff", "radius-frac": 0.3 },
+        "over": { "op": "solid", "color": "#ff0000" },
+        "out":  { "op": "blend", "base": "@base", "over": "@over", "clip": true }
+      },
+      "output": "@out"
+    }"##;
+    let r = render(json, 32, 0);
+    // Corner is outside the disk → base alpha = 0 → clip output alpha = 0.
+    let corner = r.pixel(0, 0);
+    assert_eq!(corner[3], 0, "outside base alpha must be 0 under clip: {corner:?}");
+    // Center is inside disk → red shows through atop blue's alpha.
+    let center = r.pixel(16, 16);
+    assert!(center[3] > 200, "center should be opaque: {center:?}");
+    assert!(center[0] > 200, "center should be red-dominant: {center:?}");
+}
+
+#[test]
+fn blend_mask_modulates_over_coverage() {
+    // mask is a small disk; using it as the mask input means red over
+    // only appears where the mask is opaque.
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 32,
+      "nodes": {
+        "base": { "op": "solid", "color": "#0000ff" },
+        "over": { "op": "solid", "color": "#ff0000" },
+        "mask": { "op": "circle", "color": "#ffffff", "radius-frac": 0.3 },
+        "out":  { "op": "blend", "base": "@base", "over": "@over", "mask": "@mask" }
+      },
+      "output": "@out"
+    }"##;
+    let r = render(json, 32, 0);
+    // Outside mask → still pure blue.
+    let corner = r.pixel(0, 0);
+    assert_eq!(corner, [0x00, 0x00, 0xff, 0xff]);
+    // Inside mask → red wins.
+    let center = r.pixel(16, 16);
+    assert!(center[0] > 200, "center should be red: {center:?}");
+    assert!(center[2] < 32, "center blue should be near zero: {center:?}");
+}
+
+#[test]
 fn param_substitution_works() {
     let json = r##"{
       "name": "demo",

@@ -118,6 +118,23 @@ pub(super) fn read_number_or(
     read_number(fields, name, ctx)
 }
 
+pub(super) fn read_string_or(
+    fields: &serde_json::Map<String, Value>,
+    name: &str,
+    ctx: &FactoryCtx<'_>,
+    default: &str,
+) -> Result<String, FactoryError> {
+    if !fields.contains_key(name) {
+        return Ok(default.to_string());
+    }
+    let v = resolve_field(fields, name, ctx)?;
+    let s = v.as_str().ok_or_else(|| FactoryError::BadField {
+        field: name.into(),
+        msg: "expected string".into(),
+    })?;
+    Ok(s.to_string())
+}
+
 pub(super) fn read_optional_string(
     fields: &serde_json::Map<String, Value>,
     name: &str,

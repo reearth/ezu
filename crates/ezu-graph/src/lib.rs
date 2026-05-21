@@ -31,8 +31,8 @@ pub use graph::{BuildError, Edge, Graph, GraphBuilder, NodeId, NodeIx, MAX_PAD};
 pub use node::Node;
 pub use port::{CoordSpace, PortKind, PortSpec};
 pub use registry::{
-    schema_frag, take_input_ref, BuiltNode, Connection, FactoryCtx, FactoryError, NodeFactory,
-    NodeRegistry, StaticOp,
+    schema_frag, take_input_ref, take_optional_input_ref, BuiltNode, Connection, FactoryCtx,
+    FactoryError, NodeFactory, NodeRegistry, StaticOp,
 };
 
 #[doc(hidden)]
