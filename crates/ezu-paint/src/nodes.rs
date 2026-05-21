@@ -562,27 +562,27 @@ impl Node for BlendNode {
         if base.width != over.width || base.height != over.height {
             return Err(EvalError::Other("blend: size mismatch".into()));
         }
+        // Premultiplied source-over with optional opacity, integer-only
+        // fast path. For a properly premultiplied `over` buffer, scaling
+        // its alpha by `op` requires scaling its colors by `op` too —
+        // hence the single `op_q` factor applied to all four channels.
+        // Output stays in [0, 255] by the premul invariant, so no
+        // saturation is needed.
         let mut out = RasterBuf::new(base.width, base.height);
-        let op = self.opacity.clamp(0.0, 1.0);
-        for i in (0..base.pixels.len()).step_by(4) {
-            let (br, bg, bb, ba) = (
-                base.pixels[i],
-                base.pixels[i + 1],
-                base.pixels[i + 2],
-                base.pixels[i + 3],
-            );
-            let (or_, og, ob, oa) = (
-                over.pixels[i],
-                over.pixels[i + 1],
-                over.pixels[i + 2],
-                (over.pixels[i + 3] as f32 * op) as u8,
-            );
-            // premultiplied alpha-over: out = over + base * (1 - over.a)
-            let inv = 1.0 - oa as f32 / 255.0;
-            out.pixels[i] = or_.saturating_add((br as f32 * inv).round() as u8);
-            out.pixels[i + 1] = og.saturating_add((bg as f32 * inv).round() as u8);
-            out.pixels[i + 2] = ob.saturating_add((bb as f32 * inv).round() as u8);
-            out.pixels[i + 3] = oa.saturating_add((ba as f32 * inv).round() as u8);
+        let op_q = (self.opacity.clamp(0.0, 1.0) * 255.0).round() as u16;
+        let bp = &base.pixels;
+        let op_buf = &over.pixels;
+        let dst = &mut out.pixels;
+        for i in (0..bp.len()).step_by(4) {
+            let o0 = mul_u8q(op_buf[i], op_q);
+            let o1 = mul_u8q(op_buf[i + 1], op_q);
+            let o2 = mul_u8q(op_buf[i + 2], op_q);
+            let oa = mul_u8q(op_buf[i + 3], op_q);
+            let inv = 255u16 - oa as u16;
+            dst[i] = o0 + mul_u8q(bp[i], inv);
+            dst[i + 1] = o1 + mul_u8q(bp[i + 1], inv);
+            dst[i + 2] = o2 + mul_u8q(bp[i + 2], inv);
+            dst[i + 3] = oa + mul_u8q(bp[i + 3], inv);
         }
         Ok(PortValue::Raster(Arc::new(out)))
     }
@@ -618,6 +618,14 @@ impl NodeFactory for BlendFactory {
 }
 
 // ---------------------------------------------------------------------------
+
+/// Multiply a u8 channel by a 0..=255 quantized factor with proper
+/// rounding: `(c * q + 127) / 255`. Wraps to `u8` (caller must ensure
+/// the result fits — true for any premul-correct alpha-over math).
+#[inline(always)]
+fn mul_u8q(c: u8, q: u16) -> u8 {
+    ((c as u16 * q + 127) / 255) as u8
+}
 
 fn color_to_premul_u8(c: [f32; 4]) -> [u8; 4] {
     let a = c[3].clamp(0.0, 1.0);

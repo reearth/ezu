@@ -18,6 +18,8 @@ mvt = ["dep:ezu-mvt"]
 pmtiles = ["dep:ezu-pmtiles", "mvt"]
 paint = ["dep:ezu-paint"]
 style-json = ["dep:ezu-style"]
+# Pull-through to ezu-graph's parallel within-tile evaluation.
+parallel = ["ezu-graph/parallel", "ezu-paint?/parallel"]
 
 [dependencies]
 ezu-core = { workspace = true }
@@ -28,13 +30,14 @@ ezu-paint = { workspace = true, optional = true }
 ezu-style = { workspace = true, optional = true }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "macros", "fs"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "fs"] }
 tiny-skia = { workspace = true }
 hokusai = { workspace = true, features = ["myb-json"] }
+futures = "0.3"
 
 [[example]]
 name = "tokyo"
-required-features = ["mvt", "pmtiles", "paint"]
+required-features = ["mvt", "pmtiles", "paint", "parallel"]
 
 [[example]]
 name = "inspect"

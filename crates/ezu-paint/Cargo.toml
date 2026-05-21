@@ -20,3 +20,8 @@ hokusai = { workspace = true, features = ["myb-json", "tile-mem", "tiny-skia"] }
 tiny-skia = { workspace = true }
 libblur = { workspace = true }
 thiserror = { workspace = true }
+
+[features]
+default = []
+# Pull-through: enable parallel within-tile evaluation in ezu-graph.
+parallel = ["ezu-graph/parallel"]

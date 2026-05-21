@@ -325,6 +325,35 @@ impl Graph {
         self.incoming[ix][port_ix]
     }
 
+    /// Group nodes into evaluation "levels". A node's level is one more
+    /// than the maximum level of its inputs (sources are at level 0).
+    /// All nodes in the same level have no edges between them and can
+    /// be evaluated in parallel. Returned as `levels[node_ix] = depth`.
+    pub fn compute_levels(&self) -> Vec<u32> {
+        let mut levels = vec![0u32; self.len()];
+        for &ix in &self.topo {
+            let max_up = self
+                .upstream(ix)
+                .map(|s| levels[s] + 1)
+                .max()
+                .unwrap_or(0);
+            levels[ix] = max_up;
+        }
+        levels
+    }
+
+    /// Bucket nodes by level, preserving topo order within each bucket
+    /// for determinism.
+    pub fn level_buckets(&self) -> Vec<Vec<NodeIx>> {
+        let levels = self.compute_levels();
+        let max_level = levels.iter().copied().max().unwrap_or(0);
+        let mut buckets: Vec<Vec<NodeIx>> = vec![Vec::new(); (max_level + 1) as usize];
+        for &ix in &self.topo {
+            buckets[levels[ix] as usize].push(ix);
+        }
+        buckets
+    }
+
     /// Compute the canvas padding each node must supply, given the
     /// document-level `pad` requested at the output.
     pub fn compute_pad(&self, doc_pad: u32) -> Result<Vec<u32>, BuildError> {
