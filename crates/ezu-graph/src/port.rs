@@ -12,8 +12,6 @@ pub enum PortKind {
     Features,
     /// RGBA buffer, padded canvas-sized.
     Raster,
-    /// f32 buffer in `[0, 1]`, padded canvas-sized.
-    Mask,
     /// hokusai brush handle plus overrides.
     Brush,
     /// Constant value (color, number, bool). Cheap to fan out.
@@ -25,7 +23,6 @@ impl fmt::Display for PortKind {
         f.write_str(match self {
             PortKind::Features => "features",
             PortKind::Raster => "raster",
-            PortKind::Mask => "mask",
             PortKind::Brush => "brush",
             PortKind::Scalar => "scalar",
         })

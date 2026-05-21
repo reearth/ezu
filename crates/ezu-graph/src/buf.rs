@@ -1,4 +1,4 @@
-//! Concrete buffer types flowing along `Raster` and `Mask` edges.
+//! Concrete buffer types flowing along `Raster` edges.
 //!
 //! These are deliberately small and dependency-free so node
 //! implementations from different crates can produce / consume them
@@ -42,36 +42,6 @@ impl RasterBuf {
             self.pixels[i + 2],
             self.pixels[i + 3],
         ]
-    }
-}
-
-/// Single-channel mask in `[0, 1]`. Row-major, one f32 per pixel.
-#[derive(Debug, Clone)]
-pub struct MaskBuf {
-    pub width: u32,
-    pub height: u32,
-    pub pixels: Vec<f32>,
-}
-
-impl MaskBuf {
-    pub fn new(width: u32, height: u32) -> Self {
-        Self {
-            width,
-            height,
-            pixels: vec![0.0; (width * height) as usize],
-        }
-    }
-
-    pub fn filled(width: u32, height: u32, value: f32) -> Self {
-        Self {
-            width,
-            height,
-            pixels: vec![value; (width * height) as usize],
-        }
-    }
-
-    pub fn pixel(&self, x: u32, y: u32) -> f32 {
-        self.pixels[(y * self.width + x) as usize]
     }
 }
 

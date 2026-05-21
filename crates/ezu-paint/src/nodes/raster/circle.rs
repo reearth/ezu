@@ -1,31 +1,33 @@
-//! `mask-circle` — `() -> Mask`. Centered disk, radius given as a
-//! fraction of `tile-size`. Useful for testing without MVT input.
+//! `circle` — `() -> Raster`. Centered disk, radius given as a
+//! fraction of `tile-size`. Premultiplied RGBA output with optional
+//! `hardness` edge falloff.
 
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, BuiltNode, EvalCtx, EvalError, FactoryCtx, FactoryError, MaskBuf, Node,
-    NodeFactory, PortKind, PortSpec, PortValue,
+    schema_frag, BuiltNode, EvalCtx, EvalError, FactoryCtx, FactoryError, Node, NodeFactory,
+    PortKind, PortSpec, PortValue, RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{read_number, read_number_or};
+use crate::nodes::common::{read_color, read_number, read_number_or};
 
-struct MaskCircleNode {
+struct CircleNode {
+    color: [f32; 4],
     radius_frac: f32,
     hardness: f32,
 }
 
-impl Node for MaskCircleNode {
+impl Node for CircleNode {
     fn op_name(&self) -> &'static str {
-        "mask-circle"
+        "circle"
     }
     fn inputs(&self) -> &[PortSpec] {
         &[]
     }
     fn output(&self) -> PortKind {
-        PortKind::Mask
+        PortKind::Raster
     }
     fn eval(
         &self,
@@ -33,48 +35,61 @@ impl Node for MaskCircleNode {
         _: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
         let size = ctx.canvas.padded_size();
-        let mut m = MaskBuf::new(size, size);
+        let mut out = RasterBuf::new(size, size);
         let cx = size as f32 * 0.5;
         let cy = size as f32 * 0.5;
         let r = ctx.canvas.tile_size as f32 * self.radius_frac;
         let h = self.hardness.clamp(0.0, 0.999);
         let inner = r * h;
+        let [cr, cg, cb, ca] = self.color;
         for y in 0..size {
             for x in 0..size {
                 let dx = x as f32 + 0.5 - cx;
                 let dy = y as f32 + 0.5 - cy;
                 let d = (dx * dx + dy * dy).sqrt();
-                let v = if d <= inner {
+                let m = if d <= inner {
                     1.0
                 } else if d >= r {
                     0.0
                 } else {
                     1.0 - (d - inner) / (r - inner)
                 };
-                m.pixels[(y * size + x) as usize] = v;
+                let alpha = ca * m;
+                let i = ((y * size + x) * 4) as usize;
+                out.pixels[i] = (cr * alpha * 255.0).round() as u8;
+                out.pixels[i + 1] = (cg * alpha * 255.0).round() as u8;
+                out.pixels[i + 2] = (cb * alpha * 255.0).round() as u8;
+                out.pixels[i + 3] = (alpha * 255.0).round() as u8;
             }
         }
-        Ok(PortValue::Mask(Arc::new(m)))
+        Ok(PortValue::Raster(Arc::new(out)))
     }
     fn param_hash(&self, h: &mut Xxh3) {
-        h.update(b"mask-circle");
+        h.update(b"circle");
+        for c in self.color {
+            h.update(&c.to_le_bytes());
+        }
         h.update(&self.radius_frac.to_le_bytes());
         h.update(&self.hardness.to_le_bytes());
     }
 }
 
-pub(super) struct MaskCircleFactory;
-impl NodeFactory for MaskCircleFactory {
-    fn op_name(&self) -> &'static str { "mask-circle" }
+pub(super) struct CircleFactory;
+impl NodeFactory for CircleFactory {
+    fn op_name(&self) -> &'static str {
+        "circle"
+    }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
+        let color = read_color(fields, "color", ctx)?;
         let radius_frac = read_number(fields, "radius-frac", ctx)? as f32;
         let hardness = read_number_or(fields, "hardness", ctx, 1.0)? as f32;
         Ok(BuiltNode {
-            node: Box::new(MaskCircleNode {
+            node: Box::new(CircleNode {
+                color,
                 radius_frac,
                 hardness,
             }),
@@ -83,14 +98,15 @@ impl NodeFactory for MaskCircleFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Centered disk mask. Radius is a fraction of `tile-size`.",
+            "description": "Centered disk raster source. Radius is a fraction of `tile-size`.",
             "properties": {
+                "color": schema_frag::color(),
                 "radius-frac": schema_frag::unit_number(),
                 "hardness": schema_frag::unit_number(),
             },
-            "required": ["radius-frac"],
+            "required": ["color", "radius-frac"],
         })
     }
 }
 
-ezu_graph::submit_node!(MaskCircleFactory);
+ezu_graph::submit_node!(CircleFactory);

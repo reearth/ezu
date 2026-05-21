@@ -12,7 +12,7 @@ use crate::{
 #[test]
 fn evaluator_returns_output_value() {
     let mut b = GraphBuilder::new();
-    b.add_node("a", Box::new(Forward(Counter::new("src", PortKind::Mask))))
+    b.add_node("a", Box::new(Forward(Counter::new("src", PortKind::Raster))))
         .set_output("a");
     let g = b.build().unwrap();
     let cache = Cache::new();
@@ -26,25 +26,25 @@ fn evaluator_returns_output_value() {
             0,
         )
         .unwrap();
-    let mask = out.as_mask().unwrap();
-    assert_eq!(mask.width, 8);
-    assert!((mask.pixel(0, 0) - 0.25).abs() < 1e-6);
+    let raster = out.as_raster().unwrap();
+    assert_eq!(raster.width, 8);
+    assert_eq!(raster.pixel(0, 0), [64, 0, 0, 64]);
 }
 
 #[test]
 fn evaluator_evaluates_each_node_once_per_render() {
     // diamond: a -> b, a -> c, b+c -> d. `a` should eval ONCE.
-    let counter = Counter::new("src", PortKind::Mask);
+    let counter = Counter::new("src", PortKind::Raster);
     let pass = |op: &'static str| {
-        Mock::new(op, vec![PortSpec::new("input", PortKind::Mask)], PortKind::Mask).boxed()
+        Mock::new(op, vec![PortSpec::new("input", PortKind::Raster)], PortKind::Raster).boxed()
     };
     let merge = Mock::new(
         "merge",
         vec![
-            PortSpec::new("left", PortKind::Mask),
-            PortSpec::new("right", PortKind::Mask),
+            PortSpec::new("left", PortKind::Raster),
+            PortSpec::new("right", PortKind::Raster),
         ],
-        PortKind::Mask,
+        PortKind::Raster,
     )
     .boxed();
 
@@ -77,7 +77,7 @@ fn evaluator_evaluates_each_node_once_per_render() {
 
 #[test]
 fn cache_reuses_results_across_renders() {
-    let counter = Counter::new("src", PortKind::Mask);
+    let counter = Counter::new("src", PortKind::Raster);
     let mut b = GraphBuilder::new();
     b.add_node(
         "a",

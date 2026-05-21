@@ -7,9 +7,9 @@ use crate::{BuildError, GraphBuilder, PortKind, PortSpec};
 #[test]
 fn linear_chain_topo() {
     let mut b = GraphBuilder::new();
-    b.add_node("a", src(PortKind::Mask))
-        .add_node("b", passthrough(PortKind::Mask, PortKind::Mask))
-        .add_node("c", passthrough(PortKind::Mask, PortKind::Raster))
+    b.add_node("a", src(PortKind::Raster))
+        .add_node("b", passthrough(PortKind::Raster, PortKind::Raster))
+        .add_node("c", passthrough(PortKind::Raster, PortKind::Raster))
         .connect("a", "b", "input")
         .connect("b", "c", "input")
         .set_output("c");
@@ -24,17 +24,17 @@ fn diamond_topo() {
     let merge = Mock::new(
         "merge",
         vec![
-            PortSpec::new("left", PortKind::Mask),
-            PortSpec::new("right", PortKind::Mask),
+            PortSpec::new("left", PortKind::Raster),
+            PortSpec::new("right", PortKind::Raster),
         ],
         PortKind::Raster,
     )
     .boxed();
 
     let mut b = GraphBuilder::new();
-    b.add_node("a", src(PortKind::Mask))
-        .add_node("b", passthrough(PortKind::Mask, PortKind::Mask))
-        .add_node("c", passthrough(PortKind::Mask, PortKind::Mask))
+    b.add_node("a", src(PortKind::Raster))
+        .add_node("b", passthrough(PortKind::Raster, PortKind::Raster))
+        .add_node("c", passthrough(PortKind::Raster, PortKind::Raster))
         .add_node("d", merge)
         .connect("a", "b", "input")
         .connect("a", "c", "input")
@@ -54,14 +54,14 @@ fn diamond_topo() {
 fn type_mismatch_is_rejected() {
     let mut b = GraphBuilder::new();
     b.add_node("a", src(PortKind::Raster))
-        .add_node("b", passthrough(PortKind::Mask, PortKind::Mask))
+        .add_node("b", passthrough(PortKind::Brush, PortKind::Brush))
         .connect("a", "b", "input")
         .set_output("b");
     match b.build() {
         Err(BuildError::TypeMismatch {
             expected, got, ..
         }) => {
-            assert_eq!(expected, PortKind::Mask);
+            assert_eq!(expected, PortKind::Brush);
             assert_eq!(got, PortKind::Raster);
         }
         other => panic!("expected TypeMismatch, got {other:?}"),
@@ -71,7 +71,7 @@ fn type_mismatch_is_rejected() {
 #[test]
 fn missing_required_port_is_rejected() {
     let mut b = GraphBuilder::new();
-    b.add_node("b", passthrough(PortKind::Mask, PortKind::Mask))
+    b.add_node("b", passthrough(PortKind::Raster, PortKind::Raster))
         .set_output("b");
     match b.build() {
         Err(BuildError::MissingInput { node, port }) => {
@@ -87,14 +87,14 @@ fn optional_port_may_be_unconnected() {
     let opt = Mock::new(
         "opt",
         vec![
-            PortSpec::new("input", PortKind::Mask),
-            PortSpec::new("extra", PortKind::Mask).optional(),
+            PortSpec::new("input", PortKind::Raster),
+            PortSpec::new("extra", PortKind::Raster).optional(),
         ],
-        PortKind::Mask,
+        PortKind::Raster,
     )
     .boxed();
     let mut b = GraphBuilder::new();
-    b.add_node("a", src(PortKind::Mask))
+    b.add_node("a", src(PortKind::Raster))
         .add_node("o", opt)
         .connect("a", "o", "input")
         .set_output("o");
@@ -107,8 +107,8 @@ fn cycle_is_detected() {
     // a -> b -> a; pure cycle (no entry node) is unreachable from output,
     // but is still rejected.
     let mut b = GraphBuilder::new();
-    b.add_node("a", passthrough(PortKind::Mask, PortKind::Mask))
-        .add_node("b", passthrough(PortKind::Mask, PortKind::Mask))
+    b.add_node("a", passthrough(PortKind::Raster, PortKind::Raster))
+        .add_node("b", passthrough(PortKind::Raster, PortKind::Raster))
         .connect("a", "b", "input")
         .connect("b", "a", "input")
         .set_output("b");
@@ -121,8 +121,8 @@ fn cycle_is_detected() {
 #[test]
 fn unknown_port_name_is_rejected() {
     let mut b = GraphBuilder::new();
-    b.add_node("a", src(PortKind::Mask))
-        .add_node("b", passthrough(PortKind::Mask, PortKind::Mask))
+    b.add_node("a", src(PortKind::Raster))
+        .add_node("b", passthrough(PortKind::Raster, PortKind::Raster))
         .connect("a", "b", "nope")
         .set_output("b");
     match b.build() {
@@ -137,9 +137,9 @@ fn unknown_port_name_is_rejected() {
 #[test]
 fn duplicate_edge_is_rejected() {
     let mut b = GraphBuilder::new();
-    b.add_node("a", src(PortKind::Mask))
-        .add_node("c", src(PortKind::Mask))
-        .add_node("b", passthrough(PortKind::Mask, PortKind::Mask))
+    b.add_node("a", src(PortKind::Raster))
+        .add_node("c", src(PortKind::Raster))
+        .add_node("b", passthrough(PortKind::Raster, PortKind::Raster))
         .connect("a", "b", "input")
         .connect("c", "b", "input")
         .set_output("b");
@@ -153,14 +153,14 @@ fn duplicate_edge_is_rejected() {
 fn pad_propagates_upstream_through_blur() {
     // src -> blur(grow=24) -> out(passthrough)
     let mut b = GraphBuilder::new();
-    b.add_node("src", src(PortKind::Mask))
+    b.add_node("src", src(PortKind::Raster))
         .add_node(
             "blur",
-            Mock::new("blur", vec![PortSpec::new("input", PortKind::Mask)], PortKind::Mask)
+            Mock::new("blur", vec![PortSpec::new("input", PortKind::Raster)], PortKind::Raster)
                 .with_pad_grow(24)
                 .boxed(),
         )
-        .add_node("out", passthrough(PortKind::Mask, PortKind::Mask))
+        .add_node("out", passthrough(PortKind::Raster, PortKind::Raster))
         .connect("src", "blur", "input")
         .connect("blur", "out", "input")
         .set_output("out");
@@ -180,10 +180,10 @@ fn pad_propagates_upstream_through_blur() {
 #[test]
 fn pad_exceeded_errors() {
     let mut b = GraphBuilder::new();
-    b.add_node("src", src(PortKind::Mask))
+    b.add_node("src", src(PortKind::Raster))
         .add_node(
             "blur",
-            Mock::new("blur", vec![PortSpec::new("input", PortKind::Mask)], PortKind::Mask)
+            Mock::new("blur", vec![PortSpec::new("input", PortKind::Raster)], PortKind::Raster)
                 .with_pad_grow(crate::MAX_PAD + 1)
                 .boxed(),
         )

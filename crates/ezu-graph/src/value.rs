@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::buf::{MaskBuf, OpaqueValue, RasterBuf};
+use crate::buf::{OpaqueValue, RasterBuf};
 use crate::port::PortKind;
 
 /// One value flowing along an edge. Cloning is cheap (Arc / Copy).
@@ -10,7 +10,6 @@ use crate::port::PortKind;
 pub enum PortValue {
     Features(OpaqueValue),
     Raster(Arc<RasterBuf>),
-    Mask(Arc<MaskBuf>),
     Brush(OpaqueValue),
     Scalar(ScalarValue),
 }
@@ -20,7 +19,6 @@ impl PortValue {
         match self {
             PortValue::Features(_) => PortKind::Features,
             PortValue::Raster(_) => PortKind::Raster,
-            PortValue::Mask(_) => PortKind::Mask,
             PortValue::Brush(_) => PortKind::Brush,
             PortValue::Scalar(_) => PortKind::Scalar,
         }
@@ -29,14 +27,6 @@ impl PortValue {
     pub fn as_raster(&self) -> Option<&Arc<RasterBuf>> {
         if let PortValue::Raster(r) = self {
             Some(r)
-        } else {
-            None
-        }
-    }
-
-    pub fn as_mask(&self) -> Option<&Arc<MaskBuf>> {
-        if let PortValue::Mask(m) = self {
-            Some(m)
         } else {
             None
         }

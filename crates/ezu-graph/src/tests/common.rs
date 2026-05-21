@@ -7,8 +7,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::{
-    CanvasInfo, CoordSpace, EvalCtx, EvalError, MaskBuf, Node, PortKind, PortSpec, PortValue,
-    RasterBuf,
+    CanvasInfo, CoordSpace, EvalCtx, EvalError, Node, PortKind, PortSpec, PortValue, RasterBuf,
 };
 
 /// A mock node with configurable ports and pad growth.
@@ -65,7 +64,6 @@ impl Node for Mock {
             PortKind::Raster => PortValue::Raster(Arc::new(RasterBuf::filled(
                 size, size, [0, 0, 0, 255],
             ))),
-            PortKind::Mask => PortValue::Mask(Arc::new(MaskBuf::filled(size, size, 0.0))),
             other => panic!("mock node has no default output for {other:?}"),
         })
     }
@@ -131,8 +129,8 @@ impl Node for Counter {
     ) -> Result<PortValue, EvalError> {
         self.count.fetch_add(1, Ordering::SeqCst);
         let size = ctx.canvas.padded_size();
-        Ok(PortValue::Mask(Arc::new(MaskBuf::filled(
-            size, size, 0.25,
+        Ok(PortValue::Raster(Arc::new(RasterBuf::filled(
+            size, size, [64, 0, 0, 64],
         ))))
     }
     fn param_hash(&self, h: &mut Xxh3) {

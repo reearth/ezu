@@ -43,8 +43,8 @@ impl NodeFactory for BlurFactory {
         Ok(BuiltNode {
             node: Mock::new(
                 "blur",
-                vec![PortSpec::new("input", PortKind::Mask)],
-                PortKind::Mask,
+                vec![PortSpec::new("input", PortKind::Raster)],
+                PortKind::Raster,
             )
             .with_pad_grow(pad)
             .boxed(),
@@ -58,7 +58,7 @@ impl NodeFactory for BlurFactory {
 
 fn test_registry() -> NodeRegistry {
     let mut r = NodeRegistry::new();
-    r.register(SrcFactory("image", PortKind::Mask));
+    r.register(SrcFactory("image", PortKind::Raster));
     r.register(BlurFactory);
     r
 }
@@ -107,10 +107,10 @@ fn build_unknown_op_errors() {
 
 #[test]
 fn build_propagates_type_mismatch() {
-    // image returns Mask; register a Raster-emitting "rsrc" and try to
-    // feed blur (which expects Mask) with it.
+    // image returns Raster; register a Brush-emitting "rsrc" and try to
+    // feed blur (which expects Raster) with it.
     let mut reg = test_registry();
-    reg.register(SrcFactory("rsrc", PortKind::Raster));
+    reg.register(SrcFactory("rsrc", PortKind::Brush));
     let json = r##"{
       "name": "demo",
       "nodes": {

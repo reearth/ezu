@@ -9,10 +9,8 @@ fn registry_emits_document_schema_with_all_ops() {
     // document-level structure is there.
     for op in [
         "solid",
-        "mask-solid",
-        "mask-circle",
-        "mask-blur",
-        "fill-with-mask",
+        "circle",
+        "blur",
         "blend",
         "mvt-source",
         "fill-solid",
@@ -69,15 +67,14 @@ fn solid_only_produces_uniform_raster() {
 }
 
 #[test]
-fn mask_circle_fill_then_blend_over_background() {
-    // Background is opaque red. A blue disk masked at center, blended on top.
+fn circle_fill_then_blend_over_background() {
+    // Background is opaque red. A blue disk drawn at center, blended on top.
     let json = r##"{
       "name": "demo",
       "tile-size": 32,
       "nodes": {
         "bg":    { "op": "solid", "color": "#ff0000" },
-        "disk":  { "op": "mask-circle", "radius-frac": 0.4 },
-        "blue":  { "op": "fill-with-mask", "mask": "@disk", "color": "#0000ff" },
+        "blue":  { "op": "circle", "color": "#0000ff", "radius-frac": 0.4 },
         "out":   { "op": "blend", "base": "@bg", "over": "@blue" }
       },
       "output": "@out"
@@ -98,8 +95,7 @@ fn blur_softens_disk_edge() {
       "name": "demo",
       "tile-size": 32,
       "nodes": {
-        "disk":  { "op": "mask-circle", "radius-frac": 0.4 },
-        "fill":  { "op": "fill-with-mask", "mask": "@disk", "color": "#000000ff" }
+        "fill":  { "op": "circle", "color": "#000000ff", "radius-frac": 0.4 }
       },
       "output": "@fill"
     }"##;
@@ -107,9 +103,8 @@ fn blur_softens_disk_edge() {
       "name": "demo",
       "tile-size": 32,
       "nodes": {
-        "disk":  { "op": "mask-circle", "radius-frac": 0.4 },
-        "blurred": { "op": "mask-blur", "input": "@disk", "sigma": 1.5 },
-        "fill":  { "op": "fill-with-mask", "mask": "@blurred", "color": "#000000ff" }
+        "disk":  { "op": "circle", "color": "#000000ff", "radius-frac": 0.4 },
+        "fill":  { "op": "blur", "input": "@disk", "sigma": 1.5 }
       },
       "output": "@fill"
     }"##;

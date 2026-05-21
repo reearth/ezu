@@ -76,15 +76,13 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 `ezu_paint::nodes::default_registry()` returns a
 [`NodeRegistry`](../ezu-graph) preloaded with:
 
-**Raster / mask utility** (`nodes::raster`)
+**Raster utility** (`nodes::raster`)
 
 | Op | Inputs → Output | Notes |
 |---|---|---|
 | `solid` | `() → Raster` | Constant-color fill |
-| `mask-solid` | `() → Mask` | Constant-value mask |
-| `mask-circle` | `() → Mask` | Centered disk; useful for tests |
-| `mask-blur` | `Mask → Mask` | Separable gaussian; grows upstream pad |
-| `fill-with-mask` | `Mask → Raster` | Tint a mask with a color |
+| `circle` | `() → Raster` | Centered disk with optional edge falloff |
+| `blur` | `Raster → Raster` | Gaussian (libblur); grows upstream pad |
 | `blend` | `Raster + Raster → Raster` | Premul source-over with opacity |
 
 **Feature sources** (`nodes::source`)

@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::buf::{MaskBuf, OpaqueValue, RasterBuf};
+use crate::buf::{OpaqueValue, RasterBuf};
 use crate::value::ScalarValue;
 
 /// Tile coordinate (z/x/y in TMS-ish form; the meaning is up to the host).
@@ -16,8 +16,8 @@ pub struct TileId {
 }
 
 /// Per-render canvas geometry. The padded buffer is the actual size all
-/// `Raster` / `Mask` ports must produce; the final tile is the inner
-/// `tile_size` region.
+/// `Raster` ports must produce; the final tile is the inner `tile_size`
+/// region.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CanvasInfo {
     pub tile_size: u32,
@@ -34,7 +34,6 @@ impl CanvasInfo {
 #[derive(Debug, Clone)]
 pub enum Asset {
     Image(Arc<RasterBuf>),
-    Mask(Arc<MaskBuf>),
     Brush(OpaqueValue),
 }
 

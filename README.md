@@ -62,17 +62,17 @@ cargo run --release -p ezu-server
 
 A style is a **typed node DAG**, not an ordered layer list. Every
 operation is a node; ports are statically type-checked
-(`Features` / `Raster` / `Mask` / `Brush` / `Scalar`); intermediate
-buffers are cached and reusable across tiles.
+(`Features` / `Raster` / `Brush` / `Scalar`); intermediate buffers are
+cached and reusable across tiles.
 
 The minimum op set ships in [`ezu-paint`](crates/ezu-paint):
 
-- **Sources** — `solid`, `mask-solid`, `mask-circle`, `mvt-source`, `brush-file`
+- **Sources** — `solid`, `circle`, `mvt-source`, `brush-file`
 - **Rasterization** — `fill-solid` (tiny-skia + libblur), `fill-dabs`
   (hokusai scatter-dab fill, **world-deterministic** so dabs stay
   seamless across tile boundaries), `line` (hokusai stroke along
   polylines)
-- **Composition** — `fill-with-mask`, `mask-blur`, `blend`
+- **Composition** — `blur`, `blend`
 
 Example: a watercolor water layer with a brushed road on top of an
 earth-tone background.

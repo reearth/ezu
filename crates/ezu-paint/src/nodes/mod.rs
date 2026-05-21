@@ -2,8 +2,8 @@
 //!
 //! Ops are grouped into category submodules:
 //!
-//! - [`raster`] — raster / mask utility ops (`solid`, `mask-*`,
-//!   `fill-with-mask`, `blend`)
+//! - [`raster`] — raster utility ops (`solid`, `circle`, `blur`,
+//!   `blend`)
 //! - [`source`] — feature sources, either fed by the host (MVT) or
 //!   synthesized (`mvt-source`, `literal-geometry`, `tile-bounds`,
 //!   `point-grid`)

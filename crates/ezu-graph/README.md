@@ -19,7 +19,6 @@ The DAG is typed. Every edge carries one of five `PortKind`s:
 |---|---|
 | `Features` | MVT features (geometry + properties), pre-filtered |
 | `Raster` | RGBA8 buffer (sRGB premultiplied), padded canvas-sized |
-| `Mask` | f32 buffer in `[0, 1]`, padded canvas-sized |
 | `Brush` | hokusai brush handle plus overrides |
 | `Scalar` | constant Color / Number / Bool |
 
