@@ -1,8 +1,9 @@
-//! WebAssembly bindings for the ezu painterly map renderer.
+//! WebAssembly bindings for the ezu painterly map renderer (Style).
 //!
 //! The JS side owns all I/O (HTTP, PMTiles, asset fetching). This crate
-//! exposes a stateful [`Renderer`] that holds a parsed Ezu Style document
-//! plus a brush bank, and renders one tile at a time.
+//! exposes a stateful [`Renderer`] that holds a parsed style document,
+//! its built graph, and an in-memory brush bank — it renders one tile
+//! at a time given the raw MVT bytes for that tile.
 //!
 //! ## Output formats
 //!
@@ -20,17 +21,18 @@
 //!
 //! ## Errors
 //!
-//! All fallible methods throw a JavaScript `Error` whose `.name` discriminates
-//! the failure kind: `InvalidStyle`, `BrushParse`, `MvtDecode`, `RenderFailed`,
-//! `PngEncode`. JS code can `try { … } catch (e) { if (e.name === "InvalidStyle") … }`.
+//! All fallible methods throw a JavaScript `Error` whose `.name`
+//! discriminates the failure kind: `InvalidStyle`, `BrushParse`,
+//! `MvtDecode`, `RenderFailed`, `PngEncode`.
 
-use std::collections::HashMap;
+use std::sync::Arc;
 
-use ezu_core::TileId;
-use ezu_paint::{
-    canvas_from_style, canvas_from_style_sized, encode_png, render_style, to_rgba8, Brush,
+use ezu_graph::{
+    build_graph, Cache, CanvasInfo, Evaluator, Graph, OpaqueValue, ParamValues, PortValue, TileId,
 };
-use ezu_style::Style;
+use ezu_paint::host::{raster_to_png, raster_to_rgba8, BrushBankLoader};
+use ezu_paint::nodes::default_registry;
+use ezu_style::Document;
 use wasm_bindgen::prelude::*;
 
 const ERR_STYLE: &str = "InvalidStyle";
@@ -42,65 +44,73 @@ const ERR_PNG: &str = "PngEncode";
 /// Stateful WASM renderer.
 #[wasm_bindgen]
 pub struct Renderer {
-    style: Style,
-    brushes: HashMap<String, Brush>,
+    doc: Document,
+    graph: Arc<Graph>,
+    cache: Arc<Cache>,
+    assets: BrushBankLoader,
 }
 
 #[wasm_bindgen]
 impl Renderer {
-    /// Build a renderer from an Ezu Style JSON document.
+    /// Build a renderer from a style JSON document.
     #[wasm_bindgen(constructor)]
     pub fn new(style_json: &str) -> Result<Renderer, JsValue> {
         #[cfg(feature = "panic-hook")]
         console_error_panic_hook::set_once();
 
-        let style = Style::from_json(style_json).map_err(|e| named_err(ERR_STYLE, e))?;
+        let (doc, graph) = parse_and_build(style_json)?;
         Ok(Self {
-            style,
-            brushes: HashMap::new(),
+            doc,
+            graph: Arc::new(graph),
+            cache: Arc::new(Cache::new()),
+            assets: BrushBankLoader::new(),
         })
     }
 
-    /// Replace the active style. Returns the new layer count.
+    /// Replace the active style. Returns the new node count. Invalidates
+    /// the intermediate cache.
     #[wasm_bindgen(js_name = setStyle)]
     pub fn set_style(&mut self, style_json: &str) -> Result<usize, JsValue> {
-        let style = Style::from_json(style_json).map_err(|e| named_err(ERR_STYLE, e))?;
-        self.style = style;
-        Ok(self.style.layers.len())
+        let (doc, graph) = parse_and_build(style_json)?;
+        let n = doc.nodes.len();
+        self.doc = doc;
+        self.graph = Arc::new(graph);
+        self.cache = Arc::new(Cache::new());
+        Ok(n)
     }
 
-    /// Register a `.myb` brush under `name` so layers can refer to it as
-    /// `"brush": "@name"` (the `@` prefix is stripped at resolve time).
+    /// Register a `.myb` brush under `name` so a `brush-file` node with
+    /// `src: "@name"` (via the style's `assets` map) resolves to it.
     /// Re-registering the same name replaces the previous entry.
     #[wasm_bindgen(js_name = registerBrush)]
     pub fn register_brush(&mut self, name: &str, myb_json: &str) -> Result<(), JsValue> {
         let brush = hokusai::myb::from_str(myb_json).map_err(|e| named_err(ERR_BRUSH, e))?;
-        self.brushes.insert(name.to_string(), brush);
+        self.assets.insert(name.to_string(), brush);
         Ok(())
     }
 
     /// Remove a brush by name. Returns `true` if the brush existed.
     #[wasm_bindgen(js_name = unregisterBrush)]
     pub fn unregister_brush(&mut self, name: &str) -> bool {
-        self.brushes.remove(name).is_some()
+        self.assets.bank.remove(name).is_some()
     }
 
     /// Drop every registered brush.
     #[wasm_bindgen(js_name = clearBrushes)]
     pub fn clear_brushes(&mut self) {
-        self.brushes.clear();
+        self.assets.bank.clear();
     }
 
     /// Number of brushes currently registered.
     #[wasm_bindgen(js_name = brushCount)]
     pub fn brush_count(&self) -> usize {
-        self.brushes.len()
+        self.assets.bank.len()
     }
 
     /// `tile-size` declared by the current style.
     #[wasm_bindgen(getter, js_name = tileSize)]
     pub fn tile_size(&self) -> u32 {
-        self.style.tile_size
+        self.doc.tile_size
     }
 
     /// Render a single tile to PNG bytes using the style's `tile-size` / `pad`.
@@ -187,27 +197,56 @@ impl Renderer {
         size_override: Option<(u32, u32)>,
         format: OutputFormat,
     ) -> Result<Vec<u8>, JsValue> {
-        let mut canvas = match size_override {
-            Some((ts, pad)) => canvas_from_style_sized(&self.style, ts, pad),
-            None => canvas_from_style(&self.style),
+        let (tile_size, pad) = size_override.unwrap_or((self.doc.tile_size, self.doc.pad));
+        let tile_data: Option<OpaqueValue> = match mvt_bytes {
+            Some(bytes) => Some(Arc::new(
+                ezu_mvt::decode(bytes).map_err(|e| named_err(ERR_MVT, e))?,
+            ) as OpaqueValue),
+            None => None,
         };
 
-        if let Some(bytes) = mvt_bytes {
-            let tile = TileId::new(z, x, y);
-            let decoded = ezu_mvt::decode(bytes).map_err(|e| named_err(ERR_MVT, e))?;
-            let resolver = |name: &str| -> Option<&Brush> {
-                let key = name.strip_prefix('@').unwrap_or(name);
-                self.brushes.get(key)
-            };
-            render_style(&mut canvas, &self.style, &decoded, tile, &resolver)
-                .map_err(|e| named_err(ERR_RENDER, e))?;
-        }
+        let ev = Evaluator::new(&self.graph, &self.cache, &self.assets);
+        let out = ev
+            .render_with_tile_data(
+                TileId { z, x, y },
+                CanvasInfo { tile_size, pad },
+                &ParamValues::new(),
+                tile_seed(z, x, y),
+                tile_data.as_ref(),
+            )
+            .map_err(|e| named_err(ERR_RENDER, e))?;
+        let raster = match out {
+            PortValue::Raster(r) => r,
+            other => {
+                return Err(named_err(
+                    ERR_RENDER,
+                    format!("expected Raster output, got {:?}", other.kind()),
+                ))
+            }
+        };
 
         Ok(match format {
-            OutputFormat::Png => encode_png(&canvas).map_err(|e| named_err(ERR_PNG, e))?,
-            OutputFormat::Rgba => to_rgba8(&canvas),
+            OutputFormat::Png => {
+                raster_to_png(&raster, tile_size, pad).map_err(|e| named_err(ERR_PNG, e))?
+            }
+            OutputFormat::Rgba => raster_to_rgba8(&raster, tile_size, pad),
         })
     }
+}
+
+fn parse_and_build(style_json: &str) -> Result<(Document, Graph), JsValue> {
+    let doc = Document::from_json(style_json).map_err(|e| named_err(ERR_STYLE, e))?;
+    let registry = default_registry();
+    let graph = build_graph(&doc, &registry).map_err(|e| named_err(ERR_STYLE, e))?;
+    Ok((doc, graph))
+}
+
+fn tile_seed(z: u8, x: u32, y: u32) -> u64 {
+    let mut s = 0u64;
+    s = s.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(z as u64);
+    s = s.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(x as u64);
+    s = s.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(y as u64);
+    s
 }
 
 /// Whether the wasm binary was compiled with `+simd128`. Lets the demo

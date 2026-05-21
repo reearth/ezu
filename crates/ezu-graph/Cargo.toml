@@ -1,6 +1,6 @@
 [package]
-name = "ezu-style"
-description = "Ezu Style Spec: declarative style specification for painterly map rendering"
+name = "ezu-graph"
+description = "Typed DAG evaluator for the Ezu Style Spec v1"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,9 +10,8 @@ homepage.workspace = true
 authors.workspace = true
 
 [dependencies]
-ezu-core = { workspace = true }
-serde = { workspace = true }
+ezu-style = { workspace = true }
+indexmap = "2"
 serde_json = { workspace = true }
-schemars = { workspace = true }
 thiserror = { workspace = true }
-indexmap = { version = "2", features = ["serde"] }
+xxhash-rust = { workspace = true }

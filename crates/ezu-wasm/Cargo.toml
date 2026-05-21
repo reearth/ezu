@@ -16,6 +16,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 ezu-core = { workspace = true }
+ezu-graph = { workspace = true }
 ezu-mvt = { workspace = true }
 ezu-paint = { workspace = true }
 ezu-style = { workspace = true }

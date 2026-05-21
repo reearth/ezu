@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/ezu",
     "crates/ezu-core",
+    "crates/ezu-graph",
     "crates/ezu-mvt",
     "crates/ezu-pmtiles",
     "crates/ezu-paint",
@@ -23,6 +24,7 @@ authors = ["Eukarya Inc."]
 [workspace.dependencies]
 # Internal
 ezu-core = { version = "0.1.0", path = "crates/ezu-core" }
+ezu-graph = { version = "0.1.0", path = "crates/ezu-graph" }
 ezu-mvt = { version = "0.1.0", path = "crates/ezu-mvt" }
 ezu-pmtiles = { version = "0.1.0", path = "crates/ezu-pmtiles" }
 ezu-paint = { version = "0.1.0", path = "crates/ezu-paint" }

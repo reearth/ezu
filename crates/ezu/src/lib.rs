@@ -6,6 +6,7 @@
 //! single namespace, gated by feature flags.
 
 pub use ezu_core as core;
+pub use ezu_graph as graph;
 
 #[cfg(feature = "mvt")]
 pub use ezu_mvt as mvt;

@@ -1,13 +1,14 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use bytes::Bytes;
 use dashmap::DashMap;
 use ezu::core::TileId;
-use ezu::paint::Brush;
+use ezu::graph::{build_graph, Cache, Graph};
+use ezu::paint::host::BrushBankLoader;
+use ezu::paint::nodes::default_registry;
 use ezu::pmtiles::PmTilesArchive;
-use ezu::style::Style;
+use ezu::style::Document;
 use tokio::sync::RwLock;
 
 /// State held by every request handler.
@@ -15,33 +16,56 @@ use tokio::sync::RwLock;
 pub struct AppState {
     pub archive: Arc<PmTilesArchive>,
     pub style: Arc<RwLock<StyleSnapshot>>,
-    pub brushes: Arc<HashMap<String, Brush>>,
+    pub assets: Arc<BrushBankLoader>,
     pub mvt_cache: Arc<DashMap<TileId, Bytes>>,
     pub schema_path: PathBuf,
 }
 
+/// One parsed + built style version. PUT /style atomically swaps the
+/// whole snapshot; the per-style intermediate cache lives inside, so
+/// edits don't poison the next render.
 pub struct StyleSnapshot {
-    pub parsed: Style,
+    pub doc: Document,
+    pub graph: Arc<Graph>,
+    pub cache: Arc<Cache>,
     pub text: String,
     pub version: u64,
+}
+
+impl StyleSnapshot {
+    pub fn build(text: String, version: u64) -> Result<Self, BuildSnapshotError> {
+        let doc = Document::from_json(&text).map_err(BuildSnapshotError::Parse)?;
+        let registry = default_registry();
+        let graph = build_graph(&doc, &registry).map_err(BuildSnapshotError::Graph)?;
+        Ok(Self {
+            doc,
+            graph: Arc::new(graph),
+            cache: Arc::new(Cache::new()),
+            text,
+            version,
+        })
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum BuildSnapshotError {
+    #[error("parse: {0}")]
+    Parse(#[from] ezu::style::StyleError),
+    #[error("build graph: {0}")]
+    Graph(#[from] ezu::graph::BuildGraphError),
 }
 
 impl AppState {
     pub fn new(
         archive: PmTilesArchive,
-        parsed: Style,
-        text: String,
-        brushes: HashMap<String, Brush>,
+        snapshot: StyleSnapshot,
+        assets: BrushBankLoader,
         schema_path: PathBuf,
     ) -> Self {
         Self {
             archive: Arc::new(archive),
-            style: Arc::new(RwLock::new(StyleSnapshot {
-                parsed,
-                text,
-                version: 1,
-            })),
-            brushes: Arc::new(brushes),
+            style: Arc::new(RwLock::new(snapshot)),
+            assets: Arc::new(assets),
             mvt_cache: Arc::new(DashMap::new()),
             schema_path,
         }

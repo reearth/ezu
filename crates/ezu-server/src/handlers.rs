@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::{
     body::Body,
     extract::{Path, State},
@@ -6,10 +8,10 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use ezu::core::TileId;
+use ezu::core::TileId as CoreTileId;
+use ezu::graph::{CanvasInfo, Evaluator, OpaqueValue, ParamValues, PortValue, TileId};
 use ezu::mvt;
-use ezu::paint::{self, canvas_from_style, render_style, Brush};
-use ezu::style::Style;
+use ezu::paint::host::{raster_to_png, BrushBankLoader};
 use serde_json::json;
 
 use crate::state::{AppState, StyleSnapshot};
@@ -40,12 +42,12 @@ async fn put_style(
     State(s): State<AppState>,
     body: String,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let parsed = Style::from_json(&body).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-    let mut snap = s.style.write().await;
-    snap.version += 1;
-    snap.parsed = parsed;
-    snap.text = body;
-    Ok(Json(json!({ "version": snap.version })))
+    let next_version = { s.style.read().await.version + 1 };
+    let snap = StyleSnapshot::build(body, next_version)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let version = snap.version;
+    *s.style.write().await = snap;
+    Ok(Json(json!({ "version": version })))
 }
 
 async fn get_schema(State(s): State<AppState>) -> Response {
@@ -66,10 +68,8 @@ async fn get_tile(
     let y: u32 = y_str
         .parse()
         .map_err(|_| (StatusCode::BAD_REQUEST, "bad y".into()))?;
-    let tile = TileId::new(z, x, y);
+    let tile = CoreTileId::new(z, x, y);
 
-    // Fetch (or hit cache) — keep upstream MVT bytes around so style edits
-    // re-render without re-downloading.
     let mvt = match s.mvt_cache.get(&tile).map(|r| r.clone()) {
         Some(b) => Some(b),
         None => match s.archive.get_tile(tile).await {
@@ -82,9 +82,25 @@ async fn get_tile(
         },
     };
 
-    let snap = s.style.read().await;
-    let png = render_png(&snap, mvt.as_deref(), tile, &s.brushes)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    // Take only what we need from the snapshot to keep the lock window short.
+    let (graph, cache, tile_size, pad) = {
+        let snap = s.style.read().await;
+        (
+            Arc::clone(&snap.graph),
+            Arc::clone(&snap.cache),
+            snap.doc.tile_size,
+            snap.doc.pad,
+        )
+    };
+
+    let png = tokio::task::spawn_blocking({
+        let assets = Arc::clone(&s.assets);
+        move || render_png(&graph, &cache, &assets, mvt.as_deref(), tile, tile_size, pad)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
     Ok(Response::builder()
         .header(header::CONTENT_TYPE, "image/png")
         .header(header::CACHE_CONTROL, "no-store")
@@ -98,7 +114,7 @@ async fn get_mvt(
     State(s): State<AppState>,
     Path((z, x, y)): Path<(u8, u32, u32)>,
 ) -> Result<Response, (StatusCode, String)> {
-    let tile = TileId::new(z, x, y);
+    let tile = CoreTileId::new(z, x, y);
     let mvt = match s.mvt_cache.get(&tile).map(|r| r.clone()) {
         Some(b) => Some(b),
         None => match s.archive.get_tile(tile).await {
@@ -121,19 +137,45 @@ async fn get_mvt(
 }
 
 fn render_png(
-    snap: &StyleSnapshot,
+    graph: &ezu::graph::Graph,
+    cache: &ezu::graph::Cache,
+    assets: &BrushBankLoader,
     mvt_bytes: Option<&[u8]>,
-    tile: TileId,
-    brushes: &std::collections::HashMap<String, Brush>,
-) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-    let mut canvas = canvas_from_style(&snap.parsed);
-    if let Some(bytes) = mvt_bytes {
-        let decoded = mvt::decode(bytes)?;
-        let resolver = |name: &str| -> Option<&Brush> {
-            let key = name.strip_prefix('@').unwrap_or(name);
-            brushes.get(key)
-        };
-        render_style(&mut canvas, &snap.parsed, &decoded, tile, &resolver)?;
-    }
-    Ok(paint::encode_png(&canvas)?)
+    tile: CoreTileId,
+    tile_size: u32,
+    pad: u32,
+) -> Result<Vec<u8>, String> {
+    let tile_data: Option<OpaqueValue> = match mvt_bytes {
+        Some(bytes) => Some(Arc::new(
+            mvt::decode(bytes).map_err(|e| format!("mvt decode: {e}"))?,
+        ) as OpaqueValue),
+        None => None,
+    };
+    let ev = Evaluator::new(graph, cache, assets);
+    let out = ev
+        .render_with_tile_data(
+            TileId {
+                z: tile.z,
+                x: tile.x,
+                y: tile.y,
+            },
+            CanvasInfo { tile_size, pad },
+            &ParamValues::new(),
+            tile_seed(tile),
+            tile_data.as_ref(),
+        )
+        .map_err(|e| format!("render: {e}"))?;
+    let raster = match out {
+        PortValue::Raster(r) => r,
+        other => return Err(format!("expected Raster output, got {:?}", other.kind())),
+    };
+    raster_to_png(&raster, tile_size, pad).map_err(|e| format!("png: {e}"))
+}
+
+fn tile_seed(tile: CoreTileId) -> u64 {
+    let mut s = 0u64;
+    s = s.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(tile.z as u64);
+    s = s.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(tile.x as u64);
+    s = s.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(tile.y as u64);
+    s
 }

@@ -478,6 +478,7 @@ name = "ezu"
 version = "0.1.0"
 dependencies = [
  "ezu-core",
+ "ezu-graph",
  "ezu-mvt",
  "ezu-paint",
  "ezu-pmtiles",
@@ -495,6 +496,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ezu-graph"
+version = "0.1.0"
+dependencies = [
+ "ezu-style",
+ "indexmap",
+ "serde_json",
+ "thiserror",
+ "xxhash-rust",
+]
+
+[[package]]
 name = "ezu-mvt"
 version = "0.1.0"
 dependencies = [
@@ -508,12 +520,15 @@ name = "ezu-paint"
 version = "0.1.0"
 dependencies = [
  "ezu-core",
+ "ezu-graph",
  "ezu-mvt",
  "ezu-style",
  "hokusai",
  "libblur",
+ "serde_json",
  "thiserror",
  "tiny-skia",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -551,6 +566,7 @@ name = "ezu-style"
 version = "0.1.0"
 dependencies = [
  "ezu-core",
+ "indexmap",
  "schemars",
  "serde",
  "serde_json",
@@ -563,6 +579,7 @@ version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
  "ezu-core",
+ "ezu-graph",
  "ezu-mvt",
  "ezu-paint",
  "ezu-style",

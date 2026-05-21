@@ -20,7 +20,7 @@ CLI flags (all also overridable via env):
 | Flag | Env | Default |
 |---|---|---|
 | `--pmtiles-url` | `EZU_PMTILES_URL` | `https://build.protomaps.com/20260520.pmtiles` |
-| `--style` | `EZU_STYLE` | `crates/ezu/styles/watercolor-basic.json` |
+| `--style` | `EZU_STYLE` | `crates/ezu/examples/watercolor-basic.json` |
 | `--brushes` | `EZU_BRUSHES` | `assets/brushes` |
 | `--schema` | `EZU_SCHEMA` | `schemas/ezu-style.json` |
 | `--bind` | `EZU_BIND` | `127.0.0.1:8080` |

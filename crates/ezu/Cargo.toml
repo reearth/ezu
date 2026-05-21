@@ -21,6 +21,7 @@ style-json = ["dep:ezu-style"]
 
 [dependencies]
 ezu-core = { workspace = true }
+ezu-graph = { workspace = true }
 ezu-mvt = { workspace = true, optional = true }
 ezu-pmtiles = { workspace = true, optional = true }
 ezu-paint = { workspace = true, optional = true }

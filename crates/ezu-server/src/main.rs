@@ -1,13 +1,13 @@
 //! Live editor + tile server for the Ezu Style Spec.
 //!
-//! - `GET  /`                    → inline HTML editor (textarea + Leaflet)
-//! - `GET  /style`               → current style as raw JSON
-//! - `PUT  /style`               → validate + replace style; returns `{ version }`
-//! - `GET  /tiles/{z}/{x}/{y}.png` → render and serve the tile
-//! - `GET  /schemas/ezu-style.json` → JSON Schema for client-side validation
+//! - `GET  /`                       → inline HTML editor
+//! - `GET  /style`                  → current style JSON
+//! - `PUT  /style`                  → validate + rebuild graph; returns `{ version }`
+//! - `GET  /tiles/{z}/{x}/{y}.png`  → render and serve the tile
+//! - `GET  /schemas/ezu-style.json` → (optional) JSON Schema for client validation
 //!
-//! The upstream MVT bytes are cached in-process so style edits don't refetch
-//! from the PMTiles archive.
+//! Each style version owns its own intermediate cache; an edit invalidates
+//! everything in one swap.
 
 mod handlers;
 mod state;
@@ -16,14 +16,13 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use clap::Parser;
-use ezu::paint::Brush;
-use std::collections::HashMap;
+use ezu::paint::host::BrushBankLoader;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
-use crate::state::AppState;
+use crate::state::{AppState, StyleSnapshot};
 
 #[derive(Parser, Debug)]
 #[command(about = "Live editor + tile server for the Ezu Style Spec")]
@@ -38,14 +37,14 @@ struct Args {
     /// Path to the initial Ezu Style JSON document.
     #[arg(
         long,
-        default_value = "crates/ezu/styles/watercolor-basic.json",
+        default_value = "crates/ezu/examples/watercolor-basic.json",
         env = "EZU_STYLE"
     )]
     style: PathBuf,
     /// Directory containing `.myb` brush files.
     #[arg(long, default_value = "assets/brushes", env = "EZU_BRUSHES")]
     brushes: PathBuf,
-    /// Path to the JSON schema served at `/schemas/ezu-style.json`.
+    /// Path to the JSON schema served at `/schemas/ezu-style.json` (optional).
     #[arg(long, default_value = "schemas/ezu-style.json", env = "EZU_SCHEMA")]
     schema: PathBuf,
     /// Bind address.
@@ -64,28 +63,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let archive = ezu::pmtiles::PmTilesArchive::open_url(&args.pmtiles_url).await?;
 
     let style_text = std::fs::read_to_string(&args.style)?;
-    let parsed = ezu::style::Style::from_json(&style_text)?;
+    let snapshot = StyleSnapshot::build(style_text, 1)?;
     tracing::info!(
-        "loaded style {} ({} layers, tile={}, pad={})",
-        parsed.name,
-        parsed.layers.len(),
-        parsed.tile_size,
-        parsed.pad
+        "loaded style {} ({} nodes, tile={}, pad={})",
+        snapshot.doc.name,
+        snapshot.doc.nodes.len(),
+        snapshot.doc.tile_size,
+        snapshot.doc.pad,
     );
 
-    let brushes = load_brushes(&args.brushes)?;
+    let assets = build_brush_loader(&args.brushes)?;
     tracing::info!(
         "loaded {} brushes from {}",
-        brushes.len(),
+        assets.bank.len(),
         args.brushes.display()
     );
 
-    let state = AppState::new(archive, parsed, style_text, brushes, args.schema.clone());
+    let state = AppState::new(archive, snapshot, assets, args.schema.clone());
 
     let mut app = handlers::router().with_state(state);
 
-    // Static directories — present only when they exist on disk so the
-    // server stays useful even when run from a published binary.
     for (route, dir) in [
         ("/wasm-demo", "crates/ezu-wasm/www"),
         ("/wasm/scalar", "target/wasm/scalar"),
@@ -108,8 +105,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn load_brushes(dir: &PathBuf) -> Result<HashMap<String, Brush>, Box<dyn std::error::Error>> {
-    let mut bank = HashMap::new();
+fn build_brush_loader(dir: &PathBuf) -> Result<BrushBankLoader, Box<dyn std::error::Error>> {
+    let mut loader = BrushBankLoader::new().with_dir(dir.clone());
+    if !dir.exists() {
+        return Ok(loader);
+    }
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -123,7 +123,7 @@ fn load_brushes(dir: &PathBuf) -> Result<HashMap<String, Brush>, Box<dyn std::er
             .and_then(|s| s.to_str())
             .ok_or("bad brush filename")?
             .to_string();
-        bank.insert(name, brush);
+        loader.insert(name, brush);
     }
-    Ok(bank)
+    Ok(loader)
 }

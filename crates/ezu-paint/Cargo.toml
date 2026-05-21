@@ -11,8 +11,11 @@ authors.workspace = true
 
 [dependencies]
 ezu-core = { workspace = true }
+ezu-graph = { workspace = true }
 ezu-mvt = { workspace = true }
 ezu-style = { workspace = true }
+serde_json = { workspace = true }
+xxhash-rust = { workspace = true }
 hokusai = { workspace = true, features = ["myb-json", "tile-mem", "tiny-skia"] }
 tiny-skia = { workspace = true }
 libblur = { workspace = true }
