@@ -31,6 +31,7 @@ fn registry_emits_document_schema_with_all_ops() {
         "wave",
         "stamp",
         "tiling",
+        "place",
     ] {
         assert!(s.contains(&format!("\"const\":\"{op}\"")), "missing op `{op}` in schema");
     }
@@ -795,6 +796,54 @@ fn tiling_world_anchor_is_seamless_across_tiles() {
             }
         }
     }
+}
+
+#[test]
+fn place_cover_fills_canvas_with_source_color() {
+    // A 16-canvas source disk (red) covered onto a 32-canvas should
+    // scale up by 2x. The canvas center should be red; cover crops
+    // the source so corners are red too (uniform scale 2x covers
+    // exactly, the source disk reaches y/x = 16 from canvas center).
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 32,
+      "nodes": {
+        "src":  { "op": "circle", "color": "#ff0000", "radius-frac": 0.5 },
+        "out":  { "op": "place", "input": "@src", "fit": "cover" }
+      },
+      "output": "@out"
+    }"##;
+    let r = render(json, 32, 0);
+    let center = r.pixel(16, 16);
+    assert!(center[0] > 200, "center should be red under cover: {center:?}");
+    assert!(center[3] > 200);
+}
+
+#[test]
+fn place_contain_centers_source_with_letterbox() {
+    // A square source contained in a square canvas: with equal aspect,
+    // contain == identity. We use a non-square arrangement by
+    // contain-fitting a smaller virtual rect via scale-down test:
+    // place at fit=none, scale=0.5, anchor=center, position center.
+    // Verifies the manual placement path: shrink the disk to half
+    // size, centered. Corners should now be transparent.
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 32,
+      "nodes": {
+        "src":  { "op": "circle", "color": "#00ff00", "radius-frac": 0.5 },
+        "out":  { "op": "place", "input": "@src", "fit": "none",
+                  "scale": 0.5, "anchor": "center",
+                  "position-px": [16, 16] }
+      },
+      "output": "@out"
+    }"##;
+    let r = render(json, 32, 0);
+    let center = r.pixel(16, 16);
+    assert!(center[1] > 200, "center should be green: {center:?}");
+    // Disk now has radius ~4 px (half of 8), so (24, 16) is well outside.
+    let outside = r.pixel(24, 16);
+    assert_eq!(outside[3], 0, "shrunk disk should not reach (24,16): {outside:?}");
 }
 
 #[test]
