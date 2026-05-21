@@ -5,5 +5,7 @@ mod boundary;
 mod buffer;
 mod centroid;
 mod convex_hull;
+mod dash;
 mod hatch;
 mod simplify;
+mod wave;

@@ -12,14 +12,18 @@ use tiny_skia::{Pixmap, PixmapPaint, Transform};
 
 use crate::PaintError;
 
-/// In-memory brush bank that satisfies `brush-file` references.
+/// In-memory asset bank for `brush-file` and `image` references.
 ///
-/// Names may be supplied with or without a leading `@`. If a name is not
-/// in the in-memory map, the loader falls back to reading
-/// `<brushes_dir>/<name>.myb` from disk.
+/// Names may be supplied with or without a leading `@`. Resolution
+/// order on miss is: in-memory brush bank, then `<brushes_dir>` on
+/// disk for `.myb` brushes, then in-memory image bank, then
+/// `<images_dir>` on disk for PNGs. The brush-bank/-dir pair is kept
+/// for backwards compatibility with the original brush-only API.
 pub struct BrushBankLoader {
     pub bank: HashMap<String, Arc<Brush>>,
     pub brushes_dir: Option<PathBuf>,
+    pub images: HashMap<String, Arc<RasterBuf>>,
+    pub images_dir: Option<PathBuf>,
 }
 
 impl BrushBankLoader {
@@ -27,6 +31,8 @@ impl BrushBankLoader {
         Self {
             bank: HashMap::new(),
             brushes_dir: None,
+            images: HashMap::new(),
+            images_dir: None,
         }
     }
 
@@ -35,8 +41,17 @@ impl BrushBankLoader {
         self
     }
 
+    pub fn with_images_dir(mut self, dir: PathBuf) -> Self {
+        self.images_dir = Some(dir);
+        self
+    }
+
     pub fn insert(&mut self, name: impl Into<String>, brush: Brush) {
         self.bank.insert(name.into(), Arc::new(brush));
+    }
+
+    pub fn insert_image(&mut self, name: impl Into<String>, image: RasterBuf) {
+        self.images.insert(name.into(), Arc::new(image));
     }
 }
 
@@ -69,8 +84,47 @@ impl AssetLoader for BrushBankLoader {
                 }
             }
         }
+        if let Some(img) = self.images.get(key) {
+            return Ok(Asset::Image(img.clone()));
+        }
+        if let Some(dir) = &self.images_dir {
+            // Try `<dir>/<key>`, then `<dir>/<key>.png`.
+            let candidates = [dir.join(key), dir.join(format!("{key}.png"))];
+            for path in &candidates {
+                if path.exists() {
+                    let raster = decode_image_file(path).map_err(|e| AssetError::Decode {
+                        src: src.to_string(),
+                        msg: e,
+                    })?;
+                    return Ok(Asset::Image(Arc::new(raster)));
+                }
+            }
+        }
         Err(AssetError::NotFound(src.to_string()))
     }
+}
+
+/// Decode a PNG (or other format supported by the `image` crate) into a
+/// premultiplied-alpha RGBA8 [`RasterBuf`]. Returns a stringified error
+/// on any decode failure.
+fn decode_image_file(path: &std::path::Path) -> Result<RasterBuf, String> {
+    let img = image::open(path).map_err(|e| e.to_string())?.to_rgba8();
+    let (w, h) = img.dimensions();
+    let mut pixels = Vec::with_capacity((w * h * 4) as usize);
+    for px in img.pixels() {
+        let [r, g, b, a] = px.0;
+        // Premultiply: ezu's RasterBuf carries straight RGBA *premul*.
+        let af = a as f32 / 255.0;
+        pixels.push((r as f32 * af).round() as u8);
+        pixels.push((g as f32 * af).round() as u8);
+        pixels.push((b as f32 * af).round() as u8);
+        pixels.push(a);
+    }
+    Ok(RasterBuf {
+        width: w,
+        height: h,
+        pixels,
+    })
 }
 
 /// Crop a padded raster down to the central `tile_size` × `tile_size`

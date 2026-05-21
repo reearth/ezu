@@ -8,9 +8,12 @@
 //!   synthesized (`mvt-source`, `literal-geometry`, `tile-bounds`,
 //!   `point-grid`)
 //! - [`paint`] — paint features onto a canvas (`fill-solid`,
-//!   `fill-dabs`, `line`, `brush-file`)
+//!   `fill-dabs`, `line`, `stamp`, `brush-file`)
+//! - [`brush`] — `() -> Brush` sources: load a brush asset
+//!   (`brush-file`) or synthesize one (`brush-solid`)
 //! - [`geometry`] — `Features -> Features` transforms (`centroid`,
-//!   `boundary`, `simplify`, `convex-hull`, `buffer`, `hatch`)
+//!   `boundary`, `simplify`, `convex-hull`, `buffer`, `hatch`,
+//!   `dash`, `wave`)
 //!
 //! Each op file ends in `ezu_graph::submit_node!(...Factory)` which
 //! registers it with the global inventory. [`default_registry`] simply
@@ -27,6 +30,7 @@
 
 use ezu_graph::NodeRegistry;
 
+mod brush;
 mod common;
 mod geometry;
 mod paint;

@@ -25,6 +25,11 @@ fn registry_emits_document_schema_with_all_ops() {
         "fill-dabs",
         "line",
         "brush-file",
+        "brush-solid",
+        "image",
+        "dash",
+        "wave",
+        "stamp",
     ] {
         assert!(s.contains(&format!("\"const\":\"{op}\"")), "missing op `{op}` in schema");
     }
