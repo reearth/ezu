@@ -35,6 +35,7 @@ hokusai = { version = "0.2", default-features = false }
 # Graphics
 tiny-skia = "0.12"
 libblur = "0.24"
+noise = { version = "0.9", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 # Geo

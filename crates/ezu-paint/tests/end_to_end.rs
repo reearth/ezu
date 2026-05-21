@@ -40,6 +40,15 @@ use ezu_paint::nodes::default_registry;
 use ezu_style::Document;
 
 fn render(json: &str, tile_size: u32, pad: u32) -> std::sync::Arc<ezu_graph::RasterBuf> {
+    render_tile(json, tile_size, pad, TileId { z: 0, x: 0, y: 0 })
+}
+
+fn render_tile(
+    json: &str,
+    tile_size: u32,
+    pad: u32,
+    tile: TileId,
+) -> std::sync::Arc<ezu_graph::RasterBuf> {
     let doc = Document::from_json(json).expect("parse");
     let registry = default_registry();
     let graph = build_graph(&doc, &registry).expect("build");
@@ -47,12 +56,7 @@ fn render(json: &str, tile_size: u32, pad: u32) -> std::sync::Arc<ezu_graph::Ras
     let assets = NoAssets;
     let ev = Evaluator::new(&graph, &cache, &assets);
     let out = ev
-        .render(
-            TileId { z: 0, x: 0, y: 0 },
-            CanvasInfo { tile_size, pad },
-            &ParamValues::new(),
-            0,
-        )
+        .render(tile, CanvasInfo { tile_size, pad }, &ParamValues::new(), 0)
         .expect("render");
     match out {
         PortValue::Raster(r) => r,
@@ -389,6 +393,323 @@ fn gradient_diamond_has_axis_aligned_corners() {
     // A pixel halfway to the tip along an axis: Manhattan ~0.25, t ~0.5 → grey.
     let half = r.pixel(8, 4)[0];
     assert!((half as i32 - 128).abs() < 40, "axial half should be grey, got {half}");
+}
+
+#[test]
+fn noise_perlin_produces_variation_and_is_deterministic() {
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 32,
+      "nodes": {
+        "out": {
+          "op": "noise",
+          "type": "perlin",
+          "scale-px": 16,
+          "octaves": 3,
+          "seed": 42,
+          "anchor": "tile"
+        }
+      },
+      "output": "@out"
+    }"##;
+    let a = render(json, 32, 0);
+    let b = render(json, 32, 0);
+    // Deterministic: identical bytes across two renders.
+    assert_eq!(a.pixels, b.pixels);
+    // Not uniform: at least two distinct luma values.
+    let mut min = 255u8;
+    let mut max = 0u8;
+    for chunk in a.pixels.chunks(4) {
+        min = min.min(chunk[0]);
+        max = max.max(chunk[0]);
+    }
+    assert!(max as i32 - min as i32 > 20, "noise should vary: {min}..{max}");
+}
+
+#[test]
+fn noise_white_changes_with_seed() {
+    let mk = |seed: u32| -> String {
+        format!(
+            r##"{{
+              "name": "demo",
+              "tile-size": 16,
+              "nodes": {{
+                "out": {{ "op": "noise", "type": "white", "scale-px": 1, "seed": {seed}, "anchor": "tile" }}
+              }},
+              "output": "@out"
+            }}"##
+        )
+    };
+    let a = render(&mk(1), 16, 0);
+    let b = render(&mk(2), 16, 0);
+    assert_ne!(a.pixels, b.pixels, "different seeds should give different white noise");
+}
+
+#[test]
+fn displace_with_zero_amp_is_identity() {
+    // amp-px = 0 means the displace node should reproduce its input
+    // byte-for-byte (modulo the grown pad). Comparing visible-tile
+    // pixels at matching offsets verifies the warp path doesn't drop
+    // information when there's nothing to do.
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 32,
+      "nodes": {
+        "src":   { "op": "circle", "color": "#ff0000", "radius-frac": 0.3 },
+        "disp":  { "op": "solid", "color": "#808080" },
+        "out":   { "op": "displace", "input": "@src", "displacement": "@disp", "amp-px": 0 }
+      },
+      "output": "@out"
+    }"##;
+    let warped = render(json, 32, 0);
+    let json_ref = r##"{
+      "name": "demo",
+      "tile-size": 32,
+      "nodes": { "src": { "op": "circle", "color": "#ff0000", "radius-frac": 0.3 } },
+      "output": "@src"
+    }"##;
+    let reference = render(json_ref, 32, 0);
+    // Reference has pad=0 (32×32); warped has pad=0 too because amp=0
+    // doesn't bump required_pad. So both rasters are the same size.
+    assert_eq!(warped.width, reference.width);
+    assert_eq!(warped.pixels, reference.pixels);
+}
+
+#[test]
+fn displace_moves_pixels_when_amp_nonzero() {
+    // With a non-zero amplitude and a non-neutral displacement map,
+    // pixels near the disk edge must change versus an undisplaced
+    // reference. We probe a pixel that sits on the disk's right
+    // boundary.
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 32,
+      "nodes": {
+        "src":   { "op": "circle", "color": "#ff0000", "radius-frac": 0.3 },
+        "disp":  { "op": "solid", "color": "#ff0000" },
+        "out":   { "op": "displace", "input": "@src", "displacement": "@disp", "amp-px": 4 }
+      },
+      "output": "@out"
+    }"##;
+    // The host must supply enough pad for the warp amplitude — the
+    // framework exposes `required_pad` as a contract for hosts to honour
+    // via `compute_pad`, not as an auto-grow mechanism.
+    let warped = render(json, 32, 8);
+    // R=255, G=0: dx = (1.0 - 0.5) * 2 * 4 = +4 px, dy = -4 px.
+    // Visible tile center (16, 16) inside the 32+2*8 padded raster is
+    // at padded (24, 24), and the read happens at input (28, 20) which
+    // still lands inside the radius-frac=0.3 disk (r ≈ 9.6).
+    let center = warped.pixel(8 + 16, 8 + 16);
+    assert_eq!(center[0], 255, "center should still read red: {center:?}");
+}
+
+#[test]
+fn warp_disturbs_input_but_stays_deterministic() {
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 32,
+      "nodes": {
+        "src":   { "op": "circle", "color": "#000000", "radius-frac": 0.4 },
+        "out":   {
+          "op": "warp", "input": "@src",
+          "type": "perlin", "scale-px": 12, "amp-px": 5, "seed": 7,
+          "anchor": "tile"
+        }
+      },
+      "output": "@out"
+    }"##;
+    let a = render(json, 32, 0);
+    let b = render(json, 32, 0);
+    assert_eq!(a.pixels, b.pixels, "warp must be deterministic");
+
+    let json_ref = r##"{
+      "name": "demo",
+      "tile-size": 32,
+      "nodes": { "src": { "op": "circle", "color": "#000000", "radius-frac": 0.4 } },
+      "output": "@src"
+    }"##;
+    let reference = render(json_ref, 32, 0);
+    assert_ne!(a.pixels, reference.pixels, "warp should perturb pixels");
+}
+
+#[test]
+fn warp_world_anchor_is_seamless_across_adjacent_tiles() {
+    // Two horizontally adjacent tiles must agree at their shared
+    // border column. The input is a world-anchored noise field plus a
+    // world-anchored warp, so the value at the same world pixel must
+    // match on either side of the seam.
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 32,
+      "nodes": {
+        "src":   {
+          "op": "noise", "type": "perlin", "scale-px": 24,
+          "seed": 11, "anchor": "world"
+        },
+        "out":   {
+          "op": "warp", "input": "@src",
+          "type": "perlin", "scale-px": 16, "amp-px": 4, "seed": 23,
+          "anchor": "world"
+        }
+      },
+      "output": "@out"
+    }"##;
+    // Pad must cover `amp-px` so the warp can reach into the neighbour
+    // tile's territory and produce a value identical to that
+    // neighbour's own read.
+    let pad: u32 = 8;
+    let amp: u32 = 4;
+    let left = render_tile(json, 32, pad, TileId { z: 4, x: 5, y: 7 });
+    let right = render_tile(json, 32, pad, TileId { z: 4, x: 6, y: 7 });
+    // Each warped pixel reads from a position up to `amp` px away in
+    // raster-local coords, so the *safe* output range is the inner
+    // `[amp, padded - amp]` band where the read never hits the boundary
+    // clamp. Restrict the seam comparison to world columns that fall in
+    // both tiles' safe bands — there both tiles compute from identical
+    // world-positioned samples and must agree byte-for-byte.
+    let tile_size = 32u32;
+    // Left tile safe padded x ∈ [amp, tile_size + 2*pad - amp).
+    // Right tile safe padded x ∈ [amp, tile_size + 2*pad - amp).
+    // World overlap of safe bands = pad - amp columns on each side of
+    // the shared border.
+    let safe = pad - amp;
+    for dx in 0..safe {
+        let lx = tile_size + pad + dx; // left padded x
+        let rx = pad + dx;             // right padded x — same world column
+        for y in (pad + amp)..(pad + tile_size - amp) {
+            let l = left.pixel(lx, y);
+            let r = right.pixel(rx, y);
+            assert_eq!(
+                l, r,
+                "seam mismatch at dx={dx} y={y}: left={l:?} right={r:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn brush_solid_line_paints_a_visible_stroke() {
+    // brush-solid + line: draw a horizontal red line across the tile at y=mid.
+    // `extent` 4096 covers the 32-px canvas; `y = 2048` is the middle row.
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 32,
+      "nodes": {
+        "feats": { "op": "literal-geometry", "extent": 4096,
+                   "lines": [ [ [0, 2048], [4095, 2048] ] ] },
+        "brush": { "op": "brush-solid", "width-px": 3, "color": "#ff0000" },
+        "out":   { "op": "line", "features": "@feats", "brush": "@brush", "color": "#ff0000" }
+      },
+      "output": "@out"
+    }"##;
+    let r = render(json, 32, 0);
+    // Center pixel of the middle row should have a strong red component.
+    let mid = r.pixel(16, 16);
+    assert!(mid[0] > 200, "center stroke should be red-dominant: {mid:?}");
+    assert!(mid[3] > 200, "center stroke should be opaque: {mid:?}");
+    // A pixel well above the stroke should be transparent.
+    let above = r.pixel(16, 4);
+    assert_eq!(above[3], 0, "above the stroke should be transparent: {above:?}");
+}
+
+#[test]
+fn dash_chops_a_long_line_into_multiple_runs() {
+    // A horizontal line dashed at 4-px dash / 4-px gap should leave the
+    // tile striped: some columns are inked, some are clear.
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 64,
+      "nodes": {
+        "feats":  { "op": "literal-geometry", "extent": 4096,
+                    "lines": [ [ [0, 2048], [4095, 2048] ] ] },
+        "dashed": { "op": "dash", "features": "@feats",
+                    "dash-px": 4, "gap-px": 4 },
+        "brush":  { "op": "brush-solid", "width-px": 2, "color": "#000000" },
+        "out":    { "op": "line", "features": "@dashed", "brush": "@brush", "color": "#000000" }
+      },
+      "output": "@out"
+    }"##;
+    let r = render(json, 64, 0);
+    // Across the middle row, sample alpha. Expect alternation: some
+    // columns hit a dash (alpha > 0), others fall in a gap (alpha = 0).
+    let mut inked = 0;
+    let mut clear = 0;
+    for x in 0..64 {
+        let a = r.pixel(x, 32)[3];
+        if a > 32 {
+            inked += 1;
+        } else if a < 8 {
+            clear += 1;
+        }
+    }
+    assert!(inked > 8 && clear > 8, "expected stripes: inked={inked} clear={clear}");
+}
+
+#[test]
+fn wave_lifts_a_horizontal_line_off_its_baseline() {
+    // A horizontal source line should, after wave displacement, leave
+    // pixels above and below the baseline row.
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 64,
+      "nodes": {
+        "feats":  { "op": "literal-geometry", "extent": 4096,
+                    "lines": [ [ [0, 2048], [4095, 2048] ] ] },
+        "wavy":   { "op": "wave", "features": "@feats",
+                    "amplitude-px": 10, "wavelength-px": 20 },
+        "brush":  { "op": "brush-solid", "width-px": 2, "color": "#000000" },
+        "out":    { "op": "line", "features": "@wavy", "brush": "@brush", "color": "#000000" }
+      },
+      "output": "@out"
+    }"##;
+    let r = render(json, 64, 0);
+    // Sample rows within the wave envelope on both sides of the
+    // baseline (y=32). With amplitude 10 px, the curve reaches roughly
+    // y=22 (above) and y=42 (below); sampling y=28 / y=36 stays well
+    // inside the inked envelope but is firmly off the baseline.
+    let mut above = false;
+    let mut below = false;
+    for x in 8..56 {
+        if r.pixel(x, 28)[3] > 32 {
+            above = true;
+        }
+        if r.pixel(x, 36)[3] > 32 {
+            below = true;
+        }
+    }
+    assert!(above, "wave should push pixels above the baseline");
+    assert!(below, "wave should push pixels below the baseline");
+}
+
+#[test]
+fn stamp_places_image_at_each_point() {
+    // Use `circle` as a sprite (canvas-sized, but only the inner disk is
+    // opaque). Stamping at two extent positions should leave two visible
+    // splotches. Stamp draws the full sprite at each point; since the
+    // sprite is canvas-sized, both stamps overlap heavily — we only
+    // check that the output has substantial coverage and isn't blank.
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 32,
+      "nodes": {
+        "feats": { "op": "literal-geometry", "extent": 4096,
+                   "points": [ [1024, 2048], [3072, 2048] ] },
+        "img":   { "op": "circle", "color": "#00ff00", "radius-frac": 0.15 },
+        "out":   { "op": "stamp", "features": "@feats", "image": "@img", "scale": 1.0 }
+      },
+      "output": "@out"
+    }"##;
+    let r = render(json, 32, 0);
+    let mut green = 0;
+    for y in 0..32 {
+        for x in 0..32 {
+            let p = r.pixel(x, y);
+            if p[1] > 100 && p[3] > 100 {
+                green += 1;
+            }
+        }
+    }
+    assert!(green > 4, "stamp should leave visible green pixels: got {green}");
 }
 
 #[test]

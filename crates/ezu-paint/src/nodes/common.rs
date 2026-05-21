@@ -135,6 +135,116 @@ pub(super) fn read_string_or(
     Ok(s.to_string())
 }
 
+/// How to read samples outside the source raster's `[0, w) x [0, h)`
+/// extent. The upstream `required_pad` should normally keep us inside,
+/// so this only kicks in for extreme amplitudes or at the very edge of
+/// the world (zoom 0).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BoundaryMode {
+    /// Clamp to the nearest edge pixel.
+    Clamp,
+    /// Return transparent black for out-of-bounds samples.
+    Transparent,
+    /// Reflect at edges so the pattern reads `...|abc|cba|abc|...`.
+    Mirror,
+}
+
+pub(super) fn read_boundary(
+    fields: &serde_json::Map<String, Value>,
+    name: &str,
+    default: BoundaryMode,
+) -> Result<BoundaryMode, FactoryError> {
+    let Some(v) = fields.get(name) else {
+        return Ok(default);
+    };
+    let s = v.as_str().ok_or_else(|| FactoryError::BadField {
+        field: name.into(),
+        msg: "expected string".into(),
+    })?;
+    match s {
+        "clamp" => Ok(BoundaryMode::Clamp),
+        "transparent" => Ok(BoundaryMode::Transparent),
+        "mirror" => Ok(BoundaryMode::Mirror),
+        _ => Err(FactoryError::BadField {
+            field: name.into(),
+            msg: format!("unknown boundary `{s}`, expected clamp/transparent/mirror"),
+        }),
+    }
+}
+
+/// Resolve a possibly out-of-range integer pixel coordinate into a
+/// valid `[0, dim)` index, or `None` for `Transparent` out-of-range.
+#[inline]
+fn wrap_index(i: i64, dim: u32, mode: BoundaryMode) -> Option<u32> {
+    let d = dim as i64;
+    if d == 0 {
+        return None;
+    }
+    if i >= 0 && i < d {
+        return Some(i as u32);
+    }
+    match mode {
+        BoundaryMode::Clamp => Some(i.clamp(0, d - 1) as u32),
+        BoundaryMode::Transparent => None,
+        BoundaryMode::Mirror => {
+            // Period 2*(d-1); reflect.
+            if d == 1 {
+                return Some(0);
+            }
+            let period = 2 * (d - 1);
+            let mut k = i % period;
+            if k < 0 {
+                k += period;
+            }
+            if k >= d {
+                k = period - k;
+            }
+            Some(k as u32)
+        }
+    }
+}
+
+#[inline]
+fn read_pixel_or(
+    src: &RasterBuf,
+    ix: i64,
+    iy: i64,
+    mode: BoundaryMode,
+) -> [f32; 4] {
+    let Some(x) = wrap_index(ix, src.width, mode) else {
+        return [0.0; 4];
+    };
+    let Some(y) = wrap_index(iy, src.height, mode) else {
+        return [0.0; 4];
+    };
+    let p = src.pixel(x, y);
+    [p[0] as f32, p[1] as f32, p[2] as f32, p[3] as f32]
+}
+
+/// Bilinear sample of a premultiplied RGBA8 raster at floating-point
+/// pixel coordinates `(x, y)`. Linear blending of premultiplied values
+/// is the correct path — avoids halos near transparent edges.
+pub(super) fn sample_bilinear(src: &RasterBuf, x: f64, y: f64, mode: BoundaryMode) -> [u8; 4] {
+    let fx = x.floor();
+    let fy = y.floor();
+    let tx = (x - fx) as f32;
+    let ty = (y - fy) as f32;
+    let ix = fx as i64;
+    let iy = fy as i64;
+    let p00 = read_pixel_or(src, ix, iy, mode);
+    let p10 = read_pixel_or(src, ix + 1, iy, mode);
+    let p01 = read_pixel_or(src, ix, iy + 1, mode);
+    let p11 = read_pixel_or(src, ix + 1, iy + 1, mode);
+    let mut out = [0u8; 4];
+    for c in 0..4 {
+        let a = p00[c] + (p10[c] - p00[c]) * tx;
+        let b = p01[c] + (p11[c] - p01[c]) * tx;
+        let v = a + (b - a) * ty;
+        out[c] = v.round().clamp(0.0, 255.0) as u8;
+    }
+    out
+}
+
 /// Coordinate anchor for procedural sources (gradients, noise, etc.).
 /// `Tile` = positions are fractions of the current tile (constant
 /// output per canvas size). `World` = positions are fractions of the

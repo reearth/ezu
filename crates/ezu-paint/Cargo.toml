@@ -19,6 +19,7 @@ xxhash-rust = { workspace = true }
 hokusai = { workspace = true, features = ["myb-json", "tile-mem", "tiny-skia"] }
 tiny-skia = { workspace = true }
 libblur = { workspace = true }
+noise = { workspace = true }
 thiserror = { workspace = true }
 
 [features]

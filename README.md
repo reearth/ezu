@@ -67,7 +67,9 @@ cached and reusable across tiles.
 
 The minimum op set ships in [`ezu-paint`](crates/ezu-paint):
 
-- **Sources** — `solid`, `circle`, `mvt-source`, `brush-file`
+- **Sources** — `solid`, `circle`, `noise` (white / value / perlin /
+  simplex / worley, with fBm octaves and domain warp, world-anchored
+  for seamless tile borders), `mvt-source`, `brush-file`
 - **Rasterization** — `fill-solid` (tiny-skia + libblur), `fill-dabs`
   (hokusai scatter-dab fill, **world-deterministic** so dabs stay
   seamless across tile boundaries), `line` (hokusai stroke along
@@ -77,6 +79,11 @@ The minimum op set ships in [`ezu-paint`](crates/ezu-paint):
   etc., plus `composite` operators (`destination-out` for brush-style
   eraser), `clip` for Photoshop-style clipping masks, and an optional
   alpha-`mask` input)
+- **Warp** — `displace` (Photoshop-style displacement map: R/G channels
+  of a second raster drive per-pixel offsets), `warp` (domain warp via
+  built-in noise; world-anchored for seamless tile borders). Both grow
+  upstream pad by `amp-px` and expose `clamp` / `transparent` /
+  `mirror` boundary modes
 - **Adjustment** — `brightness-contrast`, `hsl` (hue rotation +
   saturation/lightness shift), `invert`, `color-to-alpha` (chroma key)
 - **Gradients** — `gradient-linear`, `gradient-radial` (elliptical via
