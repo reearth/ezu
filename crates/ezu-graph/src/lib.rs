@@ -32,8 +32,11 @@ pub use node::Node;
 pub use port::{CoordSpace, PortKind, PortSpec};
 pub use registry::{
     schema_frag, take_input_ref, BuiltNode, Connection, FactoryCtx, FactoryError, NodeFactory,
-    NodeRegistry,
+    NodeRegistry, StaticOp,
 };
+
+#[doc(hidden)]
+pub use inventory;
 pub use value::{PortValue, ScalarValue};
 
 #[cfg(test)]

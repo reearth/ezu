@@ -10,7 +10,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use super::common::read_number_or;
+use crate::nodes::common::read_number_or;
 
 struct BlendNode {
     opacity: f32,
@@ -85,6 +85,7 @@ impl Node for BlendNode {
 
 pub(super) struct BlendFactory;
 impl NodeFactory for BlendFactory {
+    fn op_name(&self) -> &'static str { "blend" }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
@@ -127,3 +128,5 @@ impl NodeFactory for BlendFactory {
 fn mul_u8q(c: u8, q: u16) -> u8 {
     ((c as u16 * q + 127) / 255) as u8
 }
+
+ezu_graph::submit_node!(BlendFactory);

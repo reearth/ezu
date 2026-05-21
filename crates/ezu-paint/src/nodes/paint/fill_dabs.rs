@@ -13,7 +13,7 @@ use hokusai::color::RgbaF32;
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use super::common::{
+use crate::nodes::common::{
     canvas_into_raster, core_tile, downcast_features, empty_raster, make_canvas, read_color,
     read_number, read_number_or, srgb_to_linear_rgba,
 };
@@ -101,6 +101,7 @@ impl Node for FillDabsNode {
 
 pub(super) struct FillDabsFactory;
 impl NodeFactory for FillDabsFactory {
+    fn op_name(&self) -> &'static str { "fill-dabs" }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
@@ -157,3 +158,5 @@ impl NodeFactory for FillDabsFactory {
         })
     }
 }
+
+ezu_graph::submit_node!(FillDabsFactory);

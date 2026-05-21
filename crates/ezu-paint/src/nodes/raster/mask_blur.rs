@@ -10,7 +10,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use super::common::read_number;
+use crate::nodes::common::read_number;
 
 struct MaskBlurNode {
     sigma: f32,
@@ -55,6 +55,7 @@ impl Node for MaskBlurNode {
 
 pub(super) struct MaskBlurFactory;
 impl NodeFactory for MaskBlurFactory {
+    fn op_name(&self) -> &'static str { "mask-blur" }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
@@ -136,3 +137,5 @@ fn gaussian_kernel(sigma: f32) -> Vec<f32> {
     }
     k
 }
+
+ezu_graph::submit_node!(MaskBlurFactory);

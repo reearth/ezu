@@ -13,7 +13,10 @@ Three things live here:
 1. **Paint primitives** — functions that take a `Canvas` and feature
    data and produce pixels. Reusable on their own.
 2. **`nodes` module** — `NodeFactory` implementations for each built-in
-   op, plus `default_registry()` that wires them all up.
+   op, grouped into `raster`, `source`, `paint`, `geometry`
+   submodules. Each op self-registers via `ezu_graph::submit_node!`;
+   `default_registry()` just collects everything via
+   `NodeRegistry::from_inventory()`.
 3. **`host` module** — host-side glue: `AssetLoader` impl, conversions
    from `RasterBuf` to PNG / straight RGBA.
 
@@ -73,6 +76,8 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 `ezu_paint::nodes::default_registry()` returns a
 [`NodeRegistry`](../ezu-graph) preloaded with:
 
+**Raster / mask utility** (`nodes::raster`)
+
 | Op | Inputs → Output | Notes |
 |---|---|---|
 | `solid` | `() → Raster` | Constant-color fill |
@@ -81,14 +86,40 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 | `mask-blur` | `Mask → Mask` | Separable gaussian; grows upstream pad |
 | `fill-with-mask` | `Mask → Raster` | Tint a mask with a color |
 | `blend` | `Raster + Raster → Raster` | Premul source-over with opacity |
+
+**Feature sources** (`nodes::source`)
+
+| Op | Inputs → Output | Notes |
+|---|---|---|
 | `mvt-source` | `() → Features` | Pulls a layer out of `EvalCtx::tile_data` |
+| `literal-geometry` | `() → Features` | Inline points / lines / polygons from style fields |
+| `tile-bounds` | `() → Features` | Polygon covering the current tile |
+| `point-grid` | `() → Features` | Regular grid of points across the tile |
+
+**Feature paint** (`nodes::paint`)
+
+| Op | Inputs → Output | Notes |
+|---|---|---|
 | `fill-solid` | `Features → Raster` | wraps `paint_polygons` |
 | `fill-dabs` | `Features → Raster` | wraps `paint_polygons_dabs` |
 | `line` | `Features + Brush → Raster` | wraps `paint_lines` |
 | `brush-file` | `() → Brush` | Resolved by the host's `AssetLoader` |
 
+**Geometry ops** (`nodes::geometry`) — turf.js-flavored `Features → Features` transforms
+
+| Op | Inputs → Output | Notes |
+|---|---|---|
+| `centroid` | `Features → Features` | Polygon / line centroids as points |
+| `boundary` | `Features → Features` | Polygon rings as lines |
+| `simplify` | `Features → Features` | Douglas–Peucker |
+| `convex-hull` | `Features → Features` | Convex hull over all input vertices |
+| `buffer` | `Features → Features` | Offset / Minkowski-style buffer |
+| `hatch` | `Features → Features` | Hatch-line fill of polygons |
+
 Each factory implements `NodeFactory::schema()` so editors picking up
-the registry-derived JSON Schema get per-op autocomplete.
+the registry-derived JSON Schema get per-op autocomplete. Adding a new
+op means dropping a file under the right category and ending it with
+`ezu_graph::submit_node!(MyFactory);` — no central list to edit.
 
 ## Canvas
 

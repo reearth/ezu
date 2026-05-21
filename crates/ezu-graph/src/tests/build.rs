@@ -7,15 +7,18 @@ use crate::{
     FactoryError, NodeFactory, NodeRegistry, PortKind, PortSpec,
 };
 
-struct SrcFactory(PortKind);
+struct SrcFactory(&'static str, PortKind);
 impl NodeFactory for SrcFactory {
+    fn op_name(&self) -> &'static str {
+        self.0
+    }
     fn build(
         &self,
         _fields: &serde_json::Map<String, serde_json::Value>,
         _ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         Ok(BuiltNode {
-            node: Mock::new("src", vec![], self.0).boxed(),
+            node: Mock::new("src", vec![], self.1).boxed(),
             connections: vec![],
         })
     }
@@ -23,6 +26,9 @@ impl NodeFactory for SrcFactory {
 
 struct BlurFactory;
 impl NodeFactory for BlurFactory {
+    fn op_name(&self) -> &'static str {
+        "blur"
+    }
     fn build(
         &self,
         fields: &serde_json::Map<String, serde_json::Value>,
@@ -52,8 +58,8 @@ impl NodeFactory for BlurFactory {
 
 fn test_registry() -> NodeRegistry {
     let mut r = NodeRegistry::new();
-    r.register("image", SrcFactory(PortKind::Mask));
-    r.register("blur", BlurFactory);
+    r.register(SrcFactory("image", PortKind::Mask));
+    r.register(BlurFactory);
     r
 }
 
@@ -104,7 +110,7 @@ fn build_propagates_type_mismatch() {
     // image returns Mask; register a Raster-emitting "rsrc" and try to
     // feed blur (which expects Mask) with it.
     let mut reg = test_registry();
-    reg.register("rsrc", SrcFactory(PortKind::Raster));
+    reg.register(SrcFactory("rsrc", PortKind::Raster));
     let json = r##"{
       "name": "demo",
       "nodes": {

@@ -14,7 +14,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use super::common::features_value;
+use crate::nodes::common::features_value;
 
 const DEFAULT_EXTENT: u32 = 4096;
 
@@ -117,6 +117,7 @@ fn parse_ring(v: &Value, ctx: &'static str) -> Result<Vec<(i32, i32)>, FactoryEr
 
 pub(super) struct LiteralGeometryFactory;
 impl NodeFactory for LiteralGeometryFactory {
+    fn op_name(&self) -> &'static str { "literal-geometry" }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
@@ -227,3 +228,5 @@ impl NodeFactory for LiteralGeometryFactory {
         })
     }
 }
+
+ezu_graph::submit_node!(LiteralGeometryFactory);

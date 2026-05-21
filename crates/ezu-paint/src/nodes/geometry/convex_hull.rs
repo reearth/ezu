@@ -11,7 +11,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use super::common::{downcast_features, features_value};
+use crate::nodes::common::{downcast_features, features_value};
 
 struct ConvexHullNode;
 
@@ -55,6 +55,7 @@ impl Node for ConvexHullNode {
 
 pub(super) struct ConvexHullFactory;
 impl NodeFactory for ConvexHullFactory {
+    fn op_name(&self) -> &'static str { "convex-hull" }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
@@ -77,3 +78,5 @@ impl NodeFactory for ConvexHullFactory {
         })
     }
 }
+
+ezu_graph::submit_node!(ConvexHullFactory);

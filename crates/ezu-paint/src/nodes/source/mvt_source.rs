@@ -1,7 +1,7 @@
 //! `mvt-source` — `() -> Features`. Pulls one MVT layer out of
 //! `EvalCtx::tile_data`, applies optional property filter and
 //! `min-zoom-field`, and emits the surviving features as a
-//! [`FilteredFeatures`](super::common::FilteredFeatures).
+//! [`FilteredFeatures`](crate::nodes::common::FilteredFeatures).
 
 use ezu_graph::{
     BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, Node, NodeFactory,
@@ -11,7 +11,7 @@ use ezu_features::mvt::DecodedTile;
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use super::common::{features_value, read_optional_string};
+use crate::nodes::common::{features_value, read_optional_string};
 use crate::render::{collect_lines, collect_points, collect_polygons};
 
 struct MvtSourceNode {
@@ -96,6 +96,7 @@ impl Node for MvtSourceNode {
 
 pub(super) struct MvtSourceFactory;
 impl NodeFactory for MvtSourceFactory {
+    fn op_name(&self) -> &'static str { "mvt-source" }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
@@ -143,3 +144,5 @@ impl NodeFactory for MvtSourceFactory {
         })
     }
 }
+
+ezu_graph::submit_node!(MvtSourceFactory);

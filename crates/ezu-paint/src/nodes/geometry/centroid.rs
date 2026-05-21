@@ -11,7 +11,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use super::common::{downcast_features, features_value};
+use crate::nodes::common::{downcast_features, features_value};
 
 struct CentroidNode {
     include_polygons: bool,
@@ -68,6 +68,7 @@ impl Node for CentroidNode {
 
 pub(super) struct CentroidFactory;
 impl NodeFactory for CentroidFactory {
+    fn op_name(&self) -> &'static str { "centroid" }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
@@ -105,3 +106,5 @@ impl NodeFactory for CentroidFactory {
         })
     }
 }
+
+ezu_graph::submit_node!(CentroidFactory);

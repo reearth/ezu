@@ -1,9 +1,7 @@
-//! `boundary` — `Features -> Features`. Replaces every input polygon
-//! with its boundary rings (exterior + holes) as polylines. Existing
-//! polylines and points pass through unchanged so the node can be
-//! chained with `line`-style paint nodes to stroke polygon outlines.
+//! `simplify` — `Features -> Features`. Douglas-Peucker simplification
+//! on every polyline and polygon ring. Points pass through unchanged.
 
-use ezu_features::ops::boundary::polygon_boundary;
+use ezu_features::ops::simplify::{simplify_line, simplify_polygon};
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError,
     FactoryCtx, FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
@@ -11,13 +9,15 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use super::common::{downcast_features, features_value};
+use crate::nodes::common::{downcast_features, features_value, read_number};
 
-struct BoundaryNode;
+struct SimplifyNode {
+    epsilon: f64,
+}
 
-impl Node for BoundaryNode {
+impl Node for SimplifyNode {
     fn op_name(&self) -> &'static str {
-        "boundary"
+        "simplify"
     }
     fn inputs(&self) -> &[PortSpec] {
         static SPECS: &[PortSpec] = &[PortSpec {
@@ -43,27 +43,36 @@ impl Node for BoundaryNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
-        let mut lines = feats.lines.clone();
-        for p in &feats.polygons {
-            lines.extend(polygon_boundary(p));
-        }
-        Ok(features_value(feats.extent, vec![], lines, feats.points.clone()))
+        let lines: Vec<_> = feats
+            .lines
+            .iter()
+            .filter_map(|l| simplify_line(l, self.epsilon))
+            .collect();
+        let polygons: Vec<_> = feats
+            .polygons
+            .iter()
+            .filter_map(|p| simplify_polygon(p, self.epsilon))
+            .collect();
+        Ok(features_value(feats.extent, polygons, lines, feats.points.clone()))
     }
     fn param_hash(&self, h: &mut Xxh3) {
-        h.update(b"boundary");
+        h.update(b"simplify");
+        h.update(&self.epsilon.to_le_bytes());
     }
 }
 
-pub(super) struct BoundaryFactory;
-impl NodeFactory for BoundaryFactory {
+pub(super) struct SimplifyFactory;
+impl NodeFactory for SimplifyFactory {
+    fn op_name(&self) -> &'static str { "simplify" }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
-        _ctx: &FactoryCtx<'_>,
+        ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let features = take_input_ref(fields, "features")?;
+        let epsilon = read_number(fields, "epsilon", ctx)?;
         Ok(BuiltNode {
-            node: Box::new(BoundaryNode),
+            node: Box::new(SimplifyNode { epsilon }),
             connections: vec![Connection {
                 port: "features".into(),
                 src: features,
@@ -72,11 +81,15 @@ impl NodeFactory for BoundaryFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Convert each polygon to its boundary rings (exterior + holes) as polylines. Existing polylines and points pass through.",
+            "description": "Douglas-Peucker simplify polylines and polygon rings; points pass through.",
             "properties": {
                 "features": schema_frag::node_ref(),
+                "epsilon": { "type": "number", "minimum": 0.0,
+                              "description": "Max perpendicular distance a vertex may be from the simplified line, in tile pixels." },
             },
-            "required": ["features"],
+            "required": ["features", "epsilon"],
         })
     }
 }
+
+ezu_graph::submit_node!(SimplifyFactory);

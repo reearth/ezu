@@ -15,7 +15,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use super::common::{downcast_features, features_value, read_number, read_optional_string};
+use crate::nodes::common::{downcast_features, features_value, read_number, read_optional_string};
 
 struct BufferNode {
     distance: f64,
@@ -80,6 +80,7 @@ impl Node for BufferNode {
 
 pub(super) struct BufferFactory;
 impl NodeFactory for BufferFactory {
+    fn op_name(&self) -> &'static str { "buffer" }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
@@ -124,3 +125,5 @@ impl NodeFactory for BufferFactory {
         })
     }
 }
+
+ezu_graph::submit_node!(BufferFactory);

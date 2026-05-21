@@ -10,7 +10,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use super::common::{read_number, read_number_or};
+use crate::nodes::common::{read_number, read_number_or};
 
 struct MaskCircleNode {
     radius_frac: f32,
@@ -65,6 +65,7 @@ impl Node for MaskCircleNode {
 
 pub(super) struct MaskCircleFactory;
 impl NodeFactory for MaskCircleFactory {
+    fn op_name(&self) -> &'static str { "mask-circle" }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
@@ -91,3 +92,5 @@ impl NodeFactory for MaskCircleFactory {
         })
     }
 }
+
+ezu_graph::submit_node!(MaskCircleFactory);

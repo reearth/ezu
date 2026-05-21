@@ -11,7 +11,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use super::common::{
+use crate::nodes::common::{
     canvas_into_raster, downcast_features, empty_raster, make_canvas, read_color_u8,
     read_number_or, rgba8_to_color, tint_alpha_color,
 };
@@ -82,6 +82,7 @@ impl Node for FillSolidNode {
 
 pub(super) struct FillSolidFactory;
 impl NodeFactory for FillSolidFactory {
+    fn op_name(&self) -> &'static str { "fill-solid" }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
@@ -125,3 +126,5 @@ impl NodeFactory for FillSolidFactory {
         })
     }
 }
+
+ezu_graph::submit_node!(FillSolidFactory);

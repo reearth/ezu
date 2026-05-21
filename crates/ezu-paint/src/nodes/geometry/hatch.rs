@@ -10,7 +10,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use super::common::{downcast_features, features_value, read_number, read_number_or};
+use crate::nodes::common::{downcast_features, features_value, read_number, read_number_or};
 
 struct HatchNode {
     angle_deg: f64,
@@ -66,6 +66,7 @@ impl Node for HatchNode {
 
 pub(super) struct HatchFactory;
 impl NodeFactory for HatchFactory {
+    fn op_name(&self) -> &'static str { "hatch" }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
@@ -103,3 +104,5 @@ impl NodeFactory for HatchFactory {
         })
     }
 }
+
+ezu_graph::submit_node!(HatchFactory);

@@ -59,6 +59,9 @@ pub enum FactoryError {
 /// `fields` map, validate types, and return a [`BuiltNode`]. They MUST
 /// NOT execute any rendering — only construction.
 pub trait NodeFactory: Send + Sync {
+    /// Op name used as the registry key (e.g. `"solid"`, `"fill-solid"`).
+    fn op_name(&self) -> &'static str;
+
     fn build(
         &self,
         fields: &serde_json::Map<String, serde_json::Value>,
@@ -76,10 +79,34 @@ pub trait NodeFactory: Send + Sync {
     }
 }
 
+/// A factory submitted statically via [`inventory::submit!`]. Built-in
+/// node crates use this to self-register without touching a central
+/// list — see [`NodeRegistry::from_inventory`].
+pub struct StaticOp(pub &'static dyn NodeFactory);
+
+inventory::collect!(StaticOp);
+
+/// Submit a unit-struct [`NodeFactory`] to the global inventory so
+/// [`NodeRegistry::from_inventory`] picks it up.
+///
+/// ```ignore
+/// pub(super) struct SolidFactory;
+/// impl NodeFactory for SolidFactory { /* ... */ }
+/// ezu_graph::submit_node!(SolidFactory);
+/// ```
+#[macro_export]
+macro_rules! submit_node {
+    ($factory:ident) => {
+        $crate::inventory::submit! {
+            $crate::StaticOp(&$factory)
+        }
+    };
+}
+
 /// Catalog of registered ops, keyed by op name.
 #[derive(Default)]
 pub struct NodeRegistry {
-    ops: HashMap<&'static str, Box<dyn NodeFactory>>,
+    ops: HashMap<&'static str, &'static dyn NodeFactory>,
 }
 
 impl NodeRegistry {
@@ -87,12 +114,31 @@ impl NodeRegistry {
         Self::default()
     }
 
-    pub fn register(&mut self, op_name: &'static str, factory: impl NodeFactory + 'static) {
-        self.ops.insert(op_name, Box::new(factory));
+    /// Build a registry from every [`StaticOp`] submitted via
+    /// [`inventory::submit!`] across the linked binary.
+    pub fn from_inventory() -> Self {
+        let mut r = Self::default();
+        for StaticOp(f) in inventory::iter::<StaticOp> {
+            r.register_static(*f);
+        }
+        r
+    }
+
+    /// Register a factory by leaking it into `'static`. Convenient for
+    /// dynamic registration; built-in ops should prefer
+    /// [`inventory::submit!`] + [`Self::from_inventory`].
+    pub fn register(&mut self, factory: impl NodeFactory + 'static) {
+        self.register_static(Box::leak(Box::new(factory)));
+    }
+
+    /// Register a `'static` factory reference (the form produced by
+    /// [`inventory::submit!`]).
+    pub fn register_static(&mut self, factory: &'static dyn NodeFactory) {
+        self.ops.insert(factory.op_name(), factory);
     }
 
     pub fn get(&self, op_name: &str) -> Option<&dyn NodeFactory> {
-        self.ops.get(op_name).map(|b| b.as_ref())
+        self.ops.get(op_name).copied()
     }
 
     /// All registered op names, sorted for deterministic output.

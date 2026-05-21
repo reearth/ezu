@@ -12,7 +12,7 @@ use hokusai::Brush;
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use super::common::{
+use crate::nodes::common::{
     canvas_into_raster, core_tile, downcast_brush, downcast_features, empty_raster, make_canvas,
     read_color, read_number, read_number_or, resolve_field, srgb_to_linear_rgba,
 };
@@ -146,6 +146,7 @@ fn hash_curve(h: &mut Xxh3, tag: &[u8], curve: Option<&[(f32, f32)]>) {
 
 pub(super) struct LineFactory;
 impl NodeFactory for LineFactory {
+    fn op_name(&self) -> &'static str { "line" }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
@@ -299,3 +300,5 @@ fn read_stroke_curve(
     }
     Ok(Some(out))
 }
+
+ezu_graph::submit_node!(LineFactory);

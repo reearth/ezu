@@ -45,6 +45,7 @@ impl Node for BrushFileNode {
 
 pub(super) struct BrushFileFactory;
 impl NodeFactory for BrushFileFactory {
+    fn op_name(&self) -> &'static str { "brush-file" }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
@@ -91,3 +92,5 @@ impl NodeFactory for BrushFileFactory {
         })
     }
 }
+
+ezu_graph::submit_node!(BrushFileFactory);

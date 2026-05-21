@@ -9,7 +9,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use super::common::{color_to_premul_u8, read_color};
+use crate::nodes::common::{color_to_premul_u8, read_color};
 
 struct SolidNode {
     color: [f32; 4],
@@ -46,6 +46,7 @@ impl Node for SolidNode {
 
 pub(super) struct SolidFactory;
 impl NodeFactory for SolidFactory {
+    fn op_name(&self) -> &'static str { "solid" }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
@@ -65,3 +66,5 @@ impl NodeFactory for SolidFactory {
         })
     }
 }
+
+ezu_graph::submit_node!(SolidFactory);

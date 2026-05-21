@@ -1,11 +1,21 @@
 //! Node implementations for the graph evaluator. One file per op.
 //!
-//! Built-in op set:
+//! Ops are grouped into category submodules:
 //!
-//! - Sources / utility (no MVT): [`solid`], [`mask_solid`], [`mask_circle`],
-//!   [`mask_blur`], [`fill_with_mask`], [`blend`]
-//! - MVT-driven: [`mvt_source`], [`fill_solid`], [`fill_dabs`], [`line`],
-//!   [`brush_file`]
+//! - [`raster`] — raster / mask utility ops (`solid`, `mask-*`,
+//!   `fill-with-mask`, `blend`)
+//! - [`source`] — feature sources, either fed by the host (MVT) or
+//!   synthesized (`mvt-source`, `literal-geometry`, `tile-bounds`,
+//!   `point-grid`)
+//! - [`paint`] — paint features onto a canvas (`fill-solid`,
+//!   `fill-dabs`, `line`, `brush-file`)
+//! - [`geometry`] — `Features -> Features` transforms (`centroid`,
+//!   `boundary`, `simplify`, `convex-hull`, `buffer`, `hatch`)
+//!
+//! Each op file ends in `ezu_graph::submit_node!(...Factory)` which
+//! registers it with the global inventory. [`default_registry`] simply
+//! collects everything that's been submitted — adding a new op means
+//! creating a file and submitting it; no edits here required.
 //!
 //! MVT-driven nodes downcast `EvalCtx::tile_data` to
 //! `Arc<ezu_features::mvt::DecodedTile>`. The host (e.g. the `tokyo` example)
@@ -17,56 +27,16 @@
 
 use ezu_graph::NodeRegistry;
 
-mod blend;
-mod boundary;
-mod brush_file;
-mod buffer;
-mod centroid;
 mod common;
-mod convex_hull;
-mod fill_dabs;
-mod hatch;
-mod literal_geometry;
-mod point_grid;
-mod simplify;
-mod tile_bounds;
-mod fill_solid;
-mod fill_with_mask;
-mod line;
-mod mask_blur;
-mod mask_circle;
-mod mask_solid;
-mod mvt_source;
-mod solid;
+mod geometry;
+mod paint;
+mod raster;
+mod source;
 
 pub use common::{BrushPayload, FilteredFeatures};
 
-/// Build a registry with all built-in ops registered.
+/// Build a registry of every built-in op, collected from
+/// `ezu_graph::submit_node!` submissions across the linked crates.
 pub fn default_registry() -> NodeRegistry {
-    let mut r = NodeRegistry::new();
-    // raster / mask utility
-    r.register("solid", solid::SolidFactory);
-    r.register("mask-solid", mask_solid::MaskSolidFactory);
-    r.register("mask-circle", mask_circle::MaskCircleFactory);
-    r.register("mask-blur", mask_blur::MaskBlurFactory);
-    r.register("fill-with-mask", fill_with_mask::FillWithMaskFactory);
-    r.register("blend", blend::BlendFactory);
-    // mvt-driven
-    r.register("mvt-source", mvt_source::MvtSourceFactory);
-    r.register("fill-solid", fill_solid::FillSolidFactory);
-    r.register("fill-dabs", fill_dabs::FillDabsFactory);
-    r.register("line", line::LineFactory);
-    r.register("brush-file", brush_file::BrushFileFactory);
-    // geometry ops
-    r.register("centroid", centroid::CentroidFactory);
-    r.register("boundary", boundary::BoundaryFactory);
-    r.register("simplify", simplify::SimplifyFactory);
-    r.register("convex-hull", convex_hull::ConvexHullFactory);
-    r.register("buffer", buffer::BufferFactory);
-    r.register("hatch", hatch::HatchFactory);
-    // synthetic feature sources
-    r.register("literal-geometry", literal_geometry::LiteralGeometryFactory);
-    r.register("tile-bounds", tile_bounds::TileBoundsFactory);
-    r.register("point-grid", point_grid::PointGridFactory);
-    r
+    NodeRegistry::from_inventory()
 }

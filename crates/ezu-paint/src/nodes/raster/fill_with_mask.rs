@@ -10,7 +10,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use super::common::read_color;
+use crate::nodes::common::read_color;
 
 struct FillWithMaskNode {
     color: [f32; 4],
@@ -66,6 +66,7 @@ impl Node for FillWithMaskNode {
 
 pub(super) struct FillWithMaskFactory;
 impl NodeFactory for FillWithMaskFactory {
+    fn op_name(&self) -> &'static str { "fill-with-mask" }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
@@ -92,3 +93,5 @@ impl NodeFactory for FillWithMaskFactory {
         })
     }
 }
+
+ezu_graph::submit_node!(FillWithMaskFactory);

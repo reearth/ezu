@@ -96,6 +96,8 @@ catches accidental "blur σ=200" before any rendering happens.
 ```rust
 struct MyOpFactory;
 impl ezu_graph::NodeFactory for MyOpFactory {
+    fn op_name(&self) -> &'static str { "my-op" }
+
     fn build(&self, fields: &serde_json::Map<String, Value>,
              _ctx: &ezu_graph::FactoryCtx<'_>)
         -> Result<ezu_graph::BuiltNode, ezu_graph::FactoryError> { /* … */ }
@@ -112,8 +114,11 @@ impl ezu_graph::NodeFactory for MyOpFactory {
     }
 }
 
+// Built-in ops self-register via `ezu_graph::submit_node!(MyOpFactory)`
+// at module scope, and `NodeRegistry::from_inventory()` collects them.
+// For dynamic registration, hand the factory directly:
 let mut registry = ezu_paint::nodes::default_registry();
-registry.register("my-op", MyOpFactory);
+registry.register(MyOpFactory);
 ```
 
 The optional `schema()` method feeds `NodeRegistry::document_schema()`,

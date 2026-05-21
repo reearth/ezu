@@ -11,7 +11,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use super::common::features_value;
+use crate::nodes::common::features_value;
 
 const DEFAULT_EXTENT: u32 = 4096;
 
@@ -52,6 +52,7 @@ impl Node for TileBoundsNode {
 
 pub(super) struct TileBoundsFactory;
 impl NodeFactory for TileBoundsFactory {
+    fn op_name(&self) -> &'static str { "tile-bounds" }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
@@ -76,3 +77,5 @@ impl NodeFactory for TileBoundsFactory {
         })
     }
 }
+
+ezu_graph::submit_node!(TileBoundsFactory);

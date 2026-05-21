@@ -9,7 +9,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use super::common::read_number;
+use crate::nodes::common::read_number;
 
 struct MaskSolidNode {
     value: f32,
@@ -43,6 +43,7 @@ impl Node for MaskSolidNode {
 
 pub(super) struct MaskSolidFactory;
 impl NodeFactory for MaskSolidFactory {
+    fn op_name(&self) -> &'static str { "mask-solid" }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
@@ -62,3 +63,5 @@ impl NodeFactory for MaskSolidFactory {
         })
     }
 }
+
+ezu_graph::submit_node!(MaskSolidFactory);
