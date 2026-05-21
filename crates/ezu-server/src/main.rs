@@ -74,7 +74,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let brushes = load_brushes(&args.brushes)?;
-    tracing::info!("loaded {} brushes from {}", brushes.len(), args.brushes.display());
+    tracing::info!(
+        "loaded {} brushes from {}",
+        brushes.len(),
+        args.brushes.display()
+    );
 
     let state = AppState::new(archive, parsed, style_text, brushes, args.schema.clone());
 

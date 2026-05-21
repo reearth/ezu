@@ -20,19 +20,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let y: u32 = args[3].parse()?;
     let layer = args.get(4).cloned().unwrap_or_else(|| "roads".to_string());
 
-    let archive =
-        PmTilesArchive::open_url("https://build.protomaps.com/20260520.pmtiles").await?;
+    let archive = PmTilesArchive::open_url("https://build.protomaps.com/20260520.pmtiles").await?;
     let bytes = archive
         .get_tile(TileId::new(z, x, y))
         .await?
         .ok_or("tile not in archive")?;
     let decoded = mvt::decode(&bytes)?;
     let Some(l) = decoded.layer(&layer) else {
-        eprintln!("layer {layer} not in tile; available: {:?}",
-            decoded.layers.iter().map(|l| &l.name).collect::<Vec<_>>());
+        eprintln!(
+            "layer {layer} not in tile; available: {:?}",
+            decoded.layers.iter().map(|l| &l.name).collect::<Vec<_>>()
+        );
         std::process::exit(1);
     };
-    eprintln!("{}: {} features, extent={}", l.name, l.features.len(), l.extent);
+    eprintln!(
+        "{}: {} features, extent={}",
+        l.name,
+        l.features.len(),
+        l.extent
+    );
 
     let mut per_key: BTreeMap<&str, BTreeMap<String, usize>> = BTreeMap::new();
     for f in &l.features {

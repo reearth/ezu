@@ -32,7 +32,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .get(1)
         .cloned()
         .unwrap_or_else(|| "crates/ezu/styles/watercolor-basic.json".to_string());
-    let date = args.get(2).cloned().unwrap_or_else(|| "20260520".to_string());
+    let date = args
+        .get(2)
+        .cloned()
+        .unwrap_or_else(|| "20260520".to_string());
     let out_dir = PathBuf::from(
         args.get(3)
             .cloned()

@@ -99,7 +99,12 @@ fn trace_enabled() -> bool {
     false
 }
 
-fn apply_fill_solid(canvas: &mut Canvas, decoded: &DecodedTile, tile: TileId, spec: &FillSolidSpec) {
+fn apply_fill_solid(
+    canvas: &mut Canvas,
+    decoded: &DecodedTile,
+    tile: TileId,
+    spec: &FillSolidSpec,
+) {
     let Some(layer) = decoded.layer(&spec.source_layer) else {
         return;
     };
@@ -109,7 +114,7 @@ fn apply_fill_solid(canvas: &mut Canvas, decoded: &DecodedTile, tile: TileId, sp
     }
     let style = WatercolorStyle {
         fill: tint_alpha(spec.fill, spec.fill_alpha),
-        edge: spec.edge.map(|c| hex_to_tinyskia(c)),
+        edge: spec.edge.map(hex_to_tinyskia),
         edge_width: spec.edge_width,
         blur_sigma: spec.blur_sigma,
     };
@@ -154,7 +159,8 @@ fn apply_line(
     if lines.is_empty() {
         return Ok(());
     }
-    let brush = resolve_brush(&spec.brush).ok_or_else(|| RenderError::BrushMissing(spec.brush.clone()))?;
+    let brush =
+        resolve_brush(&spec.brush).ok_or_else(|| RenderError::BrushMissing(spec.brush.clone()))?;
     // Apply optional radius / opacity overrides via a local brush clone.
     let mut brush_local;
     let brush_ref: &Brush = if spec.radius_px.is_some() || spec.opacity.is_some() {

@@ -137,4 +137,3 @@ fn render_png(
     }
     Ok(paint::encode_png(&canvas)?)
 }
-
