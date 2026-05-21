@@ -76,6 +76,8 @@ The minimum op set ships in [`ezu-paint`](crates/ezu-paint):
   modes — multiply / screen / overlay / soft-light / hue / luminosity
   etc., plus `clip` for Photoshop-style clipping masks and an optional
   alpha-`mask` input)
+- **Adjustment** — `brightness-contrast`, `hsl` (hue rotation +
+  saturation/lightness shift), `invert`, `color-to-alpha` (chroma key)
 
 Example: a watercolor water layer with a brushed road on top of an
 earth-tone background.
