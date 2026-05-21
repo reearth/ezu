@@ -72,7 +72,10 @@ The minimum op set ships in [`ezu-paint`](crates/ezu-paint):
   (hokusai scatter-dab fill, **world-deterministic** so dabs stay
   seamless across tile boundaries), `line` (hokusai stroke along
   polylines)
-- **Composition** — `blur`, `blend`
+- **Composition** — `blur` (libblur Gaussian), `blend` (W3C 16 blend
+  modes — multiply / screen / overlay / soft-light / hue / luminosity
+  etc., plus `clip` for Photoshop-style clipping masks and an optional
+  alpha-`mask` input)
 
 Example: a watercolor water layer with a brushed road on top of an
 earth-tone background.
