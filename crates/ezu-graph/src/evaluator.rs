@@ -88,7 +88,7 @@ impl<'a> Evaluator<'a> {
     ) -> Result<PortValue, RenderError> {
         #[cfg(not(feature = "parallel"))]
         {
-            return self.render_with_tile_data(tile, canvas, params, rng_seed, tile_data);
+            self.render_with_tile_data(tile, canvas, params, rng_seed, tile_data)
         }
         #[cfg(feature = "parallel")]
         {

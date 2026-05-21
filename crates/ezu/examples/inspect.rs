@@ -5,9 +5,8 @@
 use std::collections::BTreeMap;
 
 use bytes::Bytes;
-use ezu::core::TileId;
 use ezu::features::{mvt, Value};
-use pmtiles::{AsyncPmTilesReader, HttpBackend, TileCoord};
+use pmtiles::{AsyncPmTilesReader, TileCoord};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
