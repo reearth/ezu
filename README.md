@@ -79,6 +79,10 @@ The minimum op set ships in [`ezu-paint`](crates/ezu-paint):
   alpha-`mask` input)
 - **Adjustment** — `brightness-contrast`, `hsl` (hue rotation +
   saturation/lightness shift), `invert`, `color-to-alpha` (chroma key)
+- **Gradients** — `gradient-linear`, `gradient-radial` (elliptical via
+  `aspect`), `gradient-conic`, `gradient-diamond`. All take color stops
+  and an `anchor: "tile" | "world"` for tile-local or world-anchored
+  (seamless across tiles) patterns.
 
 Example: a watercolor water layer with a brushed road on top of an
 earth-tone background.

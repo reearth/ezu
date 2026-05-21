@@ -135,6 +135,156 @@ pub(super) fn read_string_or(
     Ok(s.to_string())
 }
 
+/// Coordinate anchor for procedural sources (gradients, noise, etc.).
+/// `Tile` = positions are fractions of the current tile (constant
+/// output per canvas size). `World` = positions are fractions of the
+/// full Mercator world at z=0 (output depends on tile id, so the
+/// pattern stays continuous across tile boundaries).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Anchor {
+    Tile,
+    World,
+}
+
+pub(super) fn read_anchor(
+    fields: &serde_json::Map<String, Value>,
+    name: &str,
+    ctx: &FactoryCtx<'_>,
+) -> Result<Anchor, FactoryError> {
+    let s = read_string_or(fields, name, ctx, "tile")?;
+    match s.as_str() {
+        "tile" => Ok(Anchor::Tile),
+        "world" => Ok(Anchor::World),
+        _ => Err(FactoryError::BadField {
+            field: name.into(),
+            msg: format!("expected `tile` or `world`, got `{s}`"),
+        }),
+    }
+}
+
+pub(super) fn read_xy(
+    fields: &serde_json::Map<String, Value>,
+    name: &str,
+    ctx: &FactoryCtx<'_>,
+    default: [f32; 2],
+) -> Result<[f32; 2], FactoryError> {
+    if !fields.contains_key(name) {
+        return Ok(default);
+    }
+    let v = resolve_field(fields, name, ctx)?;
+    let arr = v.as_array().ok_or_else(|| FactoryError::BadField {
+        field: name.into(),
+        msg: "expected [x, y] array".into(),
+    })?;
+    if arr.len() != 2 {
+        return Err(FactoryError::BadField {
+            field: name.into(),
+            msg: format!("expected exactly 2 numbers, got {}", arr.len()),
+        });
+    }
+    let x = arr[0].as_f64().ok_or_else(|| FactoryError::BadField {
+        field: name.into(),
+        msg: "x must be number".into(),
+    })? as f32;
+    let y = arr[1].as_f64().ok_or_else(|| FactoryError::BadField {
+        field: name.into(),
+        msg: "y must be number".into(),
+    })? as f32;
+    Ok([x, y])
+}
+
+/// Parse a gradient `stops` field: `[[t, "#hex"], ...]` with t in [0,1]
+/// (non-decreasing) and color as an `#rrggbb[aa]` string. Requires at
+/// least two stops.
+pub(super) fn read_stops(
+    fields: &serde_json::Map<String, Value>,
+    name: &str,
+    _ctx: &FactoryCtx<'_>,
+) -> Result<Vec<(f32, [f32; 4])>, FactoryError> {
+    let v = fields
+        .get(name)
+        .ok_or_else(|| FactoryError::MissingField(name.to_string()))?;
+    let arr = v.as_array().ok_or_else(|| FactoryError::BadField {
+        field: name.into(),
+        msg: "expected array of [t, color] pairs".into(),
+    })?;
+    if arr.len() < 2 {
+        return Err(FactoryError::BadField {
+            field: name.into(),
+            msg: "gradient needs at least 2 stops".into(),
+        });
+    }
+    let mut out = Vec::with_capacity(arr.len());
+    let mut prev_t: Option<f32> = None;
+    for (i, pt) in arr.iter().enumerate() {
+        let pair = pt.as_array().ok_or_else(|| FactoryError::BadField {
+            field: name.into(),
+            msg: format!("entry {i}: expected [t, color] pair"),
+        })?;
+        if pair.len() != 2 {
+            return Err(FactoryError::BadField {
+                field: name.into(),
+                msg: format!("entry {i}: expected exactly 2 entries"),
+            });
+        }
+        let t = pair[0].as_f64().ok_or_else(|| FactoryError::BadField {
+            field: name.into(),
+            msg: format!("entry {i}: t must be number"),
+        })? as f32;
+        let s = pair[1].as_str().ok_or_else(|| FactoryError::BadField {
+            field: name.into(),
+            msg: format!("entry {i}: color must be hex string"),
+        })?;
+        let color = parse_hex_color(s).ok_or_else(|| FactoryError::BadField {
+            field: name.into(),
+            msg: format!("entry {i}: bad color `{s}`"),
+        })?;
+        if let Some(p) = prev_t {
+            if t < p {
+                return Err(FactoryError::BadField {
+                    field: name.into(),
+                    msg: format!("entry {i}: t must be non-decreasing"),
+                });
+            }
+        }
+        prev_t = Some(t);
+        out.push((t, color));
+    }
+    Ok(out)
+}
+
+/// Linearly interpolate gradient stops at parameter `t`. Stops must
+/// be non-empty and sorted by ascending `t`. Out-of-range `t` clamps
+/// to the endpoint colors.
+pub(super) fn sample_stops(stops: &[(f32, [f32; 4])], t: f32) -> [f32; 4] {
+    if stops.is_empty() {
+        return [0.0; 4];
+    }
+    if t <= stops[0].0 {
+        return stops[0].1;
+    }
+    let last = stops.last().unwrap();
+    if t >= last.0 {
+        return last.1;
+    }
+    for w in stops.windows(2) {
+        if t >= w[0].0 && t <= w[1].0 {
+            let d = w[1].0 - w[0].0;
+            if d < 1e-6 {
+                return w[1].1;
+            }
+            let f = (t - w[0].0) / d;
+            return [
+                w[0].1[0] + (w[1].1[0] - w[0].1[0]) * f,
+                w[0].1[1] + (w[1].1[1] - w[0].1[1]) * f,
+                w[0].1[2] + (w[1].1[2] - w[0].1[2]) * f,
+                w[0].1[3] + (w[1].1[3] - w[0].1[3]) * f,
+            ];
+        }
+    }
+    last.1
+}
+
 pub(super) fn read_optional_string(
     fields: &serde_json::Map<String, Value>,
     name: &str,

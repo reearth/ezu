@@ -88,6 +88,10 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 | `hsl` | `Raster → Raster` | Hue rotation (degrees) + saturation/lightness shift in `[-1, 1]` |
 | `invert` | `Raster → Raster` | Negate RGB (alpha preserved) |
 | `color-to-alpha` | `Raster → Raster` | Chroma-key: pixels near `color` (Chebyshev distance) become transparent with `threshold`/`softness` ramp |
+| `gradient-linear` | `() → Raster` | Linear gradient between two points. `start`/`end` as `[x, y]` fractions, `stops: [[t, "#hex"], …]`, optional `anchor: "tile" \| "world"` |
+| `gradient-radial` | `() → Raster` | Radial / elliptical gradient. `center`, `radius`, optional `aspect` |
+| `gradient-conic` | `() → Raster` | Sweep gradient around `center` starting at `start-angle` (degrees) |
+| `gradient-diamond` | `() → Raster` | Manhattan-distance gradient. `center`, `radius` |
 
 **Feature sources** (`nodes::source`)
 
