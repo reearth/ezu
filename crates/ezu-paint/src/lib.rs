@@ -24,7 +24,10 @@ pub use brush::BrushDefaults;
 pub use dabs::{paint_polygons_dabs, DabFillStyle};
 pub use hokusai::color::RgbaF32;
 pub use hokusai::Brush;
-pub use render::{brush_bank, canvas_from_style, render_style, BrushResolver, RenderError};
+pub use render::{
+    brush_bank, canvas_from_style, canvas_from_style_sized, render_style, BrushResolver,
+    RenderError,
+};
 pub use strokes::{paint_lines, LineStrokeStyle};
 
 use ezu_mvt::Polygon;
@@ -278,6 +281,38 @@ fn mul(c: u8, a: u8) -> u8 {
 pub enum PaintError {
     #[error("png encode failed")]
     PngEncode,
+}
+
+/// Crop the canvas's padded buffer back to the actual tile area.
+fn cropped_pixmap(canvas: &Canvas) -> Pixmap {
+    if canvas.pad == 0 {
+        return canvas.pixmap.clone();
+    }
+    let mut out = Pixmap::new(canvas.tile_w, canvas.tile_h).expect("non-zero output");
+    out.draw_pixmap(
+        -(canvas.pad as i32),
+        -(canvas.pad as i32),
+        canvas.pixmap.as_ref(),
+        &PixmapPaint::default(),
+        Transform::identity(),
+        None,
+    );
+    out
+}
+
+/// Return the canvas's tile as **straight (un-premultiplied)** 8-bit RGBA
+/// bytes in row-major order — directly compatible with
+/// `new ImageData(new Uint8ClampedArray(...), w, h)` in the browser.
+///
+/// The returned buffer has length `tile_width * tile_height * 4`.
+pub fn to_rgba8(canvas: &Canvas) -> Vec<u8> {
+    let pixmap = cropped_pixmap(canvas);
+    let mut rgba = Vec::with_capacity(pixmap.width() as usize * pixmap.height() as usize * 4);
+    for p in pixmap.pixels() {
+        let p = p.demultiply();
+        rgba.extend_from_slice(&[p.red(), p.green(), p.blue(), p.alpha()]);
+    }
+    rgba
 }
 
 /// Encode the canvas as PNG bytes, cropping the central tile out of the

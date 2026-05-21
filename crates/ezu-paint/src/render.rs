@@ -36,7 +36,13 @@ pub enum RenderError {
 /// Build a [`Canvas`] sized by the style (`tile_size + 2 * pad`) and prefill
 /// the paper background.
 pub fn canvas_from_style(style: &Style) -> Canvas {
-    let mut canvas = Canvas::new_padded(style.tile_size, style.tile_size, style.pad);
+    canvas_from_style_sized(style, style.tile_size, style.pad)
+}
+
+/// Like [`canvas_from_style`] but with `tile_size` and `pad` overridden —
+/// useful for hi-DPI / preview renders without mutating the style.
+pub fn canvas_from_style_sized(style: &Style, tile_size: u32, pad: u32) -> Canvas {
+    let mut canvas = Canvas::new_padded(tile_size, tile_size, pad);
     canvas.fill(hex_to_tinyskia(style.background));
     canvas
 }

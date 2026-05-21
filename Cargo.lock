@@ -567,6 +567,7 @@ dependencies = [
  "ezu-paint",
  "ezu-style",
  "hokusai",
+ "js-sys",
  "wasm-bindgen",
 ]
 
