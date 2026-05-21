@@ -3,8 +3,9 @@
 WebAssembly bindings for the `ezu` painterly map renderer.
 
 The JS side owns all I/O (HTTP, PMTiles, asset fetching). This crate exposes
-a stateful [`Renderer`](src/lib.rs) that holds a parsed Ezu Style document
-plus a brush bank, and renders one tile at a time.
+a stateful [`Renderer`](src/lib.rs) that holds a parsed style document,
+its built graph, and an in-memory brush bank, and renders one tile at
+a time.
 
 ## API
 
@@ -15,7 +16,7 @@ class Renderer {
   constructor(styleJson: string);
 
   // Style + brushes
-  setStyle(styleJson: string): number;            // → new layer count
+  setStyle(styleJson: string): number;            // → new node count
   registerBrush(name: string, mybJson: string): void;
   unregisterBrush(name: string): boolean;          // → true if removed
   clearBrushes(): void;
@@ -51,10 +52,9 @@ without mutating the style.
 
 ### Missing tiles
 
-Pass `null` (or `undefined`) as `mvtBytes` to render just the style's paper
-background. The brush bank is still consulted for layers that have no
-features (no-op in that case), so any future "background dab pattern"
-extension keeps working.
+Pass `null` (or `undefined`) as `mvtBytes` to render just the style's
+paper background. `mvt-source` nodes see an empty `tile_data` and emit
+no features, so all downstream paint nodes short-circuit.
 
 ### Errors
 
@@ -66,7 +66,7 @@ the failure kind:
 | `InvalidStyle` | `new Renderer(...)` / `setStyle(...)` rejected the JSON |
 | `BrushParse`   | `registerBrush(...)` couldn't parse the `.myb` JSON |
 | `MvtDecode`    | `render*` couldn't decode the MVT bytes |
-| `RenderFailed` | A renderer layer (typically an unresolved brush ref) failed |
+| `RenderFailed` | A node `eval` failed (e.g. unresolved brush, downcast mismatch) |
 | `PngEncode`    | PNG encoding failed (extremely unlikely) |
 
 ```js
