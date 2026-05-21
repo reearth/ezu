@@ -29,6 +29,45 @@ For `fill-dabs` the polygon is rasterized to a binary mask, then a
 regular grid of candidate positions is iterated; no brush trajectory is
 constructed, which is what keeps fills seamless across tile boundaries.
 
+## Stroke curves on `line`
+
+`line` exposes four optional **stroke curves** that vary brush
+behavior along each polyline, so strokes can simulate taper-in /
+taper-out and speed dynamics rather than running at constant pressure
+and rhythm:
+
+| Field | Drives | y semantics |
+|---|---|---|
+| `radius-stroke-curve` | brush `radius_logarithmic` (`stroke` input) | **log-space** offset added to base radius. `y = -2.3` ≈ ×0.1, `y = +0.69` ≈ ×2 |
+| `opacity-stroke-curve` | brush `opaque` (`stroke` input) | linear offset added to base opaque |
+| `hardness-stroke-curve` | brush `hardness` (`stroke` input) | linear offset added to base hardness |
+| `dtime-stroke-curve` | per-vertex `dtime` | **multiplier** on the base `dtime`. `y = 3` slows the hand 3×, `y = 0.3` speeds it up |
+
+Each curve is a piecewise-linear `[[t, y], ...]` where `t` is normalized
+progress along the polyline (`t = 0` at the first vertex, `t = 1` at
+the last). `t` values must be non-decreasing; at least two points are
+required. Evaluation matches libmypaint's `InputMapping::eval`
+(clamps below the first knot, extrapolates from the last segment).
+
+When any of the **brush-side** curves (`radius` / `opacity` /
+`hardness`) is set, `paint_lines` clones the brush per polyline and
+auto-sets `stroke_duration_logarithmic = ln(line_length_px)` so the
+brush's internal `stroke` input ramps from 0 → 1 over the full polyline
+length on the rendered canvas. `dtime-stroke-curve` doesn't need a
+clone — it scales the per-vertex `dtime` directly.
+
+Example: ink-style taper (thin → fat → thin, faster in the middle):
+
+```json
+"roads_primary": {
+  "op": "line", "features": "@roads_primary_f", "brush": "@glazing_brush",
+  "color": "#3a2a18",
+  "radius-stroke-curve":  [[0.0, -1.5], [0.15, 0.0], [0.85, 0.0], [1.0, -2.0]],
+  "opacity-stroke-curve": [[0.0, -0.3], [0.1,  0.0], [0.9,  0.0], [1.0, -0.4]],
+  "dtime-stroke-curve":   [[0.0, 3.0],  [0.15, 1.0], [0.85, 1.0], [1.0, 4.0]]
+}
+```
+
 ## Built-in nodes
 
 `ezu_paint::nodes::default_registry()` returns a

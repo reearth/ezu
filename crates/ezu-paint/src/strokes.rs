@@ -17,7 +17,7 @@
 
 use ezu_core::{seed::world_seed, TileId, WorldPos};
 use hokusai::tile_mem::MemSurface;
-use hokusai::{Brush, BrushSetting, BrushState};
+use hokusai::{Brush, BrushInput, BrushSetting, BrushState, InputMapping};
 use tiny_skia::{PixmapPaint, Transform};
 
 use crate::Canvas;
@@ -38,6 +38,26 @@ pub struct LineStrokeStyle {
     /// `dtime` between successive vertex events, in seconds. Controls how
     /// dynamics-driven brushes interpret stroke speed.
     pub dtime: f32,
+    /// Optional piecewise-linear curve `[(t, y), ...]` driving the brush's
+    /// `radius_logarithmic` setting from the libmypaint `stroke` input
+    /// (`t ∈ [0, 1]` over the polyline). `y` is added to the brush's
+    /// base radius in *log space* — `y = -2.3` ≈ ×0.1, `y = +0.69` ≈ ×2.
+    /// When any curve is `Some`, `stroke_duration_logarithmic` is auto-set
+    /// per polyline so `t = 1` lines up with the polyline's end.
+    pub radius_stroke_curve: Option<Vec<(f32, f32)>>,
+    /// Curve on `opaque` (linear, offset added to base). Useful for fade-in
+    /// / fade-out endings without touching width.
+    pub opacity_stroke_curve: Option<Vec<(f32, f32)>>,
+    /// Curve on `hardness` (linear, offset added to base). Lets the tail
+    /// soften out into a feathered edge.
+    pub hardness_stroke_curve: Option<Vec<(f32, f32)>>,
+    /// Curve on `dtime` itself (per-vertex multiplier on `dtime` base).
+    /// `t` is normalized arc-length progress along the polyline.
+    /// `y` multiplies `dtime` for that vertex — `y = 3` makes the
+    /// brush "pause" 3× longer there (slower hand), `y = 0.3` blasts
+    /// through it (faster hand). Useful with dynamics-driven brushes
+    /// that react to stroke speed.
+    pub dtime_stroke_curve: Option<Vec<(f32, f32)>>,
 }
 
 impl Default for LineStrokeStyle {
@@ -47,7 +67,21 @@ impl Default for LineStrokeStyle {
             pressure_base: 0.7,
             pressure_jitter: 0.2,
             dtime: 0.02,
+            radius_stroke_curve: None,
+            opacity_stroke_curve: None,
+            hardness_stroke_curve: None,
+            dtime_stroke_curve: None,
         }
+    }
+}
+
+impl LineStrokeStyle {
+    /// Any curve that lives on the brush (needs per-line `brush.clone()`
+    /// and auto `stroke_duration_logarithmic`).
+    fn has_brush_stroke_curves(&self) -> bool {
+        self.radius_stroke_curve.is_some()
+            || self.opacity_stroke_curve.is_some()
+            || self.hardness_stroke_curve.is_some()
     }
 }
 
@@ -185,9 +219,29 @@ fn stroke_one(
     if line.len() < 2 {
         return;
     }
+    // If any per-vertex curve is set we need cumulative arc length to
+    // derive a `t ∈ [0, 1]` per vertex.
+    let need_t = style.has_brush_stroke_curves() || style.dtime_stroke_curve.is_some();
+    let (cum_lens, total_len) = if need_t {
+        cumulative_lengths(line, geom)
+    } else {
+        (Vec::new(), 0.0)
+    };
+    // Brush-side curves (radius/opacity/hardness) require a per-line
+    // clone with stroke_duration_logarithmic tuned to the polyline length.
+    let owned;
+    let brush: &Brush = if style.has_brush_stroke_curves() {
+        let mut b = brush.clone();
+        apply_stroke_curves(&mut b, total_len, style);
+        owned = b;
+        &owned
+    } else {
+        brush
+    };
     let mut state = BrushState::default();
     let mut first = true;
-    for &(x, y) in line {
+    let inv_total = if total_len > 0.0 { 1.0 / total_len } else { 0.0 };
+    for (i, &(x, y)) in line.iter().enumerate() {
         // Padded canvas coords (tile-local px + pad).
         let px = x as f32 * geom.sx + geom.pad;
         let py = y as f32 * geom.sy + geom.pad;
@@ -200,11 +254,97 @@ fn stroke_one(
         let pressure = (style.pressure_base + pj).clamp(0.0, 1.0);
 
         // First event of each line: dtime > 5 → libmypaint resets the
-        // stroke (no dabs emitted). Subsequent events use `style.dtime`.
-        let dtime = if first { 10.0 } else { style.dtime as f64 };
+        // stroke (no dabs emitted). Subsequent events use `style.dtime`,
+        // optionally scaled by the dtime stroke curve at this vertex.
+        let dtime = if first {
+            10.0
+        } else {
+            let mut d = style.dtime as f64;
+            if let Some(curve) = style.dtime_stroke_curve.as_deref() {
+                let t = cum_lens[i] * inv_total;
+                d *= eval_curve(curve, t).max(0.0) as f64;
+            }
+            d
+        };
         brush.stroke_to(&mut state, surface, px, py, pressure, 0.0, 0.0, dtime);
         first = false;
     }
+}
+
+/// Cumulative on-canvas arc length at each vertex (`out[0] = 0`,
+/// `out[N-1] = total`). Used to derive per-vertex `t`.
+fn cumulative_lengths(line: &[(i32, i32)], geom: &StrokeGeom) -> (Vec<f32>, f32) {
+    let mut cum = Vec::with_capacity(line.len());
+    let mut acc = 0.0f32;
+    cum.push(0.0);
+    for w in line.windows(2) {
+        let dx = (w[1].0 - w[0].0) as f32 * geom.sx;
+        let dy = (w[1].1 - w[0].1) as f32 * geom.sy;
+        acc += (dx * dx + dy * dy).sqrt();
+        cum.push(acc);
+    }
+    (cum, acc)
+}
+
+/// Piecewise-linear curve eval matching the semantics of
+/// [`hokusai::InputMapping::eval`] (clamps below the first knot,
+/// extrapolates from the last segment above the last knot).
+fn eval_curve(points: &[(f32, f32)], x: f32) -> f32 {
+    match points.len() {
+        0 => 0.0,
+        1 => points[0].1,
+        _ => {
+            let (mut x0, mut y0) = points[0];
+            let (mut x1, mut y1) = points[1];
+            for &(xi, yi) in &points[2..] {
+                if x <= x1 {
+                    break;
+                }
+                x0 = x1;
+                y0 = y1;
+                x1 = xi;
+                y1 = yi;
+            }
+            if x0 == x1 || y0 == y1 {
+                y0
+            } else {
+                (y1 * (x - x0) + y0 * (x1 - x)) / (x1 - x0)
+            }
+        }
+    }
+}
+
+/// Apply per-polyline stroke-curve tweaks to a brush clone. Sets
+/// `stroke_duration_logarithmic` so `stroke_state` reaches 1.0 over the
+/// polyline's full on-canvas length, then installs each requested curve
+/// as a `stroke` input mapping (replacing any existing `stroke` mapping
+/// on that setting).
+fn apply_stroke_curves(brush: &mut Brush, line_len_px: f32, style: &LineStrokeStyle) {
+    // libmypaint advances stroke_state by `step_dist * exp(-dur_log)`
+    // each dab, where step_dist is in radius-units. Setting dur_log =
+    // ln(line_len_px) makes the total advance ~1.0 over the polyline.
+    brush
+        .get_mut(BrushSetting::StrokeDurationLogarithmic)
+        .base_value = line_len_px.max(1.0).ln();
+
+    if let Some(pts) = &style.radius_stroke_curve {
+        set_stroke_input(brush, BrushSetting::Radius, pts);
+    }
+    if let Some(pts) = &style.opacity_stroke_curve {
+        set_stroke_input(brush, BrushSetting::Opaque, pts);
+    }
+    if let Some(pts) = &style.hardness_stroke_curve {
+        set_stroke_input(brush, BrushSetting::Hardness, pts);
+    }
+}
+
+fn set_stroke_input(brush: &mut Brush, setting: BrushSetting, points: &[(f32, f32)]) {
+    let sv = brush.get_mut(setting);
+    sv.inputs.retain(|m| m.input != BrushInput::Stroke);
+    sv.inputs.push(InputMapping {
+        input: BrushInput::Stroke,
+        points: points.to_vec(),
+    });
 }
 
 /// Composite a hokusai `MemSurface` over `canvas`'s padded Pixmap. Goes
