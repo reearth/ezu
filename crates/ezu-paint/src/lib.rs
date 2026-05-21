@@ -25,6 +25,8 @@ pub use dabs::{paint_polygons_dabs, DabFillStyle};
 pub use hokusai::color::RgbaF32;
 pub use hokusai::Brush;
 pub use strokes::{paint_lines, LineStrokeStyle};
+#[cfg(feature = "parallel")]
+pub use strokes::paint_lines_parallel;
 
 use ezu_mvt::Polygon;
 use tiny_skia::{

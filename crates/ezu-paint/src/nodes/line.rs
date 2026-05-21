@@ -17,6 +17,12 @@ use super::common::{
     read_color, read_number, read_number_or, srgb_to_linear_rgba,
 };
 use crate::{paint_lines, LineStrokeStyle};
+// NOTE: `paint_lines_parallel` exists behind the `parallel` feature but
+// is intentionally NOT wired in here yet. Without a hokusai-side
+// `MemSurface::merge_premul_over` primitive, per-chunk MemSurfaces have
+// to be flattened to 8-bit before composite, which loses fix15
+// precision relative to the serial path and produces near-but-not
+// bit-identical output. See `out/hokusai-parallelization-reply.md`.
 
 struct LineNode {
     color: [f32; 3],

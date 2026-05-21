@@ -23,5 +23,17 @@ thiserror = { workspace = true }
 
 [features]
 default = []
-# Pull-through: enable parallel within-tile evaluation in ezu-graph.
-parallel = ["ezu-graph/parallel"]
+# Pull-through: enable parallel within-tile evaluation in ezu-graph,
+# and turn on the chunked-MemSurface parallel paint helpers (Rayon).
+parallel = ["ezu-graph/parallel", "dep:rayon"]
+
+[dependencies.rayon]
+version = "1"
+optional = true
+
+[dev-dependencies]
+criterion = { version = "0.7", default-features = false, features = ["plotters", "cargo_bench_support"] }
+
+[[bench]]
+name = "paint"
+harness = false
