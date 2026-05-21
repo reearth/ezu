@@ -44,9 +44,6 @@ struct Args {
     /// Directory containing `.myb` brush files.
     #[arg(long, default_value = "assets/brushes", env = "EZU_BRUSHES")]
     brushes: PathBuf,
-    /// Path to the JSON schema served at `/schemas/ezu-style.json` (optional).
-    #[arg(long, default_value = "schemas/ezu-style.json", env = "EZU_SCHEMA")]
-    schema: PathBuf,
     /// Bind address.
     #[arg(long, default_value = "127.0.0.1:8080", env = "EZU_BIND")]
     bind: SocketAddr,
@@ -79,7 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.brushes.display()
     );
 
-    let state = AppState::new(archive, snapshot, assets, args.schema.clone());
+    let state = AppState::new(archive, snapshot, assets);
 
     let mut app = handlers::router().with_state(state);
 

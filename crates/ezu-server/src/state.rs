@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -18,7 +17,9 @@ pub struct AppState {
     pub style: Arc<RwLock<StyleSnapshot>>,
     pub assets: Arc<BrushBankLoader>,
     pub mvt_cache: Arc<DashMap<TileId, Bytes>>,
-    pub schema_path: PathBuf,
+    /// Cached JSON Schema derived from the node registry. Built once at
+    /// startup since registry contents don't change at runtime.
+    pub schema: Arc<serde_json::Value>,
 }
 
 /// One parsed + built style version. PUT /style atomically swaps the
@@ -60,14 +61,14 @@ impl AppState {
         archive: PmTilesArchive,
         snapshot: StyleSnapshot,
         assets: BrushBankLoader,
-        schema_path: PathBuf,
     ) -> Self {
+        let schema = default_registry().document_schema();
         Self {
             archive: Arc::new(archive),
             style: Arc::new(RwLock::new(snapshot)),
             assets: Arc::new(assets),
             mvt_cache: Arc::new(DashMap::new()),
-            schema_path,
+            schema: Arc::new(schema),
         }
     }
 }

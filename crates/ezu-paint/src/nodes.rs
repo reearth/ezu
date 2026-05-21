@@ -16,16 +16,15 @@ use std::sync::Arc;
 
 use ezu_core::TileId as CoreTileId;
 use ezu_graph::{
-    take_input_ref, Asset, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx, FactoryError,
-    MaskBuf, Node, NodeFactory, NodeRegistry, PortKind, PortSpec, PortValue, RasterBuf,
-    ScalarValue,
+    schema_frag, take_input_ref, Asset, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
+    FactoryError, MaskBuf, Node, NodeFactory, NodeRegistry, PortKind, PortSpec, PortValue,
+    RasterBuf, ScalarValue,
 };
 use ezu_mvt::DecodedTile;
 use ezu_style as spec;
 use hokusai::color::RgbaF32;
 use hokusai::Brush;
 use serde_json::Value;
-use tiny_skia::Pixmap;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::{
@@ -212,6 +211,13 @@ impl NodeFactory for SolidFactory {
             connections: vec![],
         })
     }
+    fn schema(&self) -> Value {
+        serde_json::json!({
+            "description": "Solid-color raster source filling the entire canvas.",
+            "properties": { "color": schema_frag::color() },
+            "required": ["color"],
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -256,6 +262,13 @@ impl NodeFactory for MaskSolidFactory {
         Ok(BuiltNode {
             node: Box::new(MaskSolidNode { value }),
             connections: vec![],
+        })
+    }
+    fn schema(&self) -> Value {
+        serde_json::json!({
+            "description": "Uniform-value mask source.",
+            "properties": { "value": schema_frag::unit_number() },
+            "required": ["value"],
         })
     }
 }
@@ -330,6 +343,16 @@ impl NodeFactory for MaskCircleFactory {
             connections: vec![],
         })
     }
+    fn schema(&self) -> Value {
+        serde_json::json!({
+            "description": "Centered disk mask. Radius is a fraction of `tile-size`.",
+            "properties": {
+                "radius-frac": schema_frag::unit_number(),
+                "hardness": schema_frag::unit_number(),
+            },
+            "required": ["radius-frac"],
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -390,6 +413,16 @@ impl NodeFactory for MaskBlurFactory {
                 port: "input".into(),
                 src: input,
             }],
+        })
+    }
+    fn schema(&self) -> Value {
+        serde_json::json!({
+            "description": "Separable Gaussian blur on a mask. Grows upstream pad by 3σ.",
+            "properties": {
+                "input": schema_frag::node_ref(),
+                "sigma": schema_frag::px_number(),
+            },
+            "required": ["input", "sigma"],
         })
     }
 }
@@ -516,6 +549,16 @@ impl NodeFactory for FillWithMaskFactory {
             }],
         })
     }
+    fn schema(&self) -> Value {
+        serde_json::json!({
+            "description": "Tint a mask with a solid color, producing a premultiplied raster.",
+            "properties": {
+                "mask": schema_frag::node_ref(),
+                "color": schema_frag::color(),
+            },
+            "required": ["mask", "color"],
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -615,6 +658,17 @@ impl NodeFactory for BlendFactory {
             ],
         })
     }
+    fn schema(&self) -> Value {
+        serde_json::json!({
+            "description": "Source-over composite (premultiplied) of `over` on top of `base`.",
+            "properties": {
+                "base": schema_frag::node_ref(),
+                "over": schema_frag::node_ref(),
+                "opacity": schema_frag::unit_number(),
+            },
+            "required": ["base", "over"],
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -645,11 +699,18 @@ fn _scalar_marker(_: ScalarValue) {}
 // MVT-driven nodes
 // ===========================================================================
 
-fn pixmap_to_raster(p: &Pixmap) -> RasterBuf {
+/// Consume a freshly-painted [`Canvas`] into a zero-copy [`RasterBuf`].
+///
+/// Uses `Pixmap::take` so the inner pixel `Vec<u8>` flows straight into
+/// the graph layer without `to_vec`. Saves a ~1.3 MB memcpy per paint
+/// node on a 564×564 padded canvas.
+fn canvas_into_raster(canvas: Canvas) -> RasterBuf {
+    let pixmap = canvas.into_pixmap();
+    let (w, h) = (pixmap.width(), pixmap.height());
     RasterBuf {
-        width: p.width(),
-        height: p.height(),
-        pixels: p.data().to_vec(),
+        width: w,
+        height: h,
+        pixels: pixmap.take(),
     }
 }
 
@@ -796,6 +857,21 @@ impl NodeFactory for MvtSourceFactory {
             connections: vec![],
         })
     }
+    fn schema(&self) -> Value {
+        serde_json::json!({
+            "description": "Select features from a host-supplied MVT layer.",
+            "properties": {
+                "source-layer": { "type": "string" },
+                "filter": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Property-value filter; entries are AND-combined."
+                },
+                "min-zoom-field": { "type": "string" },
+            },
+            "required": ["source-layer"],
+        })
+    }
 }
 
 fn downcast_features(v: &PortValue) -> Result<Arc<FilteredFeatures>, EvalError> {
@@ -891,6 +967,13 @@ impl NodeFactory for BrushFileFactory {
             connections: vec![],
         })
     }
+    fn schema(&self) -> Value {
+        serde_json::json!({
+            "description": "Brush source. `src` is an `@asset` ref or a literal path/name resolved by the host's AssetLoader.",
+            "properties": { "src": schema_frag::asset_ref() },
+            "required": ["src"],
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -941,7 +1024,7 @@ impl Node for FillSolidV1Node {
             blur_sigma: self.blur_sigma,
         };
         paint_polygons(&mut canvas, &feats.polygons, feats.extent, &style);
-        Ok(PortValue::Raster(Arc::new(pixmap_to_raster(canvas.pixmap()))))
+        Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"fill-solid");
@@ -985,6 +1068,20 @@ impl NodeFactory for FillSolidFactory {
                 port: "features".into(),
                 src: features,
             }],
+        })
+    }
+    fn schema(&self) -> Value {
+        serde_json::json!({
+            "description": "Solid polygon fill with optional outline and Gaussian blur.",
+            "properties": {
+                "features": schema_frag::node_ref(),
+                "fill": schema_frag::color(),
+                "fill-alpha": schema_frag::unit_number(),
+                "edge": schema_frag::color(),
+                "edge-width": schema_frag::px_number(),
+                "blur-sigma": schema_frag::px_number(),
+            },
+            "required": ["features", "fill"],
         })
     }
 }
@@ -1049,7 +1146,7 @@ impl Node for FillDabsV1Node {
             value_jitter: self.value_jitter,
         };
         paint_polygons_dabs(&mut canvas, &feats.polygons, feats.extent, core_tile(ctx), &style);
-        Ok(PortValue::Raster(Arc::new(pixmap_to_raster(canvas.pixmap()))))
+        Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"fill-dabs");
@@ -1107,6 +1204,25 @@ impl NodeFactory for FillDabsFactory {
                 port: "features".into(),
                 src: features,
             }],
+        })
+    }
+    fn schema(&self) -> Value {
+        serde_json::json!({
+            "description": "Watercolor scatter-dab fill with world-deterministic jitter (seamless across tiles).",
+            "properties": {
+                "features": schema_frag::node_ref(),
+                "color": schema_frag::color(),
+                "opacity": schema_frag::unit_number(),
+                "radius-px": schema_frag::px_number(),
+                "hardness": schema_frag::unit_number(),
+                "paint": schema_frag::unit_number(),
+                "spacing-px": schema_frag::px_number(),
+                "position-jitter": schema_frag::unit_number(),
+                "size-jitter": schema_frag::unit_number(),
+                "opacity-jitter": schema_frag::unit_number(),
+                "value-jitter": schema_frag::unit_number(),
+            },
+            "required": ["features", "color", "opacity", "radius-px", "spacing-px"],
         })
     }
 }
@@ -1181,7 +1297,7 @@ impl Node for LineV1Node {
             dtime: self.dtime,
         };
         paint_lines(&mut canvas, &feats.lines, feats.extent, core_tile(ctx), &brush, &style);
-        Ok(PortValue::Raster(Arc::new(pixmap_to_raster(canvas.pixmap()))))
+        Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"line");
@@ -1249,6 +1365,22 @@ impl NodeFactory for LineFactory {
                     src: brush,
                 },
             ],
+        })
+    }
+    fn schema(&self) -> Value {
+        serde_json::json!({
+            "description": "Brush stroke along MVT polylines.",
+            "properties": {
+                "features": schema_frag::node_ref(),
+                "brush": schema_frag::node_ref(),
+                "color": schema_frag::color(),
+                "radius-px": schema_frag::px_number(),
+                "opacity": schema_frag::unit_number(),
+                "pressure-base": schema_frag::unit_number(),
+                "pressure-jitter": schema_frag::unit_number(),
+                "dtime": { "type": "number", "minimum": 0.0 },
+            },
+            "required": ["features", "brush", "color"],
         })
     }
 }

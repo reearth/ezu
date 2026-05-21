@@ -1,5 +1,32 @@
 //! End-to-end: JSON -> typed graph -> evaluated tile -> pixels.
 
+#[test]
+fn registry_emits_document_schema_with_all_ops() {
+    let registry = ezu_paint::nodes::default_registry();
+    let schema = registry.document_schema();
+    let s = schema.to_string();
+    // Spot-check: every built-in op surfaces in the schema and the
+    // document-level structure is there.
+    for op in [
+        "solid",
+        "mask-solid",
+        "mask-circle",
+        "mask-blur",
+        "fill-with-mask",
+        "blend",
+        "mvt-source",
+        "fill-solid",
+        "fill-dabs",
+        "line",
+        "brush-file",
+    ] {
+        assert!(s.contains(&format!("\"const\":\"{op}\"")), "missing op `{op}` in schema");
+    }
+    assert!(s.contains("\"$schema\""));
+    assert!(s.contains("\"nodes\""));
+    assert!(s.contains("\"output\""));
+}
+
 use ezu_graph::{
     build_graph, Cache, CanvasInfo, Evaluator, NoAssets, ParamValues, PortValue, TileId,
 };

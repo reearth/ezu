@@ -1,11 +1,15 @@
 //! Render-time intermediate cache, keyed by a content-derived hash.
 //!
-//! M2 uses a simple `HashMap` with no eviction. Swap to LRU once the
-//! render loop is exercised at scale.
+//! A bounded LRU keeps long editor sessions from growing without limit.
+//! Default capacity is 4096 entries; tune via [`Cache::with_capacity`].
+//! At ~1.3 MB per padded raster that ceilings around ~5 GB worst case,
+//! but in practice intermediates are mostly small (masks, features) and
+//! the cap-by-count is the right knob.
 
-use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::Mutex;
 
+use lru::LruCache;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::eval::{CanvasInfo, TileId};
@@ -48,11 +52,16 @@ impl CacheKey {
     }
 }
 
+/// Default LRU capacity. Each entry holds an `Arc<PortValue>` so the
+/// payload is shared, not duplicated; the cap bounds how many distinct
+/// intermediates the evaluator remembers, not raw bytes.
+pub const DEFAULT_CAPACITY: usize = 4096;
+
 /// Shared cache of evaluated `PortValue`s. Cloning a `PortValue` is
-/// cheap (it's Arc-backed for the heavy variants) so cache reuse adds
+/// cheap (Arc-backed for the heavy variants) so cache reuse adds
 /// near-zero overhead.
 pub struct Cache {
-    inner: Mutex<HashMap<CacheKey, PortValue>>,
+    inner: Mutex<LruCache<CacheKey, PortValue>>,
 }
 
 impl Default for Cache {
@@ -63,17 +72,23 @@ impl Default for Cache {
 
 impl Cache {
     pub fn new() -> Self {
+        Self::with_capacity(DEFAULT_CAPACITY)
+    }
+
+    pub fn with_capacity(cap: usize) -> Self {
+        let cap = NonZeroUsize::new(cap.max(1)).unwrap();
         Self {
-            inner: Mutex::new(HashMap::new()),
+            inner: Mutex::new(LruCache::new(cap)),
         }
     }
 
+    /// Look up a cached value and refresh its LRU position.
     pub fn get(&self, key: CacheKey) -> Option<PortValue> {
         self.inner.lock().unwrap().get(&key).cloned()
     }
 
     pub fn insert(&self, key: CacheKey, value: PortValue) {
-        self.inner.lock().unwrap().insert(key, value);
+        self.inner.lock().unwrap().put(key, value);
     }
 
     pub fn len(&self) -> usize {
@@ -86,5 +101,10 @@ impl Cache {
 
     pub fn clear(&self) {
         self.inner.lock().unwrap().clear();
+    }
+
+    /// Configured maximum entry count.
+    pub fn capacity(&self) -> usize {
+        self.inner.lock().unwrap().cap().get()
     }
 }

@@ -4,7 +4,7 @@ use axum::{
     body::Body,
     extract::{Path, State},
     http::{header, StatusCode},
-    response::{Html, IntoResponse, Response},
+    response::{Html, Response},
     routing::get,
     Json, Router,
 };
@@ -51,13 +51,14 @@ async fn put_style(
 }
 
 async fn get_schema(State(s): State<AppState>) -> Response {
-    match tokio::fs::read(&s.schema_path).await {
-        Ok(bytes) => Response::builder()
-            .header(header::CONTENT_TYPE, "application/schema+json")
-            .body(Body::from(bytes))
-            .unwrap(),
-        Err(_) => (StatusCode::NOT_FOUND, "schema not found").into_response(),
-    }
+    // Schema is derived from the live node registry so it always matches
+    // the ops the server can actually evaluate.
+    let body = serde_json::to_vec_pretty(&*s.schema).unwrap_or_default();
+    Response::builder()
+        .header(header::CONTENT_TYPE, "application/schema+json")
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(Body::from(body))
+        .unwrap()
 }
 
 async fn get_tile(

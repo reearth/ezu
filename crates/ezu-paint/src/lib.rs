@@ -101,6 +101,14 @@ impl Canvas {
     pub fn pad(&self) -> u32 {
         self.pad
     }
+
+    /// Consume the canvas and return its underlying `Pixmap`. Callers
+    /// can then call `Pixmap::take` to recover the raw `Vec<u8>` without
+    /// copying — paint nodes use this to hand a freshly-painted buffer
+    /// to the graph layer without an intermediate `to_vec`.
+    pub fn into_pixmap(self) -> Pixmap {
+        self.pixmap
+    }
 }
 
 /// Style for a watercolor polygon layer.

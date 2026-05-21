@@ -64,6 +64,16 @@ pub trait NodeFactory: Send + Sync {
         fields: &serde_json::Map<String, serde_json::Value>,
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError>;
+
+    /// JSON Schema fragment describing this op's field shape. Should
+    /// return a JSON object with `properties` and (optionally)
+    /// `required` keys — the `op` const is added by the registry.
+    ///
+    /// The default is permissive (any fields allowed). Override to opt
+    /// in to editor autocomplete and client-side validation.
+    fn schema(&self) -> serde_json::Value {
+        serde_json::json!({})
+    }
 }
 
 /// Catalog of registered ops, keyed by op name.
@@ -83,6 +93,142 @@ impl NodeRegistry {
 
     pub fn get(&self, op_name: &str) -> Option<&dyn NodeFactory> {
         self.ops.get(op_name).map(|b| b.as_ref())
+    }
+
+    /// All registered op names, sorted for deterministic output.
+    pub fn op_names(&self) -> Vec<&'static str> {
+        let mut names: Vec<_> = self.ops.keys().copied().collect();
+        names.sort_unstable();
+        names
+    }
+
+    /// Build a JSON Schema for a complete style document by gathering
+    /// each registered op's [`NodeFactory::schema`] under a `oneOf`. The
+    /// returned value is suitable for serving at
+    /// `/schemas/ezu-style.json` and feeding to editor tooling
+    /// (Monaco, vscode-json-languageservice, ajv, …).
+    pub fn document_schema(&self) -> serde_json::Value {
+        use serde_json::{json, Value};
+        let mut variants: Vec<Value> = Vec::with_capacity(self.ops.len());
+        for op in self.op_names() {
+            let factory = self.ops.get(op).unwrap();
+            let mut schema = factory.schema();
+            if !schema.is_object() {
+                schema = json!({});
+            }
+            let obj = schema.as_object_mut().unwrap();
+            obj.entry("type")
+                .or_insert_with(|| json!("object"));
+            // Add the discriminator field.
+            let props = obj
+                .entry("properties")
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+                .unwrap();
+            props.insert(
+                "op".to_string(),
+                json!({ "const": op, "description": format!("Selects the `{op}` operation.") }),
+            );
+            // Require `op`, preserving any other required fields.
+            let required = obj
+                .entry("required")
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+                .unwrap();
+            if !required.iter().any(|v| v.as_str() == Some("op")) {
+                required.insert(0, json!("op"));
+            }
+            obj.insert("title".to_string(), json!(format!("op: {op}")));
+            variants.push(schema);
+        }
+
+        json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": "Ezu Style Spec",
+            "type": "object",
+            "required": ["name", "nodes", "output"],
+            "properties": {
+                "name": { "type": "string" },
+                "version": { "type": "string" },
+                "tile-size": { "type": "integer", "minimum": 1 },
+                "pad": { "type": "integer", "minimum": 0 },
+                "params": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "required": ["type", "default"],
+                        "properties": {
+                            "type": { "enum": ["color", "number", "bool"] },
+                            "default": {},
+                            "min": { "type": "number" },
+                            "max": { "type": "number" },
+                            "description": { "type": "string" }
+                        }
+                    }
+                },
+                "assets": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "required": ["type", "src"],
+                        "properties": {
+                            "type": { "enum": ["brush", "image", "mask-image", "gradient"] },
+                            "src": { "type": "string" }
+                        }
+                    }
+                },
+                "nodes": {
+                    "type": "object",
+                    "additionalProperties": { "oneOf": variants }
+                },
+                "output": {
+                    "type": "string",
+                    "description": "Node id of the final raster (with or without `@`)."
+                }
+            }
+        })
+    }
+}
+
+/// Pre-built JSON Schema fragments commonly reused by `NodeFactory::schema`
+/// implementations.
+pub mod schema_frag {
+    use serde_json::{json, Value};
+
+    /// A reference to another node, written `@id`.
+    pub fn node_ref() -> Value {
+        json!({
+            "type": "string",
+            "pattern": "^@?[A-Za-z_][A-Za-z0-9_-]*$",
+            "description": "Reference to another node (`@name`)."
+        })
+    }
+
+    /// A reference to a registered asset (brush / image / etc.).
+    pub fn asset_ref() -> Value {
+        json!({
+            "type": "string",
+            "description": "Asset reference (`@name`) or literal path."
+        })
+    }
+
+    /// `#rrggbb` or `#rrggbbaa` color literal. Also allows `$param`.
+    pub fn color() -> Value {
+        json!({
+            "type": "string",
+            "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|\\$[A-Za-z_][A-Za-z0-9_-]*)$",
+            "description": "sRGB hex color, or `$param` reference."
+        })
+    }
+
+    /// Number in `[0, 1]` — commonly opacity / fraction parameters.
+    pub fn unit_number() -> Value {
+        json!({ "type": "number", "minimum": 0.0, "maximum": 1.0 })
+    }
+
+    /// Non-negative number in pixels.
+    pub fn px_number() -> Value {
+        json!({ "type": "number", "minimum": 0.0 })
     }
 }
 
