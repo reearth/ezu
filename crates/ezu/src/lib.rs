@@ -8,11 +8,8 @@
 pub use ezu_core as core;
 pub use ezu_graph as graph;
 
-#[cfg(feature = "mvt")]
-pub use ezu_mvt as mvt;
-
-#[cfg(feature = "pmtiles")]
-pub use ezu_pmtiles as pmtiles;
+#[cfg(feature = "features")]
+pub use ezu_features as features;
 
 #[cfg(feature = "paint")]
 pub use ezu_paint as paint;

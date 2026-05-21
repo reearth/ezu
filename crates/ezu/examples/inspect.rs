@@ -4,9 +4,10 @@
 
 use std::collections::BTreeMap;
 
+use bytes::Bytes;
 use ezu::core::TileId;
-use ezu::mvt::{self, Value};
-use ezu::pmtiles::PmTilesArchive;
+use ezu::features::{mvt, Value};
+use pmtiles::{AsyncPmTilesReader, HttpBackend, TileCoord};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -20,9 +21,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let y: u32 = args[3].parse()?;
     let layer = args.get(4).cloned().unwrap_or_else(|| "roads".to_string());
 
-    let archive = PmTilesArchive::open_url("https://build.protomaps.com/20260520.pmtiles").await?;
-    let bytes = archive
-        .get_tile(TileId::new(z, x, y))
+    let client = reqwest::Client::new();
+    let archive =
+        AsyncPmTilesReader::new_with_url(client, "https://build.protomaps.com/20260520.pmtiles")
+            .await?;
+    let bytes: Bytes = archive
+        .get_tile_decompressed(TileCoord::new(z, x, y)?)
         .await?
         .ok_or("tile not in archive")?;
     let decoded = mvt::decode(&bytes)?;

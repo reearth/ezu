@@ -17,16 +17,17 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use bytes::Bytes;
 use ezu::core::TileId as CoreTileId;
 use ezu::graph::{
     build_graph, Cache, CanvasInfo, Evaluator, Graph, OpaqueValue, ParamValues, PortValue, TileId,
 };
-use ezu::mvt;
+use ezu::features::mvt;
 use ezu::paint::host::{raster_to_png, BrushBankLoader};
 use ezu::paint::nodes::default_registry;
-use ezu::pmtiles::PmTilesArchive;
 use ezu::style::Document;
 use futures::future::try_join_all;
+use pmtiles::{AsyncPmTilesReader, HttpBackend, TileCoord};
 
 const Z: u8 = 13;
 const X_RANGE: std::ops::RangeInclusive<u32> = 7276..=7277;
@@ -191,6 +192,31 @@ fn tile_seed(tile: CoreTileId) -> u64 {
     s = s.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(tile.x as u64);
     s = s.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(tile.y as u64);
     s
+}
+
+/// Minimal PMTiles HTTP wrapper used by this example. Inlined so the
+/// example stays self-contained — `ezu` itself does not own remote
+/// fetch.
+struct PmTilesArchive {
+    inner: AsyncPmTilesReader<HttpBackend>,
+}
+
+impl PmTilesArchive {
+    async fn open_url(url: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let client = reqwest::Client::new();
+        let inner = AsyncPmTilesReader::new_with_url(client, url).await?;
+        Ok(Self { inner })
+    }
+    fn header(&self) -> &pmtiles::Header {
+        self.inner.get_header()
+    }
+    async fn get_tile(
+        &self,
+        tile: CoreTileId,
+    ) -> Result<Option<Bytes>, Box<dyn std::error::Error + Send + Sync>> {
+        let coord = TileCoord::new(tile.z, tile.x, tile.y)?;
+        Ok(self.inner.get_tile_decompressed(coord).await?)
+    }
 }
 
 /// Load every `*.myb` file from `dir` into a brush bank keyed by file stem.

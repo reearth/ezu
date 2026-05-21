@@ -20,7 +20,7 @@ use crate::Canvas;
 /// consumed by `fill-solid`, `fill-dabs`, `line`.
 pub struct FilteredFeatures {
     pub extent: u32,
-    pub polygons: Vec<ezu_mvt::Polygon>,
+    pub polygons: Vec<ezu_features::Polygon>,
     pub lines: Vec<Vec<(i32, i32)>>,
 }
 
@@ -233,7 +233,7 @@ pub(super) fn core_tile(ctx: &EvalCtx<'_>) -> CoreTileId {
 
 pub(super) fn features_value(
     extent: u32,
-    polygons: Vec<ezu_mvt::Polygon>,
+    polygons: Vec<ezu_features::Polygon>,
     lines: Vec<Vec<(i32, i32)>>,
 ) -> PortValue {
     let payload = FilteredFeatures {

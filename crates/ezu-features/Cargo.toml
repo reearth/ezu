@@ -1,6 +1,6 @@
 [package]
-name = "ezu-pmtiles"
-description = "PMTiles reader for ezu"
+name = "ezu-features"
+description = "GIS feature parsing (MVT, GeoJSON) for ezu"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,7 +11,7 @@ authors.workspace = true
 
 [dependencies]
 ezu-core = { workspace = true }
-pmtiles = { workspace = true }
-bytes = { workspace = true }
-reqwest = { workspace = true }
+geozero = { workspace = true }
+geojson = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }

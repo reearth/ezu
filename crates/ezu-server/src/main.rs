@@ -10,6 +10,7 @@
 //! everything in one swap.
 
 mod handlers;
+mod pmtiles;
 mod state;
 
 use std::net::SocketAddr;
@@ -57,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     tracing::info!("opening PMTiles {}", args.pmtiles_url);
-    let archive = ezu::pmtiles::PmTilesArchive::open_url(&args.pmtiles_url).await?;
+    let archive = pmtiles::PmTilesArchive::open_url(&args.pmtiles_url).await?;
 
     let style_text = std::fs::read_to_string(&args.style)?;
     let snapshot = StyleSnapshot::build(style_text, 1)?;

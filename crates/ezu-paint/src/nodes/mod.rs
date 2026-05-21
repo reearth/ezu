@@ -8,7 +8,7 @@
 //!   [`brush_file`]
 //!
 //! MVT-driven nodes downcast `EvalCtx::tile_data` to
-//! `Arc<ezu_mvt::DecodedTile>`. The host (e.g. the `tokyo` example)
+//! `Arc<ezu_features::mvt::DecodedTile>`. The host (e.g. the `tokyo` example)
 //! fetches and decodes the tile and passes it via
 //! [`Evaluator::render_with_tile_data`](ezu_graph::Evaluator).
 //!

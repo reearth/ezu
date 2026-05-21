@@ -6,7 +6,7 @@ use ezu::core::TileId;
 use ezu::graph::{build_graph, Cache, Graph};
 use ezu::paint::host::BrushBankLoader;
 use ezu::paint::nodes::default_registry;
-use ezu::pmtiles::PmTilesArchive;
+use crate::pmtiles::PmTilesArchive;
 use ezu::style::Document;
 use tokio::sync::RwLock;
 

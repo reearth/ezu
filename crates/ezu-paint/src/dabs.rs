@@ -6,7 +6,7 @@
 //! across tile boundaries.
 
 use ezu_core::{seed::world_seed, TileId, WorldPos};
-use ezu_mvt::Polygon;
+use ezu_features::Polygon;
 use hokusai::color::RgbaF32;
 use hokusai::tile_mem::MemSurface;
 use hokusai::{Dab, TiledSurface};

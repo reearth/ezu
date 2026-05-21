@@ -28,7 +28,7 @@ pub use strokes::{paint_lines, LineStrokeStyle};
 #[cfg(feature = "parallel")]
 pub use strokes::paint_lines_parallel;
 
-use ezu_mvt::Polygon;
+use ezu_features::Polygon;
 use tiny_skia::{
     Color, FillRule, Paint, PathBuilder, Pixmap, PixmapPaint, PremultipliedColorU8, Stroke,
     Transform,

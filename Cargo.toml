@@ -4,8 +4,7 @@ members = [
     "crates/ezu",
     "crates/ezu-core",
     "crates/ezu-graph",
-    "crates/ezu-mvt",
-    "crates/ezu-pmtiles",
+    "crates/ezu-features",
     "crates/ezu-paint",
     "crates/ezu-style",
     "crates/ezu-server",
@@ -25,8 +24,7 @@ authors = ["Eukarya Inc."]
 # Internal
 ezu-core = { version = "0.1.0", path = "crates/ezu-core" }
 ezu-graph = { version = "0.1.0", path = "crates/ezu-graph" }
-ezu-mvt = { version = "0.1.0", path = "crates/ezu-mvt" }
-ezu-pmtiles = { version = "0.1.0", path = "crates/ezu-pmtiles" }
+ezu-features = { version = "0.1.0", path = "crates/ezu-features" }
 ezu-paint = { version = "0.1.0", path = "crates/ezu-paint" }
 ezu-style = { version = "0.1.0", path = "crates/ezu-style" }
 ezu = { version = "0.1.0", path = "crates/ezu" }
@@ -41,6 +39,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 
 # Geo
 geozero = { version = "0.15", default-features = false, features = ["with-mvt"] }
+geojson = "0.24"
 pmtiles = { version = "0.23", default-features = false, features = ["mmap-async-tokio", "http-async", "reqwest-rustls"] }
 bytes = "1"
 tokio = { version = "1", default-features = false }

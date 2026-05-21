@@ -4,7 +4,7 @@
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use ezu_core::TileId;
-use ezu_mvt::Polygon;
+use ezu_features::Polygon;
 use ezu_paint::{
     paint_lines, paint_polygons, paint_polygons_dabs, Canvas, DabFillStyle, LineStrokeStyle,
     RgbaF32, WatercolorStyle,

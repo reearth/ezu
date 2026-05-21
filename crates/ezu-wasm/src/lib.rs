@@ -200,7 +200,7 @@ impl Renderer {
         let (tile_size, pad) = size_override.unwrap_or((self.doc.tile_size, self.doc.pad));
         let tile_data: Option<OpaqueValue> = match mvt_bytes {
             Some(bytes) => Some(Arc::new(
-                ezu_mvt::decode(bytes).map_err(|e| named_err(ERR_MVT, e))?,
+                ezu_features::mvt::decode(bytes).map_err(|e| named_err(ERR_MVT, e))?,
             ) as OpaqueValue),
             None => None,
         };

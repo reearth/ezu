@@ -1,11 +1,14 @@
-//! MVT (Mapbox Vector Tile) decoding for ezu.
+//! MVT (Mapbox Vector Tile) decoding.
 //!
-//! Decodes the protobuf to a flat, owned representation that downstream paint
-//! code can iterate over without implementing `geozero` traits.
+//! Decodes the protobuf to a flat, owned representation built on the
+//! crate-root [`Feature`] / [`Geometry`] / [`Polygon`] / [`Value`]
+//! types.
 
 use std::collections::HashMap;
 
 use geozero::mvt::{tile, Message, Tile};
+
+use crate::{Feature, Geometry, Polygon, Value};
 
 #[derive(Debug, thiserror::Error)]
 pub enum MvtError {
@@ -16,11 +19,7 @@ pub enum MvtError {
 /// Decode raw MVT bytes (already gunzipped) into owned layers.
 pub fn decode(bytes: &[u8]) -> Result<DecodedTile, MvtError> {
     let tile = Tile::decode(bytes).map_err(|e| MvtError::Decode(e.to_string()))?;
-    let layers = tile
-        .layers
-        .into_iter()
-        .map(DecodedLayer::from_proto)
-        .collect();
+    let layers = tile.layers.into_iter().map(decode_layer).collect();
     Ok(DecodedTile { layers })
 }
 
@@ -43,98 +42,56 @@ pub struct DecodedLayer {
     pub features: Vec<Feature>,
 }
 
-impl DecodedLayer {
-    fn from_proto(layer: tile::Layer) -> Self {
-        let extent = layer.extent.unwrap_or(4096);
-        let values: Vec<Value> = layer.values.into_iter().map(Value::from_proto).collect();
-        let keys = layer.keys;
-        let features = layer
-            .features
-            .into_iter()
-            .map(|f| Feature::from_proto(f, &keys, &values))
-            .collect();
-        Self {
-            name: layer.name,
-            extent,
-            features,
-        }
+fn decode_layer(layer: tile::Layer) -> DecodedLayer {
+    let extent = layer.extent.unwrap_or(4096);
+    let values: Vec<Value> = layer.values.into_iter().map(value_from_proto).collect();
+    let keys = layer.keys;
+    let features = layer
+        .features
+        .into_iter()
+        .map(|f| feature_from_proto(f, &keys, &values))
+        .collect();
+    DecodedLayer {
+        name: layer.name,
+        extent,
+        features,
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum Value {
-    String(String),
-    Float(f32),
-    Double(f64),
-    Int(i64),
-    UInt(u64),
-    SInt(i64),
-    Bool(bool),
-    Null,
-}
-
-impl Value {
-    fn from_proto(v: tile::Value) -> Self {
-        if let Some(s) = v.string_value {
-            Self::String(s)
-        } else if let Some(f) = v.float_value {
-            Self::Float(f)
-        } else if let Some(d) = v.double_value {
-            Self::Double(d)
-        } else if let Some(i) = v.int_value {
-            Self::Int(i)
-        } else if let Some(u) = v.uint_value {
-            Self::UInt(u)
-        } else if let Some(s) = v.sint_value {
-            Self::SInt(s)
-        } else if let Some(b) = v.bool_value {
-            Self::Bool(b)
-        } else {
-            Self::Null
-        }
+fn value_from_proto(v: tile::Value) -> Value {
+    if let Some(s) = v.string_value {
+        Value::String(s)
+    } else if let Some(f) = v.float_value {
+        Value::Float(f)
+    } else if let Some(d) = v.double_value {
+        Value::Double(d)
+    } else if let Some(i) = v.int_value {
+        Value::Int(i)
+    } else if let Some(u) = v.uint_value {
+        Value::UInt(u)
+    } else if let Some(s) = v.sint_value {
+        Value::SInt(s)
+    } else if let Some(b) = v.bool_value {
+        Value::Bool(b)
+    } else {
+        Value::Null
     }
 }
 
-#[derive(Debug)]
-pub struct Feature {
-    pub id: Option<u64>,
-    pub geometry: Geometry,
-    pub properties: HashMap<String, Value>,
-}
-
-impl Feature {
-    fn from_proto(f: tile::Feature, keys: &[String], values: &[Value]) -> Self {
-        let mut properties = HashMap::with_capacity(f.tags.len() / 2);
-        for chunk in f.tags.chunks_exact(2) {
-            if let (Some(k), Some(v)) = (keys.get(chunk[0] as usize), values.get(chunk[1] as usize))
-            {
-                properties.insert(k.clone(), v.clone());
-            }
-        }
-        let geom_type = f.r#type();
-        let geometry = decode_geometry(&f.geometry, geom_type);
-        Self {
-            id: f.id,
-            geometry,
-            properties,
+fn feature_from_proto(f: tile::Feature, keys: &[String], values: &[Value]) -> Feature {
+    let mut properties = HashMap::with_capacity(f.tags.len() / 2);
+    for chunk in f.tags.chunks_exact(2) {
+        if let (Some(k), Some(v)) = (keys.get(chunk[0] as usize), values.get(chunk[1] as usize)) {
+            properties.insert(k.clone(), v.clone());
         }
     }
-}
-
-/// Geometry in MVT tile-local coordinates (`[0, extent]`, y-down).
-#[derive(Debug)]
-pub enum Geometry {
-    Points(Vec<(i32, i32)>),
-    Lines(Vec<Vec<(i32, i32)>>),
-    Polygons(Vec<Polygon>),
-    Unknown,
-}
-
-/// A polygon with one exterior ring and zero or more interior holes.
-#[derive(Debug)]
-pub struct Polygon {
-    pub exterior: Vec<(i32, i32)>,
-    pub holes: Vec<Vec<(i32, i32)>>,
+    let geom_type = f.r#type();
+    let geometry = decode_geometry(&f.geometry, geom_type);
+    Feature {
+        id: f.id,
+        geometry,
+        properties,
+    }
 }
 
 fn decode_geometry(cmds: &[u32], geom_type: tile::GeomType) -> Geometry {

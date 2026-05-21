@@ -18,8 +18,7 @@ Each crate has its own README with API details and examples.
 |---|---|
 | [`ezu`](crates/ezu) | Umbrella crate, re-exports + feature flags |
 | [`ezu-core`](crates/ezu-core) | Tile / world coordinates, deterministic seeding |
-| [`ezu-mvt`](crates/ezu-mvt) | MVT decoding (via `geozero`) |
-| [`ezu-pmtiles`](crates/ezu-pmtiles) | PMTiles reader, local (`mmap`) and HTTP (range requests) |
+| [`ezu-features`](crates/ezu-features) | GIS feature parsing (MVT via `geozero`, GeoJSON) — no remote fetch |
 | [`ezu-style`](crates/ezu-style) | Style spec parser (`serde`) — pure data, no rendering |
 | [`ezu-graph`](crates/ezu-graph) | Typed node-DAG evaluator (Cache, Rayon parallel) |
 | [`ezu-paint`](crates/ezu-paint) | Painting primitives, built-in nodes, host glue (PNG / brush bank) |

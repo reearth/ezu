@@ -13,9 +13,8 @@ keywords = ["map", "cartography", "vector-tile", "rendering", "painterly"]
 categories = ["graphics", "rendering", "science::geo"]
 
 [features]
-default = ["mvt", "pmtiles", "paint", "style-json"]
-mvt = ["dep:ezu-mvt"]
-pmtiles = ["dep:ezu-pmtiles", "mvt"]
+default = ["features", "paint", "style-json"]
+features = ["dep:ezu-features"]
 paint = ["dep:ezu-paint"]
 style-json = ["dep:ezu-style"]
 # Pull-through to ezu-graph's parallel within-tile evaluation.
@@ -24,8 +23,7 @@ parallel = ["ezu-graph/parallel", "ezu-paint?/parallel"]
 [dependencies]
 ezu-core = { workspace = true }
 ezu-graph = { workspace = true }
-ezu-mvt = { workspace = true, optional = true }
-ezu-pmtiles = { workspace = true, optional = true }
+ezu-features = { workspace = true, optional = true }
 ezu-paint = { workspace = true, optional = true }
 ezu-style = { workspace = true, optional = true }
 
@@ -34,11 +32,15 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "fs"] }
 tiny-skia = { workspace = true }
 hokusai = { workspace = true, features = ["myb-json"] }
 futures = "0.3"
+# Examples talk to remote PMTiles archives; the library itself does not.
+pmtiles = { workspace = true }
+reqwest = { workspace = true }
+bytes = { workspace = true }
 
 [[example]]
 name = "tokyo"
-required-features = ["mvt", "pmtiles", "paint", "parallel"]
+required-features = ["features", "paint", "parallel"]
 
 [[example]]
 name = "inspect"
-required-features = ["mvt", "pmtiles"]
+required-features = ["features"]

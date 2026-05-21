@@ -10,7 +10,7 @@ use axum::{
 };
 use ezu::core::TileId as CoreTileId;
 use ezu::graph::{CanvasInfo, Evaluator, OpaqueValue, ParamValues, PortValue, TileId};
-use ezu::mvt;
+use ezu::features::mvt;
 use ezu::paint::host::{raster_to_png, BrushBankLoader};
 use serde_json::json;
 

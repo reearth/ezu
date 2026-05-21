@@ -1,7 +1,7 @@
 //! Feature filtering and collection helpers shared by MVT-driven
 //! nodes (`mvt-source`).
 
-use ezu_mvt::{Feature, Geometry, Polygon, Value};
+use ezu_features::{Feature, Geometry, Polygon, Value};
 use ezu_style::{FeatureFilter, FilterAtom, FilterMatch};
 
 /// Walk a layer's features and return every polygon ring that passes

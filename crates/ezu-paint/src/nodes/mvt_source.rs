@@ -7,7 +7,7 @@ use ezu_graph::{
     BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, Node, NodeFactory,
     PortKind, PortSpec, PortValue,
 };
-use ezu_mvt::DecodedTile;
+use ezu_features::mvt::DecodedTile;
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 

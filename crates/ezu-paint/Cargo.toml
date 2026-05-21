@@ -1,6 +1,6 @@
 [package]
 name = "ezu-paint"
-description = "Paint MVT features onto a hokusai surface for ezu"
+description = "Paint GIS features onto a hokusai surface for ezu"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,7 +12,7 @@ authors.workspace = true
 [dependencies]
 ezu-core = { workspace = true }
 ezu-graph = { workspace = true }
-ezu-mvt = { workspace = true }
+ezu-features = { workspace = true }
 ezu-style = { workspace = true }
 serde_json = { workspace = true }
 xxhash-rust = { workspace = true }
