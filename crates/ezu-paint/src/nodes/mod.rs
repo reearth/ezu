@@ -18,9 +18,15 @@
 use ezu_graph::NodeRegistry;
 
 mod blend;
+mod boundary;
 mod brush_file;
+mod buffer;
+mod centroid;
 mod common;
+mod convex_hull;
 mod fill_dabs;
+mod hatch;
+mod simplify;
 mod fill_solid;
 mod fill_with_mask;
 mod line;
@@ -48,5 +54,12 @@ pub fn default_registry() -> NodeRegistry {
     r.register("fill-dabs", fill_dabs::FillDabsFactory);
     r.register("line", line::LineFactory);
     r.register("brush-file", brush_file::BrushFileFactory);
+    // geometry ops
+    r.register("centroid", centroid::CentroidFactory);
+    r.register("boundary", boundary::BoundaryFactory);
+    r.register("simplify", simplify::SimplifyFactory);
+    r.register("convex-hull", convex_hull::ConvexHullFactory);
+    r.register("buffer", buffer::BufferFactory);
+    r.register("hatch", hatch::HatchFactory);
     r
 }

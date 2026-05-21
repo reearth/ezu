@@ -12,7 +12,7 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use super::common::{features_value, read_optional_string};
-use crate::render::{collect_lines, collect_polygons};
+use crate::render::{collect_lines, collect_points, collect_polygons};
 
 struct MvtSourceNode {
     source_layer: String,
@@ -40,15 +40,15 @@ impl Node for MvtSourceNode {
         _inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
         let z = ctx.tile.z;
-        let (extent, polygons, lines) = match ctx.tile_data {
-            None => (0u32, vec![], vec![]),
+        let (extent, polygons, lines, points) = match ctx.tile_data {
+            None => (0u32, vec![], vec![], vec![]),
             Some(opaque) => {
                 let tile = opaque
                     .clone()
                     .downcast::<DecodedTile>()
                     .map_err(|_| EvalError::Other("tile_data is not Arc<DecodedTile>".into()))?;
                 match tile.layer(&self.source_layer) {
-                    None => (0u32, vec![], vec![]),
+                    None => (0u32, vec![], vec![], vec![]),
                     Some(layer) => {
                         let polys = collect_polygons(
                             &layer.features,
@@ -62,12 +62,18 @@ impl Node for MvtSourceNode {
                             &self.min_zoom_field,
                             z,
                         );
-                        (layer.extent, polys, lns)
+                        let pts = collect_points(
+                            &layer.features,
+                            &self.filter,
+                            &self.min_zoom_field,
+                            z,
+                        );
+                        (layer.extent, polys, lns, pts)
                     }
                 }
             }
         };
-        Ok(features_value(extent, polygons, lines))
+        Ok(features_value(extent, polygons, lines, points))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"mvt-source");

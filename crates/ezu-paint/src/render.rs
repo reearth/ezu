@@ -29,6 +29,26 @@ pub fn collect_polygons(
     out
 }
 
+/// Walk a layer's features and return every point that passes the
+/// filter.
+pub fn collect_points(
+    features: &[Feature],
+    filter: &Option<FeatureFilter>,
+    min_zoom_field: &Option<String>,
+    z: u8,
+) -> Vec<(i32, i32)> {
+    let mut out = Vec::new();
+    for f in features {
+        if !feature_passes(f, filter, min_zoom_field, z) {
+            continue;
+        }
+        if let Geometry::Points(pts) = &f.geometry {
+            out.extend(pts.iter().copied());
+        }
+    }
+    out
+}
+
 /// Walk a layer's features and return every polyline that passes the
 /// filter.
 pub fn collect_lines(

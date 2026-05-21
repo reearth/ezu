@@ -17,6 +17,7 @@ use std::collections::HashMap;
 
 pub mod geojson;
 pub mod mvt;
+pub mod ops;
 
 /// One decoded feature: geometry plus a properties bag.
 #[derive(Debug)]
@@ -38,7 +39,7 @@ pub enum Geometry {
 }
 
 /// A polygon with one exterior ring and zero or more interior holes.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Polygon {
     pub exterior: Vec<(i32, i32)>,
     pub holes: Vec<Vec<(i32, i32)>>,

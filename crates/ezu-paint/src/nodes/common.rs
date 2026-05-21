@@ -22,6 +22,7 @@ pub struct FilteredFeatures {
     pub extent: u32,
     pub polygons: Vec<ezu_features::Polygon>,
     pub lines: Vec<Vec<(i32, i32)>>,
+    pub points: Vec<(i32, i32)>,
 }
 
 /// Payload carried on a `Brush` port. Wraps a hokusai brush.
@@ -235,11 +236,13 @@ pub(super) fn features_value(
     extent: u32,
     polygons: Vec<ezu_features::Polygon>,
     lines: Vec<Vec<(i32, i32)>>,
+    points: Vec<(i32, i32)>,
 ) -> PortValue {
     let payload = FilteredFeatures {
         extent,
         polygons,
         lines,
+        points,
     };
     PortValue::Features(Arc::new(payload) as Arc<dyn Any + Send + Sync>)
 }

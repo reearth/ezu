@@ -40,6 +40,8 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # Geo
 geozero = { version = "0.15", default-features = false, features = ["with-mvt"] }
 geojson = "0.24"
+geo = "0.33"
+i_overlay = "6"
 pmtiles = { version = "0.23", default-features = false, features = ["mmap-async-tokio", "http-async", "reqwest-rustls"] }
 bytes = "1"
 tokio = { version = "1", default-features = false }

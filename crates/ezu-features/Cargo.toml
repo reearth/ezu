@@ -13,5 +13,7 @@ authors.workspace = true
 ezu-core = { workspace = true }
 geozero = { workspace = true }
 geojson = { workspace = true }
+geo = { workspace = true }
+i_overlay = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
