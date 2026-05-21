@@ -26,7 +26,10 @@ mod common;
 mod convex_hull;
 mod fill_dabs;
 mod hatch;
+mod literal_geometry;
+mod point_grid;
 mod simplify;
+mod tile_bounds;
 mod fill_solid;
 mod fill_with_mask;
 mod line;
@@ -61,5 +64,9 @@ pub fn default_registry() -> NodeRegistry {
     r.register("convex-hull", convex_hull::ConvexHullFactory);
     r.register("buffer", buffer::BufferFactory);
     r.register("hatch", hatch::HatchFactory);
+    // synthetic feature sources
+    r.register("literal-geometry", literal_geometry::LiteralGeometryFactory);
+    r.register("tile-bounds", tile_bounds::TileBoundsFactory);
+    r.register("point-grid", point_grid::PointGridFactory);
     r
 }
