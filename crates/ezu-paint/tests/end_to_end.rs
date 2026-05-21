@@ -30,6 +30,7 @@ fn registry_emits_document_schema_with_all_ops() {
         "dash",
         "wave",
         "stamp",
+        "tiling",
     ] {
         assert!(s.contains(&format!("\"const\":\"{op}\"")), "missing op `{op}` in schema");
     }
@@ -715,6 +716,85 @@ fn stamp_places_image_at_each_point() {
         }
     }
     assert!(green > 4, "stamp should leave visible green pixels: got {green}");
+}
+
+#[test]
+fn tiling_passes_through_at_natural_scale() {
+    // Tile a `circle` raster onto a same-size canvas with `scale-px`
+    // equal to the source width: the output should reproduce the
+    // source 1:1 — red at center, transparent at corners.
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 16,
+      "nodes": {
+        "src":  { "op": "circle", "color": "#ff0000", "radius-frac": 0.4 },
+        "out":  { "op": "tiling", "input": "@src", "anchor": "tile", "scale-px": 16 }
+      },
+      "output": "@out"
+    }"##;
+    let r = render(json, 16, 0);
+    let center = r.pixel(8, 8);
+    assert!(center[0] > 200, "center should be red: {center:?}");
+    let corner = r.pixel(0, 0);
+    assert_eq!(corner[3], 0, "corner should be transparent: {corner:?}");
+}
+
+#[test]
+fn tiling_repeats_pattern_at_smaller_scale() {
+    // Halving the scale should tile the disk twice along each axis, so
+    // four disks appear in the output. Sampling at the four "tile
+    // centers" (4, 4), (12, 4), (4, 12), (12, 12) should all be red.
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 16,
+      "nodes": {
+        "src":  { "op": "circle", "color": "#ff0000", "radius-frac": 0.4 },
+        "out":  { "op": "tiling", "input": "@src", "anchor": "tile", "scale-px": 8 }
+      },
+      "output": "@out"
+    }"##;
+    let r = render(json, 16, 0);
+    for &(x, y) in &[(4, 4), (12, 4), (4, 12), (12, 12)] {
+        let p = r.pixel(x, y);
+        assert!(p[0] > 100, "tile center ({x},{y}) should have red disk: {p:?}");
+    }
+}
+
+#[test]
+fn tiling_world_anchor_is_seamless_across_tiles() {
+    // Two adjacent map tiles, world-anchored: pad lets us sample the
+    // same world column from both tiles' padded buffers. With anchor
+    // "world", `left.pixel(tile_size + pad + dx, y)` and
+    // `right.pixel(pad + dx, y)` must reference the same world pixel.
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 32,
+      "nodes": {
+        "src":  { "op": "circle", "color": "#0000ff", "radius-frac": 0.3 },
+        "out":  { "op": "tiling", "input": "@src", "anchor": "world", "scale-px": 12 }
+      },
+      "output": "@out"
+    }"##;
+    let left = render_tile(json, 32, 4, TileId { z: 4, x: 5, y: 7 });
+    let right = render_tile(json, 32, 4, TileId { z: 4, x: 6, y: 7 });
+    let pad = 4u32;
+    let tile_size = 32u32;
+    for dx in 0..pad {
+        let lx = tile_size + pad + dx;
+        let rx = pad + dx;
+        for y in pad..(pad + tile_size) {
+            let l = left.pixel(lx, y);
+            let r = right.pixel(rx, y);
+            // Bilinear can introduce ±1 LSB; everything else must
+            // agree byte-for-byte.
+            for c in 0..4 {
+                assert!(
+                    (l[c] as i32 - r[c] as i32).abs() <= 1,
+                    "seam mismatch at dx={dx} y={y} channel={c}: left={l:?} right={r:?}"
+                );
+            }
+        }
+    }
 }
 
 #[test]

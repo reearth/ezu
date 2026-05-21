@@ -19,4 +19,5 @@ mod invert;
 mod noise;
 mod noise_field;
 mod solid;
+mod tiling;
 mod warp;
