@@ -96,26 +96,26 @@ fn feature_from_proto(f: tile::Feature, keys: &[String], values: &[Value]) -> Fe
 
 fn decode_geometry(cmds: &[u32], geom_type: tile::GeomType) -> Geometry {
     let rings = walk_rings(cmds);
+    let mut g = Geometry::default();
     match geom_type {
-        tile::GeomType::Point => Geometry::Points(rings.into_iter().flatten().collect()),
-        tile::GeomType::Linestring => Geometry::Lines(rings),
+        tile::GeomType::Point => g.points = rings.into_iter().flatten().collect(),
+        tile::GeomType::Linestring => g.lines = rings,
         tile::GeomType::Polygon => {
-            let mut polys: Vec<Polygon> = Vec::new();
             for ring in rings {
                 if is_exterior(&ring) {
-                    polys.push(Polygon {
+                    g.polygons.push(Polygon {
                         exterior: ring,
                         holes: Vec::new(),
                     });
-                } else if let Some(last) = polys.last_mut() {
+                } else if let Some(last) = g.polygons.last_mut() {
                     last.holes.push(ring);
                 }
                 // Holes appearing before any exterior are dropped (malformed).
             }
-            Geometry::Polygons(polys)
         }
-        _ => Geometry::Unknown,
+        _ => {}
     }
+    g
 }
 
 /// Walk MVT geometry commands into raw rings (without the implicit close vertex).

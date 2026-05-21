@@ -60,7 +60,7 @@ fn convert_feature(f: geojson::Feature) -> Feature {
         .geometry
         .as_ref()
         .map(|g| convert_geometry(&g.value))
-        .unwrap_or(Geometry::Unknown);
+        .unwrap_or_default();
     let properties = f
         .properties
         .map(|map| {
@@ -105,25 +105,34 @@ fn convert_value(v: serde_json::Value) -> Value {
 }
 
 fn convert_geometry(v: &GeoVal) -> Geometry {
+    let mut g = Geometry::default();
+    accumulate(v, &mut g);
+    g
+}
+
+fn accumulate(v: &GeoVal, out: &mut Geometry) {
     match v {
-        GeoVal::Point(p) => Geometry::Points(vec![pos_to_xy(p)]),
-        GeoVal::MultiPoint(ps) => Geometry::Points(ps.iter().map(|p| pos_to_xy(p)).collect()),
+        GeoVal::Point(p) => out.points.push(pos_to_xy(p)),
+        GeoVal::MultiPoint(ps) => out.points.extend(ps.iter().map(|p| pos_to_xy(p))),
         GeoVal::LineString(line) => {
-            Geometry::Lines(vec![line.iter().map(|p| pos_to_xy(p)).collect()])
+            out.lines.push(line.iter().map(|p| pos_to_xy(p)).collect());
         }
-        GeoVal::MultiLineString(lines) => Geometry::Lines(
-            lines
-                .iter()
-                .map(|l| l.iter().map(|p| pos_to_xy(p)).collect())
-                .collect(),
-        ),
-        GeoVal::Polygon(rings) => Geometry::Polygons(vec![ring_set_to_polygon(rings)]),
+        GeoVal::MultiLineString(lines) => {
+            for l in lines {
+                out.lines.push(l.iter().map(|p| pos_to_xy(p)).collect());
+            }
+        }
+        GeoVal::Polygon(rings) => out.polygons.push(ring_set_to_polygon(rings)),
         GeoVal::MultiPolygon(polys) => {
-            Geometry::Polygons(polys.iter().map(|p| ring_set_to_polygon(p)).collect())
+            for p in polys {
+                out.polygons.push(ring_set_to_polygon(p));
+            }
         }
-        // GeometryCollection isn't representable as one of our flat
-        // variants; callers see it as Unknown.
-        GeoVal::GeometryCollection(_) => Geometry::Unknown,
+        GeoVal::GeometryCollection(gs) => {
+            for g in gs {
+                accumulate(&g.value, out);
+            }
+        }
     }
 }
 
@@ -194,30 +203,21 @@ mod tests {
         assert_eq!(poly.id, Some(42));
         assert!(matches!(poly.properties.get("name"), Some(Value::String(s)) if s == "park"));
         assert!(matches!(poly.properties.get("active"), Some(Value::Bool(true))));
-        match &poly.geometry {
-            Geometry::Polygons(ps) => {
-                assert_eq!(ps.len(), 1);
-                assert_eq!(ps[0].exterior.len(), 4);
-                assert_eq!(ps[0].holes.len(), 1);
-                assert_eq!(ps[0].holes[0].len(), 4);
-            }
-            other => panic!("expected polygon, got {other:?}"),
-        }
+        assert_eq!(poly.geometry.polygons.len(), 1);
+        assert_eq!(poly.geometry.polygons[0].exterior.len(), 4);
+        assert_eq!(poly.geometry.polygons[0].holes.len(), 1);
+        assert_eq!(poly.geometry.polygons[0].holes[0].len(), 4);
+        assert!(poly.geometry.lines.is_empty());
+        assert!(poly.geometry.points.is_empty());
 
-        // LineString → Lines with one ring of 3 points.
-        match &feats[1].geometry {
-            Geometry::Lines(ls) => {
-                assert_eq!(ls.len(), 1);
-                assert_eq!(ls[0], vec![(0, 0), (5, 5), (10, 10)]);
-            }
-            other => panic!("expected lines, got {other:?}"),
-        }
+        // LineString → lines vec with one polyline of 3 points.
+        assert_eq!(feats[1].geometry.lines.len(), 1);
+        assert_eq!(feats[1].geometry.lines[0], vec![(0, 0), (5, 5), (10, 10)]);
+        assert!(feats[1].geometry.polygons.is_empty());
 
-        // Point → Points with one vertex.
-        match &feats[2].geometry {
-            Geometry::Points(p) => assert_eq!(p, &vec![(3, 4)]),
-            other => panic!("expected points, got {other:?}"),
-        }
+        // Point → points vec with one vertex.
+        assert_eq!(feats[2].geometry.points, vec![(3, 4)]);
+        assert!(feats[2].geometry.lines.is_empty());
     }
 
     #[test]
@@ -225,6 +225,30 @@ mod tests {
         let s = r#"{"type":"Feature","properties":null,"geometry":{"type":"Point","coordinates":[1,2]}}"#;
         let feats = decode_str(s).unwrap();
         assert_eq!(feats.len(), 1);
-        assert!(matches!(feats[0].geometry, Geometry::Points(_)));
+        assert_eq!(feats[0].geometry.points, vec![(1, 2)]);
+    }
+
+    #[test]
+    fn geometry_collection_flattens_into_one_feature() {
+        let s = r#"{
+          "type": "Feature",
+          "properties": { "name": "mixed" },
+          "geometry": {
+            "type": "GeometryCollection",
+            "geometries": [
+              { "type": "Point", "coordinates": [1, 2] },
+              { "type": "LineString", "coordinates": [[0,0],[3,3]] },
+              { "type": "GeometryCollection", "geometries": [
+                  { "type": "Point", "coordinates": [9, 9] }
+              ]}
+            ]
+          }
+        }"#;
+        let feats = decode_str(s).unwrap();
+        assert_eq!(feats.len(), 1);
+        let g = &feats[0].geometry;
+        assert_eq!(g.points, vec![(1, 2), (9, 9)]);
+        assert_eq!(g.lines.len(), 1);
+        assert!(g.polygons.is_empty());
     }
 }

@@ -30,12 +30,30 @@ pub struct Feature {
 /// Geometry in source-specific tile-local coordinates. For MVT this is
 /// `[0, extent]` with y-down; for GeoJSON it's whatever the caller
 /// chose to project into before parsing.
-#[derive(Debug)]
-pub enum Geometry {
-    Points(Vec<(i32, i32)>),
-    Lines(Vec<Vec<(i32, i32)>>),
-    Polygons(Vec<Polygon>),
-    Unknown,
+///
+/// All three layers (points / lines / polygons) co-exist on a single
+/// feature. Single-vs-multi (`Point` vs `MultiPoint`, etc.) is
+/// expressed by element count, and a GeoJSON `GeometryCollection` maps
+/// onto whichever combination of the three vecs its children produce.
+#[derive(Debug, Default, Clone)]
+pub struct Geometry {
+    pub points: Vec<(i32, i32)>,
+    pub lines: Vec<Vec<(i32, i32)>>,
+    pub polygons: Vec<Polygon>,
+}
+
+impl Geometry {
+    pub fn is_empty(&self) -> bool {
+        self.points.is_empty() && self.lines.is_empty() && self.polygons.is_empty()
+    }
+
+    /// Merge `other`'s vertices into `self`. Used when flattening a
+    /// GeoJSON `GeometryCollection`.
+    pub fn extend(&mut self, other: Geometry) {
+        self.points.extend(other.points);
+        self.lines.extend(other.lines);
+        self.polygons.extend(other.polygons);
+    }
 }
 
 /// A polygon with one exterior ring and zero or more interior holes.

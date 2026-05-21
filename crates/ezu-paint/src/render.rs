@@ -1,7 +1,7 @@
 //! Feature filtering and collection helpers shared by MVT-driven
 //! nodes (`mvt-source`).
 
-use ezu_features::{Feature, Geometry, Polygon, Value};
+use ezu_features::{Feature, Polygon, Value};
 use ezu_style::{FeatureFilter, FilterAtom, FilterMatch};
 
 /// Walk a layer's features and return every polygon ring that passes
@@ -17,14 +17,7 @@ pub fn collect_polygons(
         if !feature_passes(f, filter, min_zoom_field, z) {
             continue;
         }
-        if let Geometry::Polygons(ps) = &f.geometry {
-            for p in ps {
-                out.push(Polygon {
-                    exterior: p.exterior.clone(),
-                    holes: p.holes.clone(),
-                });
-            }
-        }
+        out.extend(f.geometry.polygons.iter().cloned());
     }
     out
 }
@@ -42,9 +35,7 @@ pub fn collect_points(
         if !feature_passes(f, filter, min_zoom_field, z) {
             continue;
         }
-        if let Geometry::Points(pts) = &f.geometry {
-            out.extend(pts.iter().copied());
-        }
+        out.extend(f.geometry.points.iter().copied());
     }
     out
 }
@@ -62,9 +53,7 @@ pub fn collect_lines(
         if !feature_passes(f, filter, min_zoom_field, z) {
             continue;
         }
-        if let Geometry::Lines(ls) = &f.geometry {
-            out.extend(ls.iter().cloned());
-        }
+        out.extend(f.geometry.lines.iter().cloned());
     }
     out
 }
