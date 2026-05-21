@@ -44,7 +44,7 @@ impl Node for StampNode {
             },
             PortSpec {
                 name: "image",
-                kind: PortKind::Raster,
+                kind: PortKind::Sprite,
                 optional: false,
             },
         ];
@@ -68,7 +68,7 @@ impl Node for StampNode {
         )?;
         let image = inputs[1]
             .as_ref()
-            .and_then(PortValue::as_raster)
+            .and_then(PortValue::as_sprite)
             .ok_or_else(|| EvalError::MissingInput("image".into()))?
             .clone();
         if feats.points.is_empty() || image.width == 0 || image.height == 0 {

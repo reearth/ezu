@@ -10,8 +10,18 @@ use std::fmt;
 pub enum PortKind {
     /// MVT features (geometry + properties), already filtered.
     Features,
-    /// RGBA buffer, padded canvas-sized.
+    /// RGBA buffer matching the canvas's `padded_size`. Every node
+    /// that outputs `Raster` MUST produce a `padded_size × padded_size`
+    /// buffer so the host's final crop and other consumers' size
+    /// assumptions hold.
     Raster,
+    /// RGBA buffer at the asset's native dimensions, NOT canvas-sized.
+    /// Used as the "raw image" carrier for sprite / texture sources
+    /// (`image`) whose output is consumed by placement ops
+    /// (`stamp`, `tiling`, `place`) that decide how to map them onto
+    /// the canvas. Sprites cannot be wired directly into raster
+    /// transforms or the document `output` — those expect `Raster`.
+    Sprite,
     /// hokusai brush handle plus overrides.
     Brush,
     /// Constant value (color, number, bool). Cheap to fan out.
@@ -23,6 +33,7 @@ impl fmt::Display for PortKind {
         f.write_str(match self {
             PortKind::Features => "features",
             PortKind::Raster => "raster",
+            PortKind::Sprite => "sprite",
             PortKind::Brush => "brush",
             PortKind::Scalar => "scalar",
         })

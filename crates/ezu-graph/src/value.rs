@@ -10,6 +10,7 @@ use crate::port::PortKind;
 pub enum PortValue {
     Features(OpaqueValue),
     Raster(Arc<RasterBuf>),
+    Sprite(Arc<RasterBuf>),
     Brush(OpaqueValue),
     Scalar(ScalarValue),
 }
@@ -19,6 +20,7 @@ impl PortValue {
         match self {
             PortValue::Features(_) => PortKind::Features,
             PortValue::Raster(_) => PortKind::Raster,
+            PortValue::Sprite(_) => PortKind::Sprite,
             PortValue::Brush(_) => PortKind::Brush,
             PortValue::Scalar(_) => PortKind::Scalar,
         }
@@ -27,6 +29,14 @@ impl PortValue {
     pub fn as_raster(&self) -> Option<&Arc<RasterBuf>> {
         if let PortValue::Raster(r) = self {
             Some(r)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_sprite(&self) -> Option<&Arc<RasterBuf>> {
+        if let PortValue::Sprite(s) = self {
+            Some(s)
         } else {
             None
         }

@@ -1,7 +1,8 @@
 //! Vector-driven paint nodes: brush-solid + line, dash, wave, stamp.
 
 mod common;
-use common::render;
+use common::{disk_sprite, render, render_with_images};
+use ezu_graph::TileId;
 
 #[test]
 fn brush_solid_line_paints_a_visible_stroke() {
@@ -99,31 +100,36 @@ fn wave_lifts_a_horizontal_line_off_its_baseline() {
 
 #[test]
 fn stamp_places_image_at_each_point() {
-    // Use `circle` as a sprite (canvas-sized, but only the inner disk is
-    // opaque). Stamping at two extent positions should leave two visible
-    // splotches. Stamp draws the full sprite at each point; since the
-    // sprite is canvas-sized, both stamps overlap heavily — we only
-    // check that the output has substantial coverage and isn't blank.
+    // 8×8 green disk sprite stamped at two extent points (1024, 2048)
+    // and (3072, 2048) — i.e. canvas pixels (8, 16) and (24, 16) on a
+    // 32-canvas. Each stamp is centered, so a green disk should
+    // appear at each location.
+    let sprite = disk_sprite(8, 8, 3.0, [0, 255, 0, 255]);
     let json = r##"{
       "name": "demo",
       "tile-size": 32,
+      "assets": { "icon": { "type": "image", "src": "icon" } },
       "nodes": {
         "feats": { "op": "literal-geometry", "extent": 4096,
                    "points": [ [1024, 2048], [3072, 2048] ] },
-        "img":   { "op": "circle", "color": "#00ff00", "radius-frac": 0.15 },
+        "img":   { "op": "image", "src": "@icon" },
         "out":   { "op": "stamp", "features": "@feats", "image": "@img", "scale": 1.0 }
       },
       "output": "@out"
     }"##;
-    let r = render(json, 32, 0);
-    let mut green = 0;
-    for y in 0..32 {
-        for x in 0..32 {
-            let p = r.pixel(x, y);
-            if p[1] > 100 && p[3] > 100 {
-                green += 1;
-            }
-        }
+    let r = render_with_images(
+        json,
+        32,
+        0,
+        TileId { z: 0, x: 0, y: 0 },
+        &[("icon", sprite)],
+    );
+    // Both stamp centers should be green and opaque.
+    for &(x, y) in &[(8, 16), (24, 16)] {
+        let p = r.pixel(x, y);
+        assert!(p[1] > 200 && p[3] > 200, "stamp center ({x},{y}) green: {p:?}");
     }
-    assert!(green > 4, "stamp should leave visible green pixels: got {green}");
+    // Mid-point between stamps should be empty (transparent).
+    let between = r.pixel(16, 16);
+    assert_eq!(between[3], 0, "no stamp at (16,16): {between:?}");
 }

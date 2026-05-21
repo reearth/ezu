@@ -50,6 +50,11 @@ pub enum BuildError {
     NoOutput,
 
     #[error(
+        "output node `{node}` produces `{got}`, but the document output must produce `raster` (canvas-padded). Pipe a sprite through `place`, `tiling`, or `stamp` first."
+    )]
+    OutputKindMismatch { node: NodeId, got: PortKind },
+
+    #[error(
         "required pad ({required}) on node `{node}` exceeds limit ({limit})"
     )]
     PadExceeded {
@@ -202,6 +207,16 @@ impl GraphBuilder {
 
         let output_id = self.output.ok_or(BuildError::NoOutput)?;
         let output_ix = ix_of(&output_id).ok_or(BuildError::UnknownOutput(output_id.clone()))?;
+        // Document output must be a canvas-padded raster — anything
+        // smaller (e.g. a raw `Sprite`) will alias badly through the
+        // host's `raster_to_png` crop. Catch this at build time.
+        let output_kind = self.nodes.get_index(output_ix).unwrap().1.output();
+        if output_kind != PortKind::Raster {
+            return Err(BuildError::OutputKindMismatch {
+                node: output_id.clone(),
+                got: output_kind,
+            });
+        }
 
         let topo = topo_sort(n, &incoming, &self.nodes)?;
 

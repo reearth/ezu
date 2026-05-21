@@ -1,11 +1,13 @@
-//! `image` — `() -> Raster`. Resolve an image asset via the host's
+//! `image` — `() -> Sprite`. Resolve an image asset via the host's
 //! [`AssetLoader`](ezu_graph::AssetLoader) and emit its pixels as a
-//! Raster port value.
+//! `Sprite` port value.
 //!
-//! The resolved raster is returned **as-is**, with whatever dimensions
-//! the host loaded; downstream nodes (e.g. `stamp`) are responsible for
-//! placement. Unlike `circle`/`solid` this node does *not* fill the
-//! canvas — its output may be smaller (or larger) than the tile.
+//! The resolved buffer is returned **as-is**, at the asset's native
+//! dimensions; consumers (`stamp` / `tiling` / `place`) are responsible
+//! for placing it onto the canvas. The dedicated `Sprite` port kind
+//! prevents `image` from being wired directly into a raster transform
+//! or the document `output`, both of which assume a canvas-padded
+//! raster.
 
 use ezu_graph::{
     schema_frag, Asset, BuiltNode, EvalCtx, EvalError, FactoryCtx, FactoryError, Node,
@@ -27,7 +29,7 @@ impl Node for ImageNode {
         &[]
     }
     fn output(&self) -> PortKind {
-        PortKind::Raster
+        PortKind::Sprite
     }
     fn eval(
         &self,
@@ -41,7 +43,7 @@ impl Node for ImageNode {
                 self.src
             )));
         };
-        Ok(PortValue::Raster(raster))
+        Ok(PortValue::Sprite(raster))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"image");

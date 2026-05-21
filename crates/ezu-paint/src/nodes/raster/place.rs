@@ -83,7 +83,7 @@ impl Node for PlaceNode {
     fn inputs(&self) -> &[PortSpec] {
         static SPECS: &[PortSpec] = &[PortSpec {
             name: "input",
-            kind: PortKind::Raster,
+            kind: PortKind::Sprite,
             optional: false,
         }];
         SPECS
@@ -101,7 +101,7 @@ impl Node for PlaceNode {
     ) -> Result<PortValue, EvalError> {
         let src = inputs[0]
             .as_ref()
-            .and_then(PortValue::as_raster)
+            .and_then(PortValue::as_sprite)
             .ok_or_else(|| EvalError::MissingInput("input".into()))?
             .clone();
         let mut canvas = make_canvas(ctx);
