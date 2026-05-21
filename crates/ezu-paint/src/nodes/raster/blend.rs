@@ -89,8 +89,34 @@ impl BlendMode {
     }
 }
 
+/// Porter-Duff compositing operator. Defaults to `Over` (the usual
+/// "draw on top"). `DestinationOut` is the eraser: keeps base where
+/// `over` is transparent, drops it where `over` is opaque.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Composite {
+    Over,
+    DestinationOut,
+}
+
+impl Composite {
+    fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "over" | "source-over" => Self::Over,
+            "destination-out" | "dest-out" | "erase" => Self::DestinationOut,
+            _ => return None,
+        })
+    }
+    fn as_tag(self) -> &'static [u8] {
+        match self {
+            Self::Over => b"over",
+            Self::DestinationOut => b"destination-out",
+        }
+    }
+}
+
 struct BlendNode {
     mode: BlendMode,
+    composite: Composite,
     opacity: f32,
     clip: bool,
     has_mask: bool,
@@ -170,6 +196,17 @@ impl Node for BlendNode {
                 None => 1.0,
             };
             let sa = sa_raw * op * mask_a;
+            // Short-circuit Porter-Duff destination-out (eraser): the
+            // blend math is irrelevant — base is kept where over is
+            // transparent, removed where over is opaque.
+            if self.composite == Composite::DestinationOut {
+                let inv = 1.0 - sa;
+                out.pixels[i] = to_u8(br * ba * inv);
+                out.pixels[i + 1] = to_u8(bg * ba * inv);
+                out.pixels[i + 2] = to_u8(bb * ba * inv);
+                out.pixels[i + 3] = to_u8(ba * inv);
+                continue;
+            }
             // Apply blend function to non-premultiplied colors.
             let (mr, mg, mb) = blend_color(self.mode, [br, bg, bb], [sr, sg, sb]);
             // Blended source per W3C: Cs' = (1 - αb) * Cs + αb * B(Cb, Cs).
@@ -204,6 +241,7 @@ impl Node for BlendNode {
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"blend");
         h.update(self.mode.as_tag());
+        h.update(self.composite.as_tag());
         h.update(&self.opacity.to_le_bytes());
         h.update(&[self.clip as u8, self.has_mask as u8]);
     }
@@ -227,6 +265,11 @@ impl NodeFactory for BlendFactory {
         let mode = BlendMode::parse(&mode_str).ok_or_else(|| FactoryError::BadField {
             field: "mode".into(),
             msg: format!("unknown blend mode `{mode_str}`"),
+        })?;
+        let composite_str = read_string_or(fields, "composite", ctx, "over")?;
+        let composite = Composite::parse(&composite_str).ok_or_else(|| FactoryError::BadField {
+            field: "composite".into(),
+            msg: format!("unknown composite op `{composite_str}`"),
         })?;
         let clip = fields
             .get("clip")
@@ -252,6 +295,7 @@ impl NodeFactory for BlendFactory {
         Ok(BuiltNode {
             node: Box::new(BlendNode {
                 mode,
+                composite,
                 opacity,
                 clip,
                 has_mask,
@@ -261,7 +305,7 @@ impl NodeFactory for BlendFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Composite `over` onto `base` with a W3C blend mode. `clip: true` clips result to base alpha (Photoshop-style clipping mask). Optional `mask` raster's alpha modulates source coverage.",
+            "description": "Composite `over` onto `base` with a W3C blend mode. `clip: true` clips result to base alpha (Photoshop-style clipping mask). `composite: \"destination-out\"` makes `over` erase `base` (brush-eraser effect when `over` is a brush-shaped raster). Optional `mask` raster's alpha modulates source coverage.",
             "properties": {
                 "base": schema_frag::node_ref(),
                 "over": schema_frag::node_ref(),
@@ -275,6 +319,11 @@ impl NodeFactory for BlendFactory {
                         "hue","saturation","color","luminosity"
                     ],
                     "default": "normal"
+                },
+                "composite": {
+                    "type": "string",
+                    "enum": ["over", "source-over", "destination-out", "dest-out", "erase"],
+                    "default": "over"
                 },
                 "clip": { "type": "boolean", "default": false },
                 "opacity": schema_frag::unit_number(),

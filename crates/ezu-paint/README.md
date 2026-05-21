@@ -83,7 +83,7 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 | `solid` | `() → Raster` | Constant-color fill |
 | `circle` | `() → Raster` | Centered disk with optional edge falloff |
 | `blur` | `Raster → Raster` | Gaussian (libblur); grows upstream pad |
-| `blend` | `Raster base + Raster over [+ Raster mask] → Raster` | W3C blend modes (normal/multiply/screen/overlay/darken/lighten/color-dodge/color-burn/hard-light/soft-light/difference/exclusion/hue/saturation/color/luminosity), optional `clip` (source-atop, PS clipping mask), optional alpha `mask`, `opacity` |
+| `blend` | `Raster base + Raster over [+ Raster mask] → Raster` | W3C blend modes (normal/multiply/screen/overlay/darken/lighten/color-dodge/color-burn/hard-light/soft-light/difference/exclusion/hue/saturation/color/luminosity), `composite` operator (`over` default / `destination-out` for brush-eraser), `clip` (source-atop, PS clipping mask), optional alpha `mask`, `opacity` |
 | `brightness-contrast` | `Raster → Raster` | Linear brightness shift + contrast slope around mid-gray |
 | `hsl` | `Raster → Raster` | Hue rotation (degrees) + saturation/lightness shift in `[-1, 1]` |
 | `invert` | `Raster → Raster` | Negate RGB (alpha preserved) |

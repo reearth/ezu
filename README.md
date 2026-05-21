@@ -74,7 +74,8 @@ The minimum op set ships in [`ezu-paint`](crates/ezu-paint):
   polylines)
 - **Composition** — `blur` (libblur Gaussian), `blend` (W3C 16 blend
   modes — multiply / screen / overlay / soft-light / hue / luminosity
-  etc., plus `clip` for Photoshop-style clipping masks and an optional
+  etc., plus `composite` operators (`destination-out` for brush-style
+  eraser), `clip` for Photoshop-style clipping masks, and an optional
   alpha-`mask` input)
 - **Adjustment** — `brightness-contrast`, `hsl` (hue rotation +
   saturation/lightness shift), `invert`, `color-to-alpha` (chroma key)

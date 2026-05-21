@@ -196,6 +196,28 @@ fn blend_mask_modulates_over_coverage() {
 }
 
 #[test]
+fn blend_destination_out_erases_base_under_over() {
+    // base is opaque red everywhere; over is a centered disk. With
+    // composite=destination-out, the disk-shaped region becomes
+    // transparent, the rest stays red.
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 32,
+      "nodes": {
+        "base": { "op": "solid", "color": "#ff0000" },
+        "over": { "op": "circle", "color": "#ffffff", "radius-frac": 0.4 },
+        "out":  { "op": "blend", "base": "@base", "over": "@over", "composite": "destination-out" }
+      },
+      "output": "@out"
+    }"##;
+    let r = render(json, 32, 0);
+    let center = r.pixel(16, 16);
+    assert_eq!(center[3], 0, "center should be erased: {center:?}");
+    let corner = r.pixel(0, 0);
+    assert_eq!(corner, [0xff, 0x00, 0x00, 0xff], "corner untouched: {corner:?}");
+}
+
+#[test]
 fn invert_negates_rgb_preserving_alpha() {
     let json = r##"{
       "name": "demo",
