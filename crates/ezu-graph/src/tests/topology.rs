@@ -1,0 +1,197 @@
+//! Topology / type-checking / pad-propagation tests over the graph
+//! builder. No JSON parsing, no evaluation.
+
+use super::common::{passthrough, src, Mock};
+use crate::{BuildError, GraphBuilder, PortKind, PortSpec};
+
+#[test]
+fn linear_chain_topo() {
+    let mut b = GraphBuilder::new();
+    b.add_node("a", src(PortKind::Mask))
+        .add_node("b", passthrough(PortKind::Mask, PortKind::Mask))
+        .add_node("c", passthrough(PortKind::Mask, PortKind::Raster))
+        .connect("a", "b", "input")
+        .connect("b", "c", "input")
+        .set_output("c");
+    let g = b.build().unwrap();
+    let order: Vec<_> = g.topo_order().iter().map(|&i| g.node_id(i)).collect();
+    assert_eq!(order, vec!["a", "b", "c"]);
+}
+
+#[test]
+fn diamond_topo() {
+    // a -> b, a -> c, b+c -> d
+    let merge = Mock::new(
+        "merge",
+        vec![
+            PortSpec::new("left", PortKind::Mask),
+            PortSpec::new("right", PortKind::Mask),
+        ],
+        PortKind::Raster,
+    )
+    .boxed();
+
+    let mut b = GraphBuilder::new();
+    b.add_node("a", src(PortKind::Mask))
+        .add_node("b", passthrough(PortKind::Mask, PortKind::Mask))
+        .add_node("c", passthrough(PortKind::Mask, PortKind::Mask))
+        .add_node("d", merge)
+        .connect("a", "b", "input")
+        .connect("a", "c", "input")
+        .connect("b", "d", "left")
+        .connect("c", "d", "right")
+        .set_output("d");
+    let g = b.build().unwrap();
+    let order: Vec<_> = g.topo_order().iter().map(|&i| g.node_id(i)).collect();
+    assert_eq!(order[0], "a");
+    assert_eq!(order[3], "d");
+    // b and c can appear in either order, both before d.
+    assert!(order.contains(&"b"));
+    assert!(order.contains(&"c"));
+}
+
+#[test]
+fn type_mismatch_is_rejected() {
+    let mut b = GraphBuilder::new();
+    b.add_node("a", src(PortKind::Raster))
+        .add_node("b", passthrough(PortKind::Mask, PortKind::Mask))
+        .connect("a", "b", "input")
+        .set_output("b");
+    match b.build() {
+        Err(BuildError::TypeMismatch {
+            expected, got, ..
+        }) => {
+            assert_eq!(expected, PortKind::Mask);
+            assert_eq!(got, PortKind::Raster);
+        }
+        other => panic!("expected TypeMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn missing_required_port_is_rejected() {
+    let mut b = GraphBuilder::new();
+    b.add_node("b", passthrough(PortKind::Mask, PortKind::Mask))
+        .set_output("b");
+    match b.build() {
+        Err(BuildError::MissingInput { node, port }) => {
+            assert_eq!(node, "b");
+            assert_eq!(port, "input");
+        }
+        other => panic!("expected MissingInput, got {other:?}"),
+    }
+}
+
+#[test]
+fn optional_port_may_be_unconnected() {
+    let opt = Mock::new(
+        "opt",
+        vec![
+            PortSpec::new("input", PortKind::Mask),
+            PortSpec::new("extra", PortKind::Mask).optional(),
+        ],
+        PortKind::Mask,
+    )
+    .boxed();
+    let mut b = GraphBuilder::new();
+    b.add_node("a", src(PortKind::Mask))
+        .add_node("o", opt)
+        .connect("a", "o", "input")
+        .set_output("o");
+    let g = b.build().unwrap();
+    assert_eq!(g.len(), 2);
+}
+
+#[test]
+fn cycle_is_detected() {
+    // a -> b -> a; pure cycle (no entry node) is unreachable from output,
+    // but is still rejected.
+    let mut b = GraphBuilder::new();
+    b.add_node("a", passthrough(PortKind::Mask, PortKind::Mask))
+        .add_node("b", passthrough(PortKind::Mask, PortKind::Mask))
+        .connect("a", "b", "input")
+        .connect("b", "a", "input")
+        .set_output("b");
+    match b.build() {
+        Err(BuildError::Cycle(_)) => {}
+        other => panic!("expected Cycle, got {other:?}"),
+    }
+}
+
+#[test]
+fn unknown_port_name_is_rejected() {
+    let mut b = GraphBuilder::new();
+    b.add_node("a", src(PortKind::Mask))
+        .add_node("b", passthrough(PortKind::Mask, PortKind::Mask))
+        .connect("a", "b", "nope")
+        .set_output("b");
+    match b.build() {
+        Err(BuildError::UnknownPort { node, port }) => {
+            assert_eq!(node, "b");
+            assert_eq!(port, "nope");
+        }
+        other => panic!("expected UnknownPort, got {other:?}"),
+    }
+}
+
+#[test]
+fn duplicate_edge_is_rejected() {
+    let mut b = GraphBuilder::new();
+    b.add_node("a", src(PortKind::Mask))
+        .add_node("c", src(PortKind::Mask))
+        .add_node("b", passthrough(PortKind::Mask, PortKind::Mask))
+        .connect("a", "b", "input")
+        .connect("c", "b", "input")
+        .set_output("b");
+    match b.build() {
+        Err(BuildError::DuplicateEdge { .. }) => {}
+        other => panic!("expected DuplicateEdge, got {other:?}"),
+    }
+}
+
+#[test]
+fn pad_propagates_upstream_through_blur() {
+    // src -> blur(grow=24) -> out(passthrough)
+    let mut b = GraphBuilder::new();
+    b.add_node("src", src(PortKind::Mask))
+        .add_node(
+            "blur",
+            Mock::new("blur", vec![PortSpec::new("input", PortKind::Mask)], PortKind::Mask)
+                .with_pad_grow(24)
+                .boxed(),
+        )
+        .add_node("out", passthrough(PortKind::Mask, PortKind::Mask))
+        .connect("src", "blur", "input")
+        .connect("blur", "out", "input")
+        .set_output("out");
+    let g = b.build().unwrap();
+    let pads = g.compute_pad(8).unwrap();
+    // out: 8 (doc pad). blur upstream of out, so it sees 8 then declares
+    // 32 upstream. src therefore needs 32.
+    let p = |id: &str| {
+        let ix = g.topo_order().iter().find(|&&i| g.node_id(i) == id).unwrap();
+        pads[*ix]
+    };
+    assert_eq!(p("out"), 8);
+    assert_eq!(p("blur"), 8);
+    assert_eq!(p("src"), 32);
+}
+
+#[test]
+fn pad_exceeded_errors() {
+    let mut b = GraphBuilder::new();
+    b.add_node("src", src(PortKind::Mask))
+        .add_node(
+            "blur",
+            Mock::new("blur", vec![PortSpec::new("input", PortKind::Mask)], PortKind::Mask)
+                .with_pad_grow(crate::MAX_PAD + 1)
+                .boxed(),
+        )
+        .connect("src", "blur", "input")
+        .set_output("blur");
+    let g = b.build().unwrap();
+    match g.compute_pad(0) {
+        Err(BuildError::PadExceeded { .. }) => {}
+        other => panic!("expected PadExceeded, got {other:?}"),
+    }
+}
