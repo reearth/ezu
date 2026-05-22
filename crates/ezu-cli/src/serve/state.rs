@@ -10,7 +10,8 @@ use ezu::graph::{build_graph, Cache, Graph};
 use ezu::paint::host::BrushBankLoader;
 use ezu::paint::nodes::default_registry;
 use ezu::style::Document;
-use tokio::sync::RwLock;
+use serde::Serialize;
+use tokio::sync::{broadcast, RwLock};
 
 use crate::source::TileSource;
 
@@ -26,6 +27,20 @@ pub struct AppState {
     /// Cached JSON Schema derived from the node registry. Built once at
     /// startup since registry contents don't change at runtime.
     pub schema: Arc<serde_json::Value>,
+    /// Broadcast channel for style-reload events. The local-file
+    /// watcher task publishes to this; `/style/events` (SSE)
+    /// subscribers in the editor receive them.
+    pub events: broadcast::Sender<StyleReload>,
+}
+
+/// Payload emitted when the watcher reloads the style from disk.
+#[derive(Debug, Clone, Serialize)]
+pub struct StyleReload {
+    pub version: u64,
+    pub text: String,
+    /// Unix epoch ms of the on-disk file mtime that triggered this
+    /// reload. The editor uses it to render "auto-reloaded HH:MM:SS".
+    pub mtime_ms: i64,
 }
 
 /// One parsed + built style version. PUT /style atomically swaps the
@@ -95,12 +110,16 @@ pub fn validate_text(text: &str) -> Result<(), BuildSnapshotError> {
 impl AppState {
     pub fn new(source: TileSource, snapshot: StyleSnapshot, assets_dir: PathBuf) -> Self {
         let schema = default_registry().document_schema();
+        // Capacity 8 is enough: events are rare (file saves) and
+        // subscribers (open editor tabs) typically count 0–2.
+        let (events, _) = broadcast::channel(8);
         Self {
             source: Arc::new(source),
             style: Arc::new(RwLock::new(snapshot)),
             assets_dir: Arc::new(assets_dir),
             mvt_cache: Arc::new(DashMap::new()),
             schema: Arc::new(schema),
+            events,
         }
     }
 }

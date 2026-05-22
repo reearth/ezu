@@ -20,6 +20,7 @@ pmtiles = { workspace = true }
 reqwest = { workspace = true }
 bytes = { workspace = true }
 tiny-skia = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }

@@ -637,6 +637,7 @@ dependencies = [
  "futures",
  "pmtiles",
  "reqwest",
+ "serde",
  "serde_json",
  "thiserror",
  "tiny-skia",

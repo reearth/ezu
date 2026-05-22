@@ -12,6 +12,7 @@ mod state;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::Args;
 use tower_http::cors::CorsLayer;
@@ -19,7 +20,7 @@ use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
 use crate::source::{SourceSpec, TileSource};
-use state::{AppState, StyleSnapshot};
+use state::{AppState, StyleReload, StyleSnapshot};
 
 #[derive(Args, Debug)]
 pub struct ServeCmd {
@@ -78,6 +79,16 @@ pub async fn run(args: ServeCmd) -> Result<(), Box<dyn std::error::Error>> {
 
     let state = AppState::new(source, snapshot, args.assets_dir.clone());
 
+    // Spawn a polling watcher when the style was loaded from a local
+    // path. URL-sourced styles aren't watched (we don't know how the
+    // remote would notify us). The watcher reloads on mtime change and
+    // broadcasts to /style/events subscribers.
+    if !is_url(style_src) {
+        let path = PathBuf::from(style_src);
+        let state_for_watch = state.clone();
+        tokio::spawn(watch_style_file(path, state_for_watch));
+    }
+
     let mut app = handlers::router().with_state(state);
     for (route, dir) in [
         ("/wasm-demo", "crates/ezu-wasm/www"),
@@ -99,4 +110,71 @@ pub async fn run(args: ServeCmd) -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+fn is_url(s: &str) -> bool {
+    s.starts_with("http://") || s.starts_with("https://")
+}
+
+fn mtime_ms(t: SystemTime) -> i64 {
+    t.duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_millis()).ok())
+        .unwrap_or(0)
+}
+
+/// Poll the file mtime once a second and reload the live snapshot
+/// whenever it advances. Polling (vs. an OS-native notify watcher)
+/// keeps the dependency surface zero and works the same on macOS,
+/// Linux, and Windows — fine for an interactive dev tool where the
+/// only watcher is the editor that's already attached to it.
+async fn watch_style_file(path: PathBuf, state: AppState) {
+    let mut last_mtime: Option<SystemTime> = tokio::fs::metadata(&path)
+        .await
+        .ok()
+        .and_then(|m| m.modified().ok());
+    let mut ticker = tokio::time::interval(Duration::from_secs(1));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    tracing::info!("watching {} for live reload", path.display());
+    loop {
+        ticker.tick().await;
+        let meta = match tokio::fs::metadata(&path).await {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let mtime = match meta.modified() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if last_mtime == Some(mtime) {
+            continue;
+        }
+        last_mtime = Some(mtime);
+
+        let text = match tokio::fs::read_to_string(&path).await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!("watch: read {} failed: {e}", path.display());
+                continue;
+            }
+        };
+        let next_version = state.style.read().await.version + 1;
+        let snap = match StyleSnapshot::build(text.clone(), next_version, state.assets_dir.as_ref())
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("watch: rebuild failed: {e}");
+                continue;
+            }
+        };
+        let v = snap.version;
+        *state.style.write().await = snap;
+        let _ = state.events.send(StyleReload {
+            version: v,
+            text,
+            mtime_ms: mtime_ms(mtime),
+        });
+        tracing::info!("style reloaded from {} (v{v})", path.display());
+    }
 }

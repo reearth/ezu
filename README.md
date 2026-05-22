@@ -87,14 +87,27 @@ ezu serve https://example.com/style.json          # or fetch one over http(s)
 The editor (MapLibre GL based) supports:
 
 - **Open / URL / Save** — load a style from a local file or http(s) URL,
-  save the current buffer as `<name>.json`.
+  save the current buffer as `<name>.json`. Open on Chromium browsers
+  uses the File System Access API so Save writes back in place.
 - **Apply** with `⌘↵` / `Ctrl+↵` (works anywhere on the page).
 - **Live preview** — when enabled, auto-applies on every keystroke that
   parses + schema-validates + server-validates clean.
+- **External-edit reload** — when launched with a local path
+  (`ezu serve foo.json`), the server polls the file and pushes
+  Server-Sent Events on every change. The editor swaps the buffer
+  silently when clean, or surfaces a Reload banner when the user has
+  unsaved edits. The `↻ HH:MM:SS` indicator in the toolbar shows the
+  last auto-reload. On Chromium, the same watch also runs against
+  files opened via the in-browser file picker. Opening a different
+  file via `Open…` / `URL…` detaches the server watch for that
+  session.
 - **Source MVT inspector** — toggle a vector overlay of the underlying
   MVT, with per-layer ON/OFF and click-to-inspect feature properties.
   Layers are discovered from the tile at the map center; pan/zoom
   rescans automatically.
+- **Tile grid + zoom indicator** — toggle a `z/x/y` boundary overlay
+  (drawn per tile via `maplibregl.addProtocol`), and read the live
+  zoom value (click to copy `z @ lat,lng`).
 
 The WASM demo (single-tile render in the browser, scalar vs SIMD switch):
 

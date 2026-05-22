@@ -24,12 +24,20 @@
   .toolbar .status.error { color: #a03434; }
   .toolbar .status.ok { color: #387a45; }
   .toolbar .status.checking { color: #a07a3a; }
+  .toolbar .auto-mark { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: #387a45; opacity: 0; transition: opacity 0.3s; white-space: nowrap; }
+  .toolbar .auto-mark.show { opacity: 1; }
   textarea {
     flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.45;
     padding: 12px; border: 0; outline: none; resize: none; background: #fdfbf1; color: #382a1f;
     tab-size: 2;
   }
   textarea.invalid { background: #fdf3ef; }
+  .ext-banner { display: none; background: #f5e6b2; border-bottom: 1px solid #d8c382; padding: 6px 10px; gap: 8px; align-items: center; font-size: 11px; color: #5a4636; }
+  .ext-banner.open { display: flex; }
+  .ext-banner .msg { flex: 1; }
+  .ext-banner button { padding: 3px 10px; background: #5a4636; color: #fdfbf1; border: 0; border-radius: 3px; font-size: 11px; font-weight: 600; cursor: pointer; }
+  .ext-banner button.dismiss { background: transparent; color: #5a4636; font-weight: 400; padding: 3px 6px; }
+  .ext-banner button.dismiss:hover { background: #ead9a5; }
   .map-wrap { flex: 1; position: relative; }
   #map { position: absolute; inset: 0; }
   .maplibregl-canvas { background: #f8f5e8; }
@@ -75,8 +83,14 @@
       </div>
       <span class="sp"></span>
       <span class="status" id="status" title="">loading…</span>
+      <span class="auto-mark" id="auto-mark" title="Last auto-reload from disk"></span>
       <button class="secondary" id="live-toggle" title="Live preview: auto-apply on valid edits">live: off</button>
       <button id="apply" title="Apply (⌘↵ / Ctrl+↵)" disabled>Apply</button>
+    </div>
+    <div class="ext-banner" id="ext-banner">
+      <span class="msg" id="ext-banner-text">File changed on disk.</span>
+      <button id="ext-banner-reload">Reload</button>
+      <button id="ext-banner-dismiss" class="dismiss" title="Ignore this update">×</button>
     </div>
     <textarea id="json" spellcheck="false" placeholder="Loading style..."></textarea>
     <input type="file" id="open-file-input" accept=".json,application/json" style="display:none" />
@@ -205,6 +219,7 @@
     const r = await fetch('/style');
     const text = await r.text();
     $json.value = text;
+    lastServerText = text;
     try {
       const parsed = JSON.parse(text);
       if (parsed['tile-size']) tileSize = parsed['tile-size'];
@@ -286,6 +301,7 @@
       }
       const { version: v } = await r.json();
       version = v;
+      lastServerText = body;
       let nextTileSize = tileSize;
       try {
         const parsed = JSON.parse(body);
@@ -314,6 +330,47 @@
     }
   });
 
+  // --- Server-side watch (SSE) ---------------------------------------
+  // `ezu serve <file>` watches that file and broadcasts reload events
+  // here. The browser tab gets a fresh text + version whenever the
+  // file is edited externally. EventSource auto-reconnects on its own.
+  function onServerReload(p) {
+    if (!p || typeof p.text !== 'string') return;
+    const dirty = $json.value !== lastServerText;
+    if (!dirty) {
+      applyExternal(p.text, p.mtime_ms, { source: 'server', version: p.version });
+    } else {
+      pendingExternal = {
+        text: p.text,
+        mtime: p.mtime_ms,
+        source: 'server',
+        version: p.version,
+      };
+      const ts = fmtTime(p.mtime_ms);
+      showExtBanner(`Style file changed at ${ts} (server) — you have unsaved edits.`);
+    }
+  }
+  let sse = null;
+  try {
+    sse = new EventSource('/style/events');
+    sse.addEventListener('reload', (e) => {
+      try { onServerReload(JSON.parse(e.data)); } catch (_) {}
+    });
+  } catch (e) {
+    console.warn('SSE setup failed:', e);
+  }
+  // Once the user opens a different file (picker, fallback input,
+  // URL), the server-side watcher is no longer talking about the same
+  // document. Drop the SSE subscription so we don't nag with banners
+  // for an unrelated file.
+  function detachServerWatch() {
+    if (sse) { sse.close(); sse = null; }
+    if (pendingExternal && pendingExternal.source === 'server') {
+      pendingExternal = null;
+      hideExtBanner();
+    }
+  }
+
   // --- Live preview ---------------------------------------------------
   const $liveToggle = document.getElementById('live-toggle');
   let liveMode = false;
@@ -341,28 +398,175 @@
   $liveToggle.addEventListener('click', () => setLive(!liveMode));
   try { if (localStorage.getItem('ezu.live') === '1') setLive(true); } catch (_) {}
 
-  // --- Open / Save ----------------------------------------------------
+  // --- Open / Save / Watch -------------------------------------------
   const $openFile = document.getElementById('open-file');
   const $openFileInput = document.getElementById('open-file-input');
   const $openUrl = document.getElementById('open-url');
   const $saveFile = document.getElementById('save-file');
+  const $extBanner = document.getElementById('ext-banner');
+  const $extBannerText = document.getElementById('ext-banner-text');
+  const $extBannerReload = document.getElementById('ext-banner-reload');
+  const $extBannerDismiss = document.getElementById('ext-banner-dismiss');
+  const $autoMark = document.getElementById('auto-mark');
   let lastOpenedName = null;
+  // File System Access API state. `fileHandle` is a
+  // FileSystemFileHandle when the user opened via showOpenFilePicker;
+  // null after the fallback <input type=file> path or after URL open.
+  let fileHandle = null;
+  let lastLoadedText = '';   // last text known to be on disk (picker)
+  let lastLoadedMtime = 0;
+  let lastServerText = '';   // last text the server is serving (SSE)
+  let pendingExternal = null; // { text, mtime, source, version? }
+  let watchTimer = 0;
+  const WATCH_INTERVAL_MS = 1500;
+  const hasFsAccess = typeof window.showOpenFilePicker === 'function';
+
+  function fmtTime(ms) {
+    const d = ms ? new Date(ms) : new Date();
+    const p = (n) => String(n).padStart(2, '0');
+    return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  }
+  function markAutoReloaded(ms) {
+    $autoMark.textContent = `↻ ${fmtTime(ms)}`;
+    $autoMark.classList.add('show');
+  }
 
   function loadIntoEditor(text, sourceName) {
     $json.value = text;
     lastOpenedName = sourceName || null;
+    lastLoadedText = text;
+    pendingExternal = null;
+    hideExtBanner();
     setStatus('loaded · unsaved', 'checking');
     $apply.disabled = false;
     validate();
   }
 
-  $openFile.addEventListener('click', () => $openFileInput.click());
+  function stopWatch() {
+    if (watchTimer) { clearInterval(watchTimer); watchTimer = 0; }
+  }
+
+  function startWatch() {
+    stopWatch();
+    if (!fileHandle) return;
+    watchTimer = setInterval(pollExternalChange, WATCH_INTERVAL_MS);
+  }
+
+  function showExtBanner(text) {
+    $extBannerText.textContent = text;
+    $extBanner.classList.add('open');
+  }
+  function hideExtBanner() {
+    $extBanner.classList.remove('open');
+  }
+
+  // source: 'picker' (FS-Access poll) or 'server' (SSE from watcher).
+  // `opts.version` lets server-side reloads bump the raster cache key.
+  function applyExternal(text, mtime, opts = {}) {
+    $json.value = text;
+    if (opts.source === 'picker') {
+      lastLoadedText = text;
+      lastLoadedMtime = mtime;
+    } else if (opts.source === 'server') {
+      lastServerText = text;
+      if (opts.version && opts.version !== version) {
+        version = opts.version;
+        refreshRasterTiles();
+      }
+    }
+    pendingExternal = null;
+    hideExtBanner();
+    setStatus('auto-reloaded', 'ok');
+    markAutoReloaded(mtime);
+    validate();
+  }
+
+  async function pollExternalChange() {
+    if (!fileHandle) return;
+    let file;
+    try {
+      file = await fileHandle.getFile();
+    } catch (e) {
+      // Permission lost or file moved — quietly stop watching.
+      stopWatch();
+      return;
+    }
+    if (file.lastModified === lastLoadedMtime) return;
+    let text;
+    try { text = await file.text(); } catch (_) { return; }
+    if (text === lastLoadedText) {
+      // Touched but content unchanged.
+      lastLoadedMtime = file.lastModified;
+      return;
+    }
+    const dirty = $json.value !== lastLoadedText;
+    if (!dirty) {
+      applyExternal(text, file.lastModified, { source: 'picker' });
+    } else {
+      pendingExternal = { text, mtime: file.lastModified, source: 'picker' };
+      const ts = fmtTime(file.lastModified);
+      showExtBanner(`File changed on disk at ${ts} — you have unsaved edits.`);
+    }
+  }
+
+  $extBannerReload.addEventListener('click', () => {
+    if (!pendingExternal) { hideExtBanner(); return; }
+    applyExternal(pendingExternal.text, pendingExternal.mtime, {
+      source: pendingExternal.source,
+      version: pendingExternal.version,
+    });
+  });
+  $extBannerDismiss.addEventListener('click', () => {
+    if (pendingExternal) {
+      // Treat the external version as "seen" so we only re-notify on
+      // the next change. Editor content stays as-is.
+      if (pendingExternal.source === 'picker') {
+        lastLoadedMtime = pendingExternal.mtime;
+        lastLoadedText = pendingExternal.text;
+      } else if (pendingExternal.source === 'server') {
+        lastServerText = pendingExternal.text;
+      }
+      pendingExternal = null;
+    }
+    hideExtBanner();
+  });
+
+  async function openWithPicker() {
+    const [handle] = await window.showOpenFilePicker({
+      multiple: false,
+      types: [{ description: 'Ezu Style JSON', accept: { 'application/json': ['.json'] } }],
+    });
+    const file = await handle.getFile();
+    const text = await file.text();
+    fileHandle = handle;
+    detachServerWatch();
+    loadIntoEditor(text, handle.name.replace(/\.json$/i, ''));
+    lastLoadedMtime = file.lastModified;
+    startWatch();
+  }
+
+  $openFile.addEventListener('click', async () => {
+    if (hasFsAccess) {
+      try {
+        await openWithPicker();
+      } catch (e) {
+        if (e && e.name === 'AbortError') return;
+        setStatus('open failed: ' + e, 'error');
+      }
+    } else {
+      $openFileInput.click();
+    }
+  });
   $openFileInput.addEventListener('change', async () => {
     const file = $openFileInput.files && $openFileInput.files[0];
     if (!file) return;
     try {
       const text = await file.text();
+      fileHandle = null;
+      stopWatch();
+      detachServerWatch();
       loadIntoEditor(text, file.name.replace(/\.json$/i, ''));
+      lastLoadedMtime = file.lastModified;
     } catch (e) {
       setStatus('open failed: ' + e, 'error');
     } finally {
@@ -386,21 +590,16 @@
         return;
       }
       const base = url.split('?')[0].split('/').pop() || 'style';
+      fileHandle = null;
+      stopWatch();
+      detachServerWatch();
       loadIntoEditor(body, base.replace(/\.json$/i, ''));
     } catch (e) {
       setStatus('fetch failed: ' + e, 'error');
     }
   });
 
-  $saveFile.addEventListener('click', () => {
-    const text = $json.value;
-    let baseName = lastOpenedName || 'style';
-    try {
-      const parsed = JSON.parse(text);
-      if (parsed && typeof parsed.name === 'string' && parsed.name.trim()) {
-        baseName = parsed.name.trim().replace(/[\\/:*?"<>|]+/g, '_');
-      }
-    } catch (_) {}
+  function downloadAsBlob(text, baseName) {
     const blob = new Blob([text], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -410,6 +609,54 @@
     a.click();
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  async function saveToHandle(text) {
+    if (!fileHandle) return false;
+    if (fileHandle.queryPermission) {
+      const q = await fileHandle.queryPermission({ mode: 'readwrite' });
+      if (q !== 'granted') {
+        const r = await fileHandle.requestPermission({ mode: 'readwrite' });
+        if (r !== 'granted') return false;
+      }
+    }
+    const w = await fileHandle.createWritable();
+    await w.write(text);
+    await w.close();
+    const f = await fileHandle.getFile();
+    lastLoadedText = text;
+    lastLoadedMtime = f.lastModified;
+    // Pre-empt the server-side watcher: it will detect the mtime bump
+    // and broadcast a reload event with this exact text, so mark it as
+    // already-seen to avoid the banner firing on our own save.
+    lastServerText = text;
+    pendingExternal = null;
+    hideExtBanner();
+    return true;
+  }
+
+  $saveFile.addEventListener('click', async () => {
+    const text = $json.value;
+    let baseName = lastOpenedName || 'style';
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed.name === 'string' && parsed.name.trim()) {
+        baseName = parsed.name.trim().replace(/[\\/:*?"<>|]+/g, '_');
+      }
+    } catch (_) {}
+    if (fileHandle) {
+      try {
+        const ok = await saveToHandle(text);
+        if (ok) {
+          setStatus(`saved · ${fileHandle.name}`, 'ok');
+          return;
+        }
+      } catch (e) {
+        setStatus('save failed: ' + e, 'error');
+        return;
+      }
+    }
+    downloadAsBlob(text, baseName);
   });
 
   // --- Inspect mode ---------------------------------------------------

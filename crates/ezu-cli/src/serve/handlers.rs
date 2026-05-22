@@ -6,11 +6,17 @@ use axum::{
     body::Body,
     extract::{Path, Query, State},
     http::{header, StatusCode},
-    response::{Html, Response},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        Html, Response,
+    },
     routing::get,
     Json, Router,
 };
+use futures::stream::{self, Stream};
 use std::collections::HashMap;
+use std::time::Duration;
+use tokio::sync::broadcast;
 use ezu::core::TileId as CoreTileId;
 use ezu::graph::{CanvasInfo, Evaluator, ParamValues, PortValue, TileId};
 use ezu::features::mvt;
@@ -25,6 +31,7 @@ pub fn router() -> Router<AppState> {
         .route("/style", get(get_style).put(put_style))
         .route("/style/validate", axum::routing::post(post_validate))
         .route("/style/fetch", get(get_style_fetch))
+        .route("/style/events", get(get_style_events))
         .route("/schemas/ezu-style.json", get(get_schema))
         .route("/tiles/{z}/{x}/{y_ext}", get(get_tile))
         .route("/mvt/{z}/{x}/{y}", get(get_mvt))
@@ -88,6 +95,35 @@ async fn get_style_fetch(
         .header(header::CACHE_CONTROL, "no-store")
         .body(Body::from(text))
         .unwrap())
+}
+
+/// Server-Sent Events stream of style-reload notifications. Fires
+/// whenever the local style file watched by `ezu serve <file>` changes
+/// on disk and the server successfully rebuilt the snapshot. The
+/// editor listens to this and either silently swaps the buffer (clean
+/// editor) or surfaces a banner (when the user has unsaved edits).
+async fn get_style_events(
+    State(s): State<AppState>,
+) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
+    let rx = s.events.subscribe();
+    let stream = stream::unfold(rx, |mut rx| async move {
+        loop {
+            match rx.recv().await {
+                Ok(ev) => {
+                    let event = Event::default()
+                        .event("reload")
+                        .json_data(&ev)
+                        .unwrap_or_else(|_| Event::default());
+                    return Some((Ok(event), rx));
+                }
+                // Skip lagged events; an editor missing a couple of
+                // mid-flight reloads just sees the latest one next.
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    });
+    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
 }
 
 async fn get_schema(State(s): State<AppState>) -> Response {
