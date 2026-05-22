@@ -40,7 +40,7 @@ pub struct ServeCmd {
     /// and so `EZU_STYLE` still works.
     #[arg(
         long = "style",
-        default_value = "crates/ezu/examples/watercolor-basic.json",
+        default_value = "crates/ezu/examples/styles/watercolor-basic.json",
         env = "EZU_STYLE"
     )]
     style_flag: String,

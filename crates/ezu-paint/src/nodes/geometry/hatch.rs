@@ -38,7 +38,7 @@ impl Node for HatchNode {
     }
     fn eval(
         &self,
-        _ctx: &EvalCtx<'_>,
+        ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
         let feats = downcast_features(
@@ -46,12 +46,21 @@ impl Node for HatchNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
+        // World origin of this tile, in feature-extent units, so the
+        // line family is laid out on a global grid and adjacent tiles
+        // agree at the seam.
+        let extent = feats.extent as f64;
+        let origin = (
+            ctx.tile.x as f64 * extent,
+            ctx.tile.y as f64 * extent,
+        );
         let lines = hatch_polygons(
             &feats.polygons,
             &HatchOpts {
                 angle_deg: self.angle_deg,
                 spacing: self.spacing,
                 phase: self.phase,
+                origin,
             },
         );
         Ok(features_value(feats.extent, vec![], lines, vec![]))

@@ -41,7 +41,7 @@ MVT URL/path, or a TileJSON) and it spits out PNGs:
 ```sh
 # Single tile to PNG (use `--out tile.webp` for lossless WebP)
 ezu tile \
-  --style https://raw.githubusercontent.com/reearth/ezu/main/crates/ezu/examples/watercolor-basic.json \
+  --style https://raw.githubusercontent.com/reearth/ezu/main/crates/ezu/examples/styles/watercolor-basic.json \
   --assets-dir ./brushes \
   --pmtiles https://build.protomaps.com/20260520.pmtiles \
   --tile 13/7276/3225 --out tile.png
@@ -79,7 +79,7 @@ schema-validated as you type):
 
 ```sh
 ezu serve                          # default example style
-ezu serve crates/ezu/examples/pencil-sketch.json  # open a specific style
+ezu serve crates/ezu/examples/styles/pencil-sketch.json  # open a specific style
 ezu serve https://example.com/style.json          # or fetch one over http(s)
 # Open http://127.0.0.1:8080
 ```
@@ -197,7 +197,7 @@ earth-tone background.
 ```
 
 The full reference watercolor style is in
-[`crates/ezu/examples/watercolor-basic.json`](crates/ezu/examples/watercolor-basic.json).
+[`crates/ezu/examples/styles/watercolor-basic.json`](crates/ezu/examples/styles/watercolor-basic.json).
 
 All painting happens on a **padded canvas** (`tile_size + 2 * pad`) so
 gaussian blurs and MVT buffer geometry that overflows `[0, extent]`

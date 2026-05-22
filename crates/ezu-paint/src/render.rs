@@ -2,7 +2,7 @@
 //! nodes (`features`).
 
 use ezu_features::{Feature, Polygon, Value};
-use ezu_style::{FeatureFilter, FilterAtom, FilterMatch};
+use ezu_style::{FeatureFilter, FilterAtom, FilterMatch, NotInner};
 
 /// Walk a layer's features and return every polygon ring that passes
 /// the filter. Polygons are cloned out so callers own contiguous data.
@@ -77,11 +77,19 @@ fn feature_passes(
     }
     if let Some(filter) = filter.as_ref() {
         for (k, expected) in filter {
-            let Some(actual) = f.properties.get(k) else {
-                return false;
-            };
-            if !match_value(actual, expected) {
-                return false;
+            match f.properties.get(k) {
+                Some(actual) => {
+                    if !match_value(actual, expected) {
+                        return false;
+                    }
+                }
+                // Missing property: passes a Not clause (the value is
+                // not in the excluded set, vacuously), fails One/Any.
+                None => {
+                    if !matches!(expected, FilterMatch::Not(_)) {
+                        return false;
+                    }
+                }
             }
         }
     }
@@ -92,6 +100,10 @@ fn match_value(actual: &Value, expected: &FilterMatch) -> bool {
     match expected {
         FilterMatch::One(atom) => atom_equals(actual, atom),
         FilterMatch::Any(atoms) => atoms.iter().any(|a| atom_equals(actual, a)),
+        FilterMatch::Not(n) => match &n.not {
+            NotInner::One(atom) => !atom_equals(actual, atom),
+            NotInner::Any(atoms) => !atoms.iter().any(|a| atom_equals(actual, a)),
+        },
     }
 }
 

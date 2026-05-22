@@ -149,16 +149,32 @@ impl<'a> FieldRef<'a> {
 ///
 /// ```json
 /// "filter": {
-///   "kind":      ["highway", "major_road"],   // value ∈ {…}
-///   "is_bridge": true                          // exact match
+///   "kind":        ["highway", "major_road"],   // value ∈ {…}
+///   "is_bridge":   true,                         // exact match
+///   "kind_detail": { "not": ["canal", "river"] } // negation
 /// }
 /// ```
 pub type FeatureFilter = HashMap<String, FilterMatch>;
 
-/// One filter clause: exact match or membership test.
+/// One filter clause: exact match, membership test, or negation.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum FilterMatch {
+    One(FilterAtom),
+    Any(Vec<FilterAtom>),
+    Not(NotMatch),
+}
+
+/// `{ "not": <atom | [atoms]> }` — matches when the inner clause does not.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NotMatch {
+    pub not: NotInner,
+}
+
+/// Payload inside `not`: either a single atom or a list of atoms.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum NotInner {
     One(FilterAtom),
     Any(Vec<FilterAtom>),
 }
@@ -235,6 +251,27 @@ mod tests {
           "junk": 1
         }"##;
         assert!(Document::from_json(json).is_err());
+    }
+
+    #[test]
+    fn parses_filter_variants() {
+        let json = r##"{
+          "kind":        "ocean",
+          "kinds":       ["a", "b"],
+          "kind_detail": { "not": "canal" },
+          "kind_many":   { "not": ["x", "y"] }
+        }"##;
+        let f: FeatureFilter = serde_json::from_str(json).unwrap();
+        assert!(matches!(f["kind"], FilterMatch::One(_)));
+        assert!(matches!(f["kinds"], FilterMatch::Any(_)));
+        let FilterMatch::Not(n) = &f["kind_detail"] else {
+            panic!("expected Not")
+        };
+        assert!(matches!(n.not, NotInner::One(_)));
+        let FilterMatch::Not(n) = &f["kind_many"] else {
+            panic!("expected Not")
+        };
+        assert!(matches!(n.not, NotInner::Any(_)));
     }
 
     #[test]

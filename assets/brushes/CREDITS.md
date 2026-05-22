@@ -12,6 +12,8 @@ public-domain dedication.
 | `watercolor_expressive.myb` | David Revoy (deevad) | `brushes/deevad/watercolor_expressive.myb` |
 | `large_watercolor_fringe.myb` | David Revoy (deevad) | `brushes/deevad/large_watercolor_fringe.myb` |
 | `only_water_fringe.myb` | David Revoy (deevad) | `brushes/deevad/only_water_fringe.myb` |
+| `2B_pencil.myb` | David Revoy (deevad) | `brushes/deevad/2B_pencil.myb` |
+| `4H_pencil.myb` | David Revoy (deevad) | `brushes/deevad/4H_pencil.myb` |
 
 Each `*_prev.png` is the upstream preview image accompanying the corresponding
 brush.
@@ -35,3 +37,7 @@ brush.
   stroke boundaries. Pairs well with `watercolor_glazing` as an outline pass.
 - `only_water_fringe` — water-only variant of the fringe; bleeds existing
   pigment outward without depositing new color. Useful as a finishing pass.
+- `2B_pencil` — soft, dark graphite. Used for strong strokes (major roads,
+  land boundaries) in the pencil-sketch style.
+- `4H_pencil` — hard, light graphite. Used for fainter strokes (minor
+  roads) in the pencil-sketch style.

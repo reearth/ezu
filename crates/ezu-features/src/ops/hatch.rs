@@ -27,6 +27,12 @@ pub struct HatchOpts {
     /// Per-line phase offset, in spacing units. `0.0` snaps the first
     /// line through the polygon centroid's projection.
     pub phase: f64,
+    /// World-space offset of the polygon coordinate frame, in the same
+    /// units as the polygon vertices. The hatch line family is laid
+    /// out in `(local + origin)` so adjacent tiles agree on which
+    /// world lines exist (no seam at tile borders). Default `(0, 0)`
+    /// reproduces the legacy tile-local behavior.
+    pub origin: (f64, f64),
 }
 
 impl Default for HatchOpts {
@@ -35,6 +41,7 @@ impl Default for HatchOpts {
             angle_deg: 0.0,
             spacing: 8.0,
             phase: 0.0,
+            origin: (0.0, 0.0),
         }
     }
 }
@@ -49,6 +56,12 @@ pub fn hatch_polygons(polys: &[Polygon], opts: &HatchOpts) -> Vec<Vec<(i32, i32)
     }
     let theta = opts.angle_deg.to_radians();
     let (sin, cos) = theta.sin_cos();
+    // Project the world origin onto the hatch normal — `v` in world
+    // space is `v_local + v_origin`, so aligning v0 to a world grid
+    // means picking `v0_local = ceil((v_min + v_origin)/spacing) *
+    // spacing - v_origin`.
+    let (ox, oy) = opts.origin;
+    let v_origin = -ox * sin + oy * cos;
     // Rotation aligning the hatch direction with the local +X axis is
     // (cos, sin; -sin, cos). We project polygon vertices onto the
     // perpendicular (the local Y axis) to find the slab range.
@@ -78,9 +91,13 @@ pub fn hatch_polygons(polys: &[Polygon], opts: &HatchOpts) -> Vec<Vec<(i32, i32)
         if !v_min.is_finite() || v_max <= v_min {
             continue;
         }
-        let v0 = (v_min / opts.spacing).floor() * opts.spacing + opts.phase * opts.spacing;
-        // Generate the parallel-line family in world coords. Each line
-        // is two endpoints crossing the polygon's rotated bbox.
+        // Snap to the world-aligned line family. With v_origin == 0
+        // this reduces to the legacy local snap.
+        let v0 = ((v_min + v_origin) / opts.spacing).floor() * opts.spacing
+            - v_origin
+            + opts.phase * opts.spacing;
+        // Generate the parallel-line family in tile-local coords. Each
+        // line is two endpoints crossing the polygon's rotated bbox.
         let mut lines: Vec<Vec<[f64; 2]>> = Vec::new();
         let mut v = v0;
         // Step backwards once if the phase pushed us above v_min so we
@@ -127,6 +144,7 @@ mod tests {
             angle_deg: 0.0,
             spacing: 10.0,
             phase: 0.0,
+            origin: (0.0, 0.0),
         });
         // ~10 horizontal lines through a 100-tall square.
         assert!(out.len() >= 8 && out.len() <= 12, "got {} lines", out.len());
@@ -146,6 +164,7 @@ mod tests {
             angle_deg: 0.0,
             spacing: 0.0,
             phase: 0.0,
+            origin: (0.0, 0.0),
         });
         assert!(out.is_empty());
     }

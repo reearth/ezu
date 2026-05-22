@@ -6,7 +6,7 @@
 //! ```
 //!
 //! Defaults:
-//! - `STYLE.json`  → `crates/ezu/examples/watercolor-basic.json`
+//! - `STYLE.json`  → `crates/ezu/examples/styles/watercolor-basic.json`
 //! - `BUILD_DATE`  → `20260520`
 //! - `OUT_DIR`     → `out/tokyo`
 //!
@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let style_path = args
         .get(1)
         .cloned()
-        .unwrap_or_else(|| "crates/ezu/examples/watercolor-basic.json".to_string());
+        .unwrap_or_else(|| "crates/ezu/examples/styles/watercolor-basic.json".to_string());
     let date = args
         .get(2)
         .cloned()

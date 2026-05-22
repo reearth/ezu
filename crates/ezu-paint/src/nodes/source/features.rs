@@ -24,6 +24,8 @@ struct FeaturesNode {
     name: String,
     filter: Option<ezu_style::FeatureFilter>,
     min_zoom_field: Option<String>,
+    min_zoom: Option<u8>,
+    max_zoom: Option<u8>,
 }
 
 impl Node for FeaturesNode {
@@ -49,6 +51,11 @@ impl Node for FeaturesNode {
         _inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
         let z = ctx.tile.z;
+        // Style-level zoom gate: outside the [min_zoom, max_zoom] band,
+        // skip the asset lookup entirely and emit an empty layer.
+        if self.min_zoom.is_some_and(|mn| z < mn) || self.max_zoom.is_some_and(|mx| z > mx) {
+            return Ok(features_value(0, vec![], vec![], vec![]));
+        }
         let asset = match ctx.assets.load(&self.name) {
             Ok(a) => a,
             // No binding for this tile -> emit an empty layer.
@@ -85,6 +92,14 @@ impl Node for FeaturesNode {
         if let Some(s) = &self.min_zoom_field {
             h.update(s.as_bytes());
         }
+        if let Some(z) = self.min_zoom {
+            h.update(b"minz");
+            h.update(&[z]);
+        }
+        if let Some(z) = self.max_zoom {
+            h.update(b"maxz");
+            h.update(&[z]);
+        }
     }
 }
 
@@ -115,11 +130,15 @@ impl NodeFactory for FeaturesFactory {
             None => None,
         };
         let min_zoom_field = read_optional_string(fields, "min-zoom-field")?;
+        let min_zoom = read_optional_zoom(fields, "min-zoom")?;
+        let max_zoom = read_optional_zoom(fields, "max-zoom")?;
         Ok(BuiltNode {
             node: Box::new(FeaturesNode {
                 name,
                 filter,
                 min_zoom_field,
+                min_zoom,
+                max_zoom,
             }),
             connections: vec![],
         })
@@ -135,11 +154,36 @@ impl NodeFactory for FeaturesFactory {
                     "additionalProperties": true,
                     "description": "Property-value filter; entries are AND-combined."
                 },
-                "min-zoom-field": { "type": "string" },
+                "min-zoom-field": { "type": "string",
+                                    "description": "Per-feature property name carrying its data-side `min_zoom`. Features with `<field> > z` are dropped." },
+                "min-zoom": { "type": "integer", "minimum": 0, "maximum": 24,
+                              "description": "Style-level minimum zoom. Below this zoom the node emits an empty layer (the asset is not even loaded)." },
+                "max-zoom": { "type": "integer", "minimum": 0, "maximum": 24,
+                              "description": "Style-level maximum zoom. Above this zoom the node emits an empty layer." },
             },
             "required": ["name"],
         })
     }
+}
+
+fn read_optional_zoom(
+    fields: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<u8>, FactoryError> {
+    let Some(v) = fields.get(key) else {
+        return Ok(None);
+    };
+    let n = v.as_u64().ok_or_else(|| FactoryError::BadField {
+        field: key.into(),
+        msg: "expected non-negative integer".into(),
+    })?;
+    if n > 24 {
+        return Err(FactoryError::BadField {
+            field: key.into(),
+            msg: format!("zoom {n} out of range (0..=24)"),
+        });
+    }
+    Ok(Some(n as u8))
 }
 
 ezu_graph::submit_node!(FeaturesFactory);
