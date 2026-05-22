@@ -23,7 +23,7 @@ Each crate has its own README with API details and examples.
 | [`ezu-graph`](crates/ezu-graph) | Typed node-DAG evaluator (Cache, Rayon parallel) |
 | [`ezu-paint`](crates/ezu-paint) | Painting primitives, built-in nodes, host glue (PNG / brush bank) |
 | [`ezu-wasm`](crates/ezu-wasm) | WebAssembly bindings (`wasm-bindgen`) |
-| [`ezu-cli`](crates/ezu-cli) | Command-line renderer + live editor / tile server — single tile, bbox mosaic, XYZ pyramid, or `serve` |
+| [`ezu-cli`](crates/ezu-cli) | Command-line tool — `tile` / `bbox` / `tiles` rendering, `check` style validator, `serve` live editor + tile server |
 
 ## Try it
 
@@ -54,6 +54,11 @@ ezu bbox --style URL_OR_PATH --pmtiles URL_OR_PATH \
 ezu tiles --style URL_OR_PATH --pmtiles URL_OR_PATH \
   --bbox 139.74,35.65,139.78,35.69 \
   --min-zoom 10 --max-zoom 14 --out pyramid
+
+# Validate a style document (parse + build graph + resolve assets).
+# Exits non-zero on error — drop into a pre-commit hook / CI step.
+ezu check style.json --assets-dir ./brushes
+ezu check style.json --no-fetch    # parse + graph only, offline
 ```
 
 The example style above references four MyPaint brushes that live in

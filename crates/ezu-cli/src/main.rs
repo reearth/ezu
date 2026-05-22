@@ -45,6 +45,9 @@ enum Cmd {
     Bbox(BboxCmd),
     /// Bulk-render an XYZ tile pyramid into `<out>/<z>/<x>/<y>.png`.
     Tiles(TilesCmd),
+    /// Validate an Ezu Style document without rendering — exits non-zero
+    /// on parse / graph / asset errors. Suitable for CI + pre-commit hooks.
+    Check(CheckCmd),
     /// Start the live editor + tile server at `http://127.0.0.1:8080`.
     Serve(serve::ServeCmd),
 }
@@ -93,6 +96,22 @@ impl OutputFormat {
             _ => OutputFormat::Png,
         }
     }
+}
+
+#[derive(Args, Debug)]
+struct CheckCmd {
+    /// Ezu Style JSON document — local path or http(s):// URL.
+    style: String,
+    /// Base directory for resolving relative asset `src` paths.
+    /// Defaults to the style file's parent directory (or the current
+    /// directory when `--style` is a URL).
+    #[arg(long)]
+    assets_dir: Option<PathBuf>,
+    /// Skip fetching URL assets and reading local asset files — only
+    /// run parse + `build_graph`. Faster and works offline; misses
+    /// errors like an unreachable brush URL or a missing image file.
+    #[arg(long)]
+    no_fetch: bool,
 }
 
 #[derive(Args, Debug)]
@@ -180,6 +199,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Cmd::Tile(args) => run_tile(args).await,
         Cmd::Bbox(args) => run_bbox(args).await,
         Cmd::Tiles(args) => run_tiles(args).await,
+        Cmd::Check(args) => run_check(args).await,
         Cmd::Serve(args) => serve::run(args).await,
     }
 }
@@ -236,6 +256,40 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
     let source = Arc::new(TileSource::open(&spec).await?);
 
     Ok(Prepared { graph, cache, loader, source, canvas })
+}
+
+async fn run_check(args: CheckCmd) -> Result<(), Box<dyn std::error::Error>> {
+    let text = fetch_text(&args.style).await?;
+    let doc = Document::from_json(&text)?;
+    let registry = default_registry();
+    let graph = build_graph(&doc, &registry)?;
+
+    if !args.no_fetch && !doc.assets.is_empty() {
+        let base_dir = args.assets_dir.clone().unwrap_or_else(|| {
+            if is_url(&args.style) {
+                PathBuf::from(".")
+            } else {
+                Path::new(&args.style)
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| PathBuf::from("."))
+            }
+        });
+        let mut loader = BrushBankLoader::new()
+            .with_dir(base_dir.clone())
+            .with_images_dir(base_dir.clone());
+        ezu::paint::host::prefetch_doc_assets(&doc, &base_dir, &mut loader).await?;
+    }
+
+    tracing::info!(
+        "ok: {} v{} ({} nodes, {} assets){}",
+        doc.name,
+        doc.version,
+        graph.len(),
+        doc.assets.len(),
+        if args.no_fetch { " [parse + graph only]" } else { "" },
+    );
+    Ok(())
 }
 
 async fn run_tile(args: TileCmd) -> Result<(), Box<dyn std::error::Error>> {
