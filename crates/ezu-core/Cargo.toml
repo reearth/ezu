@@ -8,6 +8,9 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
+readme = "README.md"
+keywords = ["map", "cartography", "tile", "ezu", "rendering"]
+categories = ["graphics", "rendering", "science::geo"]
 
 [dependencies]
 xxhash-rust = { workspace = true }

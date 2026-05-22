@@ -8,8 +8,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
-keywords = ["wasm", "map", "cartography", "vector-tile", "rendering"]
-categories = ["wasm", "graphics", "rendering", "science::geo"]
+publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]

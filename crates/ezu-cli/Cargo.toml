@@ -8,7 +8,9 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
-publish = false
+readme = "../../README.md"
+keywords = ["map", "cartography", "vector-tile", "rendering", "cli"]
+categories = ["command-line-utilities", "graphics", "rendering", "science::geo"]
 
 [[bin]]
 name = "ezu"
