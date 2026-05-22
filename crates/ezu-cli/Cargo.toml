@@ -1,0 +1,31 @@
+[package]
+name = "ezu-cli"
+description = "Command-line renderer for the Ezu Style Spec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "ezu"
+path = "src/main.rs"
+
+[dependencies]
+ezu = { workspace = true, features = ["parallel"] }
+hokusai = { workspace = true, features = ["myb-json"] }
+pmtiles = { workspace = true }
+reqwest = { workspace = true }
+bytes = { workspace = true }
+image = { workspace = true }
+tiny-skia = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+clap = { version = "4", features = ["derive", "env"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "sync"] }
+futures = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

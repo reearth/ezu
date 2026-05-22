@@ -626,6 +626,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "ezu-cli"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "clap",
+ "ezu",
+ "futures",
+ "hokusai",
+ "image",
+ "pmtiles",
+ "reqwest",
+ "serde_json",
+ "thiserror",
+ "tiny-skia",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "ezu-core"
 version = "0.1.0"
 dependencies = [
