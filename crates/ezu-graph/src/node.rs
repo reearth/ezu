@@ -43,4 +43,15 @@ pub trait Node: Send + Sync {
     /// Used as part of the cache key. Implementations should feed every
     /// configuration value that influences output into the hasher.
     fn param_hash(&self, hasher: &mut Xxh3);
+
+    /// Named asset bindings this node samples via the
+    /// [`AssetLoader`](crate::eval::AssetLoader). The evaluator folds
+    /// each binding's `AssetLoader::hash` into this node's cache key,
+    /// so changes in bound data invalidate caches automatically. Like
+    /// declaring uniforms in a shader.
+    ///
+    /// Default: no bindings.
+    fn asset_inputs(&self) -> Vec<String> {
+        Vec::new()
+    }
 }

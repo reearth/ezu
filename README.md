@@ -65,11 +65,18 @@ operation is a node; ports are statically type-checked
 (`Features` / `Raster` / `Brush` / `Scalar`); intermediate buffers are
 cached and reusable across tiles.
 
+External inputs — images, brushes, per-tile MVT/GeoJSON feature
+layers — enter through one uniform `AssetLoader` trait. The style
+references each binding by name (`tile.<layer>` for per-tile feature
+data, bare names for document-scoped assets); the host fills the
+bindings before rendering. Source-format choice (MVT vs GeoJSON vs
+synthesized) is a host concern, not a node concern.
+
 The minimum op set ships in [`ezu-paint`](crates/ezu-paint):
 
 - **Sources** — `solid`, `circle`, `noise` (white / value / perlin /
   simplex / worley, with fBm octaves and domain warp, world-anchored
-  for seamless tile borders), `mvt-source`, `brush-file`
+  for seamless tile borders), `features`, `brush-file`
 - **Rasterization** — `fill-solid` (tiny-skia + libblur), `fill-dabs`
   (hokusai scatter-dab fill, **world-deterministic** so dabs stay
   seamless across tile boundaries), `line` (hokusai stroke along
@@ -102,13 +109,13 @@ earth-tone background.
   "assets": { "glazing": { "type": "brush", "src": "watercolor_glazing" } },
   "nodes": {
     "bg":     { "op": "solid", "color": "#fbf6e6" },
-    "earth":  { "op": "mvt-source", "source-layer": "earth" },
+    "earth":  { "op": "features", "name": "tile.earth" },
     "earth_p":{ "op": "fill-solid", "features": "@earth", "fill": "#e8d9b0" },
-    "water":  { "op": "mvt-source", "source-layer": "water" },
+    "water":  { "op": "features", "name": "tile.water" },
     "water_p":{ "op": "fill-dabs", "features": "@water",
                 "color": "#5876a0", "opacity": 0.22,
                 "radius-px": 7, "spacing-px": 3 },
-    "roads":  { "op": "mvt-source", "source-layer": "roads",
+    "roads":  { "op": "features", "name": "tile.roads",
                 "filter": { "kind_detail": "motorway" } },
     "brush":  { "op": "brush-file", "src": "@glazing" },
     "roads_p":{ "op": "line", "features": "@roads", "brush": "@brush",

@@ -31,6 +31,8 @@ impl<'a> Evaluator<'a> {
     }
 
     /// Evaluate the graph and return the value at the output node.
+    /// Source nodes pull host data through `self.assets`; tile-scoped
+    /// bindings (MVT/GeoJSON layers, …) live under `tile.<name>` keys.
     pub fn render(
         &self,
         tile: TileId,
@@ -38,26 +40,12 @@ impl<'a> Evaluator<'a> {
         params: &ParamValues,
         rng_seed: u64,
     ) -> Result<PortValue, RenderError> {
-        self.render_with_tile_data(tile, canvas, params, rng_seed, None)
-    }
-
-    /// Like [`render`] but supplies host-side tile data (e.g. a decoded
-    /// MVT) to source nodes via [`EvalCtx::tile_data`].
-    pub fn render_with_tile_data(
-        &self,
-        tile: TileId,
-        canvas: CanvasInfo,
-        params: &ParamValues,
-        rng_seed: u64,
-        tile_data: Option<&crate::buf::OpaqueValue>,
-    ) -> Result<PortValue, RenderError> {
         let ctx = EvalCtx {
             tile,
             canvas,
             assets: self.assets,
             params,
             rng_seed,
-            tile_data,
         };
         let n = self.graph.len();
         let mut hashes: Vec<Hash128> = vec![0; n];
@@ -71,24 +59,23 @@ impl<'a> Evaluator<'a> {
         Ok(values[self.graph.output()].clone().expect("output unset"))
     }
 
-    /// Same as [`render_with_tile_data`], but evaluates nodes in parallel
-    /// per topological "level" using Rayon. All nodes at the same level
-    /// have no edges between them, so they fan out across the global
-    /// thread pool with no synchronization cost beyond a per-level join.
+    /// Like [`render`] but evaluates nodes in parallel per topological
+    /// "level" using Rayon. All nodes at the same level have no edges
+    /// between them, so they fan out across the global thread pool with
+    /// no synchronization cost beyond a per-level join.
     ///
     /// Falls back to sequential evaluation transparently when the
     /// `parallel` feature is disabled, so callers don't need to branch.
-    pub fn render_parallel_with_tile_data(
+    pub fn render_parallel(
         &self,
         tile: TileId,
         canvas: CanvasInfo,
         params: &ParamValues,
         rng_seed: u64,
-        tile_data: Option<&crate::buf::OpaqueValue>,
     ) -> Result<PortValue, RenderError> {
         #[cfg(not(feature = "parallel"))]
         {
-            self.render_with_tile_data(tile, canvas, params, rng_seed, tile_data)
+            self.render(tile, canvas, params, rng_seed)
         }
         #[cfg(feature = "parallel")]
         {
@@ -100,7 +87,6 @@ impl<'a> Evaluator<'a> {
                 assets: self.assets,
                 params,
                 rng_seed,
-                tile_data,
             };
             let n = self.graph.len();
             let mut hashes: Vec<Hash128> = vec![0; n];
@@ -135,9 +121,13 @@ impl<'a> Evaluator<'a> {
     ) -> Result<(PortValue, Hash128), RenderError> {
         let node = self.graph.node(ix);
 
-        // Hash this node's own params.
+        // Hash this node's own params, plus any asset bindings it samples.
         let mut h = Xxh3::new();
         node.param_hash(&mut h);
+        for name in node.asset_inputs() {
+            h.update(name.as_bytes());
+            h.update(&ctx.assets.hash(&name).to_le_bytes());
+        }
         let params_hash: Hash128 = h.digest128();
 
         // Collect input hashes (in port order) and input values.

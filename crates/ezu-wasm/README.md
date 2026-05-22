@@ -53,8 +53,8 @@ without mutating the style.
 ### Missing tiles
 
 Pass `null` (or `undefined`) as `mvtBytes` to render just the style's
-paper background. `mvt-source` nodes see an empty `tile_data` and emit
-no features, so all downstream paint nodes short-circuit.
+paper background. `features` nodes see no `tile.<layer>` binding and
+emit an empty layer, so all downstream paint nodes short-circuit.
 
 ### Errors
 

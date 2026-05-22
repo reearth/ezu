@@ -2,13 +2,16 @@
 //! conversion helpers between `ezu_graph::RasterBuf` and `tiny-skia` /
 //! PNG output.
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use ezu_graph::{Asset, AssetError, AssetLoader, RasterBuf};
+use ezu_features::{FeatureLayer, mvt::DecodedTile};
+use ezu_graph::{Asset, AssetError, AssetLoader, OpaqueValue, RasterBuf, TileId};
 use hokusai::Brush;
 use tiny_skia::{Pixmap, PixmapPaint, Transform};
+use xxhash_rust::xxh3::Xxh3;
 
 use crate::PaintError;
 
@@ -62,7 +65,10 @@ impl Default for BrushBankLoader {
 }
 
 impl AssetLoader for BrushBankLoader {
-    fn load(&self, src: &str) -> Result<Asset, AssetError> {
+    fn load(&self, name: &str) -> Result<Asset, AssetError> {
+        let src = name;
+        // Document-scoped names with a leading `@` are accepted for
+        // backwards compatibility with the original brush bank style.
         let key = src.strip_prefix('@').unwrap_or(src);
         if let Some(b) = self.bank.get(key) {
             return Ok(Asset::Brush(b.clone()));
@@ -101,6 +107,88 @@ impl AssetLoader for BrushBankLoader {
             }
         }
         Err(AssetError::NotFound(src.to_string()))
+    }
+}
+
+/// Per-render loader that overlays tile-scoped bindings on top of a
+/// base [`AssetLoader`]. The host fills this with one entry per
+/// host-supplied feature layer (or other tile-scoped asset) before
+/// rendering a tile; document-scoped lookups fall through to the base.
+///
+/// Bindings are keyed by the exact name the style references — by
+/// convention `tile.<layer>` for per-tile features.
+pub struct TileLoader<'a> {
+    base: &'a dyn AssetLoader,
+    bindings: HashMap<String, Binding>,
+    tile: TileId,
+}
+
+struct Binding {
+    asset: Asset,
+    /// Stable identity hash mixed into consuming nodes' cache keys.
+    /// We hash `(tile, name)` rather than the payload contents — for
+    /// per-tile data, tile id already uniquely identifies the binding.
+    hash: u128,
+}
+
+impl<'a> TileLoader<'a> {
+    pub fn new(base: &'a dyn AssetLoader, tile: TileId) -> Self {
+        Self {
+            base,
+            bindings: HashMap::new(),
+            tile,
+        }
+    }
+
+    /// Bind a feature layer under `name`. By convention `name` is
+    /// `"tile.<layer>"`; the style's `features` node references it by
+    /// the same string.
+    pub fn bind_features(&mut self, name: impl Into<String>, layer: FeatureLayer) -> &mut Self {
+        let name = name.into();
+        let hash = self.binding_hash(&name);
+        let opaque: OpaqueValue = Arc::new(layer) as Arc<dyn Any + Send + Sync>;
+        self.bindings.insert(
+            name,
+            Binding {
+                asset: Asset::Features(opaque),
+                hash,
+            },
+        );
+        self
+    }
+
+    /// Bind every layer of a decoded MVT tile under `tile.<layer-name>`.
+    /// Convenience for hosts that decode MVT bytes per tile.
+    pub fn bind_mvt(&mut self, tile: DecodedTile) -> &mut Self {
+        for layer in tile.layers {
+            let key = format!("tile.{}", layer.name);
+            self.bind_features(key, layer);
+        }
+        self
+    }
+
+    fn binding_hash(&self, name: &str) -> u128 {
+        let mut h = Xxh3::new();
+        h.update(&self.tile.z.to_le_bytes());
+        h.update(&self.tile.x.to_le_bytes());
+        h.update(&self.tile.y.to_le_bytes());
+        h.update(name.as_bytes());
+        h.digest128()
+    }
+}
+
+impl AssetLoader for TileLoader<'_> {
+    fn load(&self, name: &str) -> Result<Asset, AssetError> {
+        if let Some(b) = self.bindings.get(name) {
+            return Ok(b.asset.clone());
+        }
+        self.base.load(name)
+    }
+    fn hash(&self, name: &str) -> u128 {
+        if let Some(b) = self.bindings.get(name) {
+            return b.hash;
+        }
+        self.base.hash(name)
     }
 }
 

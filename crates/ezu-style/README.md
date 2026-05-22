@@ -19,7 +19,7 @@ evaluator. To execute a document, feed it to
   },
   "nodes": {
     "bg":            { "op": "solid", "color": "#fbf6e6" },
-    "water_feat":    { "op": "mvt-source", "source-layer": "water" },
+    "water_feat":    { "op": "features", "name": "tile.water" },
     "water":         { "op": "fill-dabs", "features": "@water_feat",
                        "color": "#5876a0", "opacity": 0.22,
                        "radius-px": 7, "spacing-px": 3 },
@@ -34,9 +34,10 @@ References inside node fields use a prefix:
 - `@name` — node reference (input wiring)
 - `$name` — `params` substitution at build time
 
-Each `mvt-source` carries an optional `filter` (every entry AND-combined;
-values are single literals or membership lists) and an optional
-`min-zoom-field`.
+Each `features` node references a host-bound layer by `name`
+(`tile.<layer>` for per-tile MVT/GeoJSON data) and carries an optional
+`filter` (entries AND-combined; values are single literals or membership
+lists) and an optional `min-zoom-field`.
 
 ## Types
 

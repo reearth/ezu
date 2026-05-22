@@ -19,6 +19,20 @@ pub mod geojson;
 pub mod mvt;
 pub mod ops;
 
+/// A single tile-local layer of decoded features. The producer (MVT
+/// decoder, GeoJSON loader, host glue, …) normalizes coordinates into
+/// `[0, extent]` with y-down before constructing this. Consumers in
+/// `ezu-paint` read it via the unified `AssetLoader` under
+/// `tile.<name>` bindings.
+#[derive(Debug)]
+pub struct FeatureLayer {
+    pub name: String,
+    /// Tile coordinate extent (typically 4096 for MVT). GeoJSON
+    /// producers pick a convention and pre-project into it.
+    pub extent: u32,
+    pub features: Vec<Feature>,
+}
+
 /// One decoded feature: geometry plus a properties bag.
 #[derive(Debug)]
 pub struct Feature {

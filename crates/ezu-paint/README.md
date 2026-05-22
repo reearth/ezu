@@ -17,8 +17,10 @@ Three things live here:
    submodules. Each op self-registers via `ezu_graph::submit_node!`;
    `default_registry()` just collects everything via
    `NodeRegistry::from_inventory()`.
-3. **`host` module** — host-side glue: `AssetLoader` impl, conversions
-   from `RasterBuf` to PNG / straight RGBA.
+3. **`host` module** — host-side glue: ready-made `AssetLoader`
+   implementations (`BrushBankLoader` for document-scoped images /
+   brushes, `TileLoader` for per-tile feature overlays), and
+   conversions from `RasterBuf` to PNG / straight RGBA.
 
 ## Paint primitives
 
@@ -100,7 +102,7 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 
 | Op | Inputs → Output | Notes |
 |---|---|---|
-| `mvt-source` | `() → Features` | Pulls a layer out of `EvalCtx::tile_data` |
+| `features` | `() → Features` | Samples a host-bound layer (`tile.<layer>` for per-tile MVT/GeoJSON) via `AssetLoader` |
 | `literal-geometry` | `() → Features` | Inline points / lines / polygons from style fields |
 | `tile-bounds` | `() → Features` | Polygon covering the current tile |
 | `point-grid` | `() → Features` | Regular grid of points across the tile |
@@ -152,20 +154,36 @@ the pixel `Vec<u8>` to the graph layer without a memcpy.
 ## Host glue
 
 ```rust
-use ezu_paint::host::{BrushBankLoader, raster_to_png, raster_to_rgba8};
+use ezu_paint::host::{BrushBankLoader, TileLoader, raster_to_png, raster_to_rgba8};
 
 let mut assets = BrushBankLoader::new().with_dir("assets/brushes".into());
 assets.insert("watercolor_glazing", hokusai::myb::from_str(&myb_json)?);
 
-// after Evaluator::render_with_tile_data returns a RasterBuf:
+// Per render, overlay tile-scoped feature layers on top of the base
+// loader. `bind_mvt` registers every layer under `tile.<layer-name>`.
+let mut tile_loader = TileLoader::new(&assets, tile_id);
+tile_loader.bind_mvt(ezu_features::mvt::decode(&bytes)?);
+
+let ev = Evaluator::new(&graph, &cache, &tile_loader);
+let raster = ev.render(tile_id, canvas, &params, seed)?;
 let png = raster_to_png(&raster, tile_size, pad)?;       // cropped + PNG
 let rgba = raster_to_rgba8(&raster, tile_size, pad);     // cropped, straight RGBA
 ```
 
-`BrushBankLoader` implements `AssetLoader`. It checks an in-memory
-`HashMap<String, Arc<Brush>>` first, then falls back to reading
-`<dir>/<name>.myb` from disk — works the same way for the `tokyo`
-example, `ezu-server`, and unit tests.
+`BrushBankLoader` implements `AssetLoader` for document-scoped images
+and brushes (in-memory + disk fallback). `TileLoader` is a per-render
+overlay that adds tile-scoped feature bindings on top of any base
+loader. Both compose freely with custom `AssetLoader` impls.
+
+### `tile.<layer>` convention
+
+Anything the `features` node refers to as `tile.<name>` is expected to
+be bound by the host once per tile. `TileLoader::bind_mvt(decoded)`
+walks every layer in a decoded MVT and registers each one under
+`tile.<layer-name>`; a custom binding (GeoJSON, in-memory synthesized
+data, …) goes through `bind_features("tile.<name>", layer)`. Names
+without the `tile.` prefix flow through to the base loader unchanged,
+which is where document-scoped image / brush assets live.
 
 `raster_to_png` / `raster_to_rgba8` crop the padded buffer down to the
 central tile region before encoding / demultiplying.

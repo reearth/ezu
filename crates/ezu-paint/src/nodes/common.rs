@@ -16,7 +16,7 @@ use crate::Canvas;
 // ---------------------------------------------------------------------------
 // Concrete payload types for type-erased ports.
 
-/// Payload carried on a `Features` port. Produced by `mvt-source`;
+/// Payload carried on a `Features` port. Produced by `features`;
 /// consumed by `fill-solid`, `fill-dabs`, `line`.
 pub struct FilteredFeatures {
     pub extent: u32,

@@ -28,9 +28,9 @@
 use std::sync::Arc;
 
 use ezu_graph::{
-    build_graph, Cache, CanvasInfo, Evaluator, Graph, OpaqueValue, ParamValues, PortValue, TileId,
+    build_graph, Cache, CanvasInfo, Evaluator, Graph, ParamValues, PortValue, TileId,
 };
-use ezu_paint::host::{raster_to_png, raster_to_rgba8, BrushBankLoader};
+use ezu_paint::host::{raster_to_png, raster_to_rgba8, BrushBankLoader, TileLoader};
 use ezu_paint::nodes::default_registry;
 use ezu_style::Document;
 use wasm_bindgen::prelude::*;
@@ -198,21 +198,21 @@ impl Renderer {
         format: OutputFormat,
     ) -> Result<Vec<u8>, JsValue> {
         let (tile_size, pad) = size_override.unwrap_or((self.doc.tile_size, self.doc.pad));
-        let tile_data: Option<OpaqueValue> = match mvt_bytes {
-            Some(bytes) => Some(Arc::new(
+        let tile_id = TileId { z, x, y };
+        let mut tile_loader = TileLoader::new(&self.assets, tile_id);
+        if let Some(bytes) = mvt_bytes {
+            tile_loader.bind_mvt(
                 ezu_features::mvt::decode(bytes).map_err(|e| named_err(ERR_MVT, e))?,
-            ) as OpaqueValue),
-            None => None,
-        };
+            );
+        }
 
-        let ev = Evaluator::new(&self.graph, &self.cache, &self.assets);
+        let ev = Evaluator::new(&self.graph, &self.cache, &tile_loader);
         let out = ev
-            .render_with_tile_data(
-                TileId { z, x, y },
+            .render(
+                tile_id,
                 CanvasInfo { tile_size, pad },
                 &ParamValues::new(),
                 tile_seed(z, x, y),
-                tile_data.as_ref(),
             )
             .map_err(|e| named_err(ERR_RENDER, e))?;
         let raster = match out {

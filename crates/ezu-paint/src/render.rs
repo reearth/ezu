@@ -1,5 +1,5 @@
-//! Feature filtering and collection helpers shared by MVT-driven
-//! nodes (`mvt-source`).
+//! Feature filtering and collection helpers shared by feature-source
+//! nodes (`features`).
 
 use ezu_features::{Feature, Polygon, Value};
 use ezu_style::{FeatureFilter, FilterAtom, FilterMatch};

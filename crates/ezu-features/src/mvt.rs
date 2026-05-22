@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use geozero::mvt::{tile, Message, Tile};
 
-use crate::{Feature, Geometry, Polygon, Value};
+use crate::{Feature, FeatureLayer, Geometry, Polygon, Value};
 
 #[derive(Debug, thiserror::Error)]
 pub enum MvtError {
@@ -25,24 +25,16 @@ pub fn decode(bytes: &[u8]) -> Result<DecodedTile, MvtError> {
 
 #[derive(Debug)]
 pub struct DecodedTile {
-    pub layers: Vec<DecodedLayer>,
+    pub layers: Vec<FeatureLayer>,
 }
 
 impl DecodedTile {
-    pub fn layer(&self, name: &str) -> Option<&DecodedLayer> {
+    pub fn layer(&self, name: &str) -> Option<&FeatureLayer> {
         self.layers.iter().find(|l| l.name == name)
     }
 }
 
-#[derive(Debug)]
-pub struct DecodedLayer {
-    pub name: String,
-    /// Tile coordinate extent (typically 4096).
-    pub extent: u32,
-    pub features: Vec<Feature>,
-}
-
-fn decode_layer(layer: tile::Layer) -> DecodedLayer {
+fn decode_layer(layer: tile::Layer) -> FeatureLayer {
     let extent = layer.extent.unwrap_or(4096);
     let values: Vec<Value> = layer.values.into_iter().map(value_from_proto).collect();
     let keys = layer.keys;
@@ -51,7 +43,7 @@ fn decode_layer(layer: tile::Layer) -> DecodedLayer {
         .into_iter()
         .map(|f| feature_from_proto(f, &keys, &values))
         .collect();
-    DecodedLayer {
+    FeatureLayer {
         name: layer.name,
         extent,
         features,

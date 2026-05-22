@@ -20,10 +20,10 @@ use std::sync::Arc;
 use bytes::Bytes;
 use ezu::core::TileId as CoreTileId;
 use ezu::graph::{
-    build_graph, Cache, CanvasInfo, Evaluator, Graph, OpaqueValue, ParamValues, PortValue, TileId,
+    build_graph, Cache, CanvasInfo, Evaluator, Graph, ParamValues, PortValue, TileId,
 };
 use ezu::features::mvt;
-use ezu::paint::host::{raster_to_png, BrushBankLoader};
+use ezu::paint::host::{raster_to_png, BrushBankLoader, TileLoader};
 use ezu::paint::nodes::default_registry;
 use ezu::style::Document;
 use futures::future::try_join_all;
@@ -135,25 +135,25 @@ async fn render_one(
     // Move the CPU-heavy work off the tokio reactor; Arcs travel into
     // the blocking task by value.
     let (png, t_decode, t_paint, t_encode) = tokio::task::spawn_blocking(move || {
-        let t1 = Instant::now();
-        let tile_data: Option<OpaqueValue> = match mvt_bytes {
-            Some(bytes) => Some(Arc::new(mvt::decode(&bytes)?) as OpaqueValue),
-            None => None,
+        let tile_id = TileId {
+            z: tile.z,
+            x: tile.x,
+            y: tile.y,
         };
+        let t1 = Instant::now();
+        let mut tile_loader = TileLoader::new(loader.as_ref(), tile_id);
+        if let Some(bytes) = mvt_bytes {
+            tile_loader.bind_mvt(mvt::decode(&bytes)?);
+        }
         let t_decode = t1.elapsed();
 
         let t2 = Instant::now();
-        let ev = Evaluator::new(&graph, &cache, loader.as_ref());
-        let out = ev.render_parallel_with_tile_data(
-            TileId {
-                z: tile.z,
-                x: tile.x,
-                y: tile.y,
-            },
+        let ev = Evaluator::new(&graph, &cache, &tile_loader);
+        let out = ev.render_parallel(
+            tile_id,
             canvas,
             &ParamValues::new(),
             tile_seed(tile),
-            tile_data.as_ref(),
         )?;
         let raster = match out {
             PortValue::Raster(r) => r,

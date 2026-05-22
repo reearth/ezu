@@ -20,7 +20,7 @@ fn registry_emits_document_schema_with_all_ops() {
         "hsl",
         "invert",
         "color-to-alpha",
-        "mvt-source",
+        "features",
         "fill-solid",
         "fill-dabs",
         "line",

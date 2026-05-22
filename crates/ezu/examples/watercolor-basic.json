@@ -9,15 +9,15 @@
   "nodes": {
     "bg":              { "op": "solid", "color": "#fbf6e6" },
 
-    "earth_feat":      { "op": "mvt-source", "source-layer": "earth" },
+    "earth_feat":      { "op": "features", "name": "tile.earth" },
     "earth":           { "op": "fill-solid", "features": "@earth_feat",
                          "fill": "#e8d9b0" },
 
-    "landuse_feat":    { "op": "mvt-source", "source-layer": "landuse" },
+    "landuse_feat":    { "op": "features", "name": "tile.landuse" },
     "landuse":         { "op": "fill-solid", "features": "@landuse_feat",
                          "fill": "#a6c084", "fill-alpha": 0.7 },
 
-    "water_feat":      { "op": "mvt-source", "source-layer": "water" },
+    "water_feat":      { "op": "features", "name": "tile.water" },
     "water":           { "op": "fill-dabs", "features": "@water_feat",
                          "color": "#5876a0", "opacity": 0.22,
                          "radius-px": 7.0, "hardness": 0.5, "paint": 1.0,
@@ -27,7 +27,7 @@
 
     "glazing_brush":   { "op": "brush-file", "src": "@glazing" },
 
-    "roads_primary_f": { "op": "mvt-source", "source-layer": "roads",
+    "roads_primary_f": { "op": "features", "name": "tile.roads",
                          "min-zoom-field": "min_zoom",
                          "filter": { "kind_detail": "primary" } },
     "roads_primary":   { "op": "line", "features": "@roads_primary_f",
@@ -38,7 +38,7 @@
                          "radius-stroke-curve":  [[0.0, -1.2], [0.15, 0.0], [0.85, 0.0], [1.0, -1.6]],
                          "opacity-stroke-curve": [[0.0, -0.2], [0.1,  0.0], [0.9,  0.0], [1.0, -0.3]] },
 
-    "roads_trunk_f":   { "op": "mvt-source", "source-layer": "roads",
+    "roads_trunk_f":   { "op": "features", "name": "tile.roads",
                          "min-zoom-field": "min_zoom",
                          "filter": { "kind_detail": "trunk" } },
     "roads_trunk":     { "op": "line", "features": "@roads_trunk_f",
@@ -50,7 +50,7 @@
                          "opacity-stroke-curve": [[0.0, -0.25], [0.1, 0.0], [0.9, 0.0], [1.0, -0.35]],
                          "dtime-stroke-curve":   [[0.0, 2.5], [0.15, 1.0], [0.85, 1.0], [1.0, 3.0]] },
 
-    "roads_motor_f":   { "op": "mvt-source", "source-layer": "roads",
+    "roads_motor_f":   { "op": "features", "name": "tile.roads",
                          "min-zoom-field": "min_zoom",
                          "filter": { "kind_detail": "motorway" } },
     "roads_motor":     { "op": "line", "features": "@roads_motor_f",

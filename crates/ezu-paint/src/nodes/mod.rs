@@ -4,9 +4,9 @@
 //!
 //! - [`raster`] — raster utility ops (`solid`, `circle`, `blur`,
 //!   `blend`)
-//! - [`source`] — feature sources, either fed by the host (MVT) or
-//!   synthesized (`mvt-source`, `literal-geometry`, `tile-bounds`,
-//!   `point-grid`)
+//! - [`source`] — feature sources, either bound by the host (MVT,
+//!   GeoJSON, …) or synthesized (`features`, `literal-geometry`,
+//!   `tile-bounds`, `point-grid`)
 //! - [`paint`] — paint features onto a canvas (`fill-solid`,
 //!   `fill-dabs`, `line`, `stamp`, `brush-file`)
 //! - [`brush`] — `() -> Brush` sources: load a brush asset
@@ -20,10 +20,11 @@
 //! collects everything that's been submitted — adding a new op means
 //! creating a file and submitting it; no edits here required.
 //!
-//! MVT-driven nodes downcast `EvalCtx::tile_data` to
-//! `Arc<ezu_features::mvt::DecodedTile>`. The host (e.g. the `tokyo` example)
-//! fetches and decodes the tile and passes it via
-//! [`Evaluator::render_with_tile_data`](ezu_graph::Evaluator).
+//! The `features` node resolves tile-scoped layers through the
+//! unified [`AssetLoader`](ezu_graph::AssetLoader) under reserved
+//! `tile.<layer>` names — like sampling a shader uniform. The host
+//! (e.g. the `tokyo` example) decodes its MVT/GeoJSON input into
+//! [`ezu_features::FeatureLayer`] and binds each layer before rendering.
 //!
 //! Shared helpers (parameter parsing, color conversion, Canvas
 //! plumbing, payload downcasting) live in [`common`].

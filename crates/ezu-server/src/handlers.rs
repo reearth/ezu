@@ -9,9 +9,9 @@ use axum::{
     Json, Router,
 };
 use ezu::core::TileId as CoreTileId;
-use ezu::graph::{CanvasInfo, Evaluator, OpaqueValue, ParamValues, PortValue, TileId};
+use ezu::graph::{CanvasInfo, Evaluator, ParamValues, PortValue, TileId};
 use ezu::features::mvt;
-use ezu::paint::host::{raster_to_png, BrushBankLoader};
+use ezu::paint::host::{raster_to_png, BrushBankLoader, TileLoader};
 use serde_json::json;
 
 use crate::state::{AppState, StyleSnapshot};
@@ -146,24 +146,22 @@ fn render_png(
     tile_size: u32,
     pad: u32,
 ) -> Result<Vec<u8>, String> {
-    let tile_data: Option<OpaqueValue> = match mvt_bytes {
-        Some(bytes) => Some(Arc::new(
-            mvt::decode(bytes).map_err(|e| format!("mvt decode: {e}"))?,
-        ) as OpaqueValue),
-        None => None,
+    let tile_id = TileId {
+        z: tile.z,
+        x: tile.x,
+        y: tile.y,
     };
-    let ev = Evaluator::new(graph, cache, assets);
+    let mut tile_loader = TileLoader::new(assets, tile_id);
+    if let Some(bytes) = mvt_bytes {
+        tile_loader.bind_mvt(mvt::decode(bytes).map_err(|e| format!("mvt decode: {e}"))?);
+    }
+    let ev = Evaluator::new(graph, cache, &tile_loader);
     let out = ev
-        .render_with_tile_data(
-            TileId {
-                z: tile.z,
-                x: tile.x,
-                y: tile.y,
-            },
+        .render(
+            tile_id,
             CanvasInfo { tile_size, pad },
             &ParamValues::new(),
             tile_seed(tile),
-            tile_data.as_ref(),
         )
         .map_err(|e| format!("render: {e}"))?;
     let raster = match out {

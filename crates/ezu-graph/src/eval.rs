@@ -31,10 +31,17 @@ impl CanvasInfo {
 }
 
 /// One asset fetched by an [`AssetLoader`].
+///
+/// The shape is uniform across input kinds (images, brushes, feature
+/// layers, …) so every source-style node consumes the host through the
+/// same trait — like a shader sampling a typed uniform binding.
+/// `Features` carries a type-erased payload; by convention the
+/// concrete type is `Arc<ezu_features::FeatureLayer>`.
 #[derive(Debug, Clone)]
 pub enum Asset {
     Image(Arc<RasterBuf>),
     Brush(OpaqueValue),
+    Features(OpaqueValue),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -47,18 +54,31 @@ pub enum AssetError {
     Other(String),
 }
 
-/// Pluggable backend for resolving `src:` strings to bytes/decoded
-/// assets. Implementations live in the host (CLI / server / WASM).
+/// Pluggable backend for resolving named asset bindings (images,
+/// brushes, tile features, …). Names that start with `tile.` are by
+/// convention tile-scoped — the host rebinds them per render.
+///
+/// `hash` returns a stable content/identity hash the evaluator folds
+/// into every consuming node's cache key, so changes in a bound asset
+/// invalidate caches automatically. Implementations may return `0` if
+/// the binding never changes (document-scoped, fixed disk file, etc.).
 pub trait AssetLoader: Send + Sync {
-    fn load(&self, src: &str) -> Result<Asset, AssetError>;
+    fn load(&self, name: &str) -> Result<Asset, AssetError>;
+
+    /// Content/identity hash for cache invalidation. The default of
+    /// `0` is safe for assets that never change for the lifetime of a
+    /// loader (typical for in-memory image / brush banks).
+    fn hash(&self, _name: &str) -> u128 {
+        0
+    }
 }
 
 /// A no-op asset loader. Every load returns `NotFound`. Useful for
 /// tests of graphs that don't touch any asset.
 pub struct NoAssets;
 impl AssetLoader for NoAssets {
-    fn load(&self, src: &str) -> Result<Asset, AssetError> {
-        Err(AssetError::NotFound(src.to_string()))
+    fn load(&self, name: &str) -> Result<Asset, AssetError> {
+        Err(AssetError::NotFound(name.to_string()))
     }
 }
 
@@ -92,11 +112,6 @@ pub struct EvalCtx<'a> {
     /// Deterministic root seed for this render. World-anchored nodes
     /// hash this with world coordinates to produce per-feature seeds.
     pub rng_seed: u64,
-    /// Host-supplied tile data (e.g. a decoded MVT). Source nodes
-    /// downcast this to the concrete type they expect. `None` means no
-    /// tile data is available (e.g. the host fetched nothing for this
-    /// tile); source nodes should produce an empty result.
-    pub tile_data: Option<&'a crate::buf::OpaqueValue>,
 }
 
 #[derive(Debug, thiserror::Error)]
