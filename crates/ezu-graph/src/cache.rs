@@ -76,7 +76,8 @@ impl Cache {
     }
 
     pub fn with_capacity(cap: usize) -> Self {
-        let cap = NonZeroUsize::new(cap.max(1)).unwrap();
+        // `cap.max(1)` guarantees the value is non-zero.
+        let cap = NonZeroUsize::new(cap.max(1)).expect("cap.max(1) is non-zero");
         Self {
             inner: Mutex::new(LruCache::new(cap)),
         }
@@ -84,27 +85,34 @@ impl Cache {
 
     /// Look up a cached value and refresh its LRU position.
     pub fn get(&self, key: CacheKey) -> Option<PortValue> {
-        self.inner.lock().unwrap().get(&key).cloned()
+        self.lock().get(&key).cloned()
     }
 
     pub fn insert(&self, key: CacheKey, value: PortValue) {
-        self.inner.lock().unwrap().put(key, value);
+        self.lock().put(key, value);
     }
 
     pub fn len(&self) -> usize {
-        self.inner.lock().unwrap().len()
+        self.lock().len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.inner.lock().unwrap().is_empty()
+        self.lock().is_empty()
     }
 
     pub fn clear(&self) {
-        self.inner.lock().unwrap().clear();
+        self.lock().clear();
     }
 
     /// Configured maximum entry count.
     pub fn capacity(&self) -> usize {
-        self.inner.lock().unwrap().cap().get()
+        self.lock().cap().get()
+    }
+
+    /// Acquire the inner mutex. Recovers from poisoning by taking the
+    /// guard anyway — the cache holds no invariant that a panic mid-op
+    /// could break (it's just an LRU of `Arc`s).
+    fn lock(&self) -> std::sync::MutexGuard<'_, LruCache<CacheKey, PortValue>> {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 }

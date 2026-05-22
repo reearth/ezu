@@ -158,7 +158,10 @@ impl GraphBuilder {
                 to: edge.dst.clone(),
             })?;
 
-            let (_, dst_node) = self.nodes.get_index(dst_ix).unwrap();
+            let (_, dst_node) = self
+                .nodes
+                .get_index(dst_ix)
+                .expect("dst_ix came from ix_of and is in range");
             let port_ix = dst_node
                 .inputs()
                 .iter()
@@ -175,7 +178,12 @@ impl GraphBuilder {
                 });
             }
 
-            let src_kind = self.nodes.get_index(src_ix).unwrap().1.output();
+            let src_kind = self
+                .nodes
+                .get_index(src_ix)
+                .expect("src_ix came from ix_of and is in range")
+                .1
+                .output();
             let expected = dst_node.inputs()[port_ix].kind;
             if src_kind != expected {
                 return Err(BuildError::TypeMismatch {
@@ -208,7 +216,12 @@ impl GraphBuilder {
         // Document output must be a canvas-padded raster — anything
         // smaller (e.g. a raw `Sprite`) will alias badly through the
         // host's `raster_to_png` crop. Catch this at build time.
-        let output_kind = self.nodes.get_index(output_ix).unwrap().1.output();
+        let output_kind = self
+            .nodes
+            .get_index(output_ix)
+            .expect("output_ix came from ix_of and is in range")
+            .1
+            .output();
         if output_kind != PortKind::Raster {
             return Err(BuildError::OutputKindMismatch {
                 node: output_id.clone(),
@@ -274,8 +287,15 @@ fn topo_sort(
     }
 
     if order.len() != n {
-        let bad = (0..n).find(|&i| indegree[i] != 0).unwrap();
-        let (id, _) = nodes.get_index(bad).unwrap();
+        // `order.len() != n` means at least one node still has incoming
+        // edges (otherwise topo would have queued it). Find one such
+        // node to name in the error.
+        let bad = (0..n)
+            .find(|&i| indegree[i] != 0)
+            .expect("order.len() != n implies some indegree is non-zero");
+        let (id, _) = nodes
+            .get_index(bad)
+            .expect("bad < n is within nodes range");
         return Err(BuildError::Cycle(id.clone()));
     }
     Ok(order)
@@ -319,11 +339,18 @@ impl Graph {
     }
 
     pub fn node(&self, ix: NodeIx) -> &dyn Node {
-        self.nodes.get_index(ix).unwrap().1.as_ref()
+        self.nodes
+            .get_index(ix)
+            .expect("NodeIx is always within self.nodes range")
+            .1
+            .as_ref()
     }
 
     pub fn node_id(&self, ix: NodeIx) -> &str {
-        self.nodes.get_index(ix).unwrap().0
+        self.nodes
+            .get_index(ix)
+            .expect("NodeIx is always within self.nodes range")
+            .0
     }
 
     /// Upstream nodes feeding `ix`, deduplicated.

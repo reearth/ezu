@@ -157,19 +157,24 @@ impl NodeRegistry {
         use serde_json::{json, Value};
         let mut variants: Vec<Value> = Vec::with_capacity(self.ops.len());
         for op in self.op_names() {
-            let factory = self.ops.get(op).unwrap();
+            let factory = self
+                .ops
+                .get(op)
+                .expect("op_names yields keys present in self.ops");
             let mut schema = factory.schema();
             if !schema.is_object() {
                 schema = json!({});
             }
-            let obj = schema.as_object_mut().unwrap();
+            let obj = schema
+                .as_object_mut()
+                .expect("schema was just normalized to an object");
             obj.entry("type").or_insert_with(|| json!("object"));
             // Add the discriminator field.
             let props = obj
                 .entry("properties")
                 .or_insert_with(|| json!({}))
                 .as_object_mut()
-                .unwrap();
+                .expect("`properties` was just inserted as a JSON object");
             props.insert(
                 "op".to_string(),
                 json!({ "const": op, "description": format!("Selects the `{op}` operation.") }),
@@ -179,7 +184,7 @@ impl NodeRegistry {
                 .entry("required")
                 .or_insert_with(|| json!([]))
                 .as_array_mut()
-                .unwrap();
+                .expect("`required` was just inserted as a JSON array");
             if !required.iter().any(|v| v.as_str() == Some("op")) {
                 required.insert(0, json!("op"));
             }

@@ -48,7 +48,7 @@ async fn get_style(State(s): State<AppState>) -> Response {
         .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
         .header(header::CACHE_CONTROL, "no-store")
         .body(Body::from(snap.text.clone()))
-        .unwrap()
+        .expect("response builder with valid headers + body never fails")
 }
 
 async fn put_style(
@@ -96,7 +96,7 @@ async fn get_style_fetch(
         .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
         .header(header::CACHE_CONTROL, "no-store")
         .body(Body::from(text))
-        .unwrap())
+        .expect("response builder with valid headers + body never fails"))
 }
 
 /// Server-Sent Events stream of style-reload notifications. Fires
@@ -136,7 +136,7 @@ async fn get_schema(State(s): State<AppState>) -> Response {
         .header(header::CONTENT_TYPE, "application/schema+json")
         .header(header::CACHE_CONTROL, "no-store")
         .body(Body::from(body))
-        .unwrap()
+        .expect("response builder with valid headers + body never fails")
 }
 
 #[derive(Clone, Copy)]
@@ -208,7 +208,7 @@ async fn get_tile(
         .header(header::CONTENT_TYPE, format.content_type())
         .header(header::CACHE_CONTROL, "no-store")
         .body(Body::from(bytes))
-        .unwrap())
+        .expect("response builder with valid headers + body never fails"))
 }
 
 /// Return raw decompressed MVT bytes for `(z, x, y)`. Used by the WASM demo,
@@ -226,7 +226,7 @@ async fn get_mvt(
         .header(header::CONTENT_TYPE, "application/vnd.mapbox-vector-tile")
         .header(header::CACHE_CONTROL, "public, max-age=300")
         .body(Body::from(bytes.to_vec()))
-        .unwrap())
+        .expect("response builder with valid headers + body never fails"))
 }
 
 /// Decode the MVT for `(z, x, y)` and report which layers it contains.
