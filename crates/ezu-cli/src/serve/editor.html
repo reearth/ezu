@@ -38,6 +38,8 @@
   .inspect-toolbar { position: absolute; top: 10px; left: 10px; z-index: 5; background: #fdfbf1; border: 1px solid #d8d2bf; border-radius: 4px; padding: 6px 10px; font-size: 12px; display: flex; gap: 8px; align-items: center; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
   .inspect-toolbar button { padding: 4px 10px; background: #5a4636; color: #fdfbf1; border: 0; border-radius: 3px; font-weight: 600; cursor: pointer; font-size: 11px; }
   .inspect-toolbar button.off { background: #c9bfa8; color: #4a3424; }
+  .inspect-toolbar .z-indicator { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: #5a4636; padding: 2px 6px; background: #f5eedc; border-radius: 3px; min-width: 56px; text-align: center; }
+
 
   .inspect-panel { position: absolute; top: 60px; left: 10px; z-index: 5; background: #fdfbf1; border: 1px solid #d8d2bf; border-radius: 4px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); width: 220px; max-height: calc(100vh - 100px); display: none; flex-direction: column; overflow: hidden; }
   .inspect-panel.open { display: flex; }
@@ -82,9 +84,10 @@
   <div class="map-wrap">
     <div id="map"></div>
     <div class="inspect-toolbar">
-      <span>Source MVT</span>
-      <button id="inspect-toggle" class="off">inspect: off</button>
-      <button id="raster-toggle">render: on</button>
+      <span class="z-indicator" id="zoom-indicator" title="Current map zoom · click to copy z/center">z —</span>
+      <button id="grid-toggle" class="off" title="Show XYZ tile boundaries + z/x/y labels">grid: off</button>
+      <button id="inspect-toggle" class="off" title="Overlay source MVT features for inspection">inspect: off</button>
+      <button id="raster-toggle" title="Toggle the ezu rendered raster output">render: on</button>
     </div>
     <div class="inspect-panel" id="inspect-panel">
       <header>
@@ -591,6 +594,96 @@
     }
   });
 
+  // --- Zoom indicator + tile-grid overlay ----------------------------
+  const $zoom = document.getElementById('zoom-indicator');
+  const $gridToggle = document.getElementById('grid-toggle');
+
+  function updateZoom() {
+    $zoom.textContent = `z ${map.getZoom().toFixed(2)}`;
+  }
+  map.on('move', updateZoom);
+  map.on('zoom', updateZoom);
+
+  $zoom.addEventListener('click', () => {
+    const c = map.getCenter();
+    const text = `${map.getZoom().toFixed(2)} @ ${c.lat.toFixed(5)},${c.lng.toFixed(5)}`;
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+    $zoom.title = `copied: ${text}`;
+  });
+
+  // Render one grid tile to PNG bytes. MapLibre invokes the handler
+  // once per (z, x, y) and caches the result, so we don't have to
+  // track moveend or compute viewport bounds.
+  maplibregl.addProtocol('grid', async (params) => {
+    const m = /^grid:\/\/(\d+)\/(\d+)\/(\d+)/.exec(params.url);
+    if (!m) throw new Error('bad grid url: ' + params.url);
+    const z = +m[1], x = +m[2], y = +m[3];
+    const size = 256;
+    const canvas = typeof OffscreenCanvas !== 'undefined'
+      ? new OffscreenCanvas(size, size)
+      : Object.assign(document.createElement('canvas'), { width: size, height: size });
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, size, size);
+
+    // White halo + bright red solid stroke. High contrast on both
+    // light renders and dark imagery, and dash-free so the lines
+    // read cleanly even when many tiles are visible.
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(2, 2, size - 4, size - 4);
+    ctx.strokeStyle = '#e63946';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(2, 2, size - 4, size - 4);
+
+    const label = `${z}/${x}/${y}`;
+    ctx.font = 'bold 11px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const padX = 6, h = 16;
+    const w = Math.ceil(ctx.measureText(label).width) + padX * 2;
+    const rx = Math.round(size / 2 - w / 2);
+    const ry = Math.round(size / 2 - h / 2);
+    ctx.fillStyle = 'rgba(253,251,241,0.9)';
+    ctx.fillRect(rx, ry, w, h);
+    ctx.strokeStyle = 'rgba(216,210,191,1)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(rx + 0.5, ry + 0.5, w - 1, h - 1);
+    ctx.fillStyle = '#382a1f';
+    ctx.fillText(label, size / 2, size / 2 + 0.5);
+
+    const blob = canvas.convertToBlob
+      ? await canvas.convertToBlob({ type: 'image/png' })
+      : await new Promise((res) => canvas.toBlob(res, 'image/png'));
+    const buf = await blob.arrayBuffer();
+    return { data: new Uint8Array(buf) };
+  });
+
+  let gridOn = false;
+  function setGrid(on) {
+    gridOn = on;
+    $gridToggle.textContent = `grid: ${on ? 'on' : 'off'}`;
+    $gridToggle.classList.toggle('off', !on);
+    if (on) {
+      if (!map.getSource('tile-grid')) {
+        map.addSource('tile-grid', {
+          type: 'raster',
+          tiles: ['grid://{z}/{x}/{y}'],
+          tileSize: 256,
+          minzoom: 0,
+          maxzoom: 22,
+        });
+        map.addLayer({ id: 'tile-grid', type: 'raster', source: 'tile-grid' });
+      }
+    } else {
+      if (map.getLayer('tile-grid')) map.removeLayer('tile-grid');
+      if (map.getSource('tile-grid')) map.removeSource('tile-grid');
+    }
+  }
+
+  $gridToggle.addEventListener('click', () => setGrid(!gridOn));
+
   // --- Feature popup --------------------------------------------------
   function visibleInspectLayerIds() {
     const ids = [];
@@ -653,6 +746,7 @@
 
   // --- Boot -----------------------------------------------------------
   map.on('load', async () => {
+    updateZoom();
     await loadSchema();
     await loadStyle();
   });
