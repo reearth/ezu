@@ -13,12 +13,13 @@ concrete node implementations.
 
 ## Port types
 
-The DAG is typed. Every edge carries one of four `PortKind`s:
+The DAG is typed. Every edge carries one of five `PortKind`s:
 
 | Kind | Carries |
 |---|---|
 | `Features` | Vector features (geometry + properties), pre-filtered. Source-format agnostic — MVT, GeoJSON, or synthesized in-node. |
-| `Raster` | RGBA8 buffer (sRGB premultiplied), padded canvas-sized |
+| `Raster` | RGBA8 buffer (sRGB premultiplied), **padded canvas-sized**. The document's `output` must be this kind. |
+| `Sprite` | RGBA8 buffer at the **asset's native dimensions**, not canvas-sized. Used as the carrier for sprite / texture sources (`image`) consumed by placement ops (`place`, `tiling`, `stamp`). Cannot be wired directly into raster transforms or the document `output`. |
 | `Brush` | hokusai brush handle plus overrides |
 | `Scalar` | constant Color / Number / Bool |
 

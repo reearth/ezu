@@ -27,11 +27,10 @@ Each crate has its own README with API details and examples.
 
 ## Try it
 
-Install the CLI directly from GitHub — no clone, no `git`, just one
-command:
+Install the CLI from crates.io:
 
 ```sh
-cargo install --git https://github.com/reearth/ezu ezu-cli
+cargo install ezu-cli
 ```
 
 That puts an `ezu` binary on your `PATH`. Point it at any style (URL
@@ -129,9 +128,11 @@ ezu serve
 ## How it paints
 
 A style is a **typed node DAG**, not an ordered layer list. Every
-operation is a node; ports are statically type-checked
-(`Features` / `Raster` / `Brush` / `Scalar`); intermediate buffers are
-cached and reusable across tiles.
+operation is a node; ports are statically type-checked across five
+kinds — `Features` (geometry + props), `Raster` (canvas-sized RGBA),
+`Sprite` (image at native dimensions, consumed by placement ops),
+`Brush` (hokusai brush handle), `Scalar` (constants); intermediate
+buffers are cached and reusable across tiles.
 
 External inputs — images, brushes, per-tile MVT/GeoJSON feature
 layers — enter through one uniform `AssetLoader` trait. The style
@@ -147,11 +148,15 @@ The minimum op set ships in [`ezu-paint`](crates/ezu-paint):
 
 - **Sources** — `solid`, `circle`, `noise` (white / value / perlin /
   simplex / worley, with fBm octaves and domain warp, world-anchored
-  for seamless tile borders), `features`, `brush-file`
+  for seamless tile borders), `features`, `brush-file`, `image` (load
+  a PNG/WebP asset as a `Sprite` for placement / tiling ops)
 - **Rasterization** — `fill-solid` (tiny-skia + libblur), `fill-dabs`
   (hokusai scatter-dab fill, **world-deterministic** so dabs stay
   seamless across tile boundaries), `line` (hokusai stroke along
-  polylines)
+  polylines), `stamp` (paint a `Sprite` per feature point), `place`
+  (composite one `Sprite` at fixed canvas coordinates), `tiling`
+  (repeat a `Sprite` across the canvas, world-anchored for seamless
+  tile borders)
 - **Composition** — `blur` (libblur Gaussian), `blend` (W3C 16 blend
   modes — multiply / screen / overlay / soft-light / hue / luminosity
   etc., plus `composite` operators (`destination-out` for brush-style

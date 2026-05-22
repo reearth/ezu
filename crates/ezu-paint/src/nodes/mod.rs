@@ -2,11 +2,12 @@
 //!
 //! Ops are grouped into category submodules:
 //!
-//! - [`raster`] — raster utility ops (`solid`, `circle`, `blur`,
-//!   `blend`)
-//! - [`source`] — feature sources, either bound by the host (MVT,
-//!   GeoJSON, …) or synthesized (`features`, `literal-geometry`,
-//!   `tile-bounds`, `point-grid`)
+//! - [`raster`] — raster utility ops (`solid`, `circle`, `noise`,
+//!   `blur`, `blend`, `warp`, `displace`, `hsl`, …) plus the
+//!   `Sprite`-consuming `place` and `tiling` placement ops
+//! - [`source`] — feature / sprite sources, either bound by the host
+//!   (MVT, GeoJSON, …) or synthesized (`features`, `literal-geometry`,
+//!   `tile-bounds`, `point-grid`, `image`)
 //! - [`paint`] — paint features onto a canvas (`fill-solid`,
 //!   `fill-dabs`, `line`, `stamp`, `brush-file`)
 //! - [`brush`] — `() -> Brush` sources: load a brush asset
@@ -14,6 +15,11 @@
 //! - [`geometry`] — `Features -> Features` transforms (`centroid`,
 //!   `boundary`, `simplify`, `convex-hull`, `buffer`, `hatch`,
 //!   `dash`, `wave`)
+//!
+//! The `Sprite` port kind carries a raster at the asset's native
+//! dimensions (rather than canvas-sized) — used by `image` →
+//! `place` / `tiling` / `stamp` flows where a non-canvas-sized image
+//! is the natural payload. See [`ezu_graph::PortKind::Sprite`].
 //!
 //! Each op file ends in `ezu_graph::submit_node!(...Factory)` which
 //! registers it with the global inventory. [`default_registry`] simply
