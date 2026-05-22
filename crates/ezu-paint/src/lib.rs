@@ -290,5 +290,7 @@ fn mul(c: u8, a: u8) -> u8 {
 pub enum PaintError {
     #[error("png encode failed")]
     PngEncode,
+    #[error("webp encode failed: {0}")]
+    WebpEncode(String),
 }
 

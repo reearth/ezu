@@ -94,8 +94,14 @@ impl AssetLoader for BrushBankLoader {
             return Ok(Asset::Image(img.clone()));
         }
         if let Some(dir) = &self.images_dir {
-            // Try `<dir>/<key>`, then `<dir>/<key>.png`.
-            let candidates = [dir.join(key), dir.join(format!("{key}.png"))];
+            // Try `<dir>/<key>` (exact), then a small list of supported
+            // image extensions. `image::open` sniffs by extension, so
+            // both PNG and WebP flow through the same decode path.
+            let candidates = [
+                dir.join(key),
+                dir.join(format!("{key}.png")),
+                dir.join(format!("{key}.webp")),
+            ];
             for path in &candidates {
                 if path.exists() {
                     let raster = decode_image_file(path).map_err(|e| AssetError::Decode {
@@ -244,6 +250,50 @@ fn pixmap_from_raster(buf: &RasterBuf) -> Result<Pixmap, PaintError> {
     let mut p = Pixmap::new(buf.width, buf.height).ok_or(PaintError::PngEncode)?;
     p.data_mut().copy_from_slice(&buf.pixels);
     Ok(p)
+}
+
+/// Crop a padded raster down to the central `tile_size` × `tile_size`
+/// region and encode as lossless WebP via the pure-Rust `image-webp`
+/// codec. WebP is typically 20–40 % smaller than the PNG output for
+/// the same painterly tile while staying lossless, so it's the better
+/// default for cached tile pyramids.
+pub fn raster_to_webp(
+    buf: &RasterBuf,
+    tile_size: u32,
+    pad: u32,
+) -> Result<Vec<u8>, PaintError> {
+    // The pure-Rust WebP encoder wants straight (un-premul) RGBA, which
+    // `raster_to_rgba8` already produces alongside the crop.
+    let rgba = raster_to_rgba8(buf, tile_size, pad);
+    encode_rgba8_webp(tile_size, tile_size, &rgba)
+}
+
+/// Encode a tiny-skia `Pixmap` (premultiplied RGBA8) as lossless WebP.
+/// Demultiplies in place and hands the straight-RGBA buffer to the
+/// pure-Rust WebP encoder. Use this for outputs that aren't tile-sized
+/// (e.g. the `ezu-cli bbox` mosaic).
+pub fn pixmap_to_webp(pixmap: &Pixmap) -> Result<Vec<u8>, PaintError> {
+    let (w, h) = (pixmap.width(), pixmap.height());
+    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    for p in pixmap.pixels() {
+        let p = p.demultiply();
+        rgba.extend_from_slice(&[p.red(), p.green(), p.blue(), p.alpha()]);
+    }
+    encode_rgba8_webp(w, h, &rgba)
+}
+
+fn encode_rgba8_webp(width: u32, height: u32, straight_rgba: &[u8]) -> Result<Vec<u8>, PaintError> {
+    let mut out = Vec::new();
+    let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut out);
+    image::ImageEncoder::write_image(
+        encoder,
+        straight_rgba,
+        width,
+        height,
+        image::ExtendedColorType::Rgba8,
+    )
+    .map_err(|e| PaintError::WebpEncode(e.to_string()))?;
+    Ok(out)
 }
 
 /// Crop a padded raster down to the central tile region and return

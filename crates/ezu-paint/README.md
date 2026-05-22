@@ -154,7 +154,7 @@ the pixel `Vec<u8>` to the graph layer without a memcpy.
 ## Host glue
 
 ```rust
-use ezu_paint::host::{BrushBankLoader, TileLoader, raster_to_png, raster_to_rgba8};
+use ezu_paint::host::{BrushBankLoader, TileLoader, raster_to_png, raster_to_webp, raster_to_rgba8};
 
 let mut assets = BrushBankLoader::new().with_dir("assets/brushes".into());
 assets.insert("watercolor_glazing", hokusai::myb::from_str(&myb_json)?);
@@ -166,8 +166,9 @@ tile_loader.bind_mvt(ezu_features::mvt::decode(&bytes)?);
 
 let ev = Evaluator::new(&graph, &cache, &tile_loader);
 let raster = ev.render(tile_id, canvas, &params, seed)?;
-let png = raster_to_png(&raster, tile_size, pad)?;       // cropped + PNG
-let rgba = raster_to_rgba8(&raster, tile_size, pad);     // cropped, straight RGBA
+let png  = raster_to_png(&raster, tile_size, pad)?;       // cropped + PNG
+let webp = raster_to_webp(&raster, tile_size, pad)?;      // cropped + lossless WebP
+let rgba = raster_to_rgba8(&raster, tile_size, pad);      // cropped, straight RGBA
 ```
 
 `BrushBankLoader` implements `AssetLoader` for document-scoped images
@@ -185,8 +186,11 @@ data, …) goes through `bind_features("tile.<name>", layer)`. Names
 without the `tile.` prefix flow through to the base loader unchanged,
 which is where document-scoped image / brush assets live.
 
-`raster_to_png` / `raster_to_rgba8` crop the padded buffer down to the
-central tile region before encoding / demultiplying.
+`raster_to_png` / `raster_to_webp` / `raster_to_rgba8` all crop the
+padded buffer down to the central tile region before encoding /
+demultiplying. WebP uses the pure-Rust `image-webp` codec (lossless
+only) — no native deps. A `pixmap_to_webp(&tiny_skia::Pixmap)` helper
+covers non-tile-sized outputs (e.g. CLI bbox mosaics).
 
 ## Features
 

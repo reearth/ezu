@@ -11,13 +11,15 @@ mod source;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use ezu::core::TileId as CoreTileId;
 use ezu::features::mvt;
 use ezu::graph::{
     build_graph, Cache, CanvasInfo, Evaluator, Graph, ParamValues, PortValue, RasterBuf, TileId,
 };
-use ezu::paint::host::{raster_to_png, BrushBankLoader, TileLoader};
+use ezu::paint::host::{
+    pixmap_to_webp, raster_to_png, raster_to_webp, BrushBankLoader, TileLoader,
+};
 use ezu::paint::nodes::default_registry;
 use ezu::style::{AssetKind, Document};
 use futures::future::try_join_all;
@@ -64,6 +66,32 @@ struct CommonArgs {
     mvt: Option<String>,
 }
 
+/// Output raster format. Pure-Rust pipelines on both sides — WebP is
+/// lossless via the `image-webp` codec, typically 20–40 % smaller than
+/// PNG for painterly content.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum OutputFormat {
+    Png,
+    Webp,
+}
+
+impl OutputFormat {
+    fn extension(self) -> &'static str {
+        match self {
+            OutputFormat::Png => "png",
+            OutputFormat::Webp => "webp",
+        }
+    }
+
+    /// Pick a format from a filename extension, falling back to PNG.
+    fn from_path(path: &Path) -> Self {
+        match path.extension().and_then(|s| s.to_str()) {
+            Some(s) if s.eq_ignore_ascii_case("webp") => OutputFormat::Webp,
+            _ => OutputFormat::Png,
+        }
+    }
+}
+
 #[derive(Args, Debug)]
 struct TileCmd {
     #[command(flatten)]
@@ -71,9 +99,13 @@ struct TileCmd {
     /// Tile coordinate as `Z/X/Y`.
     #[arg(long, value_parser = parse_zxy)]
     tile: CoreTileId,
-    /// Output PNG path.
+    /// Output path. Format is sniffed from the extension (`.png` /
+    /// `.webp`); use `--format` to override.
     #[arg(long, default_value = "out.png")]
     out: PathBuf,
+    /// Output format. Defaults to whatever `--out`'s extension implies.
+    #[arg(long, value_enum)]
+    format: Option<OutputFormat>,
 }
 
 #[derive(Args, Debug)]
@@ -86,9 +118,13 @@ struct BboxCmd {
     /// Zoom level.
     #[arg(long)]
     zoom: u8,
-    /// Output PNG path.
+    /// Output path. Format is sniffed from the extension (`.png` /
+    /// `.webp`); use `--format` to override.
     #[arg(long, default_value = "out.png")]
     out: PathBuf,
+    /// Output format. Defaults to whatever `--out`'s extension implies.
+    #[arg(long, value_enum)]
+    format: Option<OutputFormat>,
 }
 
 #[derive(Args, Debug)]
@@ -106,9 +142,13 @@ struct TilesCmd {
     /// Maximum zoom level (inclusive).
     #[arg(long)]
     max_zoom: u8,
-    /// Output directory; tiles are written as `<out>/<z>/<x>/<y>.png`.
+    /// Output directory; tiles are written as
+    /// `<out>/<z>/<x>/<y>.<ext>` (extension picked by `--format`).
     #[arg(long, default_value = "tiles")]
     out: PathBuf,
+    /// Output format. Defaults to PNG.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Png)]
+    format: OutputFormat,
     /// Number of tiles rendered in parallel. Defaults to the number
     /// of logical CPU cores.
     #[arg(long, default_value_t = default_concurrency())]
@@ -196,6 +236,7 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
 
 async fn run_tile(args: TileCmd) -> Result<(), Box<dyn std::error::Error>> {
     let prep = prepare(&args.common).await?;
+    let format = args.format.unwrap_or_else(|| OutputFormat::from_path(&args.out));
     let raster = render_one(
         Arc::clone(&prep.graph),
         Arc::clone(&prep.cache),
@@ -206,14 +247,18 @@ async fn run_tile(args: TileCmd) -> Result<(), Box<dyn std::error::Error>> {
     )
     .await
     .map_err(|e| e.to_string())?;
-    let png = raster_to_png(&raster, prep.canvas.tile_size, prep.canvas.pad)?;
-    std::fs::write(&args.out, &png)?;
-    tracing::info!("wrote {} ({} bytes)", args.out.display(), png.len());
+    let bytes = match format {
+        OutputFormat::Png => raster_to_png(&raster, prep.canvas.tile_size, prep.canvas.pad)?,
+        OutputFormat::Webp => raster_to_webp(&raster, prep.canvas.tile_size, prep.canvas.pad)?,
+    };
+    std::fs::write(&args.out, &bytes)?;
+    tracing::info!("wrote {} ({} bytes)", args.out.display(), bytes.len());
     Ok(())
 }
 
 async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
     let prep = prepare(&args.common).await?;
+    let format = args.format.unwrap_or_else(|| OutputFormat::from_path(&args.out));
     let (x_range, y_range) = bbox_to_tiles(args.bbox, args.zoom);
     let nx = x_range.end - x_range.start;
     let ny = y_range.end - y_range.start;
@@ -252,9 +297,12 @@ async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
         let dy = ((tile.y - y_range.start) * prep.canvas.tile_size) as i32;
         blit_padded_into(&mut mosaic, &raster, dx, dy, prep.canvas.tile_size, prep.canvas.pad)?;
     }
-    let png = mosaic.encode_png().map_err(|e| e.to_string())?;
-    std::fs::write(&args.out, &png)?;
-    tracing::info!("wrote {} ({} bytes)", args.out.display(), png.len());
+    let bytes = match format {
+        OutputFormat::Png => mosaic.encode_png().map_err(|e| e.to_string())?,
+        OutputFormat::Webp => pixmap_to_webp(&mosaic).map_err(|e| e.to_string())?,
+    };
+    std::fs::write(&args.out, &bytes)?;
+    tracing::info!("wrote {} ({} bytes)", args.out.display(), bytes.len());
     Ok(())
 }
 
@@ -296,6 +344,7 @@ async fn run_tiles(args: TilesCmd) -> Result<(), Box<dyn std::error::Error>> {
             .flat_map(move |ty| xr.clone().map(move |tx| (tx, ty)));
         let prep = &prep;
         let out = &args.out;
+        let format = args.format;
         let t0 = std::time::Instant::now();
         futures::stream::iter(coords)
             .map(|(tx, ty)| async move {
@@ -309,17 +358,20 @@ async fn run_tiles(args: TilesCmd) -> Result<(), Box<dyn std::error::Error>> {
                     tile,
                 )
                 .await?;
-                let png = tokio::task::spawn_blocking({
+                let bytes = tokio::task::spawn_blocking({
                     let canvas = prep.canvas;
-                    move || raster_to_png(&raster, canvas.tile_size, canvas.pad)
+                    move || match format {
+                        OutputFormat::Png => raster_to_png(&raster, canvas.tile_size, canvas.pad),
+                        OutputFormat::Webp => raster_to_webp(&raster, canvas.tile_size, canvas.pad),
+                    }
                 })
                 .await
                 .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?
                 .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?;
                 let dir = out.join(z.to_string()).join(tx.to_string());
                 tokio::fs::create_dir_all(&dir).await?;
-                let path = dir.join(format!("{ty}.png"));
-                tokio::fs::write(&path, png).await?;
+                let path = dir.join(format!("{ty}.{}", format.extension()));
+                tokio::fs::write(&path, bytes).await?;
                 Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
             })
             .buffer_unordered(args.concurrency)

@@ -30,7 +30,9 @@ use std::sync::Arc;
 use ezu_graph::{
     build_graph, Cache, CanvasInfo, Evaluator, Graph, ParamValues, PortValue, TileId,
 };
-use ezu_paint::host::{raster_to_png, raster_to_rgba8, BrushBankLoader, TileLoader};
+use ezu_paint::host::{
+    raster_to_png, raster_to_rgba8, raster_to_webp, BrushBankLoader, TileLoader,
+};
 use ezu_paint::nodes::default_registry;
 use ezu_style::Document;
 use wasm_bindgen::prelude::*;
@@ -40,6 +42,7 @@ const ERR_BRUSH: &str = "BrushParse";
 const ERR_MVT: &str = "MvtDecode";
 const ERR_RENDER: &str = "RenderFailed";
 const ERR_PNG: &str = "PngEncode";
+const ERR_WEBP: &str = "WebpEncode";
 
 /// Stateful WASM renderer.
 #[wasm_bindgen]
@@ -125,6 +128,20 @@ impl Renderer {
         self.render_inner(mvt_bytes.as_deref(), z, x, y, None, OutputFormat::Png)
     }
 
+    /// Render a single tile to lossless WebP bytes. Smaller than PNG
+    /// for the same painterly content and decoded natively by every
+    /// modern browser.
+    #[wasm_bindgen(js_name = renderWebp)]
+    pub fn render_webp(
+        &self,
+        mvt_bytes: Option<Vec<u8>>,
+        z: u8,
+        x: u32,
+        y: u32,
+    ) -> Result<Vec<u8>, JsValue> {
+        self.render_inner(mvt_bytes.as_deref(), z, x, y, None, OutputFormat::Webp)
+    }
+
     /// Render a single tile to straight RGBA8 bytes (`tile_w * tile_h * 4`).
     #[wasm_bindgen(js_name = renderRgba)]
     pub fn render_rgba(
@@ -159,6 +176,27 @@ impl Renderer {
         )
     }
 
+    /// Like `renderWebp` but with `tile_size` / `pad` overridden.
+    #[wasm_bindgen(js_name = renderWebpAt)]
+    pub fn render_webp_at(
+        &self,
+        mvt_bytes: Option<Vec<u8>>,
+        z: u8,
+        x: u32,
+        y: u32,
+        tile_size: u32,
+        pad: u32,
+    ) -> Result<Vec<u8>, JsValue> {
+        self.render_inner(
+            mvt_bytes.as_deref(),
+            z,
+            x,
+            y,
+            Some((tile_size, pad)),
+            OutputFormat::Webp,
+        )
+    }
+
     /// Like `renderRgba` but with `tile_size` / `pad` overridden.
     #[wasm_bindgen(js_name = renderRgbaAt)]
     pub fn render_rgba_at(
@@ -184,6 +222,7 @@ impl Renderer {
 #[derive(Clone, Copy)]
 enum OutputFormat {
     Png,
+    Webp,
     Rgba,
 }
 
@@ -228,6 +267,9 @@ impl Renderer {
         Ok(match format {
             OutputFormat::Png => {
                 raster_to_png(&raster, tile_size, pad).map_err(|e| named_err(ERR_PNG, e))?
+            }
+            OutputFormat::Webp => {
+                raster_to_webp(&raster, tile_size, pad).map_err(|e| named_err(ERR_WEBP, e))?
             }
             OutputFormat::Rgba => raster_to_rgba8(&raster, tile_size, pad),
         })

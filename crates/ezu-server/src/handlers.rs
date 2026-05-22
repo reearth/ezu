@@ -11,7 +11,7 @@ use axum::{
 use ezu::core::TileId as CoreTileId;
 use ezu::graph::{CanvasInfo, Evaluator, ParamValues, PortValue, TileId};
 use ezu::features::mvt;
-use ezu::paint::host::{raster_to_png, BrushBankLoader, TileLoader};
+use ezu::paint::host::{raster_to_png, raster_to_webp, BrushBankLoader, TileLoader};
 use serde_json::json;
 
 use crate::state::{AppState, StyleSnapshot};
@@ -61,11 +61,34 @@ async fn get_schema(State(s): State<AppState>) -> Response {
         .unwrap()
 }
 
+#[derive(Clone, Copy)]
+enum TileFormat {
+    Png,
+    Webp,
+}
+
+impl TileFormat {
+    fn content_type(self) -> &'static str {
+        match self {
+            TileFormat::Png => "image/png",
+            TileFormat::Webp => "image/webp",
+        }
+    }
+}
+
 async fn get_tile(
     State(s): State<AppState>,
-    Path((z, x, y_png)): Path<(u8, u32, String)>,
+    Path((z, x, y_ext)): Path<(u8, u32, String)>,
 ) -> Result<Response, (StatusCode, String)> {
-    let y_str = y_png.strip_suffix(".png").unwrap_or(&y_png);
+    // Sniff the output format off the extension. Default is PNG so the
+    // legacy `/tiles/{z}/{x}/{y}` (no suffix) and `.png` keep working.
+    let (y_str, format) = if let Some(s) = y_ext.strip_suffix(".webp") {
+        (s, TileFormat::Webp)
+    } else if let Some(s) = y_ext.strip_suffix(".png") {
+        (s, TileFormat::Png)
+    } else {
+        (y_ext.as_str(), TileFormat::Png)
+    };
     let y: u32 = y_str
         .parse()
         .map_err(|_| (StatusCode::BAD_REQUEST, "bad y".into()))?;
@@ -94,18 +117,18 @@ async fn get_tile(
         )
     };
 
-    let png = tokio::task::spawn_blocking({
+    let bytes = tokio::task::spawn_blocking({
         let assets = Arc::clone(&s.assets);
-        move || render_png(&graph, &cache, &assets, mvt.as_deref(), tile, tile_size, pad)
+        move || render_tile(&graph, &cache, &assets, mvt.as_deref(), tile, tile_size, pad, format)
     })
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     Ok(Response::builder()
-        .header(header::CONTENT_TYPE, "image/png")
+        .header(header::CONTENT_TYPE, format.content_type())
         .header(header::CACHE_CONTROL, "no-store")
-        .body(Body::from(png))
+        .body(Body::from(bytes))
         .unwrap())
 }
 
@@ -137,7 +160,7 @@ async fn get_mvt(
         .unwrap())
 }
 
-fn render_png(
+fn render_tile(
     graph: &ezu::graph::Graph,
     cache: &ezu::graph::Cache,
     assets: &BrushBankLoader,
@@ -145,6 +168,7 @@ fn render_png(
     tile: CoreTileId,
     tile_size: u32,
     pad: u32,
+    format: TileFormat,
 ) -> Result<Vec<u8>, String> {
     let tile_id = TileId {
         z: tile.z,
@@ -168,7 +192,12 @@ fn render_png(
         PortValue::Raster(r) => r,
         other => return Err(format!("expected Raster output, got {:?}", other.kind())),
     };
-    raster_to_png(&raster, tile_size, pad).map_err(|e| format!("png: {e}"))
+    match format {
+        TileFormat::Png => raster_to_png(&raster, tile_size, pad).map_err(|e| format!("png: {e}")),
+        TileFormat::Webp => {
+            raster_to_webp(&raster, tile_size, pad).map_err(|e| format!("webp: {e}"))
+        }
+    }
 }
 
 fn tile_seed(tile: CoreTileId) -> u64 {

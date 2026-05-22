@@ -25,9 +25,12 @@ class Renderer {
 
   // Render — pass `null` for `mvtBytes` to get a paper-only tile.
   render(mvtBytes: Uint8Array | null, z: number, x: number, y: number): Uint8Array;        // PNG
+  renderWebp(mvtBytes: Uint8Array | null, z: number, x: number, y: number): Uint8Array;    // lossless WebP
   renderRgba(mvtBytes: Uint8Array | null, z: number, x: number, y: number): Uint8Array;    // straight RGBA
   renderAt(mvtBytes: Uint8Array | null, z: number, x: number, y: number,
            tileSize: number, pad: number): Uint8Array;                                      // PNG, size override
+  renderWebpAt(mvtBytes: Uint8Array | null, z: number, x: number, y: number,
+               tileSize: number, pad: number): Uint8Array;                                  // WebP, size override
   renderRgbaAt(mvtBytes: Uint8Array | null, z: number, x: number, y: number,
                tileSize: number, pad: number): Uint8Array;                                  // RGBA, size override
 
@@ -39,6 +42,9 @@ class Renderer {
 
 - **`render` / `renderAt`** return PNG bytes — feed to `<img>` via
   `URL.createObjectURL(new Blob([buf], { type: "image/png" }))`.
+- **`renderWebp` / `renderWebpAt`** return lossless WebP bytes (~15 %
+  smaller than PNG on painterly tiles). Pure-Rust encoder, no native
+  deps. Use `type: "image/webp"` when wrapping in a `Blob`.
 - **`renderRgba` / `renderRgbaAt`** return straight (un-premultiplied)
   8-bit RGBA bytes (`tile_size * tile_size * 4`) — feed directly to
   `ctx.putImageData(new ImageData(new Uint8ClampedArray(buf.buffer), w, h), 0, 0)`
@@ -68,6 +74,7 @@ the failure kind:
 | `MvtDecode`    | `render*` couldn't decode the MVT bytes |
 | `RenderFailed` | A node `eval` failed (e.g. unresolved brush, downcast mismatch) |
 | `PngEncode`    | PNG encoding failed (extremely unlikely) |
+| `WebpEncode`   | WebP encoding failed (extremely unlikely) |
 
 ```js
 try {

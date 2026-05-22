@@ -31,7 +31,7 @@ CLI flags (all also overridable via env):
 | `GET`  | `/` | Inline HTML editor (Leaflet + textarea, `⌘↵` to apply) |
 | `GET`  | `/style` | Current style as raw JSON |
 | `PUT`  | `/style` | Validate + replace style; returns `{ "version": N }` |
-| `GET`  | `/tiles/{z}/{x}/{y}.png` | Render the tile under the current style |
+| `GET`  | `/tiles/{z}/{x}/{y}.{png,webp}` | Render the tile under the current style. The extension picks the output codec — `.webp` is lossless and typically ~15 % smaller. |
 | `GET`  | `/mvt/{z}/{x}/{y}` | Raw decompressed MVT bytes (for the WASM demo) |
 | `GET`  | `/schemas/ezu-style.json` | JSON Schema derived from the live node registry |
 

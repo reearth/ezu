@@ -40,7 +40,7 @@ or local path) and any tile source (PMTiles URL/file, an `{z}/{x}/{y}`
 MVT URL/path, or a TileJSON) and it spits out PNGs:
 
 ```sh
-# Single tile to PNG
+# Single tile to PNG (use `--out tile.webp` for lossless WebP)
 ezu tile \
   --style https://raw.githubusercontent.com/reearth/ezu/main/crates/ezu/examples/watercolor-basic.json \
   --assets-dir ./brushes \
