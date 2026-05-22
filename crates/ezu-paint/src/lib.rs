@@ -282,14 +282,15 @@ fn blur_pixmap(pixmap: &mut Pixmap, sigma: f32) {
         let g = rgba[i * 4 + 1];
         let b = rgba[i * 4 + 2];
         let a = rgba[i * 4 + 3];
-        *dst = PremultipliedColorU8::from_rgba(mul(r, a), mul(g, a), mul(b, a), a)
-            .unwrap_or_else(|| {
+        *dst = PremultipliedColorU8::from_rgba(mul(r, a), mul(g, a), mul(b, a), a).unwrap_or_else(
+            || {
                 // Fully-transparent black is always a valid premul color;
                 // this fallback only fires if `from_rgba` ever rejects
                 // its input (it doesn't today).
                 PremultipliedColorU8::from_rgba(0, 0, 0, 0)
                     .expect("transparent black is a valid premul color")
-            });
+            },
+        );
     }
 }
 

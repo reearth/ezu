@@ -293,9 +293,7 @@ fn topo_sort(
         let bad = (0..n)
             .find(|&i| indegree[i] != 0)
             .expect("order.len() != n implies some indegree is non-zero");
-        let (id, _) = nodes
-            .get_index(bad)
-            .expect("bad < n is within nodes range");
+        let (id, _) = nodes.get_index(bad).expect("bad < n is within nodes range");
         return Err(BuildError::Cycle(id.clone()));
     }
     Ok(order)
