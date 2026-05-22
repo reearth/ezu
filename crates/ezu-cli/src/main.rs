@@ -48,6 +48,8 @@ enum Cmd {
     /// Validate an Ezu Style document without rendering — exits non-zero
     /// on parse / graph / asset errors. Suitable for CI + pre-commit hooks.
     Check(CheckCmd),
+    /// Emit a Mermaid `graph LR` diagram of the style's node dependencies.
+    Graph(GraphCmd),
     /// Start the live editor + tile server at `http://127.0.0.1:8080`.
     Serve(serve::ServeCmd),
 }
@@ -112,6 +114,15 @@ struct CheckCmd {
     /// errors like an unreachable brush URL or a missing image file.
     #[arg(long)]
     no_fetch: bool,
+}
+
+#[derive(Args, Debug)]
+struct GraphCmd {
+    /// Ezu Style JSON document — local path or http(s):// URL.
+    style: String,
+    /// Output file. Writes to stdout when omitted.
+    #[arg(long)]
+    out: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -200,6 +211,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Cmd::Bbox(args) => run_bbox(args).await,
         Cmd::Tiles(args) => run_tiles(args).await,
         Cmd::Check(args) => run_check(args).await,
+        Cmd::Graph(args) => run_graph(args).await,
         Cmd::Serve(args) => serve::run(args).await,
     }
 }
@@ -290,6 +302,110 @@ async fn run_check(args: CheckCmd) -> Result<(), Box<dyn std::error::Error>> {
         if args.no_fetch { " [parse + graph only]" } else { "" },
     );
     Ok(())
+}
+
+async fn run_graph(args: GraphCmd) -> Result<(), Box<dyn std::error::Error>> {
+    let text = fetch_text(&args.style).await?;
+    let doc = Document::from_json(&text)?;
+    let mermaid = render_mermaid(&doc);
+    match &args.out {
+        Some(p) => {
+            std::fs::write(p, &mermaid)?;
+            tracing::info!("wrote {} ({} bytes)", p.display(), mermaid.len());
+        }
+        None => print!("{mermaid}"),
+    }
+    Ok(())
+}
+
+/// Render the document's node DAG as a Mermaid `graph LR` block. Edges
+/// follow data flow: each `@ref` becomes `ref --> consumer`. Asset
+/// references (style-level `assets` entries) are emitted as styled
+/// source nodes so brush/image pipelines stay readable.
+fn render_mermaid(doc: &ezu::style::Document) -> String {
+    use std::collections::HashSet;
+
+    let mut s = String::new();
+    s.push_str("graph LR\n");
+
+    for (id, asset) in &doc.assets {
+        let kind = match asset.kind {
+            AssetKind::Brush => "brush",
+            AssetKind::Image => "image",
+            AssetKind::MaskImage => "mask-image",
+            AssetKind::Gradient => "gradient",
+        };
+        s.push_str(&format!("  {id}[/\"{id} (asset:{kind})\"/]\n"));
+    }
+
+    let output_id = doc.output.as_str();
+    let mut source_ids: Vec<&str> = Vec::new();
+    for (id, spec) in &doc.nodes {
+        let is_source = spec.op == "features";
+        let suffix = if id == output_id {
+            ":::output"
+        } else {
+            ""
+        };
+        // Cylinder shape for data-source nodes (MVT-backed `features`);
+        // rectangle for everything else.
+        if is_source {
+            s.push_str(&format!("  {id}[(\"{id} ({op})\")]{suffix}\n", op = spec.op));
+            source_ids.push(id);
+        } else {
+            s.push_str(&format!("  {id}[\"{id} ({op})\"]{suffix}\n", op = spec.op));
+        }
+    }
+    // Synthetic sink so the diagram has an unambiguous exit. Picked a
+    // name that can't collide with a user node id (contains `:`).
+    s.push_str("  __output__([\"OUTPUT\"]):::sink\n");
+    s.push_str(&format!("  {output_id} ==> __output__\n"));
+
+    s.push('\n');
+    for (id, spec) in &doc.nodes {
+        let mut refs: Vec<String> = Vec::new();
+        collect_refs(
+            &serde_json::Value::Object(spec.fields.clone()),
+            &mut refs,
+        );
+        let mut seen = HashSet::new();
+        for r in refs {
+            if !seen.insert(r.clone()) {
+                continue;
+            }
+            if doc.nodes.contains_key(&r) || doc.assets.contains_key(&r) {
+                s.push_str(&format!("  {r} --> {id}\n"));
+            }
+        }
+    }
+
+    s.push_str("\n  classDef asset fill:#fff4d6,stroke:#a88500;\n");
+    s.push_str("  classDef output fill:#ffe0e0,stroke:#cc3333,stroke-width:2px;\n");
+    s.push_str("  classDef sink fill:#cc3333,color:#ffffff,stroke:#7a1f1f,stroke-width:2px;\n");
+    s.push_str("  classDef source fill:#d9ecff,stroke:#2a6fb0;\n");
+    if !doc.assets.is_empty() {
+        let ids: Vec<&str> = doc.assets.keys().map(String::as_str).collect();
+        s.push_str(&format!("  class {} asset;\n", ids.join(",")));
+    }
+    if !source_ids.is_empty() {
+        s.push_str(&format!("  class {} source;\n", source_ids.join(",")));
+    }
+    s
+}
+
+/// Recursively scan a JSON value for `@name` strings — these are the
+/// node/asset references the style spec uses for cross-node wiring.
+fn collect_refs(v: &serde_json::Value, out: &mut Vec<String>) {
+    match v {
+        serde_json::Value::String(s) => {
+            if let Some(rest) = s.strip_prefix('@') {
+                out.push(rest.to_string());
+            }
+        }
+        serde_json::Value::Array(a) => a.iter().for_each(|x| collect_refs(x, out)),
+        serde_json::Value::Object(m) => m.values().for_each(|x| collect_refs(x, out)),
+        _ => {}
+    }
 }
 
 async fn run_tile(args: TileCmd) -> Result<(), Box<dyn std::error::Error>> {
