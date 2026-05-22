@@ -7,7 +7,7 @@
 
 **Painterly cartography** — render vector tiles as paintings.
 
-![ezu pencil-sketch render of central Japan](docs/hero.png)
+![ezu pencil-sketch render of central Japan — © OpenStreetMap contributors, © Protomaps](docs/hero.webp)
 
 `ezu` (絵図) is a Rust map rendering engine that turns vector tiles (MVT /
 PMTiles) into painterly raster tiles via the
