@@ -1,6 +1,13 @@
 # ezu
 
+[![Crates.io](https://img.shields.io/crates/v/ezu.svg)](https://crates.io/crates/ezu)
+[![docs.rs](https://img.shields.io/docsrs/ezu)](https://docs.rs/ezu)
+[![CI](https://github.com/reearth/ezu/actions/workflows/ci.yml/badge.svg)](https://github.com/reearth/ezu/actions/workflows/ci.yml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+
 **Painterly cartography** — render vector tiles as paintings.
+
+![ezu pencil-sketch render of central Japan](docs/hero.png)
 
 `ezu` (絵図) is a Rust map rendering engine that turns vector tiles (MVT /
 PMTiles) into painterly raster tiles via the
@@ -14,16 +21,15 @@ preserving the geographic data underneath.
 
 Each crate has its own README with API details and examples.
 
-| Crate | Description |
-|---|---|
-| [`ezu`](crates/ezu) | Umbrella crate, re-exports + feature flags |
-| [`ezu-core`](crates/ezu-core) | Tile / world coordinates, deterministic seeding |
-| [`ezu-features`](crates/ezu-features) | GIS feature parsing (MVT via `geozero`, GeoJSON) — no remote fetch |
-| [`ezu-style`](crates/ezu-style) | Style spec parser (`serde`) — pure data, no rendering |
-| [`ezu-graph`](crates/ezu-graph) | Typed node-DAG evaluator (Cache, Rayon parallel) |
-| [`ezu-paint`](crates/ezu-paint) | Painting primitives, built-in nodes, host glue (PNG / brush bank) |
-| [`ezu-wasm`](crates/ezu-wasm) | WebAssembly bindings (`wasm-bindgen`) |
-| [`ezu-cli`](crates/ezu-cli) | Command-line tool — `tile` / `bbox` / `tiles` rendering, `check` style validator, `serve` live editor + tile server |
+| Crate | crates.io | Description |
+|---|---|---|
+| [`ezu`](https://github.com/reearth/ezu/tree/main/crates/ezu) | [![](https://img.shields.io/crates/v/ezu.svg)](https://crates.io/crates/ezu) | Umbrella crate, re-exports + feature flags |
+| [`ezu-core`](https://github.com/reearth/ezu/tree/main/crates/ezu-core) | [![](https://img.shields.io/crates/v/ezu-core.svg)](https://crates.io/crates/ezu-core) | Tile / world coordinates, deterministic seeding |
+| [`ezu-features`](https://github.com/reearth/ezu/tree/main/crates/ezu-features) | [![](https://img.shields.io/crates/v/ezu-features.svg)](https://crates.io/crates/ezu-features) | GIS feature parsing (MVT via `geozero`, GeoJSON) — no remote fetch |
+| [`ezu-style`](https://github.com/reearth/ezu/tree/main/crates/ezu-style) | [![](https://img.shields.io/crates/v/ezu-style.svg)](https://crates.io/crates/ezu-style) | Style spec parser (`serde`) — pure data, no rendering |
+| [`ezu-graph`](https://github.com/reearth/ezu/tree/main/crates/ezu-graph) | [![](https://img.shields.io/crates/v/ezu-graph.svg)](https://crates.io/crates/ezu-graph) | Typed node-DAG evaluator (Cache, Rayon parallel) |
+| [`ezu-paint`](https://github.com/reearth/ezu/tree/main/crates/ezu-paint) | [![](https://img.shields.io/crates/v/ezu-paint.svg)](https://crates.io/crates/ezu-paint) | Painting primitives, built-in nodes, host glue (PNG / brush bank) |
+| [`ezu-cli`](https://github.com/reearth/ezu/tree/main/crates/ezu-cli) | [![](https://img.shields.io/crates/v/ezu-cli.svg)](https://crates.io/crates/ezu-cli) | Command-line tool — `tile` / `bbox` / `tiles` rendering, `check` style validator, `serve` live editor + tile server |
 
 ## Try it
 
@@ -111,20 +117,6 @@ The editor (MapLibre GL based) supports:
   (drawn per tile via `maplibregl.addProtocol`), and read the live
   zoom value (click to copy `z @ lat,lng`).
 
-The WASM demo (single-tile render in the browser, scalar vs SIMD switch):
-
-```sh
-# Build both flavors
-cd crates/ezu-wasm
-wasm-pack build --target web --release --out-dir ../../target/wasm/scalar
-RUSTFLAGS="-C target-feature=+simd128" \
-  wasm-pack build --target web --release --out-dir ../../target/wasm/simd
-
-# Serve everything (editor, demo, brushes, /mvt) and open the demo
-ezu serve
-# http://127.0.0.1:8080/wasm-demo/
-```
-
 ## How it paints
 
 A style is a **typed node DAG**, not an ordered layer list. Every
@@ -144,7 +136,7 @@ prefetch URLs via `ezu_paint::host::prefetch_doc_assets` at startup
 (gated behind the `http` feature). Source-format choice (MVT vs
 GeoJSON vs synthesized) is a host concern, not a node concern.
 
-The minimum op set ships in [`ezu-paint`](crates/ezu-paint):
+The minimum op set ships in [`ezu-paint`](https://github.com/reearth/ezu/tree/main/crates/ezu-paint):
 
 - **Sources** — `solid`, `circle`, `noise` (white / value / perlin /
   simplex / worley, with fBm octaves and domain warp, world-anchored
@@ -205,12 +197,12 @@ earth-tone background.
 ```
 
 The full reference watercolor style is in
-[`crates/ezu/examples/styles/watercolor-basic.json`](crates/ezu/examples/styles/watercolor-basic.json).
+[`crates/ezu/examples/styles/watercolor-basic.json`](https://github.com/reearth/ezu/tree/main/crates/ezu/examples/styles/watercolor-basic.json).
 
 All painting happens on a **padded canvas** (`tile_size + 2 * pad`) so
 gaussian blurs and MVT buffer geometry that overflows `[0, extent]`
 land inside the buffer; the output is cropped to the tile by
-[`ezu-paint::host`](crates/ezu-paint) before encoding.
+[`ezu-paint::host`](https://github.com/reearth/ezu/tree/main/crates/ezu-paint) before encoding.
 
 ## Custom ops
 
@@ -226,9 +218,9 @@ validation in the live editor) out of the box.
 The reference styles consume CC0 brushes by David Revoy from
 [`mypaint/mypaint-brushes`](https://github.com/mypaint/mypaint-brushes),
 bundled into `ezu-paint` at compile time
-([`crates/ezu-paint/src/builtin/`](crates/ezu-paint/src/builtin/),
+([`crates/ezu-paint/src/builtin/`](https://github.com/reearth/ezu/tree/main/crates/ezu-paint/src/builtin/),
 attribution in
-[`builtin/CREDITS.md`](crates/ezu-paint/src/builtin/CREDITS.md)). Any
+[`builtin/CREDITS.md`](https://github.com/reearth/ezu/tree/main/crates/ezu-paint/src/builtin/CREDITS.md)). Any
 MyPaint `.myb` brush works — declare it in the style's `assets` block
 and the host loads it from disk or HTTP.
 
