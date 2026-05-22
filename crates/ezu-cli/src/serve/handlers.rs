@@ -4,12 +4,13 @@ use std::sync::Arc;
 
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{header, StatusCode},
     response::{Html, Response},
     routing::get,
     Json, Router,
 };
+use std::collections::HashMap;
 use ezu::core::TileId as CoreTileId;
 use ezu::graph::{CanvasInfo, Evaluator, ParamValues, PortValue, TileId};
 use ezu::features::mvt;
@@ -23,9 +24,11 @@ pub fn router() -> Router<AppState> {
         .route("/", get(index))
         .route("/style", get(get_style).put(put_style))
         .route("/style/validate", axum::routing::post(post_validate))
+        .route("/style/fetch", get(get_style_fetch))
         .route("/schemas/ezu-style.json", get(get_schema))
         .route("/tiles/{z}/{x}/{y_ext}", get(get_tile))
         .route("/mvt/{z}/{x}/{y}", get(get_mvt))
+        .route("/mvt-meta/{z}/{x}/{y}", get(get_mvt_meta))
 }
 
 async fn index() -> Html<&'static str> {
@@ -63,6 +66,28 @@ async fn post_validate(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     validate_text(&body).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     Ok(Json(json!({ "ok": true })))
+}
+
+/// Fetch a remote style document on behalf of the editor. Limited to
+/// http(s) URLs so this can't be coaxed into serving arbitrary local
+/// files via the browser. Used by the "Open URL" button.
+async fn get_style_fetch(
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Response, (StatusCode, String)> {
+    let url = q
+        .get("url")
+        .ok_or((StatusCode::BAD_REQUEST, "missing url query parameter".into()))?;
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err((StatusCode::BAD_REQUEST, "only http(s) URLs are allowed".into()));
+    }
+    let text = crate::fetch_text(url)
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+    Ok(Response::builder()
+        .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(Body::from(text))
+        .unwrap())
 }
 
 async fn get_schema(State(s): State<AppState>) -> Response {
@@ -153,6 +178,43 @@ async fn get_mvt(
         .header(header::CACHE_CONTROL, "public, max-age=300")
         .body(Body::from(bytes.to_vec()))
         .unwrap())
+}
+
+/// Decode the MVT for `(z, x, y)` and report which layers it contains.
+/// Used by the editor's inspect panel to populate per-layer toggles
+/// without having to re-decode MVTs in the browser.
+async fn get_mvt_meta(
+    State(s): State<AppState>,
+    Path((z, x, y)): Path<(u8, u32, u32)>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let tile = CoreTileId::new(z, x, y);
+    let Some(bytes) = fetch_mvt(&s, tile).await? else {
+        return Ok(Json(json!({ "layers": [] })));
+    };
+    let decoded = mvt::decode(&bytes)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let layers: Vec<_> = decoded
+        .layers
+        .iter()
+        .map(|l| {
+            let (mut p, mut ln, mut pg) = (false, false, false);
+            for f in &l.features {
+                if !f.geometry.points.is_empty() { p = true; }
+                if !f.geometry.lines.is_empty() { ln = true; }
+                if !f.geometry.polygons.is_empty() { pg = true; }
+            }
+            let mut geoms: Vec<&str> = Vec::new();
+            if p { geoms.push("point"); }
+            if ln { geoms.push("line"); }
+            if pg { geoms.push("polygon"); }
+            json!({
+                "name": l.name,
+                "geometry_types": geoms,
+                "features": l.features.len(),
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "layers": layers })))
 }
 
 async fn fetch_mvt(

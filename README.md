@@ -78,9 +78,23 @@ The live editor (browser-based, edit JSON → see the map update,
 schema-validated as you type):
 
 ```sh
-ezu serve
+ezu serve                          # default example style
+ezu serve crates/ezu/examples/pencil-sketch.json  # open a specific style
+ezu serve https://example.com/style.json          # or fetch one over http(s)
 # Open http://127.0.0.1:8080
 ```
+
+The editor (MapLibre GL based) supports:
+
+- **Open / URL / Save** — load a style from a local file or http(s) URL,
+  save the current buffer as `<name>.json`.
+- **Apply** with `⌘↵` / `Ctrl+↵` (works anywhere on the page).
+- **Live preview** — when enabled, auto-applies on every keystroke that
+  parses + schema-validates + server-validates clean.
+- **Source MVT inspector** — toggle a vector overlay of the underlying
+  MVT, with per-layer ON/OFF and click-to-inspect feature properties.
+  Layers are discovered from the tile at the map center; pan/zoom
+  rescans automatically.
 
 The WASM demo (single-tile render in the browser, scalar vs SIMD switch):
 

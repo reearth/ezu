@@ -31,12 +31,18 @@ pub struct ServeCmd {
     #[arg(long, conflicts_with = "pmtiles", env = "EZU_MVT_URL")]
     mvt: Option<String>,
     /// Initial Ezu Style document — local path or http(s):// URL.
+    /// Accepts either a positional argument (`ezu serve foo.json`) or
+    /// `--style`. Positional wins when both are given.
+    #[arg(value_name = "STYLE")]
+    style_arg: Option<String>,
+    /// Same as the positional `STYLE` argument; kept for back-compat
+    /// and so `EZU_STYLE` still works.
     #[arg(
-        long,
+        long = "style",
         default_value = "crates/ezu/examples/watercolor-basic.json",
         env = "EZU_STYLE"
     )]
-    style: String,
+    style_flag: String,
     /// Base directory for resolving asset `src` paths (brushes, images).
     #[arg(long, default_value = "assets/brushes", env = "EZU_ASSETS")]
     assets_dir: PathBuf,
@@ -56,7 +62,9 @@ pub async fn run(args: ServeCmd) -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("opening tile source: {spec:?}");
     let source = TileSource::open(&spec).await?;
 
-    let style_text = crate::fetch_text(&args.style).await?;
+    let style_src = args.style_arg.as_deref().unwrap_or(args.style_flag.as_str());
+    tracing::info!("loading style from {style_src}");
+    let style_text = crate::fetch_text(style_src).await?;
     let snapshot = StyleSnapshot::build(style_text, 1, &args.assets_dir).await?;
     tracing::info!(
         "loaded style {} ({} nodes, tile={}, pad={}, {} brushes, {} images)",
