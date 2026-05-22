@@ -94,11 +94,10 @@ import init, { Renderer, simdEnabled } from "./ezu_wasm.js";
 await init();
 console.log("SIMD?", simdEnabled());
 
+// `new Renderer(...)` pre-registers every built-in brush bundled with
+// `ezu-paint` (the watercolor + pencil set, CC0). Call `registerBrush`
+// only when you want to bring your own `.myb`.
 const r = new Renderer(await (await fetch("/style")).text());
-for (const name of ["watercolor_glazing", "large_watercolor_fringe"]) {
-  const myb = await (await fetch(`/assets/brushes/${name}.myb`)).text();
-  r.registerBrush(name, myb);
-}
 
 const z = 13, x = 7276, y = 3225;
 const mvt = new Uint8Array(await (await fetch(`/mvt/${z}/${x}/${y}`)).arrayBuffer());
@@ -132,7 +131,7 @@ Each output directory contains `ezu_wasm.js` (ES module + glue),
 
 ## Demo page
 
-A self-contained demo lives at [`www/index.html`](www/index.html). It picks
+A self-contained demo lives at [`examples/wasm-demo/index.html`](examples/wasm-demo/index.html). It picks
 between the scalar and SIMD builds at runtime, between PNG and RGBA output,
 renders a single MVT tile on a `<canvas>`, and runs a bench-of-N for timing.
 It needs the routes that the `ezu serve` subcommand of
@@ -142,9 +141,8 @@ It needs the routes that the `ezu serve` subcommand of
 |---|---|
 | `GET /style` | Current Ezu Style JSON |
 | `GET /mvt/{z}/{x}/{y}` | Raw decompressed MVT bytes |
-| `GET /assets/brushes/*.myb` | MyPaint brush files |
 | `GET /wasm/{scalar\|simd}/ezu_wasm.js` | This crate's wasm-pack outputs |
-| `GET /wasm-demo/` | This `www/` directory |
+| `GET /wasm-demo/` | This `examples/wasm-demo/` directory |
 
 To run end-to-end from a clean tree:
 

@@ -32,9 +32,9 @@
 <main>
   <aside>
     <h1>ezu WASM single-tile demo</h1>
-    <p>JS owns HTTP (fetches MVT bytes from <code>ezu-server</code>'s
-       <code>/mvt</code> endpoint and <code>.myb</code> brushes from
-       <code>/assets/brushes</code>); WASM owns parse + paint + output.</p>
+    <p>JS owns HTTP (fetches MVT bytes from <code>ezu serve</code>'s
+       <code>/mvt</code> endpoint); WASM owns parse + paint + output
+       with built-in brushes bundled at compile time.</p>
 
     <div class="row"><label>Build</label>
       <select id="build">
@@ -71,12 +71,8 @@
 </main>
 
 <script type="module">
-  const BRUSHES = [
-    "watercolor_glazing",
-    "watercolor_expressive",
-    "large_watercolor_fringe",
-    "only_water_fringe",
-  ];
+  // The built-in brushes bundled by `ezu-paint` are pre-registered
+  // inside `new Renderer(...)` — no JS-side fetch needed.
 
   const $ = (id) => document.getElementById(id);
   const log = (...m) => { $("log").textContent += m.join(" ") + "\n"; };
@@ -98,10 +94,6 @@
     const mod = await import(`/wasm/${name}/ezu_wasm.js?build=${name}`);
     await mod.default();
     renderer = new mod.Renderer(await loadStyle());
-    for (const b of BRUSHES) {
-      const text = await (await fetch(`/assets/brushes/${b}.myb`)).text();
-      renderer.registerBrush(b, text);
-    }
     activeBuild = name;
     $("mod-ms").textContent = (performance.now() - t).toFixed(1);
     const cls = mod.simdEnabled() ? "simd" : "scalar";

@@ -94,10 +94,9 @@ pub async fn run(args: ServeCmd) -> Result<(), Box<dyn std::error::Error>> {
 
     let mut app = handlers::router().with_state(state);
     for (route, dir) in [
-        ("/wasm-demo", "crates/ezu-wasm/www"),
+        ("/wasm-demo", "crates/ezu-wasm/examples/wasm-demo"),
         ("/wasm/scalar", "target/wasm/scalar"),
         ("/wasm/simd", "target/wasm/simd"),
-        ("/assets", "assets"),
     ] {
         if Path::new(dir).is_dir() {
             tracing::info!("serving {} from {}", route, dir);
