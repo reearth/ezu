@@ -80,7 +80,7 @@ impl Node for LineNode {
         if feats.lines.is_empty() {
             return Ok(empty_raster(ctx));
         }
-        let mut canvas = make_canvas(ctx);
+        let mut canvas = make_canvas(ctx)?;
         // Clone brush and apply optional radius / opacity overrides.
         let mut brush: Brush = (*brush_arc).clone();
         if let Some(r) = self.radius_px {

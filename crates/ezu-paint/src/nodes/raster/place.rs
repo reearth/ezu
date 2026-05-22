@@ -104,7 +104,7 @@ impl Node for PlaceNode {
             .and_then(PortValue::as_sprite)
             .ok_or_else(|| EvalError::MissingInput("input".into()))?
             .clone();
-        let mut canvas = make_canvas(ctx);
+        let mut canvas = make_canvas(ctx)?;
         if src.width == 0 || src.height == 0 {
             return Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))));
         }

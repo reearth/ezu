@@ -366,7 +366,7 @@ pub(super) fn sample_stops(stops: &[(f32, [f32; 4])], t: f32) -> [f32; 4] {
     if t <= stops[0].0 {
         return stops[0].1;
     }
-    let last = stops.last().unwrap();
+    let last = stops.last().expect("stops is non-empty (guarded above)");
     if t >= last.0 {
         return last.1;
     }
@@ -469,8 +469,15 @@ pub(super) fn tint_alpha_color(c: [u8; 4], alpha_mul: f32) -> tiny_skia::Color {
 // Canvas / raster bridging
 
 /// Build a fresh padded canvas matching the eval ctx.
-pub(super) fn make_canvas(ctx: &EvalCtx<'_>) -> Canvas {
-    Canvas::new_padded(ctx.canvas.tile_size, ctx.canvas.tile_size, ctx.canvas.pad)
+pub(super) fn make_canvas(ctx: &EvalCtx<'_>) -> Result<Canvas, EvalError> {
+    Canvas::new_padded(ctx.canvas.tile_size, ctx.canvas.tile_size, ctx.canvas.pad).ok_or_else(
+        || {
+            EvalError::Other(format!(
+                "canvas allocation failed for tile-size={} pad={}",
+                ctx.canvas.tile_size, ctx.canvas.pad
+            ))
+        },
+    )
 }
 
 /// Consume a freshly-painted [`Canvas`] into a zero-copy [`RasterBuf`].

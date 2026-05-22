@@ -52,21 +52,26 @@ pub struct Canvas {
 
 impl Canvas {
     /// Convenience: padded canvas with `pad = 0`.
-    pub fn new(tile_w: u32, tile_h: u32) -> Self {
+    /// Returns `None` if `tile_w == 0` or `tile_h == 0`, or if the
+    /// pixel buffer would overflow allocation.
+    pub fn new(tile_w: u32, tile_h: u32) -> Option<Self> {
         Self::new_padded(tile_w, tile_h, 0)
     }
 
     /// Create a canvas whose internal buffer is `tile_w + 2*pad` × `tile_h + 2*pad`.
-    pub fn new_padded(tile_w: u32, tile_h: u32, pad: u32) -> Self {
-        let pw = tile_w + 2 * pad;
-        let ph = tile_h + 2 * pad;
-        let pixmap = Pixmap::new(pw, ph).expect("non-zero canvas size");
-        Self {
+    ///
+    /// Returns `None` if the resulting padded dimensions are zero or
+    /// would overflow allocation.
+    pub fn new_padded(tile_w: u32, tile_h: u32, pad: u32) -> Option<Self> {
+        let pw = tile_w.checked_add(2u32.checked_mul(pad)?)?;
+        let ph = tile_h.checked_add(2u32.checked_mul(pad)?)?;
+        let pixmap = Pixmap::new(pw, ph)?;
+        Some(Self {
             pixmap,
             tile_w,
             tile_h,
             pad,
-        }
+        })
     }
 
     /// Fill the entire (padded) canvas with a solid color, e.g. paper background.
@@ -278,7 +283,13 @@ fn blur_pixmap(pixmap: &mut Pixmap, sigma: f32) {
         let b = rgba[i * 4 + 2];
         let a = rgba[i * 4 + 3];
         *dst = PremultipliedColorU8::from_rgba(mul(r, a), mul(g, a), mul(b, a), a)
-            .unwrap_or_else(|| PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap());
+            .unwrap_or_else(|| {
+                // Fully-transparent black is always a valid premul color;
+                // this fallback only fires if `from_rgba` ever rejects
+                // its input (it doesn't today).
+                PremultipliedColorU8::from_rgba(0, 0, 0, 0)
+                    .expect("transparent black is a valid premul color")
+            });
     }
 }
 

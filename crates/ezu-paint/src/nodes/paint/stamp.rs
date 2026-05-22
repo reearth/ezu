@@ -84,7 +84,7 @@ impl Node for StampNode {
             ..PixmapPaint::default()
         };
 
-        let mut canvas = make_canvas(ctx);
+        let mut canvas = make_canvas(ctx)?;
         let pad = canvas.pad() as f32;
         let tile_w = canvas.tile_width() as f32;
         let tile_h = canvas.tile_height() as f32;

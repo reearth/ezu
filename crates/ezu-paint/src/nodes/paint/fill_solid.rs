@@ -55,7 +55,7 @@ impl Node for FillSolidNode {
         if feats.polygons.is_empty() {
             return Ok(empty_raster(ctx));
         }
-        let mut canvas = make_canvas(ctx);
+        let mut canvas = make_canvas(ctx)?;
         let style = WatercolorStyle {
             fill: tint_alpha_color(self.fill, self.fill_alpha),
             edge: self.edge.map(rgba8_to_color),

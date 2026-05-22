@@ -62,7 +62,7 @@ impl Node for FillDabsNode {
         if feats.polygons.is_empty() {
             return Ok(empty_raster(ctx));
         }
-        let mut canvas = make_canvas(ctx);
+        let mut canvas = make_canvas(ctx)?;
         let style = DabFillStyle {
             color: RgbaF32::new(self.color[0], self.color[1], self.color[2], 1.0),
             opacity: self.opacity,
