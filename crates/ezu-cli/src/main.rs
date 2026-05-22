@@ -21,6 +21,7 @@ use ezu::paint::host::{raster_to_png, BrushBankLoader, TileLoader};
 use ezu::paint::nodes::default_registry;
 use ezu::style::{AssetKind, Document};
 use futures::future::try_join_all;
+use futures::stream::{StreamExt, TryStreamExt};
 use tiny_skia::{Pixmap, PixmapPaint, Transform};
 use tracing_subscriber::EnvFilter;
 
@@ -39,6 +40,8 @@ enum Cmd {
     Tile(TileCmd),
     /// Render the tile mosaic covering a lon/lat bounding box at a fixed zoom.
     Bbox(BboxCmd),
+    /// Bulk-render an XYZ tile pyramid into `<out>/<z>/<x>/<y>.png`.
+    Tiles(TilesCmd),
 }
 
 #[derive(Args, Debug)]
@@ -88,6 +91,34 @@ struct BboxCmd {
     out: PathBuf,
 }
 
+#[derive(Args, Debug)]
+struct TilesCmd {
+    #[command(flatten)]
+    common: CommonArgs,
+    /// Bounding box `min_lng,min_lat,max_lng,max_lat` (WGS84). When
+    /// omitted, every tile at each zoom is generated — at z=14 that
+    /// is 268M tiles, so a bbox is strongly recommended.
+    #[arg(long, value_parser = parse_bbox)]
+    bbox: Option<BBox>,
+    /// Minimum zoom level (inclusive).
+    #[arg(long)]
+    min_zoom: u8,
+    /// Maximum zoom level (inclusive).
+    #[arg(long)]
+    max_zoom: u8,
+    /// Output directory; tiles are written as `<out>/<z>/<x>/<y>.png`.
+    #[arg(long, default_value = "tiles")]
+    out: PathBuf,
+    /// Number of tiles rendered in parallel. Defaults to the number
+    /// of logical CPU cores.
+    #[arg(long, default_value_t = default_concurrency())]
+    concurrency: usize,
+}
+
+fn default_concurrency() -> usize {
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
+}
+
 #[derive(Clone, Copy, Debug)]
 struct BBox {
     min_lng: f64,
@@ -105,6 +136,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.cmd {
         Cmd::Tile(args) => run_tile(args).await,
         Cmd::Bbox(args) => run_bbox(args).await,
+        Cmd::Tiles(args) => run_tiles(args).await,
     }
 }
 
@@ -223,6 +255,83 @@ async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
     let png = mosaic.encode_png().map_err(|e| e.to_string())?;
     std::fs::write(&args.out, &png)?;
     tracing::info!("wrote {} ({} bytes)", args.out.display(), png.len());
+    Ok(())
+}
+
+async fn run_tiles(args: TilesCmd) -> Result<(), Box<dyn std::error::Error>> {
+    if args.min_zoom > args.max_zoom {
+        return Err("--min-zoom must be ≤ --max-zoom".into());
+    }
+    if args.concurrency == 0 {
+        return Err("--concurrency must be ≥ 1".into());
+    }
+    let prep = prepare(&args.common).await?;
+
+    let mut total: u64 = 0;
+    for z in args.min_zoom..=args.max_zoom {
+        let (x_range, y_range) = match args.bbox {
+            Some(b) => bbox_to_tiles(b, z),
+            None => {
+                let n = 1u32 << z;
+                (0..n, 0..n)
+            }
+        };
+        let nx = x_range.end - x_range.start;
+        let ny = y_range.end - y_range.start;
+        let count = nx as u64 * ny as u64;
+        total += count;
+        tracing::info!(
+            "z={z}: {nx}×{ny} = {count} tiles ({}..{}, {}..{})",
+            x_range.start,
+            x_range.end,
+            y_range.start,
+            y_range.end,
+        );
+
+        // Lazily enumerate every (x, y) so memory stays bounded even
+        // when a whole-world zoom is requested.
+        let xr = x_range.clone();
+        let coords = y_range
+            .clone()
+            .flat_map(move |ty| xr.clone().map(move |tx| (tx, ty)));
+        let prep = &prep;
+        let out = &args.out;
+        let t0 = std::time::Instant::now();
+        futures::stream::iter(coords)
+            .map(|(tx, ty)| async move {
+                let tile = CoreTileId::new(z, tx, ty);
+                let raster = render_one(
+                    Arc::clone(&prep.graph),
+                    Arc::clone(&prep.cache),
+                    Arc::clone(&prep.loader),
+                    Arc::clone(&prep.source),
+                    prep.canvas,
+                    tile,
+                )
+                .await?;
+                let png = tokio::task::spawn_blocking({
+                    let canvas = prep.canvas;
+                    move || raster_to_png(&raster, canvas.tile_size, canvas.pad)
+                })
+                .await
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?;
+                let dir = out.join(z.to_string()).join(tx.to_string());
+                tokio::fs::create_dir_all(&dir).await?;
+                let path = dir.join(format!("{ty}.png"));
+                tokio::fs::write(&path, png).await?;
+                Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+            })
+            .buffer_unordered(args.concurrency)
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|e| e.to_string())?;
+        tracing::info!(
+            "z={z}: done in {:.1}s",
+            t0.elapsed().as_secs_f64()
+        );
+    }
+    tracing::info!("wrote {total} tiles → {}", args.out.display());
     Ok(())
 }
 

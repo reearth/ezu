@@ -24,13 +24,46 @@ Each crate has its own README with API details and examples.
 | [`ezu-paint`](crates/ezu-paint) | Painting primitives, built-in nodes, host glue (PNG / brush bank) |
 | [`ezu-wasm`](crates/ezu-wasm) | WebAssembly bindings (`wasm-bindgen`) |
 | [`ezu-server`](crates/ezu-server) | Live editor + tile server (`axum`, unpublished) |
+| [`ezu-cli`](crates/ezu-cli) | Command-line renderer — single tile, bbox mosaic, or XYZ pyramid |
 
 ## Try it
 
-The `tokyo` example fetches central Tokyo tiles from the public
-Protomaps daily build over HTTP and renders them under the reference
-watercolor style. The `parallel` feature turns on within-tile Rayon
-evaluation:
+Install the CLI directly from GitHub — no clone, no `git`, just one
+command:
+
+```sh
+cargo install --git https://github.com/reearth/ezu ezu-cli
+```
+
+That puts an `ezu` binary on your `PATH`. Point it at any style (URL
+or local path) and any tile source (PMTiles URL/file, an `{z}/{x}/{y}`
+MVT URL/path, or a TileJSON) and it spits out PNGs:
+
+```sh
+# Single tile to PNG
+ezu tile \
+  --style https://raw.githubusercontent.com/reearth/ezu/main/crates/ezu/examples/watercolor-basic.json \
+  --assets-dir ./brushes \
+  --pmtiles https://build.protomaps.com/20260520.pmtiles \
+  --tile 13/7276/3225 --out tile.png
+
+# bbox mosaic — stitch the tiles covering a lon/lat box into one PNG
+ezu bbox --style URL_OR_PATH --pmtiles URL_OR_PATH \
+  --bbox 139.74,35.65,139.78,35.69 --zoom 13 --out tokyo.png
+
+# XYZ pyramid — bulk-render `<out>/<z>/<x>/<y>.png` for a zoom range
+ezu tiles --style URL_OR_PATH --pmtiles URL_OR_PATH \
+  --bbox 139.74,35.65,139.78,35.69 \
+  --min-zoom 10 --max-zoom 14 --out pyramid
+```
+
+The example style above references four MyPaint brushes that live in
+[`assets/brushes/`](assets/brushes/) — grab them with one `curl` or
+plug in your own `.myb` files and point `--assets-dir` at the folder.
+
+For deeper hacking, clone the repo and try the `tokyo` example, which
+renders a 2×2 batch under the reference watercolor style with Rayon
+parallelism turned on:
 
 ```sh
 cargo run --release --features parallel -p ezu --example tokyo
