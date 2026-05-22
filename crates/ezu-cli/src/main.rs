@@ -213,7 +213,7 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
                 .unwrap_or_else(|| PathBuf::from("."))
         }
     });
-    let loader = Arc::new(build_asset_loader(&doc, &assets_dir)?);
+    let loader = Arc::new(build_asset_loader(&doc, &assets_dir).await?);
 
     let registry = default_registry();
     let graph = Arc::new(build_graph(&doc, &registry)?);
@@ -413,42 +413,27 @@ async fn render_one(
     Ok(raster)
 }
 
-/// Pre-resolve every entry in the style's `assets` block against
-/// `base_dir` and stage it in a `BrushBankLoader`. Brushes are parsed
-/// from `.myb` JSON; image assets are decoded to premultiplied RGBA.
-/// Gradient kinds are skipped with a warning.
-fn build_asset_loader(
+/// Pre-resolve every entry in the style's `assets` block: each `src`
+/// may be a local file path (looked up against `base_dir`) or an
+/// `http(s)://` URL (fetched via `ezu::paint::host::prefetch_doc_assets`).
+/// Decoded payloads are staged in the returned [`BrushBankLoader`].
+async fn build_asset_loader(
     doc: &Document,
     base_dir: &Path,
 ) -> Result<BrushBankLoader, Box<dyn std::error::Error>> {
     let mut loader = BrushBankLoader::new()
         .with_dir(base_dir.to_path_buf())
         .with_images_dir(base_dir.to_path_buf());
-    for (name, decl) in &doc.assets {
-        match decl.kind {
-            AssetKind::Brush => {
-                let path = resolve_with_ext(base_dir, &decl.src, "myb")
-                    .ok_or_else(|| format!("brush asset `{name}`: no file at {}", base_dir.join(&decl.src).display()))?;
-                let json = std::fs::read_to_string(&path)
-                    .map_err(|e| format!("reading brush `{name}` at {}: {e}", path.display()))?;
-                let brush = hokusai::myb::from_str(&json)
-                    .map_err(|e| format!("parsing brush `{name}`: {e}"))?;
-                loader.insert(name.clone(), brush);
-            }
-            AssetKind::Image | AssetKind::MaskImage => {
-                let path = resolve_with_ext(base_dir, &decl.src, "png")
-                    .ok_or_else(|| format!("image asset `{name}`: no file at {}", base_dir.join(&decl.src).display()))?;
-                let raster = decode_image(&path)
-                    .map_err(|e| format!("decoding image `{name}` at {}: {e}", path.display()))?;
-                loader.insert_image(name.clone(), raster);
-            }
-            AssetKind::Gradient => {
-                tracing::warn!("asset `{name}`: gradient assets are not yet supported by the CLI");
-            }
-        }
+    ezu::paint::host::prefetch_doc_assets(doc, base_dir, &mut loader).await?;
+    if doc
+        .assets
+        .values()
+        .any(|d| d.kind == AssetKind::Gradient)
+    {
+        tracing::warn!("gradient assets are not yet supported by the CLI");
     }
     tracing::info!(
-        "loaded {} brushes + {} images from {}",
+        "loaded {} brushes + {} images (base={})",
         loader.bank.len(),
         loader.images.len(),
         base_dir.display(),
@@ -473,30 +458,6 @@ async fn fetch_text(arg: &str) -> Result<String, Box<dyn std::error::Error>> {
 
 fn is_url(s: &str) -> bool {
     s.starts_with("http://") || s.starts_with("https://")
-}
-
-fn resolve_with_ext(base: &Path, src: &str, ext: &str) -> Option<PathBuf> {
-    [base.join(src), base.join(format!("{src}.{ext}"))]
-        .into_iter()
-        .find(|cand| cand.exists())
-}
-
-/// Decode an image file (PNG/JPEG/…) into a `RasterBuf` carrying
-/// premultiplied RGBA8 — the storage convention used throughout
-/// `ezu-graph` and `ezu-paint`.
-fn decode_image(path: &Path) -> Result<RasterBuf, String> {
-    let img = image::open(path).map_err(|e| e.to_string())?.to_rgba8();
-    let (w, h) = img.dimensions();
-    let mut pixels = Vec::with_capacity((w * h * 4) as usize);
-    for px in img.pixels() {
-        let [r, g, b, a] = px.0;
-        let af = a as f32 / 255.0;
-        pixels.push((r as f32 * af).round() as u8);
-        pixels.push((g as f32 * af).round() as u8);
-        pixels.push((b as f32 * af).round() as u8);
-        pixels.push(a);
-    }
-    Ok(RasterBuf { width: w, height: h, pixels })
 }
 
 /// Copy the central `tile_size × tile_size` region of `raster` (which

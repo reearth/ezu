@@ -63,9 +63,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         doc.nodes.len()
     );
 
-    // 2. Set up the asset loader (brush bank).
-    let loader = Arc::new(build_brush_loader(Path::new("assets/brushes"))?);
-    eprintln!("brush bank: {} brushes", loader.bank.len());
+    // 2. Set up the asset loader. Pre-resolves every entry in
+    //    `doc.assets` (URL or local file under `assets/brushes`) into
+    //    a `BrushBankLoader`; unbound disk lookups fall back to the
+    //    same directory.
+    let base_dir = Path::new("assets/brushes");
+    let mut loader = BrushBankLoader::new()
+        .with_dir(base_dir.to_path_buf())
+        .with_images_dir(base_dir.to_path_buf());
+    ezu::paint::host::prefetch_doc_assets(&doc, base_dir, &mut loader).await?;
+    let loader = Arc::new(loader);
+    eprintln!(
+        "brush bank: {} brushes, {} images",
+        loader.bank.len(),
+        loader.images.len()
+    );
 
     // 3. Build the graph from the document + registry. One-time cost.
     let registry = default_registry();
@@ -219,23 +231,3 @@ impl PmTilesArchive {
     }
 }
 
-/// Load every `*.myb` file from `dir` into a brush bank keyed by file stem.
-fn build_brush_loader(dir: &Path) -> Result<BrushBankLoader, Box<dyn std::error::Error>> {
-    let mut loader = BrushBankLoader::new().with_dir(dir.to_path_buf());
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("myb") {
-            continue;
-        }
-        let json = std::fs::read_to_string(&path)?;
-        let brush = hokusai::myb::from_str(&json)?;
-        let name = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .ok_or("bad brush filename")?
-            .to_string();
-        loader.insert(name, brush);
-    }
-    Ok(loader)
-}

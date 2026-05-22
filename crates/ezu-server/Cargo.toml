@@ -11,8 +11,7 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-ezu = { workspace = true }
-hokusai = { workspace = true, features = ["myb-json"] }
+ezu = { workspace = true, features = ["http"] }
 bytes = { workspace = true }
 pmtiles = { workspace = true }
 reqwest = { workspace = true }

@@ -102,8 +102,11 @@ External inputs — images, brushes, per-tile MVT/GeoJSON feature
 layers — enter through one uniform `AssetLoader` trait. The style
 references each binding by name (`tile.<layer>` for per-tile feature
 data, bare names for document-scoped assets); the host fills the
-bindings before rendering. Source-format choice (MVT vs GeoJSON vs
-synthesized) is a host concern, not a node concern.
+bindings before rendering. Asset `src` entries can be local file
+paths or `http(s)://` URLs — native hosts (CLI, server, examples)
+prefetch URLs via `ezu_paint::host::prefetch_doc_assets` at startup
+(gated behind the `http` feature). Source-format choice (MVT vs
+GeoJSON vs synthesized) is a host concern, not a node concern.
 
 The minimum op set ships in [`ezu-paint`](crates/ezu-paint):
 

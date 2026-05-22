@@ -197,6 +197,11 @@ covers non-tile-sized outputs (e.g. CLI bbox mosaics).
 - `parallel` — pull-through to `ezu-graph/parallel` (Rayon within-tile
   evaluation). No effect on the paint primitives themselves; the hot
   loops inside `hokusai` are still single-threaded.
+- `http` — enable `host::prefetch_doc_assets`, which walks a parsed
+  `Document`'s `assets` block, fetches every `http(s)://` `src` with
+  `reqwest`, and stages the decoded brush / image into a
+  `BrushBankLoader`. Off by default so `wasm32` keeps its dep graph
+  minimal (the JS host fetches assets directly there).
 
 ## License
 

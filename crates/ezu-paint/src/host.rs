@@ -203,6 +203,19 @@ impl AssetLoader for TileLoader<'_> {
 /// on any decode failure.
 fn decode_image_file(path: &std::path::Path) -> Result<RasterBuf, String> {
     let img = image::open(path).map_err(|e| e.to_string())?.to_rgba8();
+    Ok(rgba_to_premul_raster(img))
+}
+
+/// Decode image bytes (PNG / WebP / anything `image` sniffs from the
+/// content header) into a premultiplied-RGBA8 [`RasterBuf`]. The
+/// twin of [`decode_image_file`] for callers that already have the
+/// raw bytes in memory (e.g. an HTTP body).
+pub fn decode_image_bytes(bytes: &[u8]) -> Result<RasterBuf, String> {
+    let img = image::load_from_memory(bytes).map_err(|e| e.to_string())?.to_rgba8();
+    Ok(rgba_to_premul_raster(img))
+}
+
+fn rgba_to_premul_raster(img: image::RgbaImage) -> RasterBuf {
     let (w, h) = img.dimensions();
     let mut pixels = Vec::with_capacity((w * h * 4) as usize);
     for px in img.pixels() {
@@ -214,11 +227,11 @@ fn decode_image_file(path: &std::path::Path) -> Result<RasterBuf, String> {
         pixels.push((b as f32 * af).round() as u8);
         pixels.push(a);
     }
-    Ok(RasterBuf {
+    RasterBuf {
         width: w,
         height: h,
         pixels,
-    })
+    }
 }
 
 /// Crop a padded raster down to the central `tile_size` × `tile_size`
@@ -327,4 +340,113 @@ pub fn raster_to_rgba8(buf: &RasterBuf, tile_size: u32, pad: u32) -> Vec<u8> {
         rgba.extend_from_slice(&[p.red(), p.green(), p.blue(), p.alpha()]);
     }
     rgba
+}
+
+// ---------------------------------------------------------------------------
+// URL-aware asset prefetch (feature `http`)
+
+/// Walk a [`Document`]'s `assets` block and stage every entry into the
+/// given [`BrushBankLoader`]: brushes (`hokusai::Brush`), images
+/// (`RasterBuf`). Each entry's `src` may be a plain file path resolved
+/// against `base_dir` or an `http(s)://` URL fetched via `reqwest`.
+/// `gradient` assets are skipped (not yet supported here).
+///
+/// Available with the `http` feature; off on `wasm32` since the JS
+/// host handles fetching there.
+#[cfg(feature = "http")]
+pub async fn prefetch_doc_assets(
+    doc: &ezu_style::Document,
+    base_dir: &std::path::Path,
+    loader: &mut BrushBankLoader,
+) -> Result<(), String> {
+    // Keys must match what the source/paint factories actually pass to
+    // `AssetLoader::load` at eval time. `brush-file` and `image`
+    // resolve `@asset` → that asset's `src` string, so the bank lookup
+    // key is `decl.src` (not the asset name).
+    for (name, decl) in &doc.assets {
+        match decl.kind {
+            ezu_style::AssetKind::Brush => {
+                let json = fetch_asset_text(&decl.src, base_dir, "myb")
+                    .await
+                    .map_err(|e| format!("brush `{name}`: {e}"))?;
+                let brush = hokusai::myb::from_str(&json)
+                    .map_err(|e| format!("brush `{name}` parse: {e}"))?;
+                loader.insert(decl.src.clone(), brush);
+            }
+            ezu_style::AssetKind::Image | ezu_style::AssetKind::MaskImage => {
+                let bytes = fetch_asset_bytes(&decl.src, base_dir, "png")
+                    .await
+                    .map_err(|e| format!("image `{name}`: {e}"))?;
+                let raster = decode_image_bytes(&bytes)
+                    .map_err(|e| format!("image `{name}` decode: {e}"))?;
+                loader.insert_image(decl.src.clone(), raster);
+            }
+            ezu_style::AssetKind::Gradient => {}
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "http")]
+async fn fetch_asset_text(
+    src: &str,
+    base_dir: &std::path::Path,
+    default_ext: &str,
+) -> Result<String, String> {
+    if is_http_url(src) {
+        Ok(reqwest::get(src)
+            .await
+            .map_err(|e| e.to_string())?
+            .error_for_status()
+            .map_err(|e| e.to_string())?
+            .text()
+            .await
+            .map_err(|e| e.to_string())?)
+    } else {
+        let path = resolve_with_ext(base_dir, src, default_ext)
+            .ok_or_else(|| format!("no file at {}", base_dir.join(src).display()))?;
+        std::fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))
+    }
+}
+
+#[cfg(feature = "http")]
+async fn fetch_asset_bytes(
+    src: &str,
+    base_dir: &std::path::Path,
+    default_ext: &str,
+) -> Result<Vec<u8>, String> {
+    if is_http_url(src) {
+        Ok(reqwest::get(src)
+            .await
+            .map_err(|e| e.to_string())?
+            .error_for_status()
+            .map_err(|e| e.to_string())?
+            .bytes()
+            .await
+            .map_err(|e| e.to_string())?
+            .to_vec())
+    } else {
+        let path = resolve_with_ext(base_dir, src, default_ext)
+            .ok_or_else(|| format!("no file at {}", base_dir.join(src).display()))?;
+        std::fs::read(&path).map_err(|e| format!("reading {}: {e}", path.display()))
+    }
+}
+
+#[cfg(feature = "http")]
+fn is_http_url(s: &str) -> bool {
+    s.starts_with("http://") || s.starts_with("https://")
+}
+
+#[cfg(feature = "http")]
+fn resolve_with_ext(
+    base: &std::path::Path,
+    src: &str,
+    ext: &str,
+) -> Option<std::path::PathBuf> {
+    let direct = base.join(src);
+    if direct.exists() {
+        return Some(direct);
+    }
+    let with_ext = base.join(format!("{src}.{ext}"));
+    with_ext.exists().then_some(with_ext)
 }

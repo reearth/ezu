@@ -17,7 +17,6 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use clap::Parser;
-use ezu::paint::host::BrushBankLoader;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
@@ -61,23 +60,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let archive = pmtiles::PmTilesArchive::open_url(&args.pmtiles_url).await?;
 
     let style_text = std::fs::read_to_string(&args.style)?;
-    let snapshot = StyleSnapshot::build(style_text, 1)?;
+    let snapshot = StyleSnapshot::build(style_text, 1, &args.brushes).await?;
     tracing::info!(
-        "loaded style {} ({} nodes, tile={}, pad={})",
+        "loaded style {} ({} nodes, tile={}, pad={}, {} brushes, {} images)",
         snapshot.doc.name,
         snapshot.doc.nodes.len(),
         snapshot.doc.tile_size,
         snapshot.doc.pad,
+        snapshot.assets.bank.len(),
+        snapshot.assets.images.len(),
     );
 
-    let assets = build_brush_loader(&args.brushes)?;
-    tracing::info!(
-        "loaded {} brushes from {}",
-        assets.bank.len(),
-        args.brushes.display()
-    );
-
-    let state = AppState::new(archive, snapshot, assets);
+    let state = AppState::new(archive, snapshot, args.brushes.clone());
 
     let mut app = handlers::router().with_state(state);
 
@@ -103,25 +97,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn build_brush_loader(dir: &PathBuf) -> Result<BrushBankLoader, Box<dyn std::error::Error>> {
-    let mut loader = BrushBankLoader::new().with_dir(dir.clone());
-    if !dir.exists() {
-        return Ok(loader);
-    }
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("myb") {
-            continue;
-        }
-        let json = std::fs::read_to_string(&path)?;
-        let brush = hokusai::myb::from_str(&json)?;
-        let name = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .ok_or("bad brush filename")?
-            .to_string();
-        loader.insert(name, brush);
-    }
-    Ok(loader)
-}

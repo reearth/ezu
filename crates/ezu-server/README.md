@@ -48,9 +48,17 @@ Static directories are auto-mounted when present:
 
 Each `PUT /style` parses the JSON, re-builds the graph (via the
 `ezu-paint` node registry), and atomically swaps the snapshot. The
-intermediate result cache lives **inside** the snapshot, so an edit
-invalidates everything in one shot — no stale buffers leak across
-versions.
+intermediate result cache and the per-style asset loader both live
+**inside** the snapshot, so an edit invalidates everything in one
+shot and any URL-fetched brushes / images get refreshed alongside the
+document — no stale buffers leak across versions.
+
+## Asset sources
+
+Entries in the document's `assets` block can be either a local file
+(resolved against `--brushes`) or an `http(s)://` URL — the server
+prefetches URL assets via `ezu_paint::host::prefetch_doc_assets`
+during snapshot build and stages them in the loader.
 
 ## Caching
 

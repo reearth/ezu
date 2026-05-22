@@ -15,12 +15,10 @@ name = "ezu"
 path = "src/main.rs"
 
 [dependencies]
-ezu = { workspace = true, features = ["parallel"] }
-hokusai = { workspace = true, features = ["myb-json"] }
+ezu = { workspace = true, features = ["parallel", "http"] }
 pmtiles = { workspace = true }
 reqwest = { workspace = true }
 bytes = { workspace = true }
-image = { workspace = true }
 tiny-skia = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

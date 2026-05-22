@@ -43,7 +43,8 @@ async fn put_style(
     body: String,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let next_version = { s.style.read().await.version + 1 };
-    let snap = StyleSnapshot::build(body, next_version)
+    let snap = StyleSnapshot::build(body, next_version, &s.assets_dir)
+        .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     let version = snap.version;
     *s.style.write().await = snap;
@@ -107,18 +108,18 @@ async fn get_tile(
     };
 
     // Take only what we need from the snapshot to keep the lock window short.
-    let (graph, cache, tile_size, pad) = {
+    let (graph, cache, assets, tile_size, pad) = {
         let snap = s.style.read().await;
         (
             Arc::clone(&snap.graph),
             Arc::clone(&snap.cache),
+            Arc::clone(&snap.assets),
             snap.doc.tile_size,
             snap.doc.pad,
         )
     };
 
     let bytes = tokio::task::spawn_blocking({
-        let assets = Arc::clone(&s.assets);
         move || render_tile(&graph, &cache, &assets, mvt.as_deref(), tile, tile_size, pad, format)
     })
     .await

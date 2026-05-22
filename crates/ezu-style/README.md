@@ -39,6 +39,12 @@ Each `features` node references a host-bound layer by `name`
 `filter` (entries AND-combined; values are single literals or membership
 lists) and an optional `min-zoom-field`.
 
+Asset `src` strings (in the `assets` block) accept either a local file
+reference resolved against the host's base directory, or an
+`http(s)://` URL — native hosts (CLI, server, the tokyo example)
+prefetch URL assets via `ezu_paint::host::prefetch_doc_assets` before
+the first render, so the loader sees an already-decoded bank.
+
 ## Types
 
 ```rust

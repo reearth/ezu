@@ -19,6 +19,8 @@ paint = ["dep:ezu-paint"]
 style-json = ["dep:ezu-style"]
 # Pull-through to ezu-graph's parallel within-tile evaluation.
 parallel = ["ezu-graph/parallel", "ezu-paint?/parallel"]
+# Pull-through to ezu-paint's URL-fetch helpers (`reqwest`-based).
+http = ["ezu-paint?/http"]
 
 [dependencies]
 ezu-core = { workspace = true }
@@ -39,7 +41,7 @@ bytes = { workspace = true }
 
 [[example]]
 name = "tokyo"
-required-features = ["features", "paint", "parallel"]
+required-features = ["features", "paint", "parallel", "http"]
 
 [[example]]
 name = "inspect"
