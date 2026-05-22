@@ -39,10 +39,11 @@ or local path) and any tile source (PMTiles URL/file, an `{z}/{x}/{y}`
 MVT URL/path, or a TileJSON) and it spits out PNGs:
 
 ```sh
-# Single tile to PNG (use `--out tile.webp` for lossless WebP)
+# Single tile to PNG (use `--out tile.webp` for lossless WebP).
+# The reference style uses built-in brushes bundled with `ezu-paint`,
+# so no `--assets-dir` is needed.
 ezu tile \
   --style https://raw.githubusercontent.com/reearth/ezu/main/crates/ezu/examples/styles/watercolor-basic.json \
-  --assets-dir ./brushes \
   --pmtiles https://build.protomaps.com/20260520.pmtiles \
   --tile 13/7276/3225 --out tile.png
 
@@ -57,13 +58,15 @@ ezu tiles --style URL_OR_PATH --pmtiles URL_OR_PATH \
 
 # Validate a style document (parse + build graph + resolve assets).
 # Exits non-zero on error — drop into a pre-commit hook / CI step.
-ezu check style.json --assets-dir ./brushes
+ezu check style.json
 ezu check style.json --no-fetch    # parse + graph only, offline
 ```
 
-The example style above references four MyPaint brushes that live in
-[`assets/brushes/`](assets/brushes/) — grab them with one `curl` or
-plug in your own `.myb` files and point `--assets-dir` at the folder.
+The reference style references brushes by name (`watercolor_glazing`,
+`2B_pencil`, …) — these are CC0 MyPaint brushes bundled into the binary,
+so they resolve without any host-side file staging. To bring your own
+`.myb` brush, declare it in the style's `assets` block (with an
+`http(s)://` URL or a path relative to `--assets-dir`).
 
 For deeper hacking, clone the repo and try the `tokyo` example, which
 renders a 2×2 batch under the reference watercolor style with Rayon
@@ -215,11 +218,14 @@ validation in the live editor) out of the box.
 
 ## Brushes
 
-The reference style consumes four CC0 watercolor brushes by David Revoy
-from [`mypaint/mypaint-brushes`](https://github.com/mypaint/mypaint-brushes),
-bundled under [`assets/brushes/`](assets/brushes/) with attribution in
-[`assets/brushes/CREDITS.md`](assets/brushes/CREDITS.md). Any MyPaint
-`.myb` brush works — point the renderer at your own.
+The reference styles consume CC0 brushes by David Revoy from
+[`mypaint/mypaint-brushes`](https://github.com/mypaint/mypaint-brushes),
+bundled into `ezu-paint` at compile time
+([`crates/ezu-paint/src/builtin/`](crates/ezu-paint/src/builtin/),
+attribution in
+[`builtin/CREDITS.md`](crates/ezu-paint/src/builtin/CREDITS.md)). Any
+MyPaint `.myb` brush works — declare it in the style's `assets` block
+and the host loads it from disk or HTTP.
 
 ## License
 

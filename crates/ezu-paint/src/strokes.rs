@@ -413,9 +413,8 @@ mod parallel_tests {
     use ezu_core::TileId;
 
     fn fixture_brush() -> Brush {
-        let json = std::fs::read_to_string("../../assets/brushes/watercolor_glazing.myb")
-            .expect("test needs assets/brushes/watercolor_glazing.myb");
-        hokusai::myb::from_str(&json).expect("parse myb")
+        let json = include_str!("builtin/watercolor_glazing.myb");
+        hokusai::myb::from_str(json).expect("parse builtin watercolor_glazing.myb")
     }
 
     fn synth_lines() -> Vec<Vec<(i32, i32)>> {
@@ -454,10 +453,10 @@ mod parallel_tests {
         let style = LineStrokeStyle::default();
         let tile = TileId::new(13, 7276, 3225);
 
-        let mut serial = Canvas::new_padded(256, 256, 12);
+        let mut serial = Canvas::new_padded(256, 256, 12).expect("non-zero canvas dims");
         paint_lines(&mut serial, &lines, 4096, tile, &brush, &style);
 
-        let mut parallel = Canvas::new_padded(256, 256, 12);
+        let mut parallel = Canvas::new_padded(256, 256, 12).expect("non-zero canvas dims");
         paint_lines_parallel(&mut parallel, &lines, 4096, tile, &brush, &style);
 
         assert_eq!(serial.pixmap().data(), parallel.pixmap().data());
@@ -471,10 +470,10 @@ mod parallel_tests {
         let tile = TileId::new(13, 7276, 3225);
         let extent = 4096;
 
-        let mut serial = Canvas::new_padded(256, 256, 12);
+        let mut serial = Canvas::new_padded(256, 256, 12).expect("non-zero canvas dims");
         paint_lines(&mut serial, &lines, extent, tile, &brush, &style);
 
-        let mut parallel = Canvas::new_padded(256, 256, 12);
+        let mut parallel = Canvas::new_padded(256, 256, 12).expect("non-zero canvas dims");
         paint_lines_parallel(&mut parallel, &lines, extent, tile, &brush, &style);
 
         let s = serial.pixmap().data();

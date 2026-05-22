@@ -63,14 +63,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         doc.nodes.len()
     );
 
-    // 2. Set up the asset loader. Pre-resolves every entry in
-    //    `doc.assets` (URL or local file under `assets/brushes`) into
-    //    a `BrushBankLoader`; unbound disk lookups fall back to the
-    //    same directory.
-    let base_dir = Path::new("assets/brushes");
-    let mut loader = BrushBankLoader::new()
-        .with_dir(base_dir.to_path_buf())
-        .with_images_dir(base_dir.to_path_buf());
+    // 2. Set up the asset loader. `BrushBankLoader::new` pre-populates
+    //    the bank with the built-in brushes shipped by `ezu-paint`, so
+    //    styles that reference those names work without any host-side
+    //    file staging. `prefetch_doc_assets` then resolves anything the
+    //    style declares that isn't already in the bank (e.g. external
+    //    `http(s)://` brushes or local overrides).
+    let base_dir = Path::new(".");
+    let mut loader = BrushBankLoader::new();
     ezu::paint::host::prefetch_doc_assets(&doc, base_dir, &mut loader).await?;
     let loader = Arc::new(loader);
     eprintln!(

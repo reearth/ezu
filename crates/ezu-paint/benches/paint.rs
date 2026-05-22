@@ -61,10 +61,8 @@ fn synth_lines(count: u32, points_per_line: u32) -> Vec<Vec<(i32, i32)>> {
 }
 
 fn fixture_brush() -> hokusai::Brush {
-    let json = std::fs::read_to_string("../../assets/brushes/watercolor_glazing.myb").expect(
-        "bench needs assets/brushes/watercolor_glazing.myb (run from repo root or crate dir)",
-    );
-    hokusai::myb::from_str(&json).expect("parse watercolor_glazing.myb")
+    let json = include_str!("../src/builtin/watercolor_glazing.myb");
+    hokusai::myb::from_str(json).expect("parse builtin watercolor_glazing.myb")
 }
 
 // ---------------------------------------------------------------------------
@@ -79,7 +77,7 @@ fn bench_paint_polygons(c: &mut Criterion) {
     };
     c.bench_function("paint_polygons (16 patches, blur σ=1.2)", |b| {
         b.iter(|| {
-            let mut canvas = Canvas::new_padded(TILE_SIZE, TILE_SIZE, PAD);
+            let mut canvas = Canvas::new_padded(TILE_SIZE, TILE_SIZE, PAD).expect("non-zero canvas dims");
             paint_polygons(&mut canvas, &polys, EXTENT, &style);
             std::hint::black_box(canvas);
         });
@@ -102,7 +100,7 @@ fn bench_paint_polygons_dabs(c: &mut Criterion) {
     };
     c.bench_function("paint_polygons_dabs (4 patches, r=7 spacing=3)", |b| {
         b.iter(|| {
-            let mut canvas = Canvas::new_padded(TILE_SIZE, TILE_SIZE, PAD);
+            let mut canvas = Canvas::new_padded(TILE_SIZE, TILE_SIZE, PAD).expect("non-zero canvas dims");
             paint_polygons_dabs(&mut canvas, &polys, EXTENT, TILE, &style);
             std::hint::black_box(canvas);
         });
@@ -115,7 +113,7 @@ fn bench_paint_lines(c: &mut Criterion) {
     let style = LineStrokeStyle::default();
     c.bench_function("paint_lines serial (12 polylines × 16 vertices)", |b| {
         b.iter(|| {
-            let mut canvas = Canvas::new_padded(TILE_SIZE, TILE_SIZE, PAD);
+            let mut canvas = Canvas::new_padded(TILE_SIZE, TILE_SIZE, PAD).expect("non-zero canvas dims");
             paint_lines(&mut canvas, &lines, EXTENT, TILE, &brush, &style);
             std::hint::black_box(canvas);
         });
@@ -128,7 +126,7 @@ fn bench_paint_lines(c: &mut Criterion) {
             "paint_lines parallel (12 polylines × 16 vertices, Rayon)",
             |b| {
                 b.iter(|| {
-                    let mut canvas = Canvas::new_padded(TILE_SIZE, TILE_SIZE, PAD);
+                    let mut canvas = Canvas::new_padded(TILE_SIZE, TILE_SIZE, PAD).expect("non-zero canvas dims");
                     paint_lines_parallel(&mut canvas, &lines, EXTENT, TILE, &brush, &style);
                     std::hint::black_box(canvas);
                 });

@@ -16,6 +16,7 @@
 //! the padded space; cropping happens at the host boundary.
 
 pub mod brush;
+pub mod builtin;
 pub mod dabs;
 pub mod render;
 pub mod strokes;

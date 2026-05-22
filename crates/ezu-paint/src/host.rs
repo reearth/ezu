@@ -22,6 +22,11 @@ use crate::PaintError;
 /// disk for `.myb` brushes, then in-memory image bank, then
 /// `<images_dir>` on disk for PNGs. The brush-bank/-dir pair is kept
 /// for backwards compatibility with the original brush-only API.
+///
+/// Every loader is pre-populated with the built-in brushes listed in
+/// [`crate::builtin::BUILTIN_BRUSHES`] (CC0, bundled into the binary
+/// via `include_str!`). Use [`BrushBankLoader::empty`] for a loader
+/// without them.
 pub struct BrushBankLoader {
     pub bank: HashMap<String, Arc<Brush>>,
     pub brushes_dir: Option<PathBuf>,
@@ -30,13 +35,34 @@ pub struct BrushBankLoader {
 }
 
 impl BrushBankLoader {
+    /// New loader with the bundled built-in brushes pre-registered.
     pub fn new() -> Self {
+        let mut this = Self::empty();
+        this.register_builtins();
+        this
+    }
+
+    /// New loader with no brushes registered — caller manages the bank.
+    pub fn empty() -> Self {
         Self {
             bank: HashMap::new(),
             brushes_dir: None,
             images: HashMap::new(),
             images_dir: None,
         }
+    }
+
+    /// Register every entry in [`crate::builtin::BUILTIN_BRUSHES`].
+    /// Entries that fail to parse are silently skipped — the brushes
+    /// are bundled at compile time, so a parse failure is a bug in this
+    /// crate rather than a runtime condition callers can recover from.
+    pub fn register_builtins(&mut self) -> &mut Self {
+        for (name, myb_json) in crate::builtin::BUILTIN_BRUSHES {
+            if let Ok(brush) = hokusai::myb::from_str(myb_json) {
+                self.bank.insert((*name).to_string(), Arc::new(brush));
+            }
+        }
+        self
     }
 
     pub fn with_dir(mut self, dir: PathBuf) -> Self {
@@ -360,6 +386,11 @@ pub async fn prefetch_doc_assets(
     for (name, decl) in &doc.assets {
         match decl.kind {
             ezu_style::AssetKind::Brush => {
+                // Already pre-registered (built-in brush, or staged
+                // earlier by the host) — no fetch needed.
+                if loader.bank.contains_key(&decl.src) {
+                    continue;
+                }
                 let json = fetch_asset_text(&decl.src, base_dir, "myb")
                     .await
                     .map_err(|e| format!("brush `{name}`: {e}"))?;
@@ -368,6 +399,9 @@ pub async fn prefetch_doc_assets(
                 loader.insert(decl.src.clone(), brush);
             }
             ezu_style::AssetKind::Image | ezu_style::AssetKind::MaskImage => {
+                if loader.images.contains_key(&decl.src) {
+                    continue;
+                }
                 let bytes = fetch_asset_bytes(&decl.src, base_dir, "png")
                     .await
                     .map_err(|e| format!("image `{name}`: {e}"))?;
