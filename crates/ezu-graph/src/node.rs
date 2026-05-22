@@ -37,7 +37,8 @@ pub trait Node: Send + Sync {
     /// Produce this node's output given resolved inputs. `inputs` has
     /// one entry per declared port, in the order returned by
     /// [`Node::inputs`]; unconnected optional ports are `None`.
-    fn eval(&self, ctx: &EvalCtx<'_>, inputs: &[Option<PortValue>]) -> Result<PortValue, EvalError>;
+    fn eval(&self, ctx: &EvalCtx<'_>, inputs: &[Option<PortValue>])
+        -> Result<PortValue, EvalError>;
 
     /// Stable content hash of this node's *own* parameters (not inputs).
     /// Used as part of the cache key. Implementations should feed every

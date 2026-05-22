@@ -202,7 +202,10 @@ mod tests {
         let poly = &feats[0];
         assert_eq!(poly.id, Some(42));
         assert!(matches!(poly.properties.get("name"), Some(Value::String(s)) if s == "park"));
-        assert!(matches!(poly.properties.get("active"), Some(Value::Bool(true))));
+        assert!(matches!(
+            poly.properties.get("active"),
+            Some(Value::Bool(true))
+        ));
         assert_eq!(poly.geometry.polygons.len(), 1);
         assert_eq!(poly.geometry.polygons[0].exterior.len(), 4);
         assert_eq!(poly.geometry.polygons[0].holes.len(), 1);

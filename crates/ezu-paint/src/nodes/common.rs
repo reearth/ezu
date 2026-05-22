@@ -4,9 +4,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use ezu_core::TileId as CoreTileId;
-use ezu_graph::{
-    EvalCtx, EvalError, FactoryCtx, FactoryError, PortValue, RasterBuf,
-};
+use ezu_graph::{EvalCtx, EvalError, FactoryCtx, FactoryError, PortValue, RasterBuf};
 use ezu_style as spec;
 use hokusai::Brush;
 use serde_json::Value;
@@ -205,12 +203,7 @@ fn wrap_index(i: i64, dim: u32, mode: BoundaryMode) -> Option<u32> {
 }
 
 #[inline]
-fn read_pixel_or(
-    src: &RasterBuf,
-    ix: i64,
-    iy: i64,
-    mode: BoundaryMode,
-) -> [f32; 4] {
+fn read_pixel_or(src: &RasterBuf, ix: i64, iy: i64, mode: BoundaryMode) -> [f32; 4] {
     let Some(x) = wrap_index(ix, src.width, mode) else {
         return [0.0; 4];
     };

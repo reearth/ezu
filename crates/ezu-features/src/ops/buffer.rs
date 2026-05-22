@@ -157,10 +157,13 @@ mod tests {
             exterior: vec![(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)],
             holes: vec![],
         };
-        let out = buffer_polygons(&[p], &BufferOpts {
-            distance: 2.0,
-            join: BufferJoin::Miter { min_angle_rad: 0.1 },
-        });
+        let out = buffer_polygons(
+            &[p],
+            &BufferOpts {
+                distance: 2.0,
+                join: BufferJoin::Miter { min_angle_rad: 0.1 },
+            },
+        );
         assert_eq!(out.len(), 1);
         // grew outward
         assert!(out[0].exterior.iter().any(|&(x, _)| x < 0));
@@ -172,29 +175,38 @@ mod tests {
             exterior: vec![(0, 0), (4, 0), (4, 4), (0, 4), (0, 0)],
             holes: vec![],
         };
-        let out = buffer_polygons(&[p], &BufferOpts {
-            distance: -10.0,
-            join: BufferJoin::Bevel,
-        });
+        let out = buffer_polygons(
+            &[p],
+            &BufferOpts {
+                distance: -10.0,
+                join: BufferJoin::Bevel,
+            },
+        );
         assert!(out.is_empty());
     }
 
     #[test]
     fn line_buffer_produces_polygon() {
         let line = vec![(0, 0), (10, 0)];
-        let out = buffer_lines(&[line], &BufferOpts {
-            distance: 2.0,
-            join: BufferJoin::Bevel,
-        });
+        let out = buffer_lines(
+            &[line],
+            &BufferOpts {
+                distance: 2.0,
+                join: BufferJoin::Bevel,
+            },
+        );
         assert_eq!(out.len(), 1);
     }
 
     #[test]
     fn point_buffer_produces_disk() {
-        let out = buffer_points(&[(5, 5)], &BufferOpts {
-            distance: 3.0,
-            join: BufferJoin::Bevel,
-        });
+        let out = buffer_points(
+            &[(5, 5)],
+            &BufferOpts {
+                distance: 3.0,
+                join: BufferJoin::Bevel,
+            },
+        );
         assert_eq!(out.len(), 1);
         assert!(out[0].exterior.len() >= 8);
     }

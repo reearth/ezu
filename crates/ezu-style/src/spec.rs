@@ -278,6 +278,9 @@ mod tests {
     fn classify_field_refs() {
         assert!(matches!(FieldRef::classify("@foo"), FieldRef::Node("foo")));
         assert!(matches!(FieldRef::classify("$bar"), FieldRef::Param("bar")));
-        assert!(matches!(FieldRef::classify("plain"), FieldRef::Literal("plain")));
+        assert!(matches!(
+            FieldRef::classify("plain"),
+            FieldRef::Literal("plain")
+        ));
     }
 }

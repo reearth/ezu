@@ -6,15 +6,13 @@
 use std::sync::Arc;
 
 use ezu_graph::{
-    BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, Node,
-    NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, Node, NodeFactory,
+    PortKind, PortSpec, PortValue, RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{
-    read_anchor, read_stops, read_xy, sample_stops, Anchor,
-};
+use crate::nodes::common::{read_anchor, read_stops, read_xy, sample_stops, Anchor};
 use crate::nodes::raster::gradient_common::pixel_to_user;
 
 struct GradientLinearNode {
@@ -40,11 +38,7 @@ impl Node for GradientLinearNode {
             Anchor::World => CoordSpace::World,
         }
     }
-    fn eval(
-        &self,
-        ctx: &EvalCtx<'_>,
-        _: &[Option<PortValue>],
-    ) -> Result<PortValue, EvalError> {
+    fn eval(&self, ctx: &EvalCtx<'_>, _: &[Option<PortValue>]) -> Result<PortValue, EvalError> {
         let size = ctx.canvas.padded_size();
         let mut out = RasterBuf::new(size, size);
         let dx = self.end[0] - self.start[0];

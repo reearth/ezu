@@ -63,7 +63,10 @@ pub async fn run(args: ServeCmd) -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("opening tile source: {spec:?}");
     let source = TileSource::open(&spec).await?;
 
-    let style_src = args.style_arg.as_deref().unwrap_or(args.style_flag.as_str());
+    let style_src = args
+        .style_arg
+        .as_deref()
+        .unwrap_or(args.style_flag.as_str());
     tracing::info!("loading style from {style_src}");
     let style_text = crate::fetch_text(style_src).await?;
     let snapshot = StyleSnapshot::build(style_text, 1, &args.assets_dir).await?;

@@ -58,9 +58,7 @@ fn type_mismatch_is_rejected() {
         .connect("a", "b", "input")
         .set_output("b");
     match b.build() {
-        Err(BuildError::TypeMismatch {
-            expected, got, ..
-        }) => {
+        Err(BuildError::TypeMismatch { expected, got, .. }) => {
             assert_eq!(expected, PortKind::Brush);
             assert_eq!(got, PortKind::Raster);
         }
@@ -156,9 +154,13 @@ fn pad_propagates_upstream_through_blur() {
     b.add_node("src", src(PortKind::Raster))
         .add_node(
             "blur",
-            Mock::new("blur", vec![PortSpec::new("input", PortKind::Raster)], PortKind::Raster)
-                .with_pad_grow(24)
-                .boxed(),
+            Mock::new(
+                "blur",
+                vec![PortSpec::new("input", PortKind::Raster)],
+                PortKind::Raster,
+            )
+            .with_pad_grow(24)
+            .boxed(),
         )
         .add_node("out", passthrough(PortKind::Raster, PortKind::Raster))
         .connect("src", "blur", "input")
@@ -169,7 +171,11 @@ fn pad_propagates_upstream_through_blur() {
     // out: 8 (doc pad). blur upstream of out, so it sees 8 then declares
     // 32 upstream. src therefore needs 32.
     let p = |id: &str| {
-        let ix = g.topo_order().iter().find(|&&i| g.node_id(i) == id).unwrap();
+        let ix = g
+            .topo_order()
+            .iter()
+            .find(|&&i| g.node_id(i) == id)
+            .unwrap();
         pads[*ix]
     };
     assert_eq!(p("out"), 8);
@@ -183,9 +189,13 @@ fn pad_exceeded_errors() {
     b.add_node("src", src(PortKind::Raster))
         .add_node(
             "blur",
-            Mock::new("blur", vec![PortSpec::new("input", PortKind::Raster)], PortKind::Raster)
-                .with_pad_grow(crate::MAX_PAD + 1)
-                .boxed(),
+            Mock::new(
+                "blur",
+                vec![PortSpec::new("input", PortKind::Raster)],
+                PortKind::Raster,
+            )
+            .with_pad_grow(crate::MAX_PAD + 1)
+            .boxed(),
         )
         .connect("src", "blur", "input")
         .set_output("blur");

@@ -33,7 +33,10 @@ fn circle_fill_then_blend_over_background() {
     let r = render(json, 32, 0);
     // Center pixel should be blue (mask = 1).
     let center = r.pixel(16, 16);
-    assert!(center[2] > 200, "center should be blue-dominant: {center:?}");
+    assert!(
+        center[2] > 200,
+        "center should be blue-dominant: {center:?}"
+    );
     assert!(center[0] < 32, "center red should be near zero: {center:?}");
     // Corner pixel should be red (outside disk).
     let corner = r.pixel(0, 0);
@@ -66,7 +69,10 @@ fn blur_softens_disk_edge() {
     // radius = 32 * 0.4 = 12.8 → check pixel at (16+13, 16) ≈ outside.
     let px_sharp = sharp.pixel(29, 16);
     let px_blur = blur.pixel(29, 16);
-    assert_eq!(px_sharp[3], 0, "outside the disk, sharp version is transparent");
+    assert_eq!(
+        px_sharp[3], 0,
+        "outside the disk, sharp version is transparent"
+    );
     assert!(
         px_blur[3] > 0,
         "outside the disk, blurred version has some coverage: {px_blur:?}"
@@ -110,7 +116,10 @@ fn blend_clip_confines_to_base_alpha() {
     let r = render(json, 32, 0);
     // Corner is outside the disk → base alpha = 0 → clip output alpha = 0.
     let corner = r.pixel(0, 0);
-    assert_eq!(corner[3], 0, "outside base alpha must be 0 under clip: {corner:?}");
+    assert_eq!(
+        corner[3], 0,
+        "outside base alpha must be 0 under clip: {corner:?}"
+    );
     // Center is inside disk → red shows through atop blue's alpha.
     let center = r.pixel(16, 16);
     assert!(center[3] > 200, "center should be opaque: {center:?}");
@@ -139,7 +148,10 @@ fn blend_mask_modulates_over_coverage() {
     // Inside mask → red wins.
     let center = r.pixel(16, 16);
     assert!(center[0] > 200, "center should be red: {center:?}");
-    assert!(center[2] < 32, "center blue should be near zero: {center:?}");
+    assert!(
+        center[2] < 32,
+        "center blue should be near zero: {center:?}"
+    );
 }
 
 #[test]
@@ -161,5 +173,9 @@ fn blend_destination_out_erases_base_under_over() {
     let center = r.pixel(16, 16);
     assert_eq!(center[3], 0, "center should be erased: {center:?}");
     let corner = r.pixel(0, 0);
-    assert_eq!(corner, [0xff, 0x00, 0x00, 0xff], "corner untouched: {corner:?}");
+    assert_eq!(
+        corner,
+        [0xff, 0x00, 0x00, 0xff],
+        "corner untouched: {corner:?}"
+    );
 }

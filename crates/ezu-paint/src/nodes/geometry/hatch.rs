@@ -4,8 +4,8 @@
 
 use ezu_features::ops::hatch::{hatch_polygons, HatchOpts};
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError,
-    FactoryCtx, FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
+    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -50,10 +50,7 @@ impl Node for HatchNode {
         // line family is laid out on a global grid and adjacent tiles
         // agree at the seam.
         let extent = feats.extent as f64;
-        let origin = (
-            ctx.tile.x as f64 * extent,
-            ctx.tile.y as f64 * extent,
-        );
+        let origin = (ctx.tile.x as f64 * extent, ctx.tile.y as f64 * extent);
         let lines = hatch_polygons(
             &feats.polygons,
             &HatchOpts {
@@ -75,7 +72,9 @@ impl Node for HatchNode {
 
 pub(super) struct HatchFactory;
 impl NodeFactory for HatchFactory {
-    fn op_name(&self) -> &'static str { "hatch" }
+    fn op_name(&self) -> &'static str {
+        "hatch"
+    }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,

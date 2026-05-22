@@ -52,7 +52,9 @@ impl Node for TileBoundsNode {
 
 pub(super) struct TileBoundsFactory;
 impl NodeFactory for TileBoundsFactory {
-    fn op_name(&self) -> &'static str { "tile-bounds" }
+    fn op_name(&self) -> &'static str {
+        "tile-bounds"
+    }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,

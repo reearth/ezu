@@ -32,7 +32,10 @@ fn noise_perlin_produces_variation_and_is_deterministic() {
         min = min.min(chunk[0]);
         max = max.max(chunk[0]);
     }
-    assert!(max as i32 - min as i32 > 20, "noise should vary: {min}..{max}");
+    assert!(
+        max as i32 - min as i32 > 20,
+        "noise should vary: {min}..{max}"
+    );
 }
 
 #[test]
@@ -51,7 +54,10 @@ fn noise_white_changes_with_seed() {
     };
     let a = render(&mk(1), 16, 0);
     let b = render(&mk(2), 16, 0);
-    assert_ne!(a.pixels, b.pixels, "different seeds should give different white noise");
+    assert_ne!(
+        a.pixels, b.pixels,
+        "different seeds should give different white noise"
+    );
 }
 
 #[test]
@@ -184,7 +190,7 @@ fn warp_world_anchor_is_seamless_across_adjacent_tiles() {
     let safe = pad - amp;
     for dx in 0..safe {
         let lx = tile_size + pad + dx; // left padded x
-        let rx = pad + dx;             // right padded x — same world column
+        let rx = pad + dx; // right padded x — same world column
         for y in (pad + amp)..(pad + tile_size - amp) {
             let l = left.pixel(lx, y);
             let r = right.pixel(rx, y);

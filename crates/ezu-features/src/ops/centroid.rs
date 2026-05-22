@@ -61,9 +61,9 @@ fn centroid_ring(ring: &[(i32, i32)]) -> Option<(i32, i32)> {
     if a2 == 0.0 {
         // Degenerate (collinear) ring — fall back to vertex average so
         // labelling code still gets a point near the geometry.
-        let (sx, sy) = ring
-            .iter()
-            .fold((0.0_f64, 0.0_f64), |(a, b), p| (a + p.0 as f64, b + p.1 as f64));
+        let (sx, sy) = ring.iter().fold((0.0_f64, 0.0_f64), |(a, b), p| {
+            (a + p.0 as f64, b + p.1 as f64)
+        });
         let n = ring.len() as f64;
         return Some(((sx / n).round() as i32, (sy / n).round() as i32));
     }

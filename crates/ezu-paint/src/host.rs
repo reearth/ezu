@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use ezu_features::{FeatureLayer, mvt::DecodedTile};
+use ezu_features::{mvt::DecodedTile, FeatureLayer};
 use ezu_graph::{Asset, AssetError, AssetLoader, OpaqueValue, RasterBuf, TileId};
 use hokusai::Brush;
 use tiny_skia::{Pixmap, PixmapPaint, Transform};
@@ -211,7 +211,9 @@ fn decode_image_file(path: &std::path::Path) -> Result<RasterBuf, String> {
 /// twin of [`decode_image_file`] for callers that already have the
 /// raw bytes in memory (e.g. an HTTP body).
 pub fn decode_image_bytes(bytes: &[u8]) -> Result<RasterBuf, String> {
-    let img = image::load_from_memory(bytes).map_err(|e| e.to_string())?.to_rgba8();
+    let img = image::load_from_memory(bytes)
+        .map_err(|e| e.to_string())?
+        .to_rgba8();
     Ok(rgba_to_premul_raster(img))
 }
 
@@ -236,11 +238,7 @@ fn rgba_to_premul_raster(img: image::RgbaImage) -> RasterBuf {
 
 /// Crop a padded raster down to the central `tile_size` × `tile_size`
 /// region and encode as PNG.
-pub fn raster_to_png(
-    buf: &RasterBuf,
-    tile_size: u32,
-    pad: u32,
-) -> Result<Vec<u8>, PaintError> {
+pub fn raster_to_png(buf: &RasterBuf, tile_size: u32, pad: u32) -> Result<Vec<u8>, PaintError> {
     // Wrap our RGBA8 premul buffer as a tiny-skia Pixmap by copying. We
     // could share memory but the API requires a Pixmap-owned allocation.
     let padded = pixmap_from_raster(buf)?;
@@ -270,11 +268,7 @@ fn pixmap_from_raster(buf: &RasterBuf) -> Result<Pixmap, PaintError> {
 /// codec. WebP is typically 20–40 % smaller than the PNG output for
 /// the same painterly tile while staying lossless, so it's the better
 /// default for cached tile pyramids.
-pub fn raster_to_webp(
-    buf: &RasterBuf,
-    tile_size: u32,
-    pad: u32,
-) -> Result<Vec<u8>, PaintError> {
+pub fn raster_to_webp(buf: &RasterBuf, tile_size: u32, pad: u32) -> Result<Vec<u8>, PaintError> {
     // The pure-Rust WebP encoder wants straight (un-premul) RGBA, which
     // `raster_to_rgba8` already produces alongside the crop.
     let rgba = raster_to_rgba8(buf, tile_size, pad);
@@ -438,11 +432,7 @@ fn is_http_url(s: &str) -> bool {
 }
 
 #[cfg(feature = "http")]
-fn resolve_with_ext(
-    base: &std::path::Path,
-    src: &str,
-    ext: &str,
-) -> Option<std::path::PathBuf> {
+fn resolve_with_ext(base: &std::path::Path, src: &str, ext: &str) -> Option<std::path::PathBuf> {
     let direct = base.join(src);
     if direct.exists() {
         return Some(direct);

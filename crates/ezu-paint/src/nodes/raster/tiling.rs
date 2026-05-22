@@ -18,13 +18,13 @@
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError,
-    FactoryCtx, FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
+    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{read_number_or, read_xy, Anchor, read_optional_string};
+use crate::nodes::common::{read_number_or, read_optional_string, read_xy, Anchor};
 
 struct TilingNode {
     anchor: Anchor,
@@ -74,10 +74,7 @@ impl Node for TilingNode {
         }
 
         let (origin_x, origin_y) = match self.anchor {
-            Anchor::World => (
-                ctx.tile.x as f64 * tile_size,
-                ctx.tile.y as f64 * tile_size,
-            ),
+            Anchor::World => (ctx.tile.x as f64 * tile_size, ctx.tile.y as f64 * tile_size),
             Anchor::Tile => (0.0, 0.0),
         };
 
@@ -176,10 +173,8 @@ fn bilinear_wrap(pixels: &[u8], w: usize, h: usize, sx: f64, sy: f64) -> [u8; 4]
     let w11 = fx * fy;
     let mut out = [0u8; 4];
     for c in 0..4 {
-        let v = p00[c] as f32 * w00
-            + p10[c] as f32 * w10
-            + p01[c] as f32 * w01
-            + p11[c] as f32 * w11;
+        let v =
+            p00[c] as f32 * w00 + p10[c] as f32 * w10 + p01[c] as f32 * w01 + p11[c] as f32 * w11;
         out[c] = v.round().clamp(0.0, 255.0) as u8;
     }
     out

@@ -12,8 +12,11 @@ use crate::{
 #[test]
 fn evaluator_returns_output_value() {
     let mut b = GraphBuilder::new();
-    b.add_node("a", Box::new(Forward(Counter::new("src", PortKind::Raster))))
-        .set_output("a");
+    b.add_node(
+        "a",
+        Box::new(Forward(Counter::new("src", PortKind::Raster))),
+    )
+    .set_output("a");
     let g = b.build().unwrap();
     let cache = Cache::new();
     let assets = NoAssets;
@@ -36,7 +39,12 @@ fn evaluator_evaluates_each_node_once_per_render() {
     // diamond: a -> b, a -> c, b+c -> d. `a` should eval ONCE.
     let counter = Counter::new("src", PortKind::Raster);
     let pass = |op: &'static str| {
-        Mock::new(op, vec![PortSpec::new("input", PortKind::Raster)], PortKind::Raster).boxed()
+        Mock::new(
+            op,
+            vec![PortSpec::new("input", PortKind::Raster)],
+            PortKind::Raster,
+        )
+        .boxed()
     };
     let merge = Mock::new(
         "merge",

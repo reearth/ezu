@@ -24,9 +24,9 @@ pub use brush::BrushDefaults;
 pub use dabs::{paint_polygons_dabs, DabFillStyle};
 pub use hokusai::color::RgbaF32;
 pub use hokusai::Brush;
-pub use strokes::{paint_lines, LineStrokeStyle};
 #[cfg(feature = "parallel")]
 pub use strokes::paint_lines_parallel;
+pub use strokes::{paint_lines, LineStrokeStyle};
 
 use ezu_features::Polygon;
 use tiny_skia::{
@@ -293,4 +293,3 @@ pub enum PaintError {
     #[error("webp encode failed: {0}")]
     WebpEncode(String),
 }
-

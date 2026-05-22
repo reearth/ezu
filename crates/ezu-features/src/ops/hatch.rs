@@ -93,8 +93,7 @@ pub fn hatch_polygons(polys: &[Polygon], opts: &HatchOpts) -> Vec<Vec<(i32, i32)
         }
         // Snap to the world-aligned line family. With v_origin == 0
         // this reduces to the legacy local snap.
-        let v0 = ((v_min + v_origin) / opts.spacing).floor() * opts.spacing
-            - v_origin
+        let v0 = ((v_min + v_origin) / opts.spacing).floor() * opts.spacing - v_origin
             + opts.phase * opts.spacing;
         // Generate the parallel-line family in tile-local coords. Each
         // line is two endpoints crossing the polygon's rotated bbox.
@@ -140,12 +139,15 @@ mod tests {
             exterior: vec![(0, 0), (100, 0), (100, 100), (0, 100), (0, 0)],
             holes: vec![],
         };
-        let out = hatch_polygons(&[p], &HatchOpts {
-            angle_deg: 0.0,
-            spacing: 10.0,
-            phase: 0.0,
-            origin: (0.0, 0.0),
-        });
+        let out = hatch_polygons(
+            &[p],
+            &HatchOpts {
+                angle_deg: 0.0,
+                spacing: 10.0,
+                phase: 0.0,
+                origin: (0.0, 0.0),
+            },
+        );
         // ~10 horizontal lines through a 100-tall square.
         assert!(out.len() >= 8 && out.len() <= 12, "got {} lines", out.len());
         for line in &out {
@@ -160,12 +162,15 @@ mod tests {
             exterior: vec![(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)],
             holes: vec![],
         };
-        let out = hatch_polygons(&[p], &HatchOpts {
-            angle_deg: 0.0,
-            spacing: 0.0,
-            phase: 0.0,
-            origin: (0.0, 0.0),
-        });
+        let out = hatch_polygons(
+            &[p],
+            &HatchOpts {
+                angle_deg: 0.0,
+                spacing: 0.0,
+                phase: 0.0,
+                origin: (0.0, 0.0),
+            },
+        );
         assert!(out.is_empty());
     }
 }

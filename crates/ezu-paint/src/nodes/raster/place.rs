@@ -16,8 +16,8 @@
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError,
-    FactoryCtx, FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
+    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use tiny_skia::{PixmapPaint, PixmapRef, Transform};

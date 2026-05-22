@@ -35,11 +35,7 @@ impl Node for BrushSolidNode {
     fn output(&self) -> PortKind {
         PortKind::Brush
     }
-    fn eval(
-        &self,
-        _ctx: &EvalCtx<'_>,
-        _: &[Option<PortValue>],
-    ) -> Result<PortValue, EvalError> {
+    fn eval(&self, _ctx: &EvalCtx<'_>, _: &[Option<PortValue>]) -> Result<PortValue, EvalError> {
         let mut b = Brush::new();
         let radius_px = (self.width_px * 0.5).max(0.2);
         b.get_mut(BrushSetting::Radius).base_value = radius_px.ln();

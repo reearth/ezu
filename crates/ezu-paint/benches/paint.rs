@@ -14,7 +14,11 @@ use tiny_skia::Color;
 const TILE_SIZE: u32 = 512;
 const PAD: u32 = 24;
 const EXTENT: u32 = 4096;
-const TILE: TileId = TileId { z: 13, x: 7276, y: 3225 };
+const TILE: TileId = TileId {
+    z: 13,
+    x: 7276,
+    y: 3225,
+};
 
 /// Build a grid of rectangular polygons across the MVT extent — stands
 /// in for an "earth" or "landuse" layer with a handful of patches.
@@ -57,10 +61,9 @@ fn synth_lines(count: u32, points_per_line: u32) -> Vec<Vec<(i32, i32)>> {
 }
 
 fn fixture_brush() -> hokusai::Brush {
-    let json =
-        std::fs::read_to_string("../../assets/brushes/watercolor_glazing.myb").expect(
-            "bench needs assets/brushes/watercolor_glazing.myb (run from repo root or crate dir)",
-        );
+    let json = std::fs::read_to_string("../../assets/brushes/watercolor_glazing.myb").expect(
+        "bench needs assets/brushes/watercolor_glazing.myb (run from repo root or crate dir)",
+    );
     hokusai::myb::from_str(&json).expect("parse watercolor_glazing.myb")
 }
 

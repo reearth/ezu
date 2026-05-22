@@ -13,15 +13,15 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use ezu::core::TileId as CoreTileId;
+use ezu::features::mvt;
+use ezu::graph::{CanvasInfo, Evaluator, ParamValues, PortValue, TileId};
+use ezu::paint::host::{raster_to_png, raster_to_webp, BrushBankLoader, TileLoader};
 use futures::stream::{self, Stream};
+use serde_json::json;
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::sync::broadcast;
-use ezu::core::TileId as CoreTileId;
-use ezu::graph::{CanvasInfo, Evaluator, ParamValues, PortValue, TileId};
-use ezu::features::mvt;
-use ezu::paint::host::{raster_to_png, raster_to_webp, BrushBankLoader, TileLoader};
-use serde_json::json;
 
 use super::state::{validate_text, AppState, StyleSnapshot};
 
@@ -68,9 +68,7 @@ async fn put_style(
 /// without prefetching URL assets or swapping the live snapshot. The
 /// live editor pings this on every keystroke (debounced), so it has
 /// to be cheap.
-async fn post_validate(
-    body: String,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+async fn post_validate(body: String) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     validate_text(&body).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -81,11 +79,15 @@ async fn post_validate(
 async fn get_style_fetch(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response, (StatusCode, String)> {
-    let url = q
-        .get("url")
-        .ok_or((StatusCode::BAD_REQUEST, "missing url query parameter".into()))?;
+    let url = q.get("url").ok_or((
+        StatusCode::BAD_REQUEST,
+        "missing url query parameter".into(),
+    ))?;
     if !(url.starts_with("http://") || url.starts_with("https://")) {
-        return Err((StatusCode::BAD_REQUEST, "only http(s) URLs are allowed".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "only http(s) URLs are allowed".into(),
+        ));
     }
     let text = crate::fetch_text(url)
         .await
@@ -185,7 +187,18 @@ async fn get_tile(
     };
 
     let bytes = tokio::task::spawn_blocking({
-        move || render_tile(&graph, &cache, &assets, mvt.as_deref(), tile, tile_size, pad, format)
+        move || {
+            render_tile(
+                &graph,
+                &cache,
+                &assets,
+                mvt.as_deref(),
+                tile,
+                tile_size,
+                pad,
+                format,
+            )
+        }
     })
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -227,22 +240,34 @@ async fn get_mvt_meta(
     let Some(bytes) = fetch_mvt(&s, tile).await? else {
         return Ok(Json(json!({ "layers": [] })));
     };
-    let decoded = mvt::decode(&bytes)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let decoded =
+        mvt::decode(&bytes).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let layers: Vec<_> = decoded
         .layers
         .iter()
         .map(|l| {
             let (mut p, mut ln, mut pg) = (false, false, false);
             for f in &l.features {
-                if !f.geometry.points.is_empty() { p = true; }
-                if !f.geometry.lines.is_empty() { ln = true; }
-                if !f.geometry.polygons.is_empty() { pg = true; }
+                if !f.geometry.points.is_empty() {
+                    p = true;
+                }
+                if !f.geometry.lines.is_empty() {
+                    ln = true;
+                }
+                if !f.geometry.polygons.is_empty() {
+                    pg = true;
+                }
             }
             let mut geoms: Vec<&str> = Vec::new();
-            if p { geoms.push("point"); }
-            if ln { geoms.push("line"); }
-            if pg { geoms.push("polygon"); }
+            if p {
+                geoms.push("point");
+            }
+            if ln {
+                geoms.push("line");
+            }
+            if pg {
+                geoms.push("polygon");
+            }
             json!({
                 "name": l.name,
                 "geometry_types": geoms,
@@ -270,6 +295,7 @@ async fn fetch_mvt(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_tile(
     graph: &ezu::graph::Graph,
     cache: &ezu::graph::Cache,
@@ -280,7 +306,11 @@ fn render_tile(
     pad: u32,
     format: TileFormat,
 ) -> Result<Vec<u8>, String> {
-    let tile_id = TileId { z: tile.z, x: tile.x, y: tile.y };
+    let tile_id = TileId {
+        z: tile.z,
+        x: tile.x,
+        y: tile.y,
+    };
     let mut tile_loader = TileLoader::new(assets, tile_id);
     if let Some(bytes) = mvt_bytes {
         tile_loader.bind_mvt(mvt::decode(bytes).map_err(|e| format!("mvt decode: {e}"))?);
@@ -308,8 +338,14 @@ fn render_tile(
 
 fn tile_seed(tile: CoreTileId) -> u64 {
     let mut s = 0u64;
-    s = s.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(tile.z as u64);
-    s = s.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(tile.x as u64);
-    s = s.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(tile.y as u64);
+    s = s
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(tile.z as u64);
+    s = s
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(tile.x as u64);
+    s = s
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(tile.y as u64);
     s
 }

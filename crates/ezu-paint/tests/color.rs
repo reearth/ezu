@@ -50,7 +50,10 @@ fn hsl_hue_shift_rotates_color() {
     }"##;
     let r = render(json, 4, 0);
     let p = r.pixel(0, 0);
-    assert!(p[1] > 240 && p[0] < 8 && p[2] < 8, "expected pure green: {p:?}");
+    assert!(
+        p[1] > 240 && p[0] < 8 && p[2] < 8,
+        "expected pure green: {p:?}"
+    );
 }
 
 #[test]
@@ -76,6 +79,10 @@ fn color_to_alpha_keys_out_target() {
     }"##;
     let keyed = render(json_keyed, 4, 0);
     let kept = render(json_kept, 4, 0);
-    assert_eq!(keyed.pixel(0, 0)[3], 0, "matching color should be transparent");
+    assert_eq!(
+        keyed.pixel(0, 0)[3],
+        0,
+        "matching color should be transparent"
+    );
     assert_eq!(kept.pixel(0, 0)[3], 0xff, "distant color should be opaque");
 }

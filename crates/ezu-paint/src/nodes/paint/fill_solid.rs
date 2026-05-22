@@ -82,7 +82,9 @@ impl Node for FillSolidNode {
 
 pub(super) struct FillSolidFactory;
 impl NodeFactory for FillSolidFactory {
-    fn op_name(&self) -> &'static str { "fill-solid" }
+    fn op_name(&self) -> &'static str {
+        "fill-solid"
+    }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,

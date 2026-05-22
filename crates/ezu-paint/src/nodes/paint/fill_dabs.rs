@@ -6,8 +6,8 @@
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError,
-    FactoryCtx, FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
+    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use hokusai::color::RgbaF32;
 use serde_json::Value;
@@ -75,7 +75,13 @@ impl Node for FillDabsNode {
             opacity_jitter: self.opacity_jitter,
             value_jitter: self.value_jitter,
         };
-        paint_polygons_dabs(&mut canvas, &feats.polygons, feats.extent, core_tile(ctx), &style);
+        paint_polygons_dabs(
+            &mut canvas,
+            &feats.polygons,
+            feats.extent,
+            core_tile(ctx),
+            &style,
+        );
         Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))))
     }
     fn param_hash(&self, h: &mut Xxh3) {
@@ -101,7 +107,9 @@ impl Node for FillDabsNode {
 
 pub(super) struct FillDabsFactory;
 impl NodeFactory for FillDabsFactory {
-    fn op_name(&self) -> &'static str { "fill-dabs" }
+    fn op_name(&self) -> &'static str {
+        "fill-dabs"
+    }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,

@@ -18,8 +18,8 @@
 use std::f64::consts::PI;
 
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError,
-    FactoryCtx, FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
+    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -252,8 +252,8 @@ fn hash_u32(x: u32) -> u32 {
 }
 
 fn hash2(ix: i64, iy: i64, seed: u32) -> f64 {
-    let a = (ix as i64 as u32).wrapping_mul(0x27D4_EB2D);
-    let b = (iy as i64 as u32).wrapping_mul(0x1656_67B1);
+    let a = (ix as u32).wrapping_mul(0x27D4_EB2D);
+    let b = (iy as u32).wrapping_mul(0x1656_67B1);
     (hash_u32(a ^ b ^ seed) as f64) / (u32::MAX as f64)
 }
 
@@ -305,12 +305,11 @@ impl NodeFactory for WaveFactory {
         let amplitude_px = read_number(fields, "amplitude-px", ctx)?;
         let wavelength_px = read_number(fields, "wavelength-px", ctx)?;
         let phase_px = read_number_or(fields, "phase-px", ctx, 0.0)?;
-        let samples_per_wavelength = read_number_or(fields, "samples-per-wavelength", ctx, 16.0)?
-            .clamp(2.0, 256.0) as u32;
+        let samples_per_wavelength =
+            read_number_or(fields, "samples-per-wavelength", ctx, 16.0)?.clamp(2.0, 256.0) as u32;
         let noise_amp_px = read_number_or(fields, "noise-amp-px", ctx, 0.0)?;
         // Default noise scale to wavelength when not provided.
-        let noise_scale_px =
-            read_number_or(fields, "noise-scale-px", ctx, wavelength_px.max(1.0))?;
+        let noise_scale_px = read_number_or(fields, "noise-scale-px", ctx, wavelength_px.max(1.0))?;
         let seed = match fields.get("seed") {
             Some(Value::Number(n)) => n.as_u64().map(|v| v as u32),
             _ => None,

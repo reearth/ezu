@@ -17,16 +17,25 @@ pub fn convex_hull(
 ) -> Option<Polygon> {
     let mut coords = Vec::new();
     for &(x, y) in points {
-        coords.push(Point::from(Coord { x: x as f64, y: y as f64 }));
+        coords.push(Point::from(Coord {
+            x: x as f64,
+            y: y as f64,
+        }));
     }
     for line in lines {
         for &(x, y) in line {
-            coords.push(Point::from(Coord { x: x as f64, y: y as f64 }));
+            coords.push(Point::from(Coord {
+                x: x as f64,
+                y: y as f64,
+            }));
         }
     }
     for p in polygons {
         for &(x, y) in &p.exterior {
-            coords.push(Point::from(Coord { x: x as f64, y: y as f64 }));
+            coords.push(Point::from(Coord {
+                x: x as f64,
+                y: y as f64,
+            }));
         }
     }
     if coords.len() < 3 {

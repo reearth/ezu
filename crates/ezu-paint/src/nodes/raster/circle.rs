@@ -29,11 +29,7 @@ impl Node for CircleNode {
     fn output(&self) -> PortKind {
         PortKind::Raster
     }
-    fn eval(
-        &self,
-        ctx: &EvalCtx<'_>,
-        _: &[Option<PortValue>],
-    ) -> Result<PortValue, EvalError> {
+    fn eval(&self, ctx: &EvalCtx<'_>, _: &[Option<PortValue>]) -> Result<PortValue, EvalError> {
         let size = ctx.canvas.padded_size();
         let mut out = RasterBuf::new(size, size);
         let cx = size as f32 * 0.5;

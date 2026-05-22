@@ -10,8 +10,8 @@
 //! raster.
 
 use ezu_graph::{
-    schema_frag, Asset, BuiltNode, EvalCtx, EvalError, FactoryCtx, FactoryError, Node,
-    NodeFactory, PortKind, PortSpec, PortValue,
+    schema_frag, Asset, BuiltNode, EvalCtx, EvalError, FactoryCtx, FactoryError, Node, NodeFactory,
+    PortKind, PortSpec, PortValue,
 };
 use ezu_style as spec;
 use serde_json::Value;
@@ -31,11 +31,7 @@ impl Node for ImageNode {
     fn output(&self) -> PortKind {
         PortKind::Sprite
     }
-    fn eval(
-        &self,
-        ctx: &EvalCtx<'_>,
-        _: &[Option<PortValue>],
-    ) -> Result<PortValue, EvalError> {
+    fn eval(&self, ctx: &EvalCtx<'_>, _: &[Option<PortValue>]) -> Result<PortValue, EvalError> {
         let asset = ctx.assets.load(&self.src)?;
         let Asset::Image(raster) = asset else {
             return Err(EvalError::Other(format!(

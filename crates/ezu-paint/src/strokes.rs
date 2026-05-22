@@ -240,7 +240,11 @@ fn stroke_one(
     };
     let mut state = BrushState::default();
     let mut first = true;
-    let inv_total = if total_len > 0.0 { 1.0 / total_len } else { 0.0 };
+    let inv_total = if total_len > 0.0 {
+        1.0 / total_len
+    } else {
+        0.0
+    };
     for (i, &(x, y)) in line.iter().enumerate() {
         // Padded canvas coords (tile-local px + pad).
         let px = x as f32 * geom.sx + geom.pad;

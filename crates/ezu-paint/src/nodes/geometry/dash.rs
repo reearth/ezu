@@ -7,8 +7,8 @@
 //! feature-extent units using `extent / tile-size` at eval time.
 
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError,
-    FactoryCtx, FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
+    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -121,7 +121,11 @@ fn dash_polyline(
         while walked < seg {
             let rem = seg - walked;
             let in_dash = state < dash;
-            let to_boundary = if in_dash { dash - state } else { period - state };
+            let to_boundary = if in_dash {
+                dash - state
+            } else {
+                period - state
+            };
             let step = to_boundary.min(rem).max(0.0);
             let nx = x + ux * step;
             let ny = y + uy * step;

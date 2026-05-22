@@ -5,8 +5,8 @@
 
 use ezu_features::ops::centroid::{linestring_centroid, polygon_centroid};
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError,
-    FactoryCtx, FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
+    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -51,12 +51,7 @@ impl Node for CentroidNode {
             points.extend(feats.polygons.iter().filter_map(polygon_centroid));
         }
         if self.include_lines {
-            points.extend(
-                feats
-                    .lines
-                    .iter()
-                    .filter_map(|l| linestring_centroid(l)),
-            );
+            points.extend(feats.lines.iter().filter_map(|l| linestring_centroid(l)));
         }
         Ok(features_value(feats.extent, vec![], vec![], points))
     }
@@ -68,7 +63,9 @@ impl Node for CentroidNode {
 
 pub(super) struct CentroidFactory;
 impl NodeFactory for CentroidFactory {
-    fn op_name(&self) -> &'static str { "centroid" }
+    fn op_name(&self) -> &'static str {
+        "centroid"
+    }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,

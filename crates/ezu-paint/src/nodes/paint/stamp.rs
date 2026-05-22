@@ -8,8 +8,8 @@
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError,
-    FactoryCtx, FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
+    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use tiny_skia::{PixmapPaint, PixmapRef, Transform};
@@ -110,8 +110,7 @@ impl Node for StampNode {
             let (mut rot_off, mut scale_off) = (0.0_f32, 0.0_f32);
             if self.rotation_jitter_deg != 0.0 || self.scale_jitter != 0.0 {
                 let mut seed = world_seed(WorldPos::new(wx, wy), STAMP_SALT);
-                rot_off =
-                    (next_unit(&mut seed) - 0.5) * 2.0 * self.rotation_jitter_deg;
+                rot_off = (next_unit(&mut seed) - 0.5) * 2.0 * self.rotation_jitter_deg;
                 scale_off = (next_unit(&mut seed) - 0.5) * 2.0 * self.scale_jitter;
             }
             let s = (self.scale * (1.0 + scale_off)).max(0.0);

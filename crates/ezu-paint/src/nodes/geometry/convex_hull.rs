@@ -5,8 +5,8 @@
 
 use ezu_features::ops::convex_hull::convex_hull;
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError,
-    FactoryCtx, FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
+    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -55,7 +55,9 @@ impl Node for ConvexHullNode {
 
 pub(super) struct ConvexHullFactory;
 impl NodeFactory for ConvexHullFactory {
-    fn op_name(&self) -> &'static str { "convex-hull" }
+    fn op_name(&self) -> &'static str {
+        "convex-hull"
+    }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,

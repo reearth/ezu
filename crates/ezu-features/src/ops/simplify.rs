@@ -9,7 +9,10 @@ use super::convert::pt_to_i;
 fn line_to_geo(line: &[(i32, i32)]) -> LineString<f64> {
     LineString::from(
         line.iter()
-            .map(|&(x, y)| Coord { x: x as f64, y: y as f64 })
+            .map(|&(x, y)| Coord {
+                x: x as f64,
+                y: y as f64,
+            })
             .collect::<Vec<_>>(),
     )
 }
@@ -40,7 +43,10 @@ pub fn simplify_polygon(p: &Polygon, epsilon: f64) -> Option<Polygon> {
     let exterior = LineString::from(
         p.exterior
             .iter()
-            .map(|&(x, y)| Coord { x: x as f64, y: y as f64 })
+            .map(|&(x, y)| Coord {
+                x: x as f64,
+                y: y as f64,
+            })
             .collect::<Vec<_>>(),
     );
     let holes: Vec<LineString<f64>> = p
@@ -49,7 +55,10 @@ pub fn simplify_polygon(p: &Polygon, epsilon: f64) -> Option<Polygon> {
         .map(|h| {
             LineString::from(
                 h.iter()
-                    .map(|&(x, y)| Coord { x: x as f64, y: y as f64 })
+                    .map(|&(x, y)| Coord {
+                        x: x as f64,
+                        y: y as f64,
+                    })
                     .collect::<Vec<_>>(),
             )
         })
@@ -67,7 +76,10 @@ pub fn simplify_polygon(p: &Polygon, epsilon: f64) -> Option<Polygon> {
             (v.len() >= 4).then_some(v)
         })
         .collect();
-    Some(Polygon { exterior: ext, holes })
+    Some(Polygon {
+        exterior: ext,
+        holes,
+    })
 }
 
 #[cfg(test)]

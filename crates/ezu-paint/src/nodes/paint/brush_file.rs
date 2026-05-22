@@ -2,8 +2,8 @@
 //! [`AssetLoader`](ezu_graph::AssetLoader).
 
 use ezu_graph::{
-    schema_frag, Asset, BuiltNode, EvalCtx, EvalError, FactoryCtx, FactoryError, Node,
-    NodeFactory, PortKind, PortSpec, PortValue,
+    schema_frag, Asset, BuiltNode, EvalCtx, EvalError, FactoryCtx, FactoryError, Node, NodeFactory,
+    PortKind, PortSpec, PortValue,
 };
 use ezu_style as spec;
 use serde_json::Value;
@@ -23,11 +23,7 @@ impl Node for BrushFileNode {
     fn output(&self) -> PortKind {
         PortKind::Brush
     }
-    fn eval(
-        &self,
-        ctx: &EvalCtx<'_>,
-        _: &[Option<PortValue>],
-    ) -> Result<PortValue, EvalError> {
+    fn eval(&self, ctx: &EvalCtx<'_>, _: &[Option<PortValue>]) -> Result<PortValue, EvalError> {
         let asset = ctx.assets.load(&self.src)?;
         let Asset::Brush(b) = asset else {
             return Err(EvalError::Other(format!(
@@ -45,7 +41,9 @@ impl Node for BrushFileNode {
 
 pub(super) struct BrushFileFactory;
 impl NodeFactory for BrushFileFactory {
-    fn op_name(&self) -> &'static str { "brush-file" }
+    fn op_name(&self) -> &'static str {
+        "brush-file"
+    }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,

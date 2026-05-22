@@ -82,10 +82,7 @@ impl Node for WarpNode {
         let pad = ctx.canvas.pad as f64;
         let tile_size = ctx.canvas.tile_size as f64;
         let (origin_x, origin_y) = match self.anchor {
-            Anchor::World => (
-                ctx.tile.x as f64 * tile_size,
-                ctx.tile.y as f64 * tile_size,
-            ),
+            Anchor::World => (ctx.tile.x as f64 * tile_size, ctx.tile.y as f64 * tile_size),
             Anchor::Tile => (0.0, 0.0),
         };
         let inv_scale = 1.0 / self.scale_px;
@@ -97,12 +94,22 @@ impl Node for WarpNode {
             let py = origin_y + (y as f64) - pad;
             for x in 0..w {
                 let px = origin_x + (x as f64) - pad;
-                let dx =
-                    fbm(&nx, px * inv_scale, py * inv_scale, self.octaves, self.lacunarity, self.gain)
-                        * self.amp_x;
-                let dy =
-                    fbm(&ny, px * inv_scale, py * inv_scale, self.octaves, self.lacunarity, self.gain)
-                        * self.amp_y;
+                let dx = fbm(
+                    &nx,
+                    px * inv_scale,
+                    py * inv_scale,
+                    self.octaves,
+                    self.lacunarity,
+                    self.gain,
+                ) * self.amp_x;
+                let dy = fbm(
+                    &ny,
+                    px * inv_scale,
+                    py * inv_scale,
+                    self.octaves,
+                    self.lacunarity,
+                    self.gain,
+                ) * self.amp_y;
                 let sx = x as f64 + dx;
                 let sy = y as f64 + dy;
                 let pxv = sample_bilinear(src, sx, sy, self.boundary);

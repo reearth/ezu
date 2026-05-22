@@ -25,11 +25,7 @@ impl Node for SolidNode {
     fn output(&self) -> PortKind {
         PortKind::Raster
     }
-    fn eval(
-        &self,
-        ctx: &EvalCtx<'_>,
-        _: &[Option<PortValue>],
-    ) -> Result<PortValue, EvalError> {
+    fn eval(&self, ctx: &EvalCtx<'_>, _: &[Option<PortValue>]) -> Result<PortValue, EvalError> {
         let size = ctx.canvas.padded_size();
         let rgba = color_to_premul_u8(self.color);
         Ok(PortValue::Raster(Arc::new(RasterBuf::filled(
@@ -46,7 +42,9 @@ impl Node for SolidNode {
 
 pub(super) struct SolidFactory;
 impl NodeFactory for SolidFactory {
-    fn op_name(&self) -> &'static str { "solid" }
+    fn op_name(&self) -> &'static str {
+        "solid"
+    }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,

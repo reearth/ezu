@@ -23,9 +23,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{
-    read_color, read_number, read_number_or, read_optional_string, Anchor,
-};
+use crate::nodes::common::{read_color, read_number, read_number_or, read_optional_string, Anchor};
 use crate::nodes::raster::noise_field::{fbm, NoiseKind, Sampler};
 
 struct NoiseNode {
@@ -59,11 +57,7 @@ impl Node for NoiseNode {
             Anchor::Tile => CoordSpace::Tile,
         }
     }
-    fn eval(
-        &self,
-        ctx: &EvalCtx<'_>,
-        _: &[Option<PortValue>],
-    ) -> Result<PortValue, EvalError> {
+    fn eval(&self, ctx: &EvalCtx<'_>, _: &[Option<PortValue>]) -> Result<PortValue, EvalError> {
         let size = ctx.canvas.padded_size();
         let pad = ctx.canvas.pad as f64;
         let tile_size = ctx.canvas.tile_size as f64;
@@ -86,10 +80,7 @@ impl Node for NoiseNode {
 
         // World-origin of this tile in pixels at the current zoom.
         let (origin_x, origin_y) = match self.anchor {
-            Anchor::World => (
-                ctx.tile.x as f64 * tile_size,
-                ctx.tile.y as f64 * tile_size,
-            ),
+            Anchor::World => (ctx.tile.x as f64 * tile_size, ctx.tile.y as f64 * tile_size),
             Anchor::Tile => (0.0, 0.0),
         };
 

@@ -19,11 +19,22 @@ fn gradient_linear_top_to_bottom() {
       "output": "@out"
     }"##;
     let r = render(json, 16, 0);
-    assert!(r.pixel(8, 0)[0] < 16, "top row should be black: {:?}", r.pixel(8, 0));
-    assert!(r.pixel(8, 15)[0] > 240, "bottom row should be white: {:?}", r.pixel(8, 15));
+    assert!(
+        r.pixel(8, 0)[0] < 16,
+        "top row should be black: {:?}",
+        r.pixel(8, 0)
+    );
+    assert!(
+        r.pixel(8, 15)[0] > 240,
+        "bottom row should be white: {:?}",
+        r.pixel(8, 15)
+    );
     // Middle row should be roughly grey.
     let mid = r.pixel(8, 8)[0];
-    assert!((mid as i32 - 128).abs() < 16, "mid should be grey, got {mid}");
+    assert!(
+        (mid as i32 - 128).abs() < 16,
+        "mid should be grey, got {mid}"
+    );
 }
 
 #[test]
@@ -46,7 +57,10 @@ fn gradient_radial_center_to_edge() {
     // Pixel sample center is offset by 0.5 from `[0.5, 0.5]`, so the
     // closest pixel is slightly off-center but still mostly white.
     assert!(center > 220, "center should be near white: {center}");
-    assert!(corner < 32, "corner past radius should be near black: {corner}");
+    assert!(
+        corner < 32,
+        "corner past radius should be near black: {corner}"
+    );
 }
 
 #[test]
@@ -68,7 +82,10 @@ fn gradient_conic_sweeps_around_center() {
     let r = render(json, 32, 0);
     // Pixel to the right of center (ang ~ 0): red dominant.
     let right = r.pixel(24, 16);
-    assert!(right[0] > 200 && right[1] < 64 && right[2] < 64, "right should be red: {right:?}");
+    assert!(
+        right[0] > 200 && right[1] < 64 && right[2] < 64,
+        "right should be red: {right:?}"
+    );
 }
 
 #[test]
@@ -93,5 +110,8 @@ fn gradient_diamond_has_axis_aligned_corners() {
     assert!(r.pixel(0, 0)[0] < 32, "corner should be near black");
     // A pixel halfway to the tip along an axis: Manhattan ~0.25, t ~0.5 → grey.
     let half = r.pixel(8, 4)[0];
-    assert!((half as i32 - 128).abs() < 40, "axial half should be grey, got {half}");
+    assert!(
+        (half as i32 - 128).abs() < 40,
+        "axial half should be grey, got {half}"
+    );
 }

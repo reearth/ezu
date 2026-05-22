@@ -67,7 +67,10 @@ impl TileSource {
                     return Err(SourceError::BadPattern(pattern));
                 }
                 if is_url(&pattern) {
-                    Ok(Self::MvtHttp { pattern, client: Client::new() })
+                    Ok(Self::MvtHttp {
+                        pattern,
+                        client: Client::new(),
+                    })
                 } else {
                     Ok(Self::MvtFile { pattern })
                 }
@@ -157,23 +160,42 @@ async fn load_tilejson_pattern(src: &str) -> Result<String, SourceError> {
     let text = if is_url(src) {
         let resp = reqwest::get(src)
             .await
-            .map_err(|e| SourceError::TileJson { src: src.into(), msg: e.to_string() })?
+            .map_err(|e| SourceError::TileJson {
+                src: src.into(),
+                msg: e.to_string(),
+            })?
             .error_for_status()
-            .map_err(|e| SourceError::TileJson { src: src.into(), msg: e.to_string() })?;
-        resp.text()
-            .await
-            .map_err(|e| SourceError::TileJson { src: src.into(), msg: e.to_string() })?
+            .map_err(|e| SourceError::TileJson {
+                src: src.into(),
+                msg: e.to_string(),
+            })?;
+        resp.text().await.map_err(|e| SourceError::TileJson {
+            src: src.into(),
+            msg: e.to_string(),
+        })?
     } else {
-        std::fs::read_to_string(src)
-            .map_err(|e| SourceError::TileJson { src: src.into(), msg: e.to_string() })?
+        std::fs::read_to_string(src).map_err(|e| SourceError::TileJson {
+            src: src.into(),
+            msg: e.to_string(),
+        })?
     };
-    let v: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| SourceError::TileJson { src: src.into(), msg: e.to_string() })?;
-    let tiles = v.get("tiles").and_then(|t| t.as_array()).ok_or_else(|| {
-        SourceError::TileJson { src: src.into(), msg: "missing `tiles` array".into() }
+    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| SourceError::TileJson {
+        src: src.into(),
+        msg: e.to_string(),
     })?;
-    let first = tiles.first().and_then(|t| t.as_str()).ok_or_else(|| {
-        SourceError::TileJson { src: src.into(), msg: "`tiles[0]` is missing or not a string".into() }
-    })?;
+    let tiles = v
+        .get("tiles")
+        .and_then(|t| t.as_array())
+        .ok_or_else(|| SourceError::TileJson {
+            src: src.into(),
+            msg: "missing `tiles` array".into(),
+        })?;
+    let first = tiles
+        .first()
+        .and_then(|t| t.as_str())
+        .ok_or_else(|| SourceError::TileJson {
+            src: src.into(),
+            msg: "`tiles[0]` is missing or not a string".into(),
+        })?;
     Ok(first.to_string())
 }

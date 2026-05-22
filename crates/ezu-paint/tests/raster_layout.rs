@@ -24,10 +24,7 @@ fn image_directly_as_output_is_rejected() {
     let doc = Document::from_json(json).expect("parse");
     let registry = default_registry();
     match build_graph(&doc, &registry) {
-        Err(ezu_graph::BuildGraphError::Graph(BuildError::OutputKindMismatch {
-            node,
-            got,
-        })) => {
+        Err(ezu_graph::BuildGraphError::Graph(BuildError::OutputKindMismatch { node, got })) => {
             assert_eq!(node, "src");
             assert_eq!(got, PortKind::Sprite);
         }
@@ -51,7 +48,13 @@ fn tiling_passes_through_at_natural_scale() {
       },
       "output": "@out"
     }"##;
-    let r = render_with_images(json, 16, 0, TileId { z: 0, x: 0, y: 0 }, &[("disk", sprite)]);
+    let r = render_with_images(
+        json,
+        16,
+        0,
+        TileId { z: 0, x: 0, y: 0 },
+        &[("disk", sprite)],
+    );
     let center = r.pixel(8, 8);
     assert!(center[0] > 200, "center should be red: {center:?}");
     let corner = r.pixel(0, 0);
@@ -74,10 +77,19 @@ fn tiling_repeats_pattern_at_smaller_scale() {
       },
       "output": "@out"
     }"##;
-    let r = render_with_images(json, 16, 0, TileId { z: 0, x: 0, y: 0 }, &[("disk", sprite)]);
+    let r = render_with_images(
+        json,
+        16,
+        0,
+        TileId { z: 0, x: 0, y: 0 },
+        &[("disk", sprite)],
+    );
     for &(x, y) in &[(4, 4), (12, 4), (4, 12), (12, 12)] {
         let p = r.pixel(x, y);
-        assert!(p[0] > 100, "tile center ({x},{y}) should have red disk: {p:?}");
+        assert!(
+            p[0] > 100,
+            "tile center ({x},{y}) should have red disk: {p:?}"
+        );
     }
 }
 
@@ -111,7 +123,13 @@ fn tiling_world_anchor_is_seamless_across_tiles() {
       },
       "output": "@out"
     }"##;
-    let left = render_with_images(json, 32, 4, TileId { z: 4, x: 5, y: 7 }, &[("p", sprite.clone())]);
+    let left = render_with_images(
+        json,
+        32,
+        4,
+        TileId { z: 4, x: 5, y: 7 },
+        &[("p", sprite.clone())],
+    );
     let right = render_with_images(json, 32, 4, TileId { z: 4, x: 6, y: 7 }, &[("p", sprite)]);
     let pad = 4u32;
     let tile_size = 32u32;
@@ -148,7 +166,10 @@ fn place_cover_fills_canvas_with_source_color() {
     }"##;
     let r = render_with_images(json, 32, 0, TileId { z: 0, x: 0, y: 0 }, &[("src", sprite)]);
     let center = r.pixel(16, 16);
-    assert!(center[0] > 200, "center should be red under cover: {center:?}");
+    assert!(
+        center[0] > 200,
+        "center should be red under cover: {center:?}"
+    );
     assert!(center[3] > 200);
 }
 
@@ -174,5 +195,8 @@ fn place_none_with_scale_and_anchor_shrinks_source() {
     let center = r.pixel(16, 16);
     assert!(center[1] > 200, "center should be green: {center:?}");
     let outside = r.pixel(24, 16);
-    assert_eq!(outside[3], 0, "shrunk disk should not reach (24,16): {outside:?}");
+    assert_eq!(
+        outside[3], 0,
+        "shrunk disk should not reach (24,16): {outside:?}"
+    );
 }

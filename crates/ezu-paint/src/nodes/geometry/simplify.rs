@@ -3,8 +3,8 @@
 
 use ezu_features::ops::simplify::{simplify_line, simplify_polygon};
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError,
-    FactoryCtx, FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
+    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -53,7 +53,12 @@ impl Node for SimplifyNode {
             .iter()
             .filter_map(|p| simplify_polygon(p, self.epsilon))
             .collect();
-        Ok(features_value(feats.extent, polygons, lines, feats.points.clone()))
+        Ok(features_value(
+            feats.extent,
+            polygons,
+            lines,
+            feats.points.clone(),
+        ))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"simplify");
@@ -63,7 +68,9 @@ impl Node for SimplifyNode {
 
 pub(super) struct SimplifyFactory;
 impl NodeFactory for SimplifyFactory {
-    fn op_name(&self) -> &'static str { "simplify" }
+    fn op_name(&self) -> &'static str {
+        "simplify"
+    }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,

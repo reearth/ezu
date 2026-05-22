@@ -5,8 +5,8 @@
 use std::sync::Arc;
 
 use ezu_graph::{
-    BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, Node,
-    NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, Node, NodeFactory,
+    PortKind, PortSpec, PortValue, RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -39,11 +39,7 @@ impl Node for GradientDiamondNode {
             Anchor::World => CoordSpace::World,
         }
     }
-    fn eval(
-        &self,
-        ctx: &EvalCtx<'_>,
-        _: &[Option<PortValue>],
-    ) -> Result<PortValue, EvalError> {
+    fn eval(&self, ctx: &EvalCtx<'_>, _: &[Option<PortValue>]) -> Result<PortValue, EvalError> {
         let size = ctx.canvas.padded_size();
         let mut out = RasterBuf::new(size, size);
         let r = self.radius.max(1e-6);

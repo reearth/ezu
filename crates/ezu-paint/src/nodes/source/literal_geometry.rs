@@ -117,7 +117,9 @@ fn parse_ring(v: &Value, ctx: &'static str) -> Result<Vec<(i32, i32)>, FactoryEr
 
 pub(super) struct LiteralGeometryFactory;
 impl NodeFactory for LiteralGeometryFactory {
-    fn op_name(&self) -> &'static str { "literal-geometry" }
+    fn op_name(&self) -> &'static str {
+        "literal-geometry"
+    }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
@@ -136,7 +138,9 @@ impl NodeFactory for LiteralGeometryFactory {
                     field: "points".into(),
                     msg: "expected array of [x, y]".into(),
                 })?;
-                arr.iter().map(|p| parse_point(p, "points")).collect::<Result<_, _>>()?
+                arr.iter()
+                    .map(|p| parse_point(p, "points"))
+                    .collect::<Result<_, _>>()?
             }
         };
 
@@ -147,7 +151,9 @@ impl NodeFactory for LiteralGeometryFactory {
                     field: "lines".into(),
                     msg: "expected array of polylines".into(),
                 })?;
-                arr.iter().map(|l| parse_ring(l, "lines")).collect::<Result<_, _>>()?
+                arr.iter()
+                    .map(|l| parse_ring(l, "lines"))
+                    .collect::<Result<_, _>>()?
             }
         };
 

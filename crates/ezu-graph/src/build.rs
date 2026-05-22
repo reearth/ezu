@@ -24,7 +24,10 @@ pub enum BuildGraphError {
 
 /// Build a typed [`Graph`] from a parsed document and a registry of
 /// node factories.
-pub fn build_graph(doc: &spec::Document, registry: &NodeRegistry) -> Result<Graph, BuildGraphError> {
+pub fn build_graph(
+    doc: &spec::Document,
+    registry: &NodeRegistry,
+) -> Result<Graph, BuildGraphError> {
     let ctx = FactoryCtx {
         params: &doc.params,
         assets: &doc.assets,

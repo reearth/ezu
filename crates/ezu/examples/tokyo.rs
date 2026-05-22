@@ -19,10 +19,10 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use ezu::core::TileId as CoreTileId;
+use ezu::features::mvt;
 use ezu::graph::{
     build_graph, Cache, CanvasInfo, Evaluator, Graph, ParamValues, PortValue, TileId,
 };
-use ezu::features::mvt;
 use ezu::paint::host::{raster_to_png, BrushBankLoader, TileLoader};
 use ezu::paint::nodes::default_registry;
 use ezu::style::Document;
@@ -126,7 +126,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     try_join_all(tasks).await?;
-    eprintln!("wall-clock: {:>6.1}ms", t_total.elapsed().as_secs_f64() * 1000.0);
+    eprintln!(
+        "wall-clock: {:>6.1}ms",
+        t_total.elapsed().as_secs_f64() * 1000.0
+    );
     Ok(())
 }
 
@@ -161,12 +164,7 @@ async fn render_one(
 
         let t2 = Instant::now();
         let ev = Evaluator::new(&graph, &cache, &tile_loader);
-        let out = ev.render_parallel(
-            tile_id,
-            canvas,
-            &ParamValues::new(),
-            tile_seed(tile),
-        )?;
+        let out = ev.render_parallel(tile_id, canvas, &ParamValues::new(), tile_seed(tile))?;
         let raster = match out {
             PortValue::Raster(r) => r,
             other => {
@@ -200,9 +198,15 @@ async fn render_one(
 
 fn tile_seed(tile: CoreTileId) -> u64 {
     let mut s = 0u64;
-    s = s.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(tile.z as u64);
-    s = s.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(tile.x as u64);
-    s = s.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(tile.y as u64);
+    s = s
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(tile.z as u64);
+    s = s
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(tile.x as u64);
+    s = s
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(tile.y as u64);
     s
 }
 
@@ -230,4 +234,3 @@ impl PmTilesArchive {
         Ok(self.inner.get_tile_decompressed(coord).await?)
     }
 }
-

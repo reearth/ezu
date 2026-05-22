@@ -163,8 +163,7 @@ impl NodeRegistry {
                 schema = json!({});
             }
             let obj = schema.as_object_mut().unwrap();
-            obj.entry("type")
-                .or_insert_with(|| json!("object"));
+            obj.entry("type").or_insert_with(|| json!("object"));
             // Add the discriminator field.
             let props = obj
                 .entry("properties")

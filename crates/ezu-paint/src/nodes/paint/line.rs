@@ -5,8 +5,8 @@
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError,
-    FactoryCtx, FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
+    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use hokusai::Brush;
 use serde_json::Value;
@@ -99,7 +99,14 @@ impl Node for LineNode {
             hardness_stroke_curve: self.hardness_stroke_curve.clone(),
             dtime_stroke_curve: self.dtime_stroke_curve.clone(),
         };
-        paint_lines(&mut canvas, &feats.lines, feats.extent, core_tile(ctx), &brush, &style);
+        paint_lines(
+            &mut canvas,
+            &feats.lines,
+            feats.extent,
+            core_tile(ctx),
+            &brush,
+            &style,
+        );
         Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))))
     }
     fn param_hash(&self, h: &mut Xxh3) {
@@ -146,7 +153,9 @@ fn hash_curve(h: &mut Xxh3, tag: &[u8], curve: Option<&[(f32, f32)]>) {
 
 pub(super) struct LineFactory;
 impl NodeFactory for LineFactory {
-    fn op_name(&self) -> &'static str { "line" }
+    fn op_name(&self) -> &'static str {
+        "line"
+    }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,

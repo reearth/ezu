@@ -33,7 +33,10 @@ fn registry_emits_document_schema_with_all_ops() {
         "tiling",
         "place",
     ] {
-        assert!(s.contains(&format!("\"const\":\"{op}\"")), "missing op `{op}` in schema");
+        assert!(
+            s.contains(&format!("\"const\":\"{op}\"")),
+            "missing op `{op}` in schema"
+        );
     }
     assert!(s.contains("\"$schema\""));
     assert!(s.contains("\"nodes\""));

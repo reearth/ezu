@@ -54,9 +54,7 @@ pub enum BuildError {
     )]
     OutputKindMismatch { node: NodeId, got: PortKind },
 
-    #[error(
-        "required pad ({required}) on node `{node}` exceeds limit ({limit})"
-    )]
+    #[error("required pad ({required}) on node `{node}` exceeds limit ({limit})")]
     PadExceeded {
         node: NodeId,
         required: u32,
@@ -289,7 +287,14 @@ impl std::fmt::Debug for Graph {
         f.debug_struct("Graph")
             .field("nodes", &ids)
             .field("output", &self.node_id(self.output))
-            .field("topo", &self.topo.iter().map(|&i| self.node_id(i)).collect::<Vec<_>>())
+            .field(
+                "topo",
+                &self
+                    .topo
+                    .iter()
+                    .map(|&i| self.node_id(i))
+                    .collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
@@ -347,11 +352,7 @@ impl Graph {
     pub fn compute_levels(&self) -> Vec<u32> {
         let mut levels = vec![0u32; self.len()];
         for &ix in &self.topo {
-            let max_up = self
-                .upstream(ix)
-                .map(|s| levels[s] + 1)
-                .max()
-                .unwrap_or(0);
+            let max_up = self.upstream(ix).map(|s| levels[s] + 1).max().unwrap_or(0);
             levels[ix] = max_up;
         }
         levels

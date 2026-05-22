@@ -9,11 +9,11 @@
 //! bindings. A missing binding is treated as "no features for this
 //! tile" and yields an empty result.
 
+use ezu_features::FeatureLayer;
 use ezu_graph::{
     Asset, AssetError, BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, Node,
     NodeFactory, PortKind, PortSpec, PortValue,
 };
-use ezu_features::FeatureLayer;
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
@@ -68,9 +68,9 @@ impl Node for FeaturesNode {
                 self.name
             )));
         };
-        let layer = opq
-            .downcast::<FeatureLayer>()
-            .map_err(|_| EvalError::Other(format!("`{}` payload is not FeatureLayer", self.name)))?;
+        let layer = opq.downcast::<FeatureLayer>().map_err(|_| {
+            EvalError::Other(format!("`{}` payload is not FeatureLayer", self.name))
+        })?;
         let polys = collect_polygons(&layer.features, &self.filter, &self.min_zoom_field, z);
         let lns = collect_lines(&layer.features, &self.filter, &self.min_zoom_field, z);
         let pts = collect_points(&layer.features, &self.filter, &self.min_zoom_field, z);

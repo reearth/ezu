@@ -189,7 +189,9 @@ struct TilesCmd {
 }
 
 fn default_concurrency() -> usize {
-    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -267,7 +269,13 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
     tracing::info!("opening source: {spec:?}");
     let source = Arc::new(TileSource::open(&spec).await?);
 
-    Ok(Prepared { graph, cache, loader, source, canvas })
+    Ok(Prepared {
+        graph,
+        cache,
+        loader,
+        source,
+        canvas,
+    })
 }
 
 async fn run_check(args: CheckCmd) -> Result<(), Box<dyn std::error::Error>> {
@@ -299,7 +307,11 @@ async fn run_check(args: CheckCmd) -> Result<(), Box<dyn std::error::Error>> {
         doc.version,
         graph.len(),
         doc.assets.len(),
-        if args.no_fetch { " [parse + graph only]" } else { "" },
+        if args.no_fetch {
+            " [parse + graph only]"
+        } else {
+            ""
+        },
     );
     Ok(())
 }
@@ -342,15 +354,14 @@ fn render_mermaid(doc: &ezu::style::Document) -> String {
     let mut source_ids: Vec<&str> = Vec::new();
     for (id, spec) in &doc.nodes {
         let is_source = spec.op == "features";
-        let suffix = if id == output_id {
-            ":::output"
-        } else {
-            ""
-        };
+        let suffix = if id == output_id { ":::output" } else { "" };
         // Cylinder shape for data-source nodes (MVT-backed `features`);
         // rectangle for everything else.
         if is_source {
-            s.push_str(&format!("  {id}[(\"{id} ({op})\")]{suffix}\n", op = spec.op));
+            s.push_str(&format!(
+                "  {id}[(\"{id} ({op})\")]{suffix}\n",
+                op = spec.op
+            ));
             source_ids.push(id);
         } else {
             s.push_str(&format!("  {id}[\"{id} ({op})\"]{suffix}\n", op = spec.op));
@@ -364,10 +375,7 @@ fn render_mermaid(doc: &ezu::style::Document) -> String {
     s.push('\n');
     for (id, spec) in &doc.nodes {
         let mut refs: Vec<String> = Vec::new();
-        collect_refs(
-            &serde_json::Value::Object(spec.fields.clone()),
-            &mut refs,
-        );
+        collect_refs(&serde_json::Value::Object(spec.fields.clone()), &mut refs);
         let mut seen = HashSet::new();
         for r in refs {
             if !seen.insert(r.clone()) {
@@ -410,7 +418,9 @@ fn collect_refs(v: &serde_json::Value, out: &mut Vec<String>) {
 
 async fn run_tile(args: TileCmd) -> Result<(), Box<dyn std::error::Error>> {
     let prep = prepare(&args.common).await?;
-    let format = args.format.unwrap_or_else(|| OutputFormat::from_path(&args.out));
+    let format = args
+        .format
+        .unwrap_or_else(|| OutputFormat::from_path(&args.out));
     let raster = render_one(
         Arc::clone(&prep.graph),
         Arc::clone(&prep.cache),
@@ -432,7 +442,9 @@ async fn run_tile(args: TileCmd) -> Result<(), Box<dyn std::error::Error>> {
 
 async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
     let prep = prepare(&args.common).await?;
-    let format = args.format.unwrap_or_else(|| OutputFormat::from_path(&args.out));
+    let format = args
+        .format
+        .unwrap_or_else(|| OutputFormat::from_path(&args.out));
     let (x_range, y_range) = bbox_to_tiles(args.bbox, args.zoom);
     let nx = x_range.end - x_range.start;
     let ny = y_range.end - y_range.start;
@@ -463,13 +475,20 @@ async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let mut mosaic =
-        Pixmap::new(nx * prep.canvas.tile_size, ny * prep.canvas.tile_size).ok_or("mosaic alloc")?;
+    let mut mosaic = Pixmap::new(nx * prep.canvas.tile_size, ny * prep.canvas.tile_size)
+        .ok_or("mosaic alloc")?;
     for handle in try_join_all(tasks).await? {
         let (tile, raster) = handle.map_err(|e| e.to_string())?;
         let dx = ((tile.x - x_range.start) * prep.canvas.tile_size) as i32;
         let dy = ((tile.y - y_range.start) * prep.canvas.tile_size) as i32;
-        blit_padded_into(&mut mosaic, &raster, dx, dy, prep.canvas.tile_size, prep.canvas.pad)?;
+        blit_padded_into(
+            &mut mosaic,
+            &raster,
+            dx,
+            dy,
+            prep.canvas.tile_size,
+            prep.canvas.pad,
+        )?;
     }
     let bytes = match format {
         OutputFormat::Png => mosaic.encode_png().map_err(|e| e.to_string())?,
@@ -541,7 +560,9 @@ async fn run_tiles(args: TilesCmd) -> Result<(), Box<dyn std::error::Error>> {
                 })
                 .await
                 .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?
-                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?;
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+                    e.to_string().into()
+                })?;
                 let dir = out.join(z.to_string()).join(tx.to_string());
                 tokio::fs::create_dir_all(&dir).await?;
                 let path = dir.join(format!("{ty}.{}", format.extension()));
@@ -552,10 +573,7 @@ async fn run_tiles(args: TilesCmd) -> Result<(), Box<dyn std::error::Error>> {
             .try_collect::<Vec<_>>()
             .await
             .map_err(|e| e.to_string())?;
-        tracing::info!(
-            "z={z}: done in {:.1}s",
-            t0.elapsed().as_secs_f64()
-        );
+        tracing::info!("z={z}: done in {:.1}s", t0.elapsed().as_secs_f64());
     }
     tracing::info!("wrote {total} tiles → {}", args.out.display());
     Ok(())
@@ -570,19 +588,25 @@ async fn render_one(
     tile: CoreTileId,
 ) -> Result<Arc<RasterBuf>, Box<dyn std::error::Error + Send + Sync>> {
     let mvt_bytes = source.fetch(tile).await?;
-    let raster = tokio::task::spawn_blocking(move || -> Result<Arc<RasterBuf>, Box<dyn std::error::Error + Send + Sync>> {
-        let tile_id = TileId { z: tile.z, x: tile.x, y: tile.y };
-        let mut tile_loader = TileLoader::new(loader.as_ref(), tile_id);
-        if let Some(bytes) = mvt_bytes {
-            tile_loader.bind_mvt(mvt::decode(&bytes)?);
-        }
-        let ev = Evaluator::new(&graph, &cache, &tile_loader);
-        let out = ev.render_parallel(tile_id, canvas, &ParamValues::new(), tile_seed(tile))?;
-        match out {
-            PortValue::Raster(r) => Ok(r),
-            other => Err(format!("expected Raster output, got {:?}", other.kind()).into()),
-        }
-    })
+    let raster = tokio::task::spawn_blocking(
+        move || -> Result<Arc<RasterBuf>, Box<dyn std::error::Error + Send + Sync>> {
+            let tile_id = TileId {
+                z: tile.z,
+                x: tile.x,
+                y: tile.y,
+            };
+            let mut tile_loader = TileLoader::new(loader.as_ref(), tile_id);
+            if let Some(bytes) = mvt_bytes {
+                tile_loader.bind_mvt(mvt::decode(&bytes)?);
+            }
+            let ev = Evaluator::new(&graph, &cache, &tile_loader);
+            let out = ev.render_parallel(tile_id, canvas, &ParamValues::new(), tile_seed(tile))?;
+            match out {
+                PortValue::Raster(r) => Ok(r),
+                other => Err(format!("expected Raster output, got {:?}", other.kind()).into()),
+            }
+        },
+    )
     .await??;
     Ok(raster)
 }
@@ -599,11 +623,7 @@ async fn build_asset_loader(
         .with_dir(base_dir.to_path_buf())
         .with_images_dir(base_dir.to_path_buf());
     ezu::paint::host::prefetch_doc_assets(doc, base_dir, &mut loader).await?;
-    if doc
-        .assets
-        .values()
-        .any(|d| d.kind == AssetKind::Gradient)
-    {
+    if doc.assets.values().any(|d| d.kind == AssetKind::Gradient) {
         tracing::warn!("gradient assets are not yet supported by the CLI");
     }
     tracing::info!(
@@ -703,11 +723,17 @@ fn parse_zxy(s: &str) -> Result<CoreTileId, String> {
 fn parse_bbox(s: &str) -> Result<BBox, String> {
     let parts: Vec<&str> = s.split(',').collect();
     if parts.len() != 4 {
-        return Err(format!("expected `min_lng,min_lat,max_lng,max_lat`, got `{s}`"));
+        return Err(format!(
+            "expected `min_lng,min_lat,max_lng,max_lat`, got `{s}`"
+        ));
     }
     let v: Vec<f64> = parts
         .iter()
-        .map(|p| p.trim().parse::<f64>().map_err(|e| format!("bad number `{p}`: {e}")))
+        .map(|p| {
+            p.trim()
+                .parse::<f64>()
+                .map_err(|e| format!("bad number `{p}`: {e}"))
+        })
         .collect::<Result<_, _>>()?;
     let (min_lng, min_lat, max_lng, max_lat) = (v[0], v[1], v[2], v[3]);
     if min_lng >= max_lng || min_lat >= max_lat {
@@ -715,13 +741,24 @@ fn parse_bbox(s: &str) -> Result<BBox, String> {
             "bbox min must be strictly less than max: {min_lng},{min_lat},{max_lng},{max_lat}"
         ));
     }
-    Ok(BBox { min_lng, min_lat, max_lng, max_lat })
+    Ok(BBox {
+        min_lng,
+        min_lat,
+        max_lng,
+        max_lat,
+    })
 }
 
 fn tile_seed(tile: CoreTileId) -> u64 {
     let mut s = 0u64;
-    s = s.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(tile.z as u64);
-    s = s.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(tile.x as u64);
-    s = s.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(tile.y as u64);
+    s = s
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(tile.z as u64);
+    s = s
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(tile.x as u64);
+    s = s
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(tile.y as u64);
     s
 }

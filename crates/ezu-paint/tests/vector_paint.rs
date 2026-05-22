@@ -22,11 +22,17 @@ fn brush_solid_line_paints_a_visible_stroke() {
     let r = render(json, 32, 0);
     // Center pixel of the middle row should have a strong red component.
     let mid = r.pixel(16, 16);
-    assert!(mid[0] > 200, "center stroke should be red-dominant: {mid:?}");
+    assert!(
+        mid[0] > 200,
+        "center stroke should be red-dominant: {mid:?}"
+    );
     assert!(mid[3] > 200, "center stroke should be opaque: {mid:?}");
     // A pixel well above the stroke should be transparent.
     let above = r.pixel(16, 4);
-    assert_eq!(above[3], 0, "above the stroke should be transparent: {above:?}");
+    assert_eq!(
+        above[3], 0,
+        "above the stroke should be transparent: {above:?}"
+    );
 }
 
 #[test]
@@ -59,7 +65,10 @@ fn dash_chops_a_long_line_into_multiple_runs() {
             clear += 1;
         }
     }
-    assert!(inked > 8 && clear > 8, "expected stripes: inked={inked} clear={clear}");
+    assert!(
+        inked > 8 && clear > 8,
+        "expected stripes: inked={inked} clear={clear}"
+    );
 }
 
 #[test]
@@ -127,7 +136,10 @@ fn stamp_places_image_at_each_point() {
     // Both stamp centers should be green and opaque.
     for &(x, y) in &[(8, 16), (24, 16)] {
         let p = r.pixel(x, y);
-        assert!(p[1] > 200 && p[3] > 200, "stamp center ({x},{y}) green: {p:?}");
+        assert!(
+            p[1] > 200 && p[3] > 200,
+            "stamp center ({x},{y}) green: {p:?}"
+        );
     }
     // Mid-point between stamps should be empty (transparent).
     let between = r.pixel(16, 16);

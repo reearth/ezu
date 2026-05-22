@@ -5,8 +5,8 @@
 
 use ezu_features::ops::boundary::polygon_boundary;
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError,
-    FactoryCtx, FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
+    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -47,7 +47,12 @@ impl Node for BoundaryNode {
         for p in &feats.polygons {
             lines.extend(polygon_boundary(p));
         }
-        Ok(features_value(feats.extent, vec![], lines, feats.points.clone()))
+        Ok(features_value(
+            feats.extent,
+            vec![],
+            lines,
+            feats.points.clone(),
+        ))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"boundary");
@@ -56,7 +61,9 @@ impl Node for BoundaryNode {
 
 pub(super) struct BoundaryFactory;
 impl NodeFactory for BoundaryFactory {
-    fn op_name(&self) -> &'static str { "boundary" }
+    fn op_name(&self) -> &'static str {
+        "boundary"
+    }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,

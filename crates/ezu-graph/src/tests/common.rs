@@ -1,8 +1,8 @@
 //! Shared test helpers: mock nodes used across topology / build / eval
 //! suites.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 
 use xxhash_rust::xxh3::Xxh3;
 
@@ -61,9 +61,9 @@ impl Node for Mock {
     ) -> Result<PortValue, EvalError> {
         let size = ctx.canvas.padded_size();
         Ok(match self.output {
-            PortKind::Raster => PortValue::Raster(Arc::new(RasterBuf::filled(
-                size, size, [0, 0, 0, 255],
-            ))),
+            PortKind::Raster => {
+                PortValue::Raster(Arc::new(RasterBuf::filled(size, size, [0, 0, 0, 255])))
+            }
             other => panic!("mock node has no default output for {other:?}"),
         })
     }
@@ -130,7 +130,9 @@ impl Node for Counter {
         self.count.fetch_add(1, Ordering::SeqCst);
         let size = ctx.canvas.padded_size();
         Ok(PortValue::Raster(Arc::new(RasterBuf::filled(
-            size, size, [64, 0, 0, 64],
+            size,
+            size,
+            [64, 0, 0, 64],
         ))))
     }
     fn param_hash(&self, h: &mut Xxh3) {

@@ -9,8 +9,8 @@ use ezu_features::ops::buffer::{
     buffer_lines, buffer_points, buffer_polygons, BufferJoin, BufferOpts,
 };
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError,
-    FactoryCtx, FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
+    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -80,7 +80,9 @@ impl Node for BufferNode {
 
 pub(super) struct BufferFactory;
 impl NodeFactory for BufferFactory {
-    fn op_name(&self) -> &'static str { "buffer" }
+    fn op_name(&self) -> &'static str {
+        "buffer"
+    }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
@@ -88,7 +90,8 @@ impl NodeFactory for BufferFactory {
     ) -> Result<BuiltNode, FactoryError> {
         let features = take_input_ref(fields, "features")?;
         let distance = read_number(fields, "distance", ctx)?;
-        let join_kind = read_optional_string(fields, "join")?.unwrap_or_else(|| "miter".to_string());
+        let join_kind =
+            read_optional_string(fields, "join")?.unwrap_or_else(|| "miter".to_string());
         let join = match join_kind.as_str() {
             "bevel" => BufferJoin::Bevel,
             "round" => BufferJoin::Round {

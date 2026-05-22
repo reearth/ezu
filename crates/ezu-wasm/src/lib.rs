@@ -27,9 +27,7 @@
 
 use std::sync::Arc;
 
-use ezu_graph::{
-    build_graph, Cache, CanvasInfo, Evaluator, Graph, ParamValues, PortValue, TileId,
-};
+use ezu_graph::{build_graph, Cache, CanvasInfo, Evaluator, Graph, ParamValues, PortValue, TileId};
 use ezu_paint::host::{
     raster_to_png, raster_to_rgba8, raster_to_webp, BrushBankLoader, TileLoader,
 };
@@ -240,9 +238,8 @@ impl Renderer {
         let tile_id = TileId { z, x, y };
         let mut tile_loader = TileLoader::new(&self.assets, tile_id);
         if let Some(bytes) = mvt_bytes {
-            tile_loader.bind_mvt(
-                ezu_features::mvt::decode(bytes).map_err(|e| named_err(ERR_MVT, e))?,
-            );
+            tile_loader
+                .bind_mvt(ezu_features::mvt::decode(bytes).map_err(|e| named_err(ERR_MVT, e))?);
         }
 
         let ev = Evaluator::new(&self.graph, &self.cache, &tile_loader);

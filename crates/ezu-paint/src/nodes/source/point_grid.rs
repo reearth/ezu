@@ -102,7 +102,9 @@ impl Node for PointGridNode {
 
 pub(super) struct PointGridFactory;
 impl NodeFactory for PointGridFactory {
-    fn op_name(&self) -> &'static str { "point-grid" }
+    fn op_name(&self) -> &'static str {
+        "point-grid"
+    }
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
