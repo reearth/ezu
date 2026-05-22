@@ -6,7 +6,8 @@
 //!          --bbox MIN_LNG,MIN_LAT,MAX_LNG,MAX_LAT --zoom Z [--out FILE]
 //! ```
 
-mod source;
+mod serve;
+pub(crate) mod source;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -44,6 +45,8 @@ enum Cmd {
     Bbox(BboxCmd),
     /// Bulk-render an XYZ tile pyramid into `<out>/<z>/<x>/<y>.png`.
     Tiles(TilesCmd),
+    /// Start the live editor + tile server at `http://127.0.0.1:8080`.
+    Serve(serve::ServeCmd),
 }
 
 #[derive(Args, Debug)]
@@ -177,6 +180,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Cmd::Tile(args) => run_tile(args).await,
         Cmd::Bbox(args) => run_bbox(args).await,
         Cmd::Tiles(args) => run_tiles(args).await,
+        Cmd::Serve(args) => serve::run(args).await,
     }
 }
 
@@ -447,7 +451,7 @@ async fn build_asset_loader(
 /// `"watercolor_glazing.myb"`).
 /// Fetch a text resource by URL (http/https) or local path. Used for
 /// the style document so callers can pass either form to `--style`.
-async fn fetch_text(arg: &str) -> Result<String, Box<dyn std::error::Error>> {
+pub(crate) async fn fetch_text(arg: &str) -> Result<String, Box<dyn std::error::Error>> {
     if is_url(arg) {
         let body = reqwest::get(arg).await?.error_for_status()?.text().await?;
         Ok(body)

@@ -15,14 +15,17 @@
   .toolbar .sp { flex: 1; }
   .toolbar button { padding: 6px 14px; background: #5a4636; color: #fdfbf1; border: 0; border-radius: 4px; font-weight: 600; cursor: pointer; }
   .toolbar button:hover { background: #4a3424; }
-  .toolbar .status { font-size: 12px; color: #6a5040; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .toolbar button:disabled { background: #b0a08e; cursor: not-allowed; }
+  .toolbar .status { font-size: 12px; color: #6a5040; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; max-width: 60%; text-align: right; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .toolbar .status.error { color: #a03434; }
   .toolbar .status.ok { color: #387a45; }
+  .toolbar .status.checking { color: #a07a3a; }
   textarea {
     flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.45;
     padding: 12px; border: 0; outline: none; resize: none; background: #fdfbf1; color: #382a1f;
     tab-size: 2;
   }
+  textarea.invalid { background: #fdf3ef; }
   #map { flex: 1; }
   .leaflet-container { background: #f8f5e8; }
   kbd { background: #e6dfc8; padding: 1px 5px; border-radius: 3px; font-family: inherit; font-size: 11px; }
@@ -34,8 +37,8 @@
     <div class="toolbar">
       <h1>Ezu Style</h1>
       <span class="sp"></span>
-      <span class="status" id="status">loading…</span>
-      <button id="apply" title="Apply (⌘↵ / Ctrl+↵)">Apply</button>
+      <span class="status" id="status" title="">loading…</span>
+      <button id="apply" title="Apply (⌘↵ / Ctrl+↵)" disabled>Apply</button>
     </div>
     <textarea id="json" spellcheck="false" placeholder="Loading style..."></textarea>
   </aside>
@@ -44,6 +47,7 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="https://cdn.jsdelivr.net/npm/ajv@8.17.1/dist/ajv7.bundle.min.js"></script>
 <script>
 (() => {
   const $json = document.getElementById('json');
@@ -58,8 +62,14 @@
   let tilesLayer = null;
   let tileSize = 512;
 
-  function setStatus(text, cls = '') {
+  // Schema validator. Built once after we fetch the schema; null until
+  // ready or if Ajv failed to load. Best-effort client-side feedback;
+  // the server's /style/validate is the authoritative check.
+  let validateSchema = null;
+
+  function setStatus(text, cls = '', title = '') {
     $status.textContent = text;
+    $status.title = title || text;
     $status.className = 'status' + (cls ? ' ' + cls : '');
   }
 
@@ -77,6 +87,22 @@
     }).addTo(map);
   }
 
+  async function loadSchema() {
+    if (typeof Ajv === 'undefined') return; // CDN unreachable, skip
+    try {
+      const r = await fetch('/schemas/ezu-style.json');
+      const schema = await r.json();
+      // The registry advertises 2020-12 but the keywords used are all
+      // draft-07 compatible. Strip the dialect URI so Ajv 8 (default
+      // draft-07) doesn't reject the schema.
+      delete schema.$schema;
+      const ajv = new Ajv({ strict: false, allErrors: true });
+      validateSchema = ajv.compile(schema);
+    } catch (e) {
+      console.warn('schema validator init failed:', e);
+    }
+  }
+
   async function loadStyle() {
     const r = await fetch('/style');
     const text = await r.text();
@@ -88,11 +114,74 @@
     version = 1;
     mountTiles();
     setStatus(`loaded (v${version})`, 'ok');
+    $apply.disabled = false;
   }
+
+  // Validate the current textarea content. Fast path is JSON.parse
+  // plus an Ajv schema check (instant, no network). On success we
+  // kick off the authoritative /style/validate dry-run, which catches
+  // semantic errors (cycles, port type mismatches, …) the schema
+  // can't express.
+  function validate() {
+    const text = $json.value;
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (e) {
+      $json.classList.add('invalid');
+      setStatus('json: ' + e.message, 'error');
+      $apply.disabled = true;
+      return;
+    }
+
+    if (validateSchema && !validateSchema(parsed)) {
+      const err = validateSchema.errors[0];
+      const path = err.instancePath || '/';
+      $json.classList.add('invalid');
+      setStatus(`schema: ${path} ${err.message}`, 'error',
+        validateSchema.errors
+          .map(e => `${e.instancePath || '/'} ${e.message}`)
+          .join('\n'));
+      $apply.disabled = true;
+      return;
+    }
+
+    $json.classList.remove('invalid');
+    setStatus('checking…', 'checking');
+    serverValidate(text);
+  }
+
+  let validateSeq = 0;
+  async function serverValidate(text) {
+    const my = ++validateSeq;
+    try {
+      const r = await fetch('/style/validate', { method: 'POST', body: text });
+      if (my !== validateSeq) return; // newer input; drop stale result
+      if (r.ok) {
+        setStatus(`valid · v${version}`, 'ok');
+        $apply.disabled = false;
+      } else {
+        const detail = (await r.text()).slice(0, 240);
+        setStatus(detail, 'error', detail);
+        $apply.disabled = true;
+      }
+    } catch (e) {
+      if (my !== validateSeq) return;
+      setStatus('check failed: ' + e, 'error');
+    }
+  }
+
+  // Debounce input → validate. 300 ms feels responsive without
+  // hammering the server on every keystroke.
+  let inputTimer = 0;
+  $json.addEventListener('input', () => {
+    clearTimeout(inputTimer);
+    inputTimer = setTimeout(validate, 300);
+  });
 
   async function apply() {
     const body = $json.value;
-    setStatus('applying…');
+    setStatus('applying…', 'checking');
     try {
       const r = await fetch('/style', {
         method: 'PUT',
@@ -101,7 +190,7 @@
       });
       if (!r.ok) {
         const detail = await r.text();
-        setStatus('error: ' + detail.slice(0, 200), 'error');
+        setStatus(detail.slice(0, 240), 'error', detail);
         return;
       }
       const { version: v } = await r.json();
@@ -123,11 +212,14 @@
   $json.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
-      apply();
+      if (!$apply.disabled) apply();
     }
   });
 
-  loadStyle();
+  (async () => {
+    await loadSchema();
+    await loadStyle();
+  })();
 })();
 </script>
 </body>

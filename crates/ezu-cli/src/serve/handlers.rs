@@ -1,3 +1,5 @@
+//! axum handlers for `ezu serve`.
+
 use std::sync::Arc;
 
 use axum::{
@@ -14,14 +16,15 @@ use ezu::features::mvt;
 use ezu::paint::host::{raster_to_png, raster_to_webp, BrushBankLoader, TileLoader};
 use serde_json::json;
 
-use crate::state::{AppState, StyleSnapshot};
+use super::state::{validate_text, AppState, StyleSnapshot};
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(index))
         .route("/style", get(get_style).put(put_style))
+        .route("/style/validate", axum::routing::post(post_validate))
         .route("/schemas/ezu-style.json", get(get_schema))
-        .route("/tiles/{z}/{x}/{y_png}", get(get_tile))
+        .route("/tiles/{z}/{x}/{y_ext}", get(get_tile))
         .route("/mvt/{z}/{x}/{y}", get(get_mvt))
 }
 
@@ -49,6 +52,17 @@ async fn put_style(
     let version = snap.version;
     *s.style.write().await = snap;
     Ok(Json(json!({ "version": version })))
+}
+
+/// Dry-run the parse + graph-build pipeline `PUT /style` would run,
+/// without prefetching URL assets or swapping the live snapshot. The
+/// live editor pings this on every keystroke (debounced), so it has
+/// to be cheap.
+async fn post_validate(
+    body: String,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    validate_text(&body).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 async fn get_schema(State(s): State<AppState>) -> Response {
@@ -95,17 +109,7 @@ async fn get_tile(
         .map_err(|_| (StatusCode::BAD_REQUEST, "bad y".into()))?;
     let tile = CoreTileId::new(z, x, y);
 
-    let mvt = match s.mvt_cache.get(&tile).map(|r| r.clone()) {
-        Some(b) => Some(b),
-        None => match s.archive.get_tile(tile).await {
-            Ok(Some(b)) => {
-                s.mvt_cache.insert(tile, b.clone());
-                Some(b)
-            }
-            Ok(None) => None,
-            Err(e) => return Err((StatusCode::BAD_GATEWAY, e.to_string())),
-        },
-    };
+    let mvt = fetch_mvt(&s, tile).await?;
 
     // Take only what we need from the snapshot to keep the lock window short.
     let (graph, cache, assets, tile_size, pad) = {
@@ -140,25 +144,32 @@ async fn get_mvt(
     Path((z, x, y)): Path<(u8, u32, u32)>,
 ) -> Result<Response, (StatusCode, String)> {
     let tile = CoreTileId::new(z, x, y);
-    let mvt = match s.mvt_cache.get(&tile).map(|r| r.clone()) {
-        Some(b) => Some(b),
-        None => match s.archive.get_tile(tile).await {
-            Ok(Some(b)) => {
-                s.mvt_cache.insert(tile, b.clone());
-                Some(b)
-            }
-            Ok(None) => None,
-            Err(e) => return Err((StatusCode::BAD_GATEWAY, e.to_string())),
-        },
-    };
+    let mvt = fetch_mvt(&s, tile).await?;
     let Some(bytes) = mvt else {
-        return Err((StatusCode::NOT_FOUND, "tile not in archive".into()));
+        return Err((StatusCode::NOT_FOUND, "tile not in source".into()));
     };
     Ok(Response::builder()
         .header(header::CONTENT_TYPE, "application/vnd.mapbox-vector-tile")
         .header(header::CACHE_CONTROL, "public, max-age=300")
         .body(Body::from(bytes.to_vec()))
         .unwrap())
+}
+
+async fn fetch_mvt(
+    s: &AppState,
+    tile: CoreTileId,
+) -> Result<Option<bytes::Bytes>, (StatusCode, String)> {
+    if let Some(b) = s.mvt_cache.get(&tile).map(|r| r.clone()) {
+        return Ok(Some(b));
+    }
+    match s.source.fetch(tile).await {
+        Ok(Some(b)) => {
+            s.mvt_cache.insert(tile, b.clone());
+            Ok(Some(b))
+        }
+        Ok(None) => Ok(None),
+        Err(e) => Err((StatusCode::BAD_GATEWAY, e.to_string())),
+    }
 }
 
 fn render_tile(
@@ -171,11 +182,7 @@ fn render_tile(
     pad: u32,
     format: TileFormat,
 ) -> Result<Vec<u8>, String> {
-    let tile_id = TileId {
-        z: tile.z,
-        x: tile.x,
-        y: tile.y,
-    };
+    let tile_id = TileId { z: tile.z, x: tile.x, y: tile.y };
     let mut tile_loader = TileLoader::new(assets, tile_id);
     if let Some(bytes) = mvt_bytes {
         tile_loader.bind_mvt(mvt::decode(bytes).map_err(|e| format!("mvt decode: {e}"))?);

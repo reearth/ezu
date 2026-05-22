@@ -6,7 +6,7 @@ Parses tile / feature formats into a flat, owned representation that
 downstream paint code can iterate over without implementing any
 format-specific traits. **Remote fetching is intentionally out of
 scope** — input is always raw bytes / strings handed in by the caller
-(e.g. an example, `ezu-server`, the WASM bindings).
+(e.g. an example, `ezu serve`, the WASM bindings).
 
 ## Submodules
 

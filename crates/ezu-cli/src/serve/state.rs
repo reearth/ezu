@@ -1,3 +1,5 @@
+//! Shared state for the `ezu serve` live editor + tile server.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -7,14 +9,15 @@ use ezu::core::TileId;
 use ezu::graph::{build_graph, Cache, Graph};
 use ezu::paint::host::BrushBankLoader;
 use ezu::paint::nodes::default_registry;
-use crate::pmtiles::PmTilesArchive;
 use ezu::style::Document;
 use tokio::sync::RwLock;
+
+use crate::source::TileSource;
 
 /// State held by every request handler.
 #[derive(Clone)]
 pub struct AppState {
-    pub archive: Arc<PmTilesArchive>,
+    pub source: Arc<TileSource>,
     pub style: Arc<RwLock<StyleSnapshot>>,
     /// Base directory used to resolve relative asset `src` paths and
     /// as the fall-through for the per-snapshot loader's disk lookups.
@@ -39,10 +42,10 @@ pub struct StyleSnapshot {
 }
 
 impl StyleSnapshot {
-    /// Build a snapshot: parse the document, build the graph, and
-    /// pre-resolve every entry in `doc.assets` (URL or local path)
-    /// into a fresh `BrushBankLoader`. Disk lookups for assets that
-    /// the doc doesn't declare fall through to `assets_dir`.
+    /// Parse the document, build the graph, and pre-resolve every entry
+    /// in `doc.assets` (URL or local path) into a fresh `BrushBankLoader`.
+    /// Disk lookups for assets that the doc doesn't declare fall
+    /// through to `assets_dir`.
     pub async fn build(
         text: String,
         version: u64,
@@ -78,15 +81,22 @@ pub enum BuildSnapshotError {
     Assets(String),
 }
 
+/// Lighter twin of [`StyleSnapshot::build`] that runs the parse +
+/// graph-build pipeline without prefetching any URL assets. Suitable
+/// for live-editor "as you type" validation where round-tripping
+/// every keystroke through HTTP fetches would be lethal.
+pub fn validate_text(text: &str) -> Result<(), BuildSnapshotError> {
+    let doc = Document::from_json(text).map_err(BuildSnapshotError::Parse)?;
+    let registry = default_registry();
+    build_graph(&doc, &registry).map_err(BuildSnapshotError::Graph)?;
+    Ok(())
+}
+
 impl AppState {
-    pub fn new(
-        archive: PmTilesArchive,
-        snapshot: StyleSnapshot,
-        assets_dir: PathBuf,
-    ) -> Self {
+    pub fn new(source: TileSource, snapshot: StyleSnapshot, assets_dir: PathBuf) -> Self {
         let schema = default_registry().document_schema();
         Self {
-            archive: Arc::new(archive),
+            source: Arc::new(source),
             style: Arc::new(RwLock::new(snapshot)),
             assets_dir: Arc::new(assets_dir),
             mvt_cache: Arc::new(DashMap::new()),

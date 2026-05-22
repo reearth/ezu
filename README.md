@@ -23,8 +23,7 @@ Each crate has its own README with API details and examples.
 | [`ezu-graph`](crates/ezu-graph) | Typed node-DAG evaluator (Cache, Rayon parallel) |
 | [`ezu-paint`](crates/ezu-paint) | Painting primitives, built-in nodes, host glue (PNG / brush bank) |
 | [`ezu-wasm`](crates/ezu-wasm) | WebAssembly bindings (`wasm-bindgen`) |
-| [`ezu-server`](crates/ezu-server) | Live editor + tile server (`axum`, unpublished) |
-| [`ezu-cli`](crates/ezu-cli) | Command-line renderer — single tile, bbox mosaic, or XYZ pyramid |
+| [`ezu-cli`](crates/ezu-cli) | Command-line renderer + live editor / tile server — single tile, bbox mosaic, XYZ pyramid, or `serve` |
 
 ## Try it
 
@@ -70,10 +69,11 @@ cargo run --release --features parallel -p ezu --example tokyo
 # Output PNGs in ./out/tokyo/
 ```
 
-The live editor (browser-based, edit JSON → see the map update):
+The live editor (browser-based, edit JSON → see the map update,
+schema-validated as you type):
 
 ```sh
-cargo run --release -p ezu-server
+ezu serve
 # Open http://127.0.0.1:8080
 ```
 
@@ -87,7 +87,7 @@ RUSTFLAGS="-C target-feature=+simd128" \
   wasm-pack build --target web --release --out-dir ../../target/wasm/simd
 
 # Serve everything (editor, demo, brushes, /mvt) and open the demo
-cargo run --release -p ezu-server
+ezu serve
 # http://127.0.0.1:8080/wasm-demo/
 ```
 
@@ -177,9 +177,9 @@ land inside the buffer; the output is cropped to the tile by
 `NodeFactory` is a public trait — any downstream crate can register
 its own ops on top of `ezu-paint::nodes::default_registry()` and feed
 the registry to `ezu-graph::build_graph`. The JSON Schema served at
-`/schemas/ezu-style.json` by [`ezu-server`](crates/ezu-server) is
-derived from the live registry, so custom ops get editor
-autocomplete out of the box.
+`/schemas/ezu-style.json` by `ezu serve` is derived from the live
+registry, so custom ops get editor autocomplete (and as-you-type
+validation in the live editor) out of the box.
 
 ## Brushes
 

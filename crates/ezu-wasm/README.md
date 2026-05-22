@@ -135,8 +135,8 @@ Each output directory contains `ezu_wasm.js` (ES module + glue),
 A self-contained demo lives at [`www/index.html`](www/index.html). It picks
 between the scalar and SIMD builds at runtime, between PNG and RGBA output,
 renders a single MVT tile on a `<canvas>`, and runs a bench-of-N for timing.
-It needs the routes that the [`ezu-server`](../ezu-server) crate provides
-out of the box:
+It needs the routes that the `ezu serve` subcommand of
+[`ezu-cli`](../ezu-cli) provides out of the box:
 
 | Path | Source |
 |---|---|
@@ -151,7 +151,7 @@ To run end-to-end from a clean tree:
 ```sh
 # 1. Build both WASM flavors (see above)
 # 2. Start the server (serves the editor, the static dirs, and the demo)
-cargo run --release -p ezu-server
+cargo run --release -p ezu-cli -- serve
 # 3. Open http://127.0.0.1:8080/wasm-demo/
 ```
 

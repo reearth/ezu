@@ -629,8 +629,10 @@ dependencies = [
 name = "ezu-cli"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "bytes",
  "clap",
+ "dashmap",
  "ezu",
  "futures",
  "pmtiles",
@@ -639,6 +641,7 @@ dependencies = [
  "thiserror",
  "tiny-skia",
  "tokio",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
 ]
@@ -696,26 +699,6 @@ dependencies = [
  "thiserror",
  "tiny-skia",
  "xxhash-rust",
-]
-
-[[package]]
-name = "ezu-server"
-version = "0.1.0"
-dependencies = [
- "axum",
- "bytes",
- "clap",
- "dashmap",
- "ezu",
- "pmtiles",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tower-http",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

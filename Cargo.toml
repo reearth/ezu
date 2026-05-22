@@ -8,7 +8,6 @@ members = [
     "crates/ezu-features",
     "crates/ezu-paint",
     "crates/ezu-style",
-    "crates/ezu-server",
     "crates/ezu-wasm",
 ]
 

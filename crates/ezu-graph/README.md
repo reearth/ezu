@@ -158,7 +158,7 @@ registry.register(MyOpFactory);
 ```
 
 The optional `schema()` method feeds `NodeRegistry::document_schema()`,
-which is what `ezu-server` serves at `/schemas/ezu-style.json` for
+which is what `ezu serve` exposes at `/schemas/ezu-style.json` for
 editor autocomplete. Pre-built fragments live in
 [`schema_frag`](src/registry.rs): `node_ref`, `asset_ref`, `color`,
 `unit_number`, `px_number`.
