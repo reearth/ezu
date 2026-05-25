@@ -27,7 +27,7 @@ use reqwest::Client;
 
 use crate::host::TileLoader;
 
-const EARTH_CIRCUMFERENCE_M: f64 = 40_075_016.685_578_488;
+const EARTH_CIRCUMFERENCE_M: f64 = 40_075_016.685_578_5;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DemFetchError {
@@ -383,6 +383,5 @@ fn split_fraction(t: f32) -> (i32, f32) {
 fn tile_centre_lat_rad(tile: TileId) -> f64 {
     let n = (1u64 << tile.z) as f64;
     let y = tile.y as f64 + 0.5;
-    let lat_rad = (std::f64::consts::PI * (1.0 - 2.0 * y / n)).sinh().atan();
-    lat_rad
+    (std::f64::consts::PI * (1.0 - 2.0 * y / n)).sinh().atan()
 }

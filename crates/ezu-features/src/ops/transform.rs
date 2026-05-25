@@ -29,9 +29,9 @@ fn apply(
 /// Apply `(scale, rotation, translate)` to every vertex of the inputs.
 /// `pivot` is the centre of rotation / scale in feature-space coords.
 pub fn transform(
-    points: &mut Vec<(i32, i32)>,
-    lines: &mut Vec<Vec<(i32, i32)>>,
-    polygons: &mut Vec<Polygon>,
+    points: &mut [(i32, i32)],
+    lines: &mut [Vec<(i32, i32)>],
+    polygons: &mut [Polygon],
     scale: (f64, f64),
     rotation_rad: f64,
     pivot: (f64, f64),

@@ -192,6 +192,7 @@ impl Renderer {
     /// Like `render` but with `tile_size` / `pad` overridden — useful for
     /// hi-DPI / preview rendering without mutating the style.
     #[wasm_bindgen(js_name = renderAt)]
+    #[allow(clippy::too_many_arguments)]
     pub fn render_at(
         &self,
         mvt_bytes: Option<Vec<u8>>,
@@ -216,6 +217,7 @@ impl Renderer {
     /// Like `renderWebp` but with `tile_size` / `pad` overridden.
     #[allow(unused_variables)]
     #[wasm_bindgen(js_name = renderWebpAt)]
+    #[allow(clippy::too_many_arguments)]
     pub fn render_webp_at(
         &self,
         mvt_bytes: Option<Vec<u8>>,
@@ -298,6 +300,7 @@ fn parse_options(obj: Option<&js_sys::Object>) -> EncodeOptions {
 }
 
 impl Renderer {
+    #[allow(clippy::too_many_arguments)]
     fn render_inner(
         &self,
         mvt_bytes: Option<&[u8]>,

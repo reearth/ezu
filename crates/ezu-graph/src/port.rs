@@ -92,7 +92,7 @@ impl PortSpec {
 
     /// True if this port would accept a value of the given kind.
     pub fn accepts_kind(&self, kind: PortKind) -> bool {
-        self.accepts.iter().any(|k| *k == kind)
+        self.accepts.contains(&kind)
     }
 
     /// The first kind in the accepts list — convenient for ports that

@@ -210,6 +210,12 @@ impl LogSink {
         self.state.buffer.lock().map(|b| b.len()).unwrap_or(0)
     }
 
+    /// `true` if no records are buffered.
+    #[wasm_bindgen(js_name = isEmpty)]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Resize the ring-buffer cap. Older entries are evicted FIFO once
     /// the buffer reaches the new cap. Default is 4096.
     #[wasm_bindgen(js_name = setCapacity)]

@@ -1,7 +1,7 @@
-//! `bbox` — `Features -> Features`. Pool every input vertex (points
-//! + lines + polygons) and emit a single axis-aligned bounding-box
-//! polygon. Useful as a clipping or placement reference for downstream
-//! ops. Empty input yields empty output.
+//! `bbox` — `Features -> Features`. Pool every input vertex (across
+//! points, lines, and polygons) and emit a single axis-aligned
+//! bounding-box polygon. Useful as a clipping or placement reference
+//! for downstream ops. Empty input yields empty output.
 
 use ezu_features::ops::bbox::bbox_polygon;
 use ezu_graph::{
