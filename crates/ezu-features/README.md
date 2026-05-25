@@ -62,6 +62,33 @@ Polygon rings are classified as exterior / hole via signed shoelace
 area following the
 [MVT spec](https://github.com/mapbox/vector-tile-spec).
 
+## Geometry ops
+
+Beyond parsing, `ezu_features::ops` ships pure-function geometry
+transforms on the crate's owned types — usable from any caller, no
+graph layer required:
+
+| Module | Operation |
+|---|---|
+| `centroid` | Per-feature centroid (polygons / lines / point clouds) |
+| `boundary` | Polygon rings → polylines |
+| `convex_hull` | Convex hull over pooled vertices |
+| `simplify` | Douglas–Peucker polyline / ring simplification |
+| `buffer` | Offset / Minkowski-style buffering via `i_overlay` |
+| `hatch` | Parallel hatch lines clipped to polygons |
+| `resample` | Chaikin `smooth`, uniform `densify`, arc-length `resample` |
+| `bbox` | Axis-aligned bounding box / envelope polygon |
+| `transform` | Affine translate + rotate + scale around a pivot |
+| `boolean` | Polygon set ops (union / intersection / difference / xor) |
+| `voronoi` | Point-Voronoi edges, polygon fracture, medial-axis approximation |
+| `triangulate` | Delaunay triangulation (`delaunator`) |
+| `convert` | `f64` ↔ integer-coord conversion helpers |
+
+Each module's docstring covers the algorithmic specifics (kernel
+size, fill rules, coordinate space). Wrapper `Node` impls in
+`ezu-paint` glue these into the graph layer, but the bare functions
+are useful standalone for CLI tools or batch processing.
+
 ## Hand-off to the renderer
 
 `ezu-paint` consumes feature data through the generic
