@@ -1,6 +1,6 @@
 //! `dem` — `() -> ScalarField`. Resolves a host-bound DEM mosaic via
 //! the unified [`AssetLoader`](ezu_graph::AssetLoader) and emits it as a
-//! `ScalarField` port value for `hillshade` / `slope` / `hypsometric`.
+//! `ScalarField` port value for `hillshade` / `slope` / `color-ramp`.
 //!
 //! The host is expected to declare the underlying tile source in the
 //! style document's `sources` block, fetch + stitch the tiles, and bind

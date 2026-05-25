@@ -64,7 +64,7 @@ pub type OpaqueValue = Arc<dyn Any + Send + Sync>;
 /// particular latitude). Gradient-based consumers (`hillshade`,
 /// `slope`) read it to compute geographically faithful results.
 /// `None` means the field is unitless / in pixel space — fine for
-/// `hypsometric` or `color-ramp` style mapping but stylization-only
+/// `color-ramp` style mapping but stylization-only
 /// for gradient ops.
 ///
 /// Missing samples (e.g. ocean nodata in some DEMs) surface as

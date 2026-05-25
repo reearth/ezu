@@ -30,8 +30,8 @@ pub enum PortKind {
     /// `padded_size`. The general carrier for floating-point grids:
     /// elevation (with `GeoScale` populated, produced by `dem`),
     /// signed distance, scalar noise, slope angle. Consumed by
-    /// terrain ops (`hillshade`, `slope`, `hypsometric`) and any
-    /// future scalar→raster mapper (`color-ramp`).
+    /// terrain ops (`hillshade`, `slope`) and scalar→raster mappers
+    /// (`color-ramp`).
     ScalarField,
 }
 

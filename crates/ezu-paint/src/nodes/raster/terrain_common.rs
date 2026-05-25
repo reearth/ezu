@@ -1,5 +1,5 @@
 //! Shared helpers for ScalarField-consuming nodes (hillshade, slope,
-//! hypsometric).
+//! color-ramp).
 
 use ezu_graph::ScalarField;
 

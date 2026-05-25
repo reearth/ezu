@@ -99,7 +99,7 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 | `gradient-diamond` | `() → Raster` | Manhattan-distance gradient. `center`, `radius` |
 | `hillshade` | `ScalarField → Raster` | Horn-method analytical hillshade. `azimuth-deg` / `altitude-deg` light angle, `z-factor` / `exaggeration`, optional ESRI `multidirectional`. `mode: shade` (grayscale) or `mode: relief` (transparent black for multiply-blend over a base map). Geographically accurate only when the input's `geo_scale` is populated (DEM source); otherwise produces pixel-space gradients (fine for stylization) |
 | `slope` | `ScalarField → Raster` | Per-pixel slope angle as grayscale, normalised to `0..1` against `max-deg`; optional `invert`. Same `geo_scale` caveat as `hillshade` |
-| `hypsometric` | `ScalarField → Raster` | Map scalar values (metres elevation, or any unitless quantity) to colour via a `stops: [{elev, color}]` table; clamps to end colours outside the range |
+| `color-ramp` | `ScalarField → Raster` | Map scalar values to colour via a `stops: [{value, color}]` table; linear interp, end colours clamp out-of-range. Canonical use is hypsometric tinting over an elevation `ScalarField` (`stops[i].value` = metres) but works on any scalar field |
 
 **Sources** (`nodes::source`)
 

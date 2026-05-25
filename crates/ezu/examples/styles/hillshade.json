@@ -15,14 +15,14 @@
   "nodes": {
     "dem":       { "op": "dem", "name": "tile.terrain" },
     "elevation": {
-      "op": "hypsometric", "field": "@dem",
+      "op": "color-ramp", "field": "@dem",
       "stops": [
-        { "elev": -200,  "color": "#9bc8e5" },
-        { "elev": 0,     "color": "#cce6c8" },
-        { "elev": 500,   "color": "#e0d8a6" },
-        { "elev": 1500,  "color": "#b89271" },
-        { "elev": 2500,  "color": "#8b6b4a" },
-        { "elev": 3500,  "color": "#f4f1ea" }
+        { "value": -200,  "color": "#9bc8e5" },
+        { "value": 0,     "color": "#cce6c8" },
+        { "value": 500,   "color": "#e0d8a6" },
+        { "value": 1500,  "color": "#b89271" },
+        { "value": 2500,  "color": "#8b6b4a" },
+        { "value": 3500,  "color": "#f4f1ea" }
       ]
     },
     "shade":     {

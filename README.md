@@ -186,8 +186,9 @@ The minimum op set ships in [`ezu-paint`](https://github.com/reearth/ezu/tree/ma
   handles fetch / decode / 3×3 stitch / overzoom upsampling for
   terrarium and mapbox-rgb encodings), `hillshade` (Horn-method
   analytical shade with `shade` or multiply-friendly `relief` mode,
-  optional ESRI multidirectional), `slope`, `hypsometric` (elevation
-  → colour ramp).
+  optional ESRI multidirectional), `slope`, `color-ramp` (any scalar
+  field → colour via a stops table; canonical use is hypsometric
+  tinting of a DEM).
 
 Example: a watercolor water layer with a brushed road on top of an
 earth-tone background.
