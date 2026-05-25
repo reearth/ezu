@@ -10,6 +10,9 @@
   "homepage": "https://github.com/reearth/ezu",
   "keywords": ["map", "renderer", "wasm", "webassembly", "mvt", "painterly"],
   "type": "module",
+  "scripts": {
+    "prepublishOnly": "cd ../../.. && bash scripts/build-wasm-npm.sh"
+  },
   "exports": {
     ".": {
       "workerd": {

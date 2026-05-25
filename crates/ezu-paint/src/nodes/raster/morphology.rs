@@ -188,7 +188,7 @@ fn build_morph(
     op: Op,
 ) -> Result<BuiltNode, FactoryError> {
     let input = take_input_ref(fields, "input")?;
-    let radius = (read_number(fields, "radius-px", ctx)? as f64).round();
+    let radius = read_number(fields, "radius-px", ctx)?.round();
     if !(0.0..=256.0).contains(&radius) {
         return Err(FactoryError::BadField {
             field: "radius-px".into(),

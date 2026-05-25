@@ -131,7 +131,7 @@ impl NodeFactory for SmoothFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let features = take_input_ref(fields, "features")?;
-        let iter = (read_number_or(fields, "iterations", ctx, 2.0)? as f64).round();
+        let iter = read_number_or(fields, "iterations", ctx, 2.0)?.round();
         if !(0.0..=8.0).contains(&iter) {
             return Err(FactoryError::BadField {
                 field: "iterations".into(),
