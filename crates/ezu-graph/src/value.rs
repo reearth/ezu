@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::buf::{HeightField, OpaqueValue, RasterBuf};
+use crate::buf::{OpaqueValue, RasterBuf, ScalarField};
 use crate::port::PortKind;
 
 /// One value flowing along an edge. Cloning is cheap (Arc / Copy).
@@ -13,7 +13,7 @@ pub enum PortValue {
     Sprite(Arc<RasterBuf>),
     Brush(OpaqueValue),
     Scalar(ScalarValue),
-    HeightField(Arc<HeightField>),
+    ScalarField(Arc<ScalarField>),
 }
 
 impl PortValue {
@@ -24,13 +24,13 @@ impl PortValue {
             PortValue::Sprite(_) => PortKind::Sprite,
             PortValue::Brush(_) => PortKind::Brush,
             PortValue::Scalar(_) => PortKind::Scalar,
-            PortValue::HeightField(_) => PortKind::HeightField,
+            PortValue::ScalarField(_) => PortKind::ScalarField,
         }
     }
 
-    pub fn as_height_field(&self) -> Option<&Arc<HeightField>> {
-        if let PortValue::HeightField(h) = self {
-            Some(h)
+    pub fn as_scalar_field(&self) -> Option<&Arc<ScalarField>> {
+        if let PortValue::ScalarField(f) = self {
+            Some(f)
         } else {
             None
         }

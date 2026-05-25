@@ -10,7 +10,7 @@
 //! 2. Bilinear-resamples that 3×3 mosaic onto the render canvas's
 //!    padded grid, so gradient ops (`hillshade`, `slope`) see
 //!    continuous values across the tile seam.
-//! 3. Binds the resulting [`HeightField`] under `"tile.<source-name>"`
+//! 3. Binds the resulting [`ScalarField`] under `"tile.<source-name>"`
 //!    so the `dem` source node can pick it up.
 //!
 //! Decoded tiles are cached unboundedly per source — a tile pyramid run
@@ -21,7 +21,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use ezu_graph::{CanvasInfo, HeightField, TileId};
+use ezu_graph::{CanvasInfo, ScalarField, TileId};
 use ezu_style::{DemEncoding, DemSource, Document, SourceDecl};
 use reqwest::Client;
 
@@ -125,7 +125,7 @@ pub async fn bind_dem_sources(
     }
     for (name, src) in &registry.sources {
         let field = src.clone().build_padded(tile, canvas).await?;
-        tile_loader.bind_height_field(format!("tile.{name}"), field);
+        tile_loader.bind_scalar_field(format!("tile.{name}"), field);
     }
     Ok(())
 }
@@ -135,7 +135,7 @@ impl DemSourceState {
         self: Arc<Self>,
         tile: TileId,
         canvas: CanvasInfo,
-    ) -> Result<HeightField, DemFetchError> {
+    ) -> Result<ScalarField, DemFetchError> {
         let world = 1u32 << tile.z;
         let neighbor_fetch = self.spec.neighbor_fetch;
         // Coordinates of the 3x3 neighbourhood, with `None` slots for
@@ -203,13 +203,15 @@ impl DemSourceState {
         let world_pixels = canvas.tile_size as f64 * (1u64 << tile.z) as f64;
         let mpp = (EARTH_CIRCUMFERENCE_M * lat_rad.cos() / world_pixels) as f32;
 
-        Ok(HeightField {
+        Ok(ScalarField {
             width: padded_size,
             height: padded_size,
-            metres_per_pixel_x: mpp,
-            metres_per_pixel_y: mpp,
-            elev: elev.into(),
+            values: elev.into(),
             nodata: None,
+            geo_scale: Some(ezu_graph::GeoScale {
+                metres_per_pixel_x: mpp,
+                metres_per_pixel_y: mpp,
+            }),
         })
     }
 

@@ -14,8 +14,8 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    raster_or_sprite_output, read_color, read_number_or, unwrap_raster_or_sprite,
-    wrap_raster_like, ACCEPTS_RASTER_OR_SPRITE,
+    raster_or_sprite_output, read_color, read_number_or, unwrap_raster_or_sprite, wrap_raster_like,
+    ACCEPTS_RASTER_OR_SPRITE,
 };
 
 struct ColorToAlphaNode {

@@ -109,7 +109,7 @@ pub enum AssetKind {
 /// configured tiles before each render and binds the decoded payload
 /// for source nodes (`features`, `dem`) to consume.
 ///
-/// - `dem` binds a stitched `HeightField` under
+/// - `dem` binds a stitched `ScalarField` under
 ///   `tile.<source-name>` for `dem` source nodes.
 /// - `mvt` and `pmtiles` bind every layer of the decoded vector tile
 ///   under `tile.<layer-name>` (i.e. by the layer's name *inside* the

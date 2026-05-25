@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use ezu_features::{mvt::DecodedTile, FeatureLayer};
-use ezu_graph::{Asset, AssetError, AssetLoader, HeightField, OpaqueValue, RasterBuf, TileId};
+use ezu_graph::{Asset, AssetError, AssetLoader, OpaqueValue, RasterBuf, ScalarField, TileId};
 use hokusai::Brush;
 use tiny_skia::{Pixmap, PixmapPaint, Transform};
 use xxhash_rust::xxh3::Xxh3;
@@ -194,15 +194,17 @@ impl<'a> TileLoader<'a> {
         self
     }
 
-    /// Bind a decoded height field under `name` (by convention
+    /// Bind a decoded scalar field under `name` (by convention
     /// `"tile.<source>"` to match the style's DEM `sources` entry).
-    pub fn bind_height_field(&mut self, name: impl Into<String>, field: HeightField) -> &mut Self {
+    /// For DEM data, populate `geo_scale` on the field so gradient
+    /// consumers (`hillshade`, `slope`) produce real-world slopes.
+    pub fn bind_scalar_field(&mut self, name: impl Into<String>, field: ScalarField) -> &mut Self {
         let name = name.into();
         let hash = self.binding_hash(&name);
         self.bindings.insert(
             name,
             Binding {
-                asset: Asset::HeightField(Arc::new(field)),
+                asset: Asset::ScalarField(Arc::new(field)),
                 hash,
             },
         );

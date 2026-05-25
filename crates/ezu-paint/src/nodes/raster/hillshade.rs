@@ -1,4 +1,4 @@
-//! `hillshade` — `HeightField -> Raster`. Classic Horn-method analytical
+//! `hillshade` — `ScalarField -> Raster`. Classic Horn-method analytical
 //! hillshade: a single illumination direction (azimuth + altitude) lit
 //! against per-pixel slope and aspect derived from a 3×3 gradient
 //! window on the input elevations.
@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, HeightField, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf, ScalarField,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -45,7 +45,7 @@ impl Node for HillshadeNode {
     fn inputs(&self) -> &[PortSpec] {
         static SPECS: &[PortSpec] = &[PortSpec {
             name: "field",
-            accepts: &[PortKind::HeightField],
+            accepts: &[PortKind::ScalarField],
             optional: false,
         }];
         SPECS
@@ -60,7 +60,7 @@ impl Node for HillshadeNode {
     ) -> Result<PortValue, EvalError> {
         let field = inputs[0]
             .as_ref()
-            .and_then(PortValue::as_height_field)
+            .and_then(PortValue::as_scalar_field)
             .ok_or_else(|| EvalError::MissingInput("field".into()))?;
         let out = if self.multidirectional {
             self.render_multidirectional(field)
@@ -84,7 +84,7 @@ impl Node for HillshadeNode {
 }
 
 impl HillshadeNode {
-    fn render_single(&self, field: &HeightField) -> RasterBuf {
+    fn render_single(&self, field: &ScalarField) -> RasterBuf {
         let azimuth_rad = (450.0 - self.azimuth_deg).to_radians();
         let altitude_rad = self.altitude_deg.to_radians();
         let cos_zenith = (std::f32::consts::FRAC_PI_2 - altitude_rad).cos();
@@ -95,7 +95,7 @@ impl HillshadeNode {
         })
     }
 
-    fn render_multidirectional(&self, field: &HeightField) -> RasterBuf {
+    fn render_multidirectional(&self, field: &ScalarField) -> RasterBuf {
         // ESRI-style weighted sum over four light directions
         // (225°, 270°, 315°, 360°). Weights from the published recipe.
         let altitudes_rad = self.altitude_deg.to_radians();
@@ -116,14 +116,14 @@ impl HillshadeNode {
         })
     }
 
-    fn render_with(&self, field: &HeightField, sample: impl Fn(f32, f32) -> f32) -> RasterBuf {
+    fn render_with(&self, field: &ScalarField, sample: impl Fn(f32, f32) -> f32) -> RasterBuf {
         let w = field.width;
         let h = field.height;
         let mut out = RasterBuf::new(w, h);
         // 8 * pitch is the Horn-method divisor for the central
         // differences below; bake it in once.
-        let inv_x = 1.0 / (8.0 * field.metres_per_pixel_x.max(1e-6));
-        let inv_y = 1.0 / (8.0 * field.metres_per_pixel_y.max(1e-6));
+        let inv_x = 1.0 / (8.0 * field.metres_per_pixel_x().max(1e-6));
+        let inv_y = 1.0 / (8.0 * field.metres_per_pixel_y().max(1e-6));
         for y in 0..h {
             for x in 0..w {
                 let (dz_dx, dz_dy) = horn_gradient(field, x, y, inv_x, inv_y);
@@ -217,7 +217,7 @@ impl NodeFactory for HillshadeFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Analytical hillshade (Horn 1981) from a HeightField. `mode: shade` outputs grayscale; `mode: relief` outputs transparent black scaled by 1-shade for multiply-blend over a base map.",
+            "description": "Analytical hillshade (Horn 1981) from a ScalarField. `mode: shade` outputs grayscale; `mode: relief` outputs transparent black scaled by 1-shade for multiply-blend over a base map.",
             "properties": {
                 "field": schema_frag::node_ref(),
                 "azimuth-deg": { "type": "number", "default": 315,

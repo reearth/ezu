@@ -1,4 +1,4 @@
-//! `hypsometric` — `HeightField -> Raster`. Map elevation to colour via
+//! `hypsometric` — `ScalarField -> Raster`. Map elevation to colour via
 //! a user-supplied stop table. Linear interpolation between stops;
 //! samples outside the range clamp to the end colours.
 
@@ -29,7 +29,7 @@ impl Node for HypsometricNode {
     fn inputs(&self) -> &[PortSpec] {
         static SPECS: &[PortSpec] = &[PortSpec {
             name: "field",
-            accepts: &[PortKind::HeightField],
+            accepts: &[PortKind::ScalarField],
             optional: false,
         }];
         SPECS
@@ -44,12 +44,12 @@ impl Node for HypsometricNode {
     ) -> Result<PortValue, EvalError> {
         let field = inputs[0]
             .as_ref()
-            .and_then(PortValue::as_height_field)
+            .and_then(PortValue::as_scalar_field)
             .ok_or_else(|| EvalError::MissingInput("field".into()))?;
         let w = field.width;
         let h = field.height;
         let mut out = RasterBuf::new(w, h);
-        for (i, &z) in field.elev.iter().enumerate() {
+        for (i, &z) in field.values.iter().enumerate() {
             let rgba = sample_stops(&self.stops, z);
             let off = i * 4;
             // Premultiply alpha to match the rest of the pipeline.

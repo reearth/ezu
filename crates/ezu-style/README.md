@@ -50,7 +50,7 @@ The `sources` block declares per-tile data sources the host fetches
 
 - `dem` — raster-DEM tile pyramid (terrarium or mapbox-rgb encoding).
   The host stitches the 3×3 neighbourhood into a per-tile
-  `HeightField` and binds it under `tile.<source-name>`, ready for
+  `ScalarField` (with `geo_scale` populated) and binds it under `tile.<source-name>`, ready for
   the `dem` source node to pick up.
 - `mvt` — XYZ MVT URL template (or a TileJSON document). The host
   fetches one tile per render, decodes every layer, and binds each

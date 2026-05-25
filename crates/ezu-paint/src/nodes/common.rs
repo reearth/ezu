@@ -527,8 +527,7 @@ pub(super) fn features_value(
 /// Accepts list for ports that take either a canvas `Raster` or a
 /// native-sized `Sprite`. Filter ops that don't care about the
 /// canvas-alignment of their input (e.g. `blur`, `hsl`) use this.
-pub(super) const ACCEPTS_RASTER_OR_SPRITE: &[PortKind] =
-    &[PortKind::Raster, PortKind::Sprite];
+pub(super) const ACCEPTS_RASTER_OR_SPRITE: &[PortKind] = &[PortKind::Raster, PortKind::Sprite];
 
 /// Extract an `Arc<RasterBuf>` from a `PortValue` that is either
 /// `Raster` or `Sprite`, returning which variant it came from so the

@@ -97,16 +97,16 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 | `gradient-radial` | `() → Raster` | Radial / elliptical gradient. `center`, `radius`, optional `aspect` |
 | `gradient-conic` | `() → Raster` | Sweep gradient around `center` starting at `start-angle` (degrees) |
 | `gradient-diamond` | `() → Raster` | Manhattan-distance gradient. `center`, `radius` |
-| `hillshade` | `HeightField → Raster` | Horn-method analytical hillshade. `azimuth-deg` / `altitude-deg` light angle, `z-factor` / `exaggeration`, optional ESRI `multidirectional`. `mode: shade` (grayscale) or `mode: relief` (transparent black for multiply-blend over a base map) |
-| `slope` | `HeightField → Raster` | Per-pixel slope angle as grayscale, normalised to `0..1` against `max-deg`; optional `invert` |
-| `hypsometric` | `HeightField → Raster` | Map elevation (metres) to colour via a `stops: [{elev, color}]` table; clamps to end colours outside the range |
+| `hillshade` | `ScalarField → Raster` | Horn-method analytical hillshade. `azimuth-deg` / `altitude-deg` light angle, `z-factor` / `exaggeration`, optional ESRI `multidirectional`. `mode: shade` (grayscale) or `mode: relief` (transparent black for multiply-blend over a base map). Geographically accurate only when the input's `geo_scale` is populated (DEM source); otherwise produces pixel-space gradients (fine for stylization) |
+| `slope` | `ScalarField → Raster` | Per-pixel slope angle as grayscale, normalised to `0..1` against `max-deg`; optional `invert`. Same `geo_scale` caveat as `hillshade` |
+| `hypsometric` | `ScalarField → Raster` | Map scalar values (metres elevation, or any unitless quantity) to colour via a `stops: [{elev, color}]` table; clamps to end colours outside the range |
 
 **Sources** (`nodes::source`)
 
 | Op | Inputs → Output | Notes |
 |---|---|---|
 | `features` | `() → Features` | Samples a host-bound layer (`tile.<layer>` for per-tile MVT/GeoJSON) via `AssetLoader` |
-| `dem` | `() → HeightField` | Samples a host-bound DEM mosaic (`tile.<source>` matching a `sources` entry). The host fetches + decodes raster-DEM tiles (terrarium / mapbox-rgb) and binds the stitched `HeightField` per render |
+| `dem` | `() → ScalarField` | Samples a host-bound DEM mosaic (`tile.<source>` matching a `sources` entry). The host fetches + decodes raster-DEM tiles (terrarium / mapbox-rgb) and binds the stitched scalar field (with `geo_scale` populated) per render |
 | `literal-geometry` | `() → Features` | Inline points / lines / polygons from style fields |
 | `tile-bounds` | `() → Features` | Polygon covering the current tile |
 | `point-grid` | `() → Features` | Regular grid of points across the tile |
@@ -204,7 +204,7 @@ building one fetcher (terrarium or mapbox-rgb, PNG or WebP) per
 declared source; `bind_dem_sources(&mut tile_loader, &registry, tile,
 canvas)` fetches the 3×3 neighbourhood (date-line-wrapping in X,
 edge-clamping in Y), bilinear-resamples it onto the padded canvas,
-and binds the resulting `HeightField` under `tile.<source-name>` so
+and binds the resulting `ScalarField` under `tile.<source-name>` so
 the style's `dem` node picks it up. Requests beyond the source's
 `max-zoom` upsample from the appropriate ancestor tile. Decoded tiles
 are cached unboundedly per source — well-suited to single-tile and
@@ -221,7 +221,7 @@ outgrow memory.
   `reqwest`, and stages the decoded brush / image into a
   `BrushBankLoader`) and the `host::dem` module (raster-DEM tile
   fetcher + 3×3 stitch + overzoom upsampling that feeds the
-  `HeightField` port). Off by default so `wasm32` keeps its dep graph
+  `ScalarField` port). Off by default so `wasm32` keeps its dep graph
   minimal (the JS host fetches assets directly there).
 
 ## License

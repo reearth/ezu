@@ -22,7 +22,7 @@ The DAG is typed. Every edge carries one of six `PortKind`s:
 | `Sprite` | RGBA8 buffer at the **asset's native dimensions**, not canvas-sized. Carrier for sprite / texture sources (`image`). Cannot be wired directly into the document `output`. Polymorphic filter ops (`blur`, `hsl`, `brightness-contrast`, `invert`, `color-to-alpha`, `displace`, `warp`, `blend`) accept `Raster` and `Sprite` interchangeably and pass the input kind through; placement ops (`place`, `tiling`, `stamp`) also accept either, sampling the input at its native dimensions and producing a `Raster`. |
 | `Brush` | hokusai brush handle plus overrides |
 | `Scalar` | constant Color / Number / Bool |
-| `HeightField` | Per-pixel elevation grid (`f32`, metres), padded canvas-sized. Emitted by raster-DEM source nodes (`dem`) and consumed by terrain-derived raster ops (`hillshade`, `slope`, `hypsometric`). Carries `metres_per_pixel_x/y` so consumers can compute geographically faithful gradients. |
+| `ScalarField` | Per-pixel single-channel `f32` grid, padded canvas-sized. The general carrier for floating-point fields — elevation (with `geo_scale` populated, produced by `dem`), distance fields, scalar noise, slope angle. Consumed by terrain ops (`hillshade`, `slope`, `hypsometric`) and any future scalar-to-raster mapper (`color-ramp`). `geo_scale.is_some()` distinguishes geographically scaled fields (where gradient ops produce real-world slopes) from unitless fields used for stylization. |
 
 `Features` and `Brush` ride as type-erased `Arc<dyn Any + Send + Sync>`
 so producer / consumer nodes can use whatever concrete payload they
@@ -81,7 +81,7 @@ pub enum Asset {
     Image(Arc<RasterBuf>),
     Brush(OpaqueValue),
     Features(OpaqueValue),
-    HeightField(Arc<HeightField>),
+    ScalarField(Arc<ScalarField>),
 }
 pub trait AssetLoader: Send + Sync {
     fn load(&self, name: &str) -> Result<Asset, AssetError>;

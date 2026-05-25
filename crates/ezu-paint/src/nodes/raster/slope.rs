@@ -1,4 +1,4 @@
-//! `slope` — `HeightField -> Raster`. Per-pixel slope angle from a
+//! `slope` — `ScalarField -> Raster`. Per-pixel slope angle from a
 //! 3×3 Horn gradient, normalised to `0..1` against `max-deg` and
 //! rasterised as grayscale RGBA.
 
@@ -26,7 +26,7 @@ impl Node for SlopeNode {
     fn inputs(&self) -> &[PortSpec] {
         static SPECS: &[PortSpec] = &[PortSpec {
             name: "field",
-            accepts: &[PortKind::HeightField],
+            accepts: &[PortKind::ScalarField],
             optional: false,
         }];
         SPECS
@@ -41,13 +41,13 @@ impl Node for SlopeNode {
     ) -> Result<PortValue, EvalError> {
         let field = inputs[0]
             .as_ref()
-            .and_then(PortValue::as_height_field)
+            .and_then(PortValue::as_scalar_field)
             .ok_or_else(|| EvalError::MissingInput("field".into()))?;
         let w = field.width;
         let h = field.height;
         let mut out = RasterBuf::new(w, h);
-        let inv_x = 1.0 / (8.0 * field.metres_per_pixel_x.max(1e-6));
-        let inv_y = 1.0 / (8.0 * field.metres_per_pixel_y.max(1e-6));
+        let inv_x = 1.0 / (8.0 * field.metres_per_pixel_x().max(1e-6));
+        let inv_y = 1.0 / (8.0 * field.metres_per_pixel_y().max(1e-6));
         let max_rad = self.max_deg.to_radians().max(1e-4);
         for y in 0..h {
             for x in 0..w {

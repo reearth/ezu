@@ -84,7 +84,7 @@ pub(super) fn passthrough(input: PortKind, output: PortKind) -> Box<dyn Node> {
         PortKind::Sprite => &[PortKind::Sprite],
         PortKind::Brush => &[PortKind::Brush],
         PortKind::Scalar => &[PortKind::Scalar],
-        PortKind::HeightField => &[PortKind::HeightField],
+        PortKind::ScalarField => &[PortKind::ScalarField],
     };
     Mock::new("pass", vec![PortSpec::new("input", accepts)], output).boxed()
 }

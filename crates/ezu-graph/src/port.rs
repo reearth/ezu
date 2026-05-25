@@ -26,11 +26,13 @@ pub enum PortKind {
     Brush,
     /// Constant value (color, number, bool). Cheap to fan out.
     Scalar,
-    /// Per-pixel elevation grid (metres, `f32`) matching the canvas's
-    /// `padded_size`. Produced by DEM-source nodes and consumed by
-    /// terrain-derived raster ops (`hillshade`, `slope`,
-    /// `hypsometric`).
-    HeightField,
+    /// Per-pixel single-channel `f32` grid matching the canvas's
+    /// `padded_size`. The general carrier for floating-point grids:
+    /// elevation (with `GeoScale` populated, produced by `dem`),
+    /// signed distance, scalar noise, slope angle. Consumed by
+    /// terrain ops (`hillshade`, `slope`, `hypsometric`) and any
+    /// future scalar→raster mapper (`color-ramp`).
+    ScalarField,
 }
 
 impl fmt::Display for PortKind {
@@ -41,7 +43,7 @@ impl fmt::Display for PortKind {
             PortKind::Sprite => "sprite",
             PortKind::Brush => "brush",
             PortKind::Scalar => "scalar",
-            PortKind::HeightField => "height-field",
+            PortKind::ScalarField => "scalar-field",
         })
     }
 }

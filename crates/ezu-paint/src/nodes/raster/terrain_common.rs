@@ -1,14 +1,14 @@
-//! Shared helpers for HeightField-consuming nodes (hillshade, slope,
+//! Shared helpers for ScalarField-consuming nodes (hillshade, slope,
 //! hypsometric).
 
-use ezu_graph::HeightField;
+use ezu_graph::ScalarField;
 
 /// Horn (1981) 3×3 weighted central differences. Returns
 /// `(dz/dx, dz/dy)` in metres-per-metre once `inv_x` / `inv_y` carry
 /// the `1 / (8 * pitch)` factor.
 #[inline]
 pub(super) fn horn_gradient(
-    field: &HeightField,
+    field: &ScalarField,
     x: u32,
     y: u32,
     inv_x: f32,
@@ -20,7 +20,7 @@ pub(super) fn horn_gradient(
     let ym = y.saturating_sub(1);
     let xp = (x + 1).min(w - 1);
     let yp = (y + 1).min(h - 1);
-    let z = |xx: u32, yy: u32| -> f32 { field.elev[(yy * w + xx) as usize] };
+    let z = |xx: u32, yy: u32| -> f32 { field.values[(yy * w + xx) as usize] };
     let a = z(xm, ym);
     let b = z(x, ym);
     let c = z(xp, ym);

@@ -1,19 +1,19 @@
-//! `dem` — `() -> HeightField`. Resolves a host-bound DEM mosaic via
+//! `dem` — `() -> ScalarField`. Resolves a host-bound DEM mosaic via
 //! the unified [`AssetLoader`](ezu_graph::AssetLoader) and emits it as a
-//! `HeightField` port value for `hillshade` / `slope` / `hypsometric`.
+//! `ScalarField` port value for `hillshade` / `slope` / `hypsometric`.
 //!
 //! The host is expected to declare the underlying tile source in the
 //! style document's `sources` block, fetch + stitch the tiles, and bind
-//! the resulting [`HeightField`] under `tile.<source-name>` via
-//! `TileLoader::bind_height_field` before each render. The `name` field
+//! the resulting [`ScalarField`] under `tile.<source-name>` via
+//! `TileLoader::bind_scalar_field` before each render. The `name` field
 //! on this node is the binding key (typically the same `tile.<source>`
 //! string).
 
 use std::sync::Arc;
 
 use ezu_graph::{
-    Asset, AssetError, BuiltNode, EvalCtx, EvalError, FactoryCtx, FactoryError, HeightField, Node,
-    NodeFactory, PortKind, PortSpec, PortValue,
+    Asset, AssetError, BuiltNode, EvalCtx, EvalError, FactoryCtx, FactoryError, Node, NodeFactory,
+    PortKind, PortSpec, PortValue, ScalarField,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -30,7 +30,7 @@ impl Node for DemNode {
         &[]
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
-        PortKind::HeightField
+        PortKind::ScalarField
     }
     fn asset_inputs(&self) -> Vec<String> {
         vec![self.name.clone()]
@@ -44,24 +44,23 @@ impl Node for DemNode {
                 // becomes flat-lit, slope is zero).
                 let size = ctx.canvas.padded_size();
                 let count = (size * size) as usize;
-                return Ok(PortValue::HeightField(Arc::new(HeightField {
+                return Ok(PortValue::ScalarField(Arc::new(ScalarField {
                     width: size,
                     height: size,
-                    metres_per_pixel_x: 1.0,
-                    metres_per_pixel_y: 1.0,
-                    elev: vec![0.0; count].into(),
+                    values: vec![0.0; count].into(),
                     nodata: None,
+                    geo_scale: None,
                 })));
             }
             Err(e) => return Err(EvalError::Asset(e)),
         };
-        let Asset::HeightField(field) = asset else {
+        let Asset::ScalarField(field) = asset else {
             return Err(EvalError::Other(format!(
-                "asset `{}` is not a height field",
+                "asset `{}` is not a scalar field",
                 self.name
             )));
         };
-        Ok(PortValue::HeightField(field))
+        Ok(PortValue::ScalarField(field))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"dem");
@@ -91,7 +90,7 @@ impl NodeFactory for DemFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Sample a host-bound raster DEM as a HeightField. `name` is an AssetLoader binding (typically `tile.<source>` matching a `sources` entry).",
+            "description": "Sample a host-bound raster DEM as a ScalarField. `name` is an AssetLoader binding (typically `tile.<source>` matching a `sources` entry).",
             "properties": {
                 "name": {
                     "type": "string",

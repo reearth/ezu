@@ -222,8 +222,14 @@ fn place_accepts_raster_input() {
     let r = render_with_images(json, 16, 0, TileId { z: 0, x: 0, y: 0 }, &[]);
     let left = r.pixel(1, 8);
     let right = r.pixel(14, 8);
-    assert!(left[0] > 200 && left[2] < 40, "left should be red: {left:?}");
-    assert!(right[2] > 200 && right[0] < 40, "right should be blue: {right:?}");
+    assert!(
+        left[0] > 200 && left[2] < 40,
+        "left should be red: {left:?}"
+    );
+    assert!(
+        right[2] > 200 && right[0] < 40,
+        "right should be blue: {right:?}"
+    );
 }
 
 #[test]
@@ -289,5 +295,8 @@ fn blur_passes_through_sprite_kind() {
     }"##;
     let r = render_with_images(json, 32, 0, TileId { z: 0, x: 0, y: 0 }, &[("src", sprite)]);
     let center = r.pixel(16, 16);
-    assert!(center[0] > 150, "blurred disk center should still be reddish: {center:?}");
+    assert!(
+        center[0] > 150,
+        "blurred disk center should still be reddish: {center:?}"
+    );
 }

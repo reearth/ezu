@@ -135,8 +135,9 @@ operation is a node; ports are statically type-checked across six
 kinds — `Features` (geometry + props), `Raster` (canvas-sized RGBA),
 `Sprite` (image at native dimensions, consumed by placement ops),
 `Brush` (hokusai brush handle), `Scalar` (constants),
-`HeightField` (per-pixel elevation grid). Ports list the kinds they
-accept, so polymorphic ops (e.g. `blur` over `Raster`/`Sprite`)
+`ScalarField` (per-pixel `f32` grid — elevation, distance, scalar
+noise; carries optional geographic scaling). Ports list the kinds
+they accept, so polymorphic ops (e.g. `blur` over `Raster`/`Sprite`)
 pass the input kind straight through. Intermediate buffers are
 cached and reusable across tiles.
 
@@ -181,7 +182,7 @@ The minimum op set ships in [`ezu-paint`](https://github.com/reearth/ezu/tree/ma
   and an `anchor: "tile" | "world"` for tile-local or world-anchored
   (seamless across tiles) patterns.
 - **Terrain** — `dem` (sample a host-bound raster-DEM mosaic as a
-  `HeightField`; the host declares the tile pyramid in `sources` and
+  `ScalarField` with `geo_scale` populated; the host declares the tile pyramid in `sources` and
   handles fetch / decode / 3×3 stitch / overzoom upsampling for
   terrarium and mapbox-rgb encodings), `hillshade` (Horn-method
   analytical shade with `shade` or multiply-friendly `relief` mode,

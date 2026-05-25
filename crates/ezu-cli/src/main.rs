@@ -635,14 +635,14 @@ async fn render_one(
     };
     // Pre-fetch DEM mosaics for the tile before entering spawn_blocking
     // so the blocking path doesn't have to juggle async fetches.
-    let mut dem_bindings: Vec<(String, ezu::graph::HeightField)> = Vec::new();
+    let mut dem_bindings: Vec<(String, ezu::graph::ScalarField)> = Vec::new();
     if !dem_sources.is_empty() {
         let base_loader = BrushBankLoader::empty();
         let mut tmp = TileLoader::new(&base_loader, tile_id);
         bind_dem_sources(&mut tmp, &dem_sources, tile_id, canvas).await?;
         for name in dem_sources.names() {
             let key = format!("tile.{name}");
-            if let Ok(ezu::graph::Asset::HeightField(field)) =
+            if let Ok(ezu::graph::Asset::ScalarField(field)) =
                 ezu::graph::AssetLoader::load(&tmp, &key)
             {
                 dem_bindings.push((key, (*field).clone()));
@@ -656,7 +656,7 @@ async fn render_one(
                 tile_loader.bind_mvt(mvt::decode(&bytes)?);
             }
             for (name, field) in dem_bindings {
-                tile_loader.bind_height_field(name, field);
+                tile_loader.bind_scalar_field(name, field);
             }
             let ev = Evaluator::new(&graph, &cache, &tile_loader);
             let out = ev.render_parallel(tile_id, canvas, &ParamValues::new(), tile_seed(tile))?;

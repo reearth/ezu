@@ -50,31 +50,59 @@ impl RasterBuf {
 /// downcasts happen inside nodes. The DAG only checks the `PortKind`.
 pub type OpaqueValue = Arc<dyn Any + Send + Sync>;
 
-/// Per-pixel elevation grid flowing along `HeightField` ports.
+/// Per-pixel `f32` scalar grid flowing along `ScalarField` ports.
 ///
-/// Layout is row-major, one `f32` per pixel, in **metres above ellipsoid**
-/// (or whatever the source declares — the host owns the datum). `width` /
-/// `height` MUST match the canvas's `padded_size()` so consumers (e.g.
-/// `hillshade`) can pair samples with the same geometry as their raster
-/// output. Missing samples (e.g. ocean nodata in some DEMs) surface as
+/// The general carrier for single-channel floating-point data —
+/// elevation, signed distance, scalar noise, slope angle, anything
+/// "one number per pixel". Layout is row-major, one `f32` per pixel.
+/// `width` / `height` MUST match the canvas's `padded_size()` so
+/// consumers can pair samples with the same geometry as their raster
+/// output.
+///
+/// `geo_scale` is populated when the values represent a quantity
+/// measured per real-world distance (e.g. elevation in metres at a
+/// particular latitude). Gradient-based consumers (`hillshade`,
+/// `slope`) read it to compute geographically faithful results.
+/// `None` means the field is unitless / in pixel space — fine for
+/// `hypsometric` or `color-ramp` style mapping but stylization-only
+/// for gradient ops.
+///
+/// Missing samples (e.g. ocean nodata in some DEMs) surface as
 /// `nodata`; consumers fall back to `0.0` or pass-through.
-///
-/// `metres_per_pixel_x` / `_y` are filled by the producer from tile
-/// geometry and latitude (Web Mercator scale is latitude-dependent), so
-/// gradient-based consumers can produce geographically faithful slopes
-/// without re-deriving the tile geometry.
 #[derive(Debug, Clone)]
-pub struct HeightField {
+pub struct ScalarField {
     pub width: u32,
     pub height: u32,
-    pub metres_per_pixel_x: f32,
-    pub metres_per_pixel_y: f32,
-    pub elev: Arc<[f32]>,
+    pub values: Arc<[f32]>,
     pub nodata: Option<f32>,
+    pub geo_scale: Option<GeoScale>,
 }
 
-impl HeightField {
+/// Geographic per-pixel scaling for a `ScalarField`. Filled by the
+/// producer from tile geometry and latitude (Web Mercator's scale is
+/// latitude-dependent), so consumers like `slope` don't need to
+/// re-derive tile geometry.
+#[derive(Debug, Clone, Copy)]
+pub struct GeoScale {
+    pub metres_per_pixel_x: f32,
+    pub metres_per_pixel_y: f32,
+}
+
+impl ScalarField {
     pub fn sample(&self, x: u32, y: u32) -> f32 {
-        self.elev[(y * self.width + x) as usize]
+        self.values[(y * self.width + x) as usize]
+    }
+
+    /// Real-world metres per pixel along X, or `1.0` when the field
+    /// has no geographic scaling. Lets gradient consumers stay
+    /// branch-free; the fallback is a no-op scaling that produces
+    /// pixel-space gradients — geographically inaccurate but useful
+    /// for stylization over non-DEM inputs.
+    pub fn metres_per_pixel_x(&self) -> f32 {
+        self.geo_scale.map(|g| g.metres_per_pixel_x).unwrap_or(1.0)
+    }
+
+    pub fn metres_per_pixel_y(&self) -> f32 {
+        self.geo_scale.map(|g| g.metres_per_pixel_y).unwrap_or(1.0)
     }
 }

@@ -193,9 +193,11 @@ fn describe_value(v: &PortValue) -> String {
     match v {
         PortValue::Raster(r) => format!("raster {}x{}", r.width, r.height),
         PortValue::Sprite(s) => format!("sprite {}x{}", s.width, s.height),
-        PortValue::HeightField(h) => format!(
-            "height-field {}x{} (mpp~{:.2})",
-            h.width, h.height, h.metres_per_pixel_x,
+        PortValue::ScalarField(f) => format!(
+            "scalar-field {}x{} (mpp~{:.2})",
+            f.width,
+            f.height,
+            f.metres_per_pixel_x(),
         ),
         PortValue::Features(_) => "features".to_string(),
         PortValue::Brush(_) => "brush".to_string(),

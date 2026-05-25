@@ -313,13 +313,13 @@ async fn fetch_mvt(
 }
 
 /// Pre-fetch the DEM mosaic for every source in the snapshot so the
-/// blocking render path receives ready-to-bind [`HeightField`]s
+/// blocking render path receives ready-to-bind [`ScalarField`]s
 /// without juggling async fetches.
 async fn fetch_dem_bindings(
     registry: &DemSourceRegistry,
     tile: TileId,
     canvas: CanvasInfo,
-) -> Result<Vec<(String, ezu::graph::HeightField)>, String> {
+) -> Result<Vec<(String, ezu::graph::ScalarField)>, String> {
     if registry.is_empty() {
         return Ok(Vec::new());
     }
@@ -331,7 +331,7 @@ async fn fetch_dem_bindings(
     let mut out = Vec::new();
     for name in registry.names() {
         let key = format!("tile.{name}");
-        if let Ok(ezu::graph::Asset::HeightField(field)) = ezu::graph::AssetLoader::load(&tmp, &key)
+        if let Ok(ezu::graph::Asset::ScalarField(field)) = ezu::graph::AssetLoader::load(&tmp, &key)
         {
             out.push((key, (*field).clone()));
         }
@@ -345,7 +345,7 @@ fn render_tile(
     cache: &ezu::graph::Cache,
     assets: &BrushBankLoader,
     mvt_bytes: Option<&[u8]>,
-    dem_bindings: Vec<(String, ezu::graph::HeightField)>,
+    dem_bindings: Vec<(String, ezu::graph::ScalarField)>,
     tile: CoreTileId,
     tile_size: u32,
     pad: u32,
@@ -361,7 +361,7 @@ fn render_tile(
         tile_loader.bind_mvt(mvt::decode(bytes).map_err(|e| format!("mvt decode: {e}"))?);
     }
     for (name, field) in dem_bindings {
-        tile_loader.bind_height_field(name, field);
+        tile_loader.bind_scalar_field(name, field);
     }
     let ev = Evaluator::new(graph, cache, &tile_loader);
     let out = ev

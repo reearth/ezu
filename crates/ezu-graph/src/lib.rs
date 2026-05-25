@@ -20,7 +20,7 @@ pub mod port;
 pub mod registry;
 pub mod value;
 
-pub use buf::{HeightField, OpaqueValue, RasterBuf};
+pub use buf::{GeoScale, OpaqueValue, RasterBuf, ScalarField};
 pub use build::{build_graph, BuildGraphError};
 pub use cache::{Cache, CacheKey, Hash128};
 pub use eval::{
