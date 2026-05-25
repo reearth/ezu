@@ -1,6 +1,9 @@
-//! `place` — `Raster -> Raster`. Draw the source raster onto the
+//! `place` — `Raster|Sprite -> Raster`. Draw the source onto the
 //! canvas **once**, with a fit mode (`none` / `cover` / `contain` /
-//! `stretch`) plus optional rotation and opacity.
+//! `stretch`) plus optional rotation and opacity. The input is
+//! sampled at its native dimensions regardless of which kind it
+//! came in as, so feeding a canvas-sized `Raster` works too — it
+//! just happens to fit 1:1 under `cover`/`contain`.
 //!
 //! Companion to `tiling` (which repeats the source) and `stamp` (which
 //! pastes the source per-point). Use `place` for hero backgrounds,
@@ -25,6 +28,7 @@ use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
     canvas_into_raster, make_canvas, read_number_or, read_optional_string, read_xy,
+    unwrap_raster_or_sprite, ACCEPTS_RASTER_OR_SPRITE,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,7 +87,7 @@ impl Node for PlaceNode {
     fn inputs(&self) -> &[PortSpec] {
         static SPECS: &[PortSpec] = &[PortSpec {
             name: "input",
-            accepts: &[PortKind::Sprite],
+            accepts: ACCEPTS_RASTER_OR_SPRITE,
             optional: false,
         }];
         SPECS
@@ -99,11 +103,10 @@ impl Node for PlaceNode {
         ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
-        let src = inputs[0]
+        let input = inputs[0]
             .as_ref()
-            .and_then(PortValue::as_sprite)
-            .ok_or_else(|| EvalError::MissingInput("input".into()))?
-            .clone();
+            .ok_or_else(|| EvalError::MissingInput("input".into()))?;
+        let (src, _) = unwrap_raster_or_sprite(input, "input")?;
         let mut canvas = make_canvas(ctx)?;
         if src.width == 0 || src.height == 0 {
             return Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))));

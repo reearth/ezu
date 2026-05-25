@@ -202,6 +202,49 @@ fn place_none_with_scale_and_anchor_shrinks_source() {
 }
 
 #[test]
+fn place_accepts_raster_input() {
+    // `place` accepts both Sprite and Raster. Feeding a canvas-sized
+    // `gradient-linear` (Raster) through `place` with `fit: none` at
+    // (0, 0) should be effectively a no-op copy — the left edge should
+    // be the start color, the right edge the end color.
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 16,
+      "nodes": {
+        "grad": { "op": "gradient-linear",
+                  "start": [0.0, 0.5], "end": [1.0, 0.5],
+                  "stops": [[0.0, "#ff0000"], [1.0, "#0000ff"]] },
+        "out":  { "op": "place", "input": "@grad", "fit": "none",
+                  "position-px": [0, 0], "anchor": "top-left" }
+      },
+      "output": "@out"
+    }"##;
+    let r = render_with_images(json, 16, 0, TileId { z: 0, x: 0, y: 0 }, &[]);
+    let left = r.pixel(1, 8);
+    let right = r.pixel(14, 8);
+    assert!(left[0] > 200 && left[2] < 40, "left should be red: {left:?}");
+    assert!(right[2] > 200 && right[0] < 40, "right should be blue: {right:?}");
+}
+
+#[test]
+fn tiling_accepts_raster_input() {
+    // `tiling` over a small canvas-sized Raster source. Use a solid
+    // color so tiling at the canvas size is just a uniform fill.
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 16,
+      "nodes": {
+        "solid": { "op": "solid", "color": "#22cc44" },
+        "out":   { "op": "tiling", "input": "@solid", "anchor": "tile" }
+      },
+      "output": "@out"
+    }"##;
+    let r = render_with_images(json, 16, 0, TileId { z: 0, x: 0, y: 0 }, &[]);
+    let p = r.pixel(8, 8);
+    assert_eq!(p, [0x22, 0xcc, 0x44, 0xff]);
+}
+
+#[test]
 fn hsl_passes_through_sprite_kind() {
     // `hsl` is polymorphic; a red disk sprite rotated 120° (red → green)
     // should still type-check through `place` and render green at the

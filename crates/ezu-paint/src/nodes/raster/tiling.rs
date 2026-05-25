@@ -1,4 +1,4 @@
-//! `tiling` — `Raster -> Raster`. Repeat a source raster across the
+//! `tiling` — `Raster|Sprite -> Raster`. Repeat a source across the
 //! canvas with wrap-around sampling. The primary use case is **paper
 //! / canvas texture**: load a small PNG via `image`, tile it across
 //! every map tile such that the pattern is continuous across tile
@@ -24,7 +24,10 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{read_number_or, read_optional_string, read_xy, Anchor};
+use crate::nodes::common::{
+    read_number_or, read_optional_string, read_xy, unwrap_raster_or_sprite, Anchor,
+    ACCEPTS_RASTER_OR_SPRITE,
+};
 
 struct TilingNode {
     anchor: Anchor,
@@ -42,7 +45,7 @@ impl Node for TilingNode {
     fn inputs(&self) -> &[PortSpec] {
         static SPECS: &[PortSpec] = &[PortSpec {
             name: "input",
-            accepts: &[PortKind::Sprite],
+            accepts: ACCEPTS_RASTER_OR_SPRITE,
             optional: false,
         }];
         SPECS
@@ -61,11 +64,10 @@ impl Node for TilingNode {
         ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
-        let src = inputs[0]
+        let input = inputs[0]
             .as_ref()
-            .and_then(PortValue::as_sprite)
-            .ok_or_else(|| EvalError::MissingInput("input".into()))?
-            .clone();
+            .ok_or_else(|| EvalError::MissingInput("input".into()))?;
+        let (src, _) = unwrap_raster_or_sprite(input, "input")?;
         let size = ctx.canvas.padded_size();
         let pad = ctx.canvas.pad as f64;
         let tile_size = ctx.canvas.tile_size as f64;

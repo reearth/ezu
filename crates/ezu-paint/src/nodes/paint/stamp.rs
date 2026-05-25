@@ -1,6 +1,7 @@
-//! `stamp` — `Features + Raster -> Raster`. Place the input `Raster`
-//! (a sprite) once at every point in `Features.points`, with optional
-//! rotation / scale / per-point jitter.
+//! `stamp` — `Features + (Raster|Sprite) -> Raster`. Place the input
+//! image once at every point in `Features.points`, with optional
+//! rotation / scale / per-point jitter. The image is sampled at its
+//! native dimensions regardless of which kind it was wired in as.
 //!
 //! Lines and polygons in the features input are ignored. The output
 //! has the canvas-padded dimensions, matching every other paint node.
@@ -19,6 +20,7 @@ use ezu_core::{seed::world_seed, WorldPos};
 
 use crate::nodes::common::{
     canvas_into_raster, downcast_features, empty_raster, make_canvas, read_number_or,
+    unwrap_raster_or_sprite, ACCEPTS_RASTER_OR_SPRITE,
 };
 
 const STAMP_SALT: u32 = 0x5354_4d50; // 'STMP'
@@ -44,7 +46,7 @@ impl Node for StampNode {
             },
             PortSpec {
                 name: "image",
-                accepts: &[PortKind::Sprite],
+                accepts: ACCEPTS_RASTER_OR_SPRITE,
                 optional: false,
             },
         ];
@@ -66,11 +68,10 @@ impl Node for StampNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
-        let image = inputs[1]
+        let image_in = inputs[1]
             .as_ref()
-            .and_then(PortValue::as_sprite)
-            .ok_or_else(|| EvalError::MissingInput("image".into()))?
-            .clone();
+            .ok_or_else(|| EvalError::MissingInput("image".into()))?;
+        let (image, _) = unwrap_raster_or_sprite(image_in, "image")?;
         if feats.points.is_empty() || image.width == 0 || image.height == 0 {
             return Ok(empty_raster(ctx));
         }
