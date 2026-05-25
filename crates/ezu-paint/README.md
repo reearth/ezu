@@ -138,6 +138,9 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 | `convex-hull` | `Features → Features` | Convex hull over all input vertices |
 | `buffer` | `Features → Features` | Offset / Minkowski-style buffer |
 | `hatch` | `Features → Features` | Hatch-line fill of polygons |
+| `voronoi` | `Features → Features` | Voronoi diagram of input points → edge polylines (2-point each). Polygons/lines ignored — pipe `centroid` upstream to derive seeds |
+| `voronoi-fracture` | `(Features, Features) → Features` | Fracture each polygon in `features` into Voronoi sub-cells seeded by `seeds`' points; cells clipped to the source polygon |
+| `medial-axis` | `Features → Features` | Approximate medial axis (skeleton) of each input polygon as polylines. `densify-px` controls boundary sampling, `min-branch-px` prunes short branches. Useful for river / lake centrelines |
 
 Each factory implements `NodeFactory::schema()` so editors picking up
 the registry-derived JSON Schema get per-op autocomplete. Adding a new

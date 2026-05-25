@@ -17,3 +17,4 @@ pub mod convert;
 pub mod convex_hull;
 pub mod hatch;
 pub mod simplify;
+pub mod voronoi;

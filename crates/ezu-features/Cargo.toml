@@ -20,3 +20,4 @@ geo = { workspace = true }
 i_overlay = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+voronoice = { workspace = true }

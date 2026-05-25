@@ -7,5 +7,8 @@ mod centroid;
 mod convex_hull;
 mod dash;
 mod hatch;
+mod medial_axis;
 mod simplify;
+mod voronoi;
+mod voronoi_fracture;
 mod wave;
