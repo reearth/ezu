@@ -139,7 +139,12 @@
 
     const format = $("format").value;
     const t1 = performance.now();
-    const out = format === "rgba" ? renderer.renderRgba(bytes, z, x, y) : renderer.render(bytes, z, x, y);
+    // Bind into the first MVT source the style declared, render, clear.
+    // (Demo styles all use a `basemap` source; for real apps, list the
+    // names with `renderer.boundSources()` after binding.)
+    renderer.clearSources();
+    if (bytes) renderer.bindSource("basemap", bytes);
+    const out = renderer.renderTile(z, x, y, { format });
     const tRender = performance.now() - t1;
     $("render-ms").textContent = tRender.toFixed(1);
 
@@ -157,9 +162,11 @@
     const r = await fetch(`/mvt/${z}/${x}/${y}`);
     const bytes = r.ok ? new Uint8Array(await r.arrayBuffer()) : null;
     const fmt = $("format").value;
-    const call = fmt === "rgba"
-      ? (b) => renderer.renderRgba(b, z, x, y)
-      : (b) => renderer.render(b, z, x, y);
+    const call = (b) => {
+      renderer.clearSources();
+      if (b) renderer.bindSource("basemap", b);
+      return renderer.renderTile(z, x, y, { format: fmt });
+    };
 
     call(bytes); // warm
 

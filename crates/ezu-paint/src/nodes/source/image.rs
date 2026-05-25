@@ -61,21 +61,21 @@ impl NodeFactory for ImageFactory {
             .get("src")
             .and_then(Value::as_str)
             .ok_or_else(|| FactoryError::MissingField("src".into()))?;
-        // `@name` -> look up in document `assets`; literal goes straight
+        // `@name` -> look up in document `sources`; literal goes straight
         // to the loader.
         let src = match spec::FieldRef::classify(raw) {
             spec::FieldRef::Node(name) => {
-                let asset = ctx
-                    .assets
+                let source = ctx
+                    .sources
                     .get(name)
                     .ok_or_else(|| FactoryError::UnknownAsset(name.to_string()))?;
-                if asset.kind != spec::AssetKind::Image {
+                let spec::SourceDecl::Image(file) = source else {
                     return Err(FactoryError::BadField {
                         field: "src".into(),
-                        msg: format!("asset `{name}` is not an image"),
+                        msg: format!("source `{name}` is not an image"),
                     });
-                }
-                asset.src.clone()
+                };
+                file.src.clone()
             }
             spec::FieldRef::Literal(s) => s.to_string(),
             spec::FieldRef::Param(_) => {

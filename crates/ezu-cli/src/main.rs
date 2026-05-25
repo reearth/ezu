@@ -23,7 +23,7 @@ use ezu::paint::host::{
     BrushBankLoader, DemSourceRegistry, TileLoader,
 };
 use ezu::paint::nodes::default_registry;
-use ezu::style::{AssetKind, Document, SourceDecl};
+use ezu::style::{Document, SourceDecl};
 use futures::future::try_join_all;
 use futures::stream::{StreamExt, TryStreamExt};
 use tiny_skia::{Pixmap, PixmapPaint, Transform};
@@ -316,7 +316,8 @@ async fn run_check(args: CheckCmd) -> Result<(), Box<dyn std::error::Error>> {
     let registry = default_registry();
     let graph = build_graph(&doc, &registry)?;
 
-    if !args.no_fetch && !doc.assets.is_empty() {
+    let doc_scoped_count = count_doc_scoped_sources(&doc);
+    if !args.no_fetch && doc_scoped_count > 0 {
         let base_dir = args.assets_dir.clone().unwrap_or_else(|| {
             if is_url(&args.style) {
                 PathBuf::from(".")
@@ -334,11 +335,11 @@ async fn run_check(args: CheckCmd) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     tracing::info!(
-        "ok: {} v{} ({} nodes, {} assets){}",
+        "ok: {} v{} ({} nodes, {} sources){}",
         doc.name,
         doc.version,
         graph.len(),
-        doc.assets.len(),
+        doc.sources.len(),
         if args.no_fetch {
             " [parse + graph only]"
         } else {
@@ -346,6 +347,15 @@ async fn run_check(args: CheckCmd) -> Result<(), Box<dyn std::error::Error>> {
         },
     );
     Ok(())
+}
+
+/// Number of document-scoped sources (brush / image) — the ones
+/// `prefetch_doc_assets` will fetch on style load.
+fn count_doc_scoped_sources(doc: &Document) -> usize {
+    doc.sources
+        .values()
+        .filter(|d| matches!(d, SourceDecl::Brush(_) | SourceDecl::Image(_)))
+        .count()
 }
 
 async fn run_graph(args: GraphCmd) -> Result<(), Box<dyn std::error::Error>> {
@@ -362,24 +372,29 @@ async fn run_graph(args: GraphCmd) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Render the document's node DAG as a Mermaid `graph LR` block. Edges
-/// follow data flow: each `@ref` becomes `ref --> consumer`. Asset
-/// references (style-level `assets` entries) are emitted as styled
-/// source nodes so brush/image pipelines stay readable.
+/// Render the document's node DAG as a Mermaid `graph LR` block.
+/// Edges follow data flow: each `@ref` becomes `ref --> consumer`.
+/// `sources` entries are emitted as styled nodes so brush/image and
+/// tile-pyramid sources stay visible.
 fn render_mermaid(doc: &ezu::style::Document) -> String {
     use std::collections::HashSet;
 
     let mut s = String::new();
     s.push_str("graph LR\n");
 
-    for (id, asset) in &doc.assets {
-        let kind = match asset.kind {
-            AssetKind::Brush => "brush",
-            AssetKind::Image => "image",
-            AssetKind::MaskImage => "mask-image",
-            AssetKind::Gradient => "gradient",
+    let mut doc_scoped_ids: Vec<&str> = Vec::new();
+    for (id, decl) in &doc.sources {
+        let kind = match decl {
+            SourceDecl::Brush(_) => "brush",
+            SourceDecl::Image(_) => "image",
+            SourceDecl::Mvt(_) => "mvt",
+            SourceDecl::Pmtiles(_) => "pmtiles",
+            SourceDecl::Dem(_) => "dem",
         };
-        s.push_str(&format!("  {id}[/\"{id} (asset:{kind})\"/]\n"));
+        s.push_str(&format!("  {id}[/\"{id} (source:{kind})\"/]\n"));
+        if matches!(decl, SourceDecl::Brush(_) | SourceDecl::Image(_)) {
+            doc_scoped_ids.push(id);
+        }
     }
 
     let output_id = doc.output.as_str();
@@ -399,8 +414,6 @@ fn render_mermaid(doc: &ezu::style::Document) -> String {
             s.push_str(&format!("  {id}[\"{id} ({op})\"]{suffix}\n", op = spec.op));
         }
     }
-    // Synthetic sink so the diagram has an unambiguous exit. Picked a
-    // name that can't collide with a user node id (contains `:`).
     s.push_str("  __output__([\"OUTPUT\"]):::sink\n");
     s.push_str(&format!("  {output_id} ==> __output__\n"));
 
@@ -413,7 +426,7 @@ fn render_mermaid(doc: &ezu::style::Document) -> String {
             if !seen.insert(r.clone()) {
                 continue;
             }
-            if doc.nodes.contains_key(&r) || doc.assets.contains_key(&r) {
+            if doc.nodes.contains_key(&r) || doc.sources.contains_key(&r) {
                 s.push_str(&format!("  {r} --> {id}\n"));
             }
         }
@@ -423,9 +436,8 @@ fn render_mermaid(doc: &ezu::style::Document) -> String {
     s.push_str("  classDef output fill:#ffe0e0,stroke:#cc3333,stroke-width:2px;\n");
     s.push_str("  classDef sink fill:#cc3333,color:#ffffff,stroke:#7a1f1f,stroke-width:2px;\n");
     s.push_str("  classDef source fill:#d9ecff,stroke:#2a6fb0;\n");
-    if !doc.assets.is_empty() {
-        let ids: Vec<&str> = doc.assets.keys().map(String::as_str).collect();
-        s.push_str(&format!("  class {} asset;\n", ids.join(",")));
+    if !doc_scoped_ids.is_empty() {
+        s.push_str(&format!("  class {} asset;\n", doc_scoped_ids.join(",")));
     }
     if !source_ids.is_empty() {
         s.push_str(&format!("  class {} source;\n", source_ids.join(",")));
@@ -682,9 +694,6 @@ async fn build_asset_loader(
         .with_dir(base_dir.to_path_buf())
         .with_images_dir(base_dir.to_path_buf());
     ezu::paint::host::prefetch_doc_assets(doc, base_dir, &mut loader).await?;
-    if doc.assets.values().any(|d| d.kind == AssetKind::Gradient) {
-        tracing::warn!("gradient assets are not yet supported by the CLI");
-    }
     tracing::info!(
         "loaded {} brushes + {} images (base={})",
         loader.bank.len(),
@@ -723,7 +732,9 @@ pub(crate) fn feature_source_from_doc(doc: &Document) -> Option<(SourceSpec, &'s
                 SourceSpec::PmTiles(s.url.clone()),
                 "style sources (pmtiles)",
             ),
-            SourceDecl::Dem(_) => continue,
+            // Document-scoped and tile-scoped raster — not feature
+            // sources, skip.
+            SourceDecl::Brush(_) | SourceDecl::Image(_) | SourceDecl::Dem(_) => continue,
         };
         if chosen.is_some() {
             tracing::warn!("multiple feature sources in style; ignoring `{name}`");

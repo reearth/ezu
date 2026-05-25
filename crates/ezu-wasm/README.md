@@ -2,10 +2,10 @@
 
 WebAssembly bindings for the `ezu` painterly map renderer.
 
-The JS side owns all I/O (HTTP, PMTiles, asset fetching). This crate exposes
-a stateful [`Renderer`](src/lib.rs) that holds a parsed style document,
-its built graph, and an in-memory brush bank, and renders one tile at
-a time.
+The JS side owns all I/O (HTTP, PMTiles, asset fetching). This crate
+exposes a stateful [`Renderer`](src/lib.rs) that holds a parsed style
+document, its built graph, an in-memory brush bank, and a per-tile
+binding buffer that mirrors the style's `sources` block.
 
 ## API
 
@@ -15,85 +15,87 @@ function simdEnabled(): boolean;
 class Renderer {
   constructor(styleJson: string);
 
-  // Style + brushes
   setStyle(styleJson: string): number;            // → new node count
-  registerBrush(name: string, mybJson: string): void;
-  unregisterBrush(name: string): boolean;          // → true if removed
-  clearBrushes(): void;
-  brushCount(): number;
   readonly tileSize: number;
 
-  // Render — pass `null` for `mvtBytes` to get a paper-only tile.
-  // `options` is optional; see "Encoding options" below.
-  render(mvtBytes: Uint8Array | null, z: number, x: number, y: number,
-         options?: EncodeOptions): Uint8Array;                                              // PNG
-  renderWebp(mvtBytes: Uint8Array | null, z: number, x: number, y: number,
-             options?: EncodeOptions): Uint8Array;                                          // lossless WebP
-  renderRgba(mvtBytes: Uint8Array | null, z: number, x: number, y: number): Uint8Array;    // straight RGBA
-  renderAt(mvtBytes: Uint8Array | null, z: number, x: number, y: number,
-           tileSize: number, pad: number, options?: EncodeOptions): Uint8Array;             // PNG, size override
-  renderWebpAt(mvtBytes: Uint8Array | null, z: number, x: number, y: number,
-               tileSize: number, pad: number, options?: EncodeOptions): Uint8Array;         // WebP, size override
-  renderRgbaAt(mvtBytes: Uint8Array | null, z: number, x: number, y: number,
-               tileSize: number, pad: number): Uint8Array;                                  // RGBA, size override
+  // Bind raw tile bytes under a `sources.<name>` entry. The renderer
+  // dispatches on the source's declared `type`:
+  //   - brush  → parse `.myb` JSON, register in the persistent bank
+  //              under `decl.src` (clearSources does NOT clear it)
+  //   - image  → decode PNG/WebP, persistent same as brush
+  //   - mvt / pmtiles → decode MVT, bind as `tile.<layer>` at render
+  //                     time, cleared by `clearSources`
+  //   - dem    → decode + 3×3 stitch at render time. Bind each
+  //              neighbour with `{ coord: [dx, dy] }` (dx, dy ∈ {-1, 0, 1};
+  //              the centre is `[0, 0]`, the default).
+  bindSource(name: string, bytes: Uint8Array,
+             opts?: { coord?: [number, number] }): void;
+
+  // Drop every pending tile-scoped binding. Document-scoped sources
+  // (brush / image) keep their bank entries.
+  clearSources(): void;
+
+  // Names with at least one pending tile-scoped binding.
+  boundSources(): string[];
+
+  // Single unified render. Format and canvas overrides go in `opts`.
+  renderTile(z: number, x: number, y: number, opts?: {
+    format?: "png" | "webp" | "rgba";       // default "png"
+    tileSize?: number;                       // override style canvas
+    pad?: number;
+    png?: { compression?: "fast" | "default" | "best" };
+  }): Uint8Array;
 
   free(): void;
 }
-
-type EncodeOptions = {
-  png?: { compression?: "fast" | "default" | "best" };
-};
 ```
 
 ### Output formats
 
-- **`render` / `renderAt`** return PNG bytes — feed to `<img>` via
+`opts.format` picks the encoder:
+
+- **`"png"`** (default) returns PNG bytes — feed to `<img>` via
   `URL.createObjectURL(new Blob([buf], { type: "image/png" }))`.
-- **`renderWebp` / `renderWebpAt`** return lossless WebP bytes (~15 %
-  smaller than PNG on painterly tiles). Pure-Rust encoder, no native
-  deps. Use `type: "image/webp"` when wrapping in a `Blob`.
-- **`renderRgba` / `renderRgbaAt`** return straight (un-premultiplied)
-  8-bit RGBA bytes (`tile_size * tile_size * 4`) — feed directly to
+- **`"webp"`** returns lossless WebP bytes (~15 % smaller than PNG
+  on painterly tiles). Pure-Rust encoder, no native deps.
+- **`"rgba"`** returns straight (un-premultiplied) 8-bit RGBA bytes
+  (`tile_size * tile_size * 4`) — feed directly to
   `ctx.putImageData(new ImageData(new Uint8ClampedArray(buf.buffer), w, h), 0, 0)`
   and skip the PNG decode round trip.
 
 ### Per-call size override
 
-The `*At` variants take `tileSize` and `pad` arguments that override the
-style-level values for that call. Useful for hi-DPI preview rendering
-without mutating the style.
+`opts.tileSize` and `opts.pad` override the style-level canvas
+geometry for that call. Useful for hi-DPI preview rendering without
+mutating the style.
 
 ### Encoding options
 
-Every `render*` PNG / WebP method accepts an optional final `options`
-argument (`undefined` ⇒ defaults). Today the only knob is PNG
-compression:
+PNG accepts a compression preset via `opts.png.compression`:
 
 ```js
 // Fast preset — biggest files, lowest CPU. Good for live-preview redraws.
-const fast = r.render(mvt, z, x, y, { png: { compression: "fast" } });
+const fast = r.renderTile(z, x, y, { png: { compression: "fast" } });
 
 // Best preset — smallest files, ~2-4× the CPU. Good for cached pyramids.
-const small = r.render(mvt, z, x, y, { png: { compression: "best" } });
-
-// Default preset (omit `options`) — tiny-skia / miniz mid-range deflate.
-const default_ = r.render(mvt, z, x, y);
+const small = r.renderTile(z, x, y, { png: { compression: "best" } });
 ```
 
 WebP is lossless via the pure-Rust `image-webp` codec and has no
-quality knob — see the recipe below for lossy WebP without C
-dependencies.
+quality knob — see below for the lossy-WebP recipe without C deps.
 
 #### Lossy WebP without C bindings
 
 The WASM build stays pure-Rust on purpose (no `libwebp`, no native
 linker, smaller `.wasm`). If you want lossy WebP, ask the **browser**
-to do it after `renderRgba`:
+to do it after rendering as `"rgba"`:
 
 ```js
 async function renderTileToLossyWebp(r, mvt, z, x, y, quality = 0.8) {
   const w = r.tileSize;
-  const rgba = r.renderRgba(mvt, z, x, y);
+  r.clearSources();
+  if (mvt) r.bindSource("basemap", mvt);
+  const rgba = r.renderTile(z, x, y, { format: "rgba" });
   const oc = new OffscreenCanvas(w, w);
   const ctx = oc.getContext("2d");
   ctx.putImageData(new ImageData(new Uint8ClampedArray(rgba.buffer), w, w), 0, 0);
@@ -102,34 +104,28 @@ async function renderTileToLossyWebp(r, mvt, z, x, y, quality = 0.8) {
 }
 ```
 
-`OffscreenCanvas` (available in every Chromium / Firefox / Safari ≥ 16.4
-release as of writing) gives you the OS's `libwebp` for free. On the
-main thread, the equivalent is `<canvas>.toBlob('image/webp', q)`. For
-the rare case neither is available (very old Safari, headless
-environments without `OffscreenCanvas`), pipe `renderRgba` through any
-JS-side WebP encoder (e.g.
-[`@jsquash/webp`](https://github.com/jamsinclair/jSquash)) — bigger
-bundle, but still no native deps in the Rust side.
-
 ### Missing tiles
 
-Pass `null` (or `undefined`) as `mvtBytes` to render just the style's
-paper background. `features` nodes see no `tile.<layer>` binding and
-emit an empty layer, so all downstream paint nodes short-circuit.
+Don't `bindSource` an MVT source for that tile — `renderTile` returns
+the style's paper background. `features` source nodes see no
+`tile.<layer>` binding and emit an empty layer, so downstream paint
+nodes short-circuit.
 
 ### Errors
 
-Every fallible method throws a JavaScript `Error` whose `.name` discriminates
-the failure kind:
+Every fallible method throws a JavaScript `Error` whose `.name`
+discriminates the failure kind:
 
 | `.name` | When |
 |---|---|
 | `InvalidStyle` | `new Renderer(...)` / `setStyle(...)` rejected the JSON |
-| `BrushParse`   | `registerBrush(...)` couldn't parse the `.myb` JSON |
-| `MvtDecode`    | `render*` couldn't decode the MVT bytes |
-| `RenderFailed` | A node `eval` failed (e.g. unresolved brush, downcast mismatch) |
-| `PngEncode`    | PNG encoding failed (extremely unlikely) |
-| `WebpEncode`   | WebP encoding failed (extremely unlikely) |
+| `BrushParse`   | `bindSource` on a brush source couldn't parse the `.myb` JSON |
+| `MvtDecode`    | `bindSource` (mvt/pmtiles) or render couldn't decode the MVT bytes |
+| `DemDecode`    | `bindSource` (dem) couldn't decode the raster-DEM tile |
+| `UnknownSource`| `bindSource` got a name not in the style's `sources` block, or `coord` was malformed |
+| `RenderFailed` | A node `eval` failed (e.g. missing brush, downcast mismatch) |
+| `PngEncode`    | PNG encoding failed |
+| `WebpEncode`   | WebP encoding failed |
 
 ```js
 try {
@@ -149,16 +145,19 @@ import init, { Renderer, simdEnabled } from "./ezu_wasm.js";
 await init();
 console.log("SIMD?", simdEnabled());
 
-// `new Renderer(...)` pre-registers every built-in brush bundled with
-// `ezu-paint` (the watercolor + pencil set, CC0). Call `registerBrush`
-// only when you want to bring your own `.myb`.
+// `new Renderer(...)` pre-registers every built-in brush bundled
+// with `ezu-paint` (the watercolor + pencil set, CC0). Styles can
+// reference these with `"src": "builtin:NAME"`; bring your own by
+// declaring a `brush` source in the style and calling `bindSource`.
 const r = new Renderer(await (await fetch("/style")).text());
 
 const z = 13, x = 7276, y = 3225;
 const mvt = new Uint8Array(await (await fetch(`/mvt/${z}/${x}/${y}`)).arrayBuffer());
 
-// Fast path: straight to a <canvas>
-const rgba = r.renderRgba(mvt, z, x, y);
+// Fast path: bind the source, render as RGBA, blit to a <canvas>.
+r.clearSources();
+r.bindSource("basemap", mvt);
+const rgba = r.renderTile(z, x, y, { format: "rgba" });
 const w = r.tileSize;
 const ctx = canvas.getContext("2d");
 ctx.putImageData(new ImageData(new Uint8ClampedArray(rgba.buffer), w, w), 0, 0);

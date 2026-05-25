@@ -17,7 +17,7 @@ fn image_directly_as_output_is_rejected() {
     let json = r##"{
       "name": "demo",
       "tile-size": 16,
-      "assets": { "icon": { "type": "image", "src": "icon" } },
+      "sources": { "icon": { "type": "image", "src": "builtin:icon" } },
       "nodes": { "src": { "op": "image", "src": "@icon" } },
       "output": "@src"
     }"##;
@@ -41,7 +41,7 @@ fn tiling_passes_through_at_natural_scale() {
     let json = r##"{
       "name": "demo",
       "tile-size": 16,
-      "assets": { "disk": { "type": "image", "src": "disk" } },
+      "sources": { "disk": { "type": "image", "src": "builtin:disk" } },
       "nodes": {
         "src":  { "op": "image", "src": "@disk" },
         "out":  { "op": "tiling", "input": "@src", "anchor": "tile", "scale-px": 16 }
@@ -70,7 +70,7 @@ fn tiling_repeats_pattern_at_smaller_scale() {
     let json = r##"{
       "name": "demo",
       "tile-size": 16,
-      "assets": { "disk": { "type": "image", "src": "disk" } },
+      "sources": { "disk": { "type": "image", "src": "builtin:disk" } },
       "nodes": {
         "src":  { "op": "image", "src": "@disk" },
         "out":  { "op": "tiling", "input": "@src", "anchor": "tile", "scale-px": 8 }
@@ -116,7 +116,7 @@ fn tiling_world_anchor_is_seamless_across_tiles() {
     let json = r##"{
       "name": "demo",
       "tile-size": 32,
-      "assets": { "p": { "type": "image", "src": "p" } },
+      "sources": { "p": { "type": "image", "src": "builtin:p" } },
       "nodes": {
         "src":  { "op": "image", "src": "@p" },
         "out":  { "op": "tiling", "input": "@src", "anchor": "world", "scale-px": 12 }
@@ -157,7 +157,7 @@ fn place_cover_fills_canvas_with_source_color() {
     let json = r##"{
       "name": "demo",
       "tile-size": 32,
-      "assets": { "src": { "type": "image", "src": "src" } },
+      "sources": { "src": { "type": "image", "src": "builtin:src" } },
       "nodes": {
         "src":  { "op": "image", "src": "@src" },
         "out":  { "op": "place", "input": "@src", "fit": "cover" }
@@ -182,7 +182,7 @@ fn place_none_with_scale_and_anchor_shrinks_source() {
     let json = r##"{
       "name": "demo",
       "tile-size": 32,
-      "assets": { "src": { "type": "image", "src": "src" } },
+      "sources": { "src": { "type": "image", "src": "builtin:src" } },
       "nodes": {
         "src":  { "op": "image", "src": "@src" },
         "out":  { "op": "place", "input": "@src", "fit": "none",
@@ -259,7 +259,7 @@ fn hsl_passes_through_sprite_kind() {
     let json = r##"{
       "name": "demo",
       "tile-size": 32,
-      "assets": { "src": { "type": "image", "src": "src" } },
+      "sources": { "src": { "type": "image", "src": "builtin:src" } },
       "nodes": {
         "src":     { "op": "image", "src": "@src" },
         "shifted": { "op": "hsl",   "input": "@src", "hue-shift": 120.0 },
@@ -285,7 +285,7 @@ fn blur_passes_through_sprite_kind() {
     let json = r##"{
       "name": "demo",
       "tile-size": 32,
-      "assets": { "src": { "type": "image", "src": "src" } },
+      "sources": { "src": { "type": "image", "src": "builtin:src" } },
       "nodes": {
         "src":     { "op": "image", "src": "@src" },
         "blurred": { "op": "blur",  "input": "@src", "sigma": 1.5 },

@@ -14,8 +14,8 @@ evaluator. To execute a document, feed it to
   "name": "watercolor-basic",
   "tile-size": 512,
   "pad": 24,
-  "assets": {
-    "glazing": { "type": "brush", "src": "watercolor_glazing" }
+  "sources": {
+    "glazing": { "type": "brush", "src": "builtin:watercolor_glazing" }
   },
   "nodes": {
     "bg":            { "op": "solid", "color": "#fbf6e6" },
@@ -39,19 +39,28 @@ Each `features` node references a host-bound layer by `name`
 `filter` (entries AND-combined; values are single literals or membership
 lists) and an optional `min-zoom-field`.
 
-Asset `src` strings (in the `assets` block) accept either a local file
-reference resolved against the host's base directory, or an
-`http(s)://` URL — native hosts (CLI, server, the tokyo example)
-prefetch URL assets via `ezu_paint::host::prefetch_doc_assets` before
-the first render, so the loader sees an already-decoded bank.
+The `sources` block is the single home for **every** external
+resource the renderer pulls in — document-scoped files (brushes,
+images) sit next to tile-scoped pyramids (MVT, PMTiles, DEM). Each
+entry's `type` discriminates the variant; document-scoped variants
+carry a `src` URI, tile-scoped variants a `url` template.
 
-The `sources` block declares per-tile data sources the host fetches
-+ binds before each render. Three source kinds are recognised today:
+`src` URIs are explicit-scheme — pick one of:
+
+- `builtin:NAME` — bundled brush / image included in `ezu-paint`'s
+  built-in bank, or a host-registered resource of the same name.
+- `file:PATH` — local file resolved against `--assets-dir` (or
+  absolute). `.myb` / `.png` / `.webp` extensions are inferred from
+  the source `type` if omitted.
+- `http(s)://...` — fetched by the host (CLI native, `prefetch_doc_assets`)
+  before the first render, then cached in the in-memory bank.
+
+Tile-scoped source kinds:
 
 - `dem` — raster-DEM tile pyramid (terrarium or mapbox-rgb encoding).
   The host stitches the 3×3 neighbourhood into a per-tile
-  `ScalarField` (with `geo_scale` populated) and binds it under `tile.<source-name>`, ready for
-  the `dem` source node to pick up.
+  `ScalarField` (with `geo_scale` populated) and binds it under
+  `tile.<source-name>`, ready for the `dem` source node to pick up.
 - `mvt` — XYZ MVT URL template (or a TileJSON document). The host
   fetches one tile per render, decodes every layer, and binds each
   one under `tile.<layer-name>` — the same names existing

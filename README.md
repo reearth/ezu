@@ -222,7 +222,7 @@ earth-tone background.
   "name": "demo",
   "tile-size": 512,
   "pad": 24,
-  "assets": { "glazing": { "type": "brush", "src": "watercolor_glazing" } },
+  "sources": { "glazing": { "type": "brush", "src": "builtin:watercolor_glazing" } },
   "nodes": {
     "bg":     { "op": "solid", "color": "#fbf6e6" },
     "earth":  { "op": "features", "name": "tile.earth" },

@@ -53,21 +53,21 @@ impl NodeFactory for BrushFileFactory {
             .get("src")
             .and_then(Value::as_str)
             .ok_or_else(|| FactoryError::MissingField("src".into()))?;
-        // `@name` -> look up in document `assets` and use that entry's
+        // `@name` -> look up in document `sources` and use that entry's
         // src. Otherwise the literal is passed straight to the loader.
         let src = match spec::FieldRef::classify(raw) {
             spec::FieldRef::Node(name) => {
-                let asset = ctx
-                    .assets
+                let source = ctx
+                    .sources
                     .get(name)
                     .ok_or_else(|| FactoryError::UnknownAsset(name.to_string()))?;
-                if asset.kind != spec::AssetKind::Brush {
+                let spec::SourceDecl::Brush(file) = source else {
                     return Err(FactoryError::BadField {
                         field: "src".into(),
-                        msg: format!("asset `{name}` is not a brush"),
+                        msg: format!("source `{name}` is not a brush"),
                     });
-                }
-                asset.src.clone()
+                };
+                file.src.clone()
             }
             spec::FieldRef::Literal(s) => s.to_string(),
             spec::FieldRef::Param(_) => {

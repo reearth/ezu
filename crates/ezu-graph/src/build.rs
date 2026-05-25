@@ -30,7 +30,7 @@ pub fn build_graph(
 ) -> Result<Graph, BuildGraphError> {
     let ctx = FactoryCtx {
         params: &doc.params,
-        assets: &doc.assets,
+        sources: &doc.sources,
     };
 
     let mut gb = GraphBuilder::new();

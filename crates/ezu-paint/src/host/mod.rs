@@ -2,6 +2,9 @@
 //! conversion helpers between `ezu_graph::RasterBuf` and `tiny-skia` /
 //! PNG output.
 
+pub mod dem_decode;
+pub use dem_decode::{decode_dem_tile, stitch_padded_field, DemDecodeError, DemTile};
+
 #[cfg(feature = "http")]
 pub mod dem;
 #[cfg(feature = "http")]
@@ -98,53 +101,161 @@ impl Default for BrushBankLoader {
 impl AssetLoader for BrushBankLoader {
     fn load(&self, name: &str) -> Result<Asset, AssetError> {
         let src = name;
-        // Document-scoped names with a leading `@` are accepted for
-        // backwards compatibility with the original brush bank style.
-        let key = src.strip_prefix('@').unwrap_or(src);
-        if let Some(b) = self.bank.get(key) {
-            return Ok(Asset::Brush(b.clone()));
-        }
-        if let Some(dir) = &self.brushes_dir {
-            // Try `<dir>/<key>` then `<dir>/<key>.myb`.
-            let candidates = [dir.join(key), dir.join(format!("{key}.myb"))];
-            for path in &candidates {
-                if path.exists() {
-                    let bytes = std::fs::read_to_string(path).map_err(|e| AssetError::Decode {
-                        src: src.to_string(),
-                        msg: e.to_string(),
-                    })?;
-                    let brush = hokusai::myb::from_str(&bytes).map_err(|e| AssetError::Decode {
-                        src: src.to_string(),
-                        msg: e.to_string(),
-                    })?;
-                    return Ok(Asset::Brush(Arc::new(brush)));
+        match parse_src_scheme(src)? {
+            SrcScheme::Builtin(key) => {
+                // Two-step lookup: bundled brushes register under bare
+                // names, but a host-driven `bindSource` may insert
+                // under the full `builtin:NAME` key. Try both.
+                if let Some(b) = self.bank.get(key) {
+                    return Ok(Asset::Brush(b.clone()));
                 }
+                if let Some(b) = self.bank.get(src) {
+                    return Ok(Asset::Brush(b.clone()));
+                }
+                if let Some(img) = self.images.get(key) {
+                    return Ok(Asset::Image(img.clone()));
+                }
+                if let Some(img) = self.images.get(src) {
+                    return Ok(Asset::Image(img.clone()));
+                }
+                Err(AssetError::NotFound(src.to_string()))
+            }
+            SrcScheme::File(path) => {
+                // Host may pre-populate the bank under the full
+                // `file:PATH` key (wasm `bindSource`); try that first
+                // so wasm hosts work without disk.
+                if let Some(b) = self.bank.get(src) {
+                    return Ok(Asset::Brush(b.clone()));
+                }
+                if let Some(img) = self.images.get(src) {
+                    return Ok(Asset::Image(img.clone()));
+                }
+                if let Some(asset) = load_brush_file(self.brushes_dir.as_deref(), path, src)? {
+                    return Ok(asset);
+                }
+                if let Some(asset) = load_image_file(self.images_dir.as_deref(), path, src)? {
+                    return Ok(asset);
+                }
+                Err(AssetError::NotFound(src.to_string()))
+            }
+            SrcScheme::Http(_) => {
+                // Prefetched (CLI `prefetch_doc_assets`) or
+                // host-supplied (`bindSource`) — same insertion key:
+                // the full URL string.
+                if let Some(b) = self.bank.get(src) {
+                    return Ok(Asset::Brush(b.clone()));
+                }
+                if let Some(img) = self.images.get(src) {
+                    return Ok(Asset::Image(img.clone()));
+                }
+                Err(AssetError::NotFound(src.to_string()))
             }
         }
-        if let Some(img) = self.images.get(key) {
-            return Ok(Asset::Image(img.clone()));
-        }
-        if let Some(dir) = &self.images_dir {
-            // Try `<dir>/<key>` (exact), then a small list of supported
-            // image extensions. `image::open` sniffs by extension, so
-            // both PNG and WebP flow through the same decode path.
-            let candidates = [
-                dir.join(key),
-                dir.join(format!("{key}.png")),
-                dir.join(format!("{key}.webp")),
-            ];
-            for path in &candidates {
-                if path.exists() {
-                    let raster = decode_image_file(path).map_err(|e| AssetError::Decode {
-                        src: src.to_string(),
-                        msg: e,
-                    })?;
-                    return Ok(Asset::Image(Arc::new(raster)));
-                }
-            }
-        }
-        Err(AssetError::NotFound(src.to_string()))
     }
+}
+
+/// Parsed `src` URI scheme. Style `src` fields are required to carry an
+/// explicit scheme so built-ins, disk paths, and URLs are unambiguous.
+#[derive(Debug, Clone, Copy)]
+enum SrcScheme<'a> {
+    /// `builtin:NAME` — looked up in the loader's in-memory bank
+    /// (bundled brushes + host-registered resources).
+    Builtin(&'a str),
+    /// `file:PATH` — disk path resolved against `brushes_dir` /
+    /// `images_dir`; absolute paths are honoured as-is.
+    File(&'a str),
+    /// `http(s)://URL` — pre-fetched by the host and stored in the
+    /// bank under the full URL string. The `_unused` payload mirrors
+    /// the other variants for symmetry; the lookup uses the full
+    /// `src` (matched against `bank` / `images` by the URL key).
+    Http(#[allow(dead_code)] &'a str),
+}
+
+fn parse_src_scheme(src: &str) -> Result<SrcScheme<'_>, AssetError> {
+    if let Some(rest) = src.strip_prefix("builtin:") {
+        Ok(SrcScheme::Builtin(rest))
+    } else if let Some(rest) = src.strip_prefix("file:") {
+        Ok(SrcScheme::File(rest))
+    } else if src.starts_with("http://") || src.starts_with("https://") {
+        Ok(SrcScheme::Http(src))
+    } else {
+        Err(AssetError::Other(format!(
+            "src `{src}` is missing a scheme — use `builtin:NAME`, `file:PATH`, or `http(s)://URL`"
+        )))
+    }
+}
+
+fn load_brush_file(
+    dir: Option<&std::path::Path>,
+    path: &str,
+    src: &str,
+) -> Result<Option<Asset>, AssetError> {
+    // Absolute paths bypass the configured dir.
+    let abs = std::path::Path::new(path);
+    let candidates: Vec<std::path::PathBuf> = if abs.is_absolute() {
+        vec![abs.to_path_buf()]
+    } else {
+        match dir {
+            Some(d) => {
+                let base = d.join(path);
+                vec![base.clone(), base.with_extension("myb")]
+            }
+            None => return Ok(None),
+        }
+    };
+    for path in &candidates {
+        if !path.exists() || !is_brush_extension(path) {
+            continue;
+        }
+        let bytes = std::fs::read_to_string(path).map_err(|e| AssetError::Decode {
+            src: src.to_string(),
+            msg: e.to_string(),
+        })?;
+        let brush = hokusai::myb::from_str(&bytes).map_err(|e| AssetError::Decode {
+            src: src.to_string(),
+            msg: e.to_string(),
+        })?;
+        return Ok(Some(Asset::Brush(Arc::new(brush))));
+    }
+    Ok(None)
+}
+
+fn load_image_file(
+    dir: Option<&std::path::Path>,
+    path: &str,
+    src: &str,
+) -> Result<Option<Asset>, AssetError> {
+    let abs = std::path::Path::new(path);
+    let candidates: Vec<std::path::PathBuf> = if abs.is_absolute() {
+        vec![abs.to_path_buf()]
+    } else {
+        match dir {
+            Some(d) => {
+                let base = d.join(path);
+                vec![
+                    base.clone(),
+                    base.with_extension("png"),
+                    base.with_extension("webp"),
+                ]
+            }
+            None => return Ok(None),
+        }
+    };
+    for path in &candidates {
+        if !path.exists() || is_brush_extension(path) {
+            continue;
+        }
+        let raster = decode_image_file(path).map_err(|e| AssetError::Decode {
+            src: src.to_string(),
+            msg: e,
+        })?;
+        return Ok(Some(Asset::Image(Arc::new(raster))));
+    }
+    Ok(None)
+}
+
+fn is_brush_extension(path: &std::path::Path) -> bool {
+    matches!(path.extension().and_then(|s| s.to_str()), Some("myb"))
 }
 
 /// Per-render loader that overlays tile-scoped bindings on top of a
@@ -447,7 +558,8 @@ pub fn raster_to_rgba8(buf: &RasterBuf, tile_size: u32, pad: u32) -> Vec<u8> {
 /// given [`BrushBankLoader`]: brushes (`hokusai::Brush`), images
 /// (`RasterBuf`). Each entry's `src` may be a plain file path resolved
 /// against `base_dir` or an `http(s)://` URL fetched via `reqwest`.
-/// `gradient` assets are skipped (not yet supported here).
+/// Tile-scoped variants (`mvt`, `pmtiles`, `dem`) are skipped — those
+/// are fetched per-render by the CLI's source registries.
 ///
 /// Available with the `http` feature; off on `wasm32` since the JS
 /// host handles fetching there.
@@ -459,96 +571,76 @@ pub async fn prefetch_doc_assets(
 ) -> Result<(), String> {
     // Keys must match what the source/paint factories actually pass to
     // `AssetLoader::load` at eval time. `brush-file` and `image`
-    // resolve `@asset` → that asset's `src` string, so the bank lookup
-    // key is `decl.src` (not the asset name).
-    for (name, decl) in &doc.assets {
-        match decl.kind {
-            ezu_style::AssetKind::Brush => {
-                // Already pre-registered (built-in brush, or staged
-                // earlier by the host) — no fetch needed.
-                if loader.bank.contains_key(&decl.src) {
+    // resolve `@source-name` → that source's `src` string, so the bank
+    // lookup key is `decl.src` (not the source name).
+    for (name, decl) in &doc.sources {
+        let _ = base_dir; // file:-scheme srcs resolve at load() time
+        match decl {
+            ezu_style::SourceDecl::Brush(file) => {
+                // Only HTTP brushes need pre-fetching — `builtin:` is
+                // already in the bank, `file:` reads at eval time.
+                if !is_http_url(&file.src) {
                     continue;
                 }
-                let json = fetch_asset_text(&decl.src, base_dir, "myb")
+                if loader.bank.contains_key(&file.src) {
+                    continue;
+                }
+                let json = http_text(&file.src)
                     .await
                     .map_err(|e| format!("brush `{name}`: {e}"))?;
                 let brush = hokusai::myb::from_str(&json)
                     .map_err(|e| format!("brush `{name}` parse: {e}"))?;
-                loader.insert(decl.src.clone(), brush);
+                loader.insert(file.src.clone(), brush);
             }
-            ezu_style::AssetKind::Image | ezu_style::AssetKind::MaskImage => {
-                if loader.images.contains_key(&decl.src) {
+            ezu_style::SourceDecl::Image(file) => {
+                if !is_http_url(&file.src) {
                     continue;
                 }
-                let bytes = fetch_asset_bytes(&decl.src, base_dir, "png")
+                if loader.images.contains_key(&file.src) {
+                    continue;
+                }
+                let bytes = http_bytes(&file.src)
                     .await
                     .map_err(|e| format!("image `{name}`: {e}"))?;
                 let raster = decode_image_bytes(&bytes)
                     .map_err(|e| format!("image `{name}` decode: {e}"))?;
-                loader.insert_image(decl.src.clone(), raster);
+                loader.insert_image(file.src.clone(), raster);
             }
-            ezu_style::AssetKind::Gradient => {}
+            // Tile-scoped — handled per-render elsewhere.
+            ezu_style::SourceDecl::Mvt(_)
+            | ezu_style::SourceDecl::Pmtiles(_)
+            | ezu_style::SourceDecl::Dem(_) => {}
         }
     }
     Ok(())
 }
 
 #[cfg(feature = "http")]
-async fn fetch_asset_text(
-    src: &str,
-    base_dir: &std::path::Path,
-    default_ext: &str,
-) -> Result<String, String> {
-    if is_http_url(src) {
-        Ok(reqwest::get(src)
-            .await
-            .map_err(|e| e.to_string())?
-            .error_for_status()
-            .map_err(|e| e.to_string())?
-            .text()
-            .await
-            .map_err(|e| e.to_string())?)
-    } else {
-        let path = resolve_with_ext(base_dir, src, default_ext)
-            .ok_or_else(|| format!("no file at {}", base_dir.join(src).display()))?;
-        std::fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))
-    }
+async fn http_text(url: &str) -> Result<String, String> {
+    reqwest::get(url)
+        .await
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?
+        .text()
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(feature = "http")]
-async fn fetch_asset_bytes(
-    src: &str,
-    base_dir: &std::path::Path,
-    default_ext: &str,
-) -> Result<Vec<u8>, String> {
-    if is_http_url(src) {
-        Ok(reqwest::get(src)
-            .await
-            .map_err(|e| e.to_string())?
-            .error_for_status()
-            .map_err(|e| e.to_string())?
-            .bytes()
-            .await
-            .map_err(|e| e.to_string())?
-            .to_vec())
-    } else {
-        let path = resolve_with_ext(base_dir, src, default_ext)
-            .ok_or_else(|| format!("no file at {}", base_dir.join(src).display()))?;
-        std::fs::read(&path).map_err(|e| format!("reading {}: {e}", path.display()))
-    }
+async fn http_bytes(url: &str) -> Result<Vec<u8>, String> {
+    Ok(reqwest::get(url)
+        .await
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?
+        .bytes()
+        .await
+        .map_err(|e| e.to_string())?
+        .to_vec())
 }
 
 #[cfg(feature = "http")]
 fn is_http_url(s: &str) -> bool {
     s.starts_with("http://") || s.starts_with("https://")
-}
-
-#[cfg(feature = "http")]
-fn resolve_with_ext(base: &std::path::Path, src: &str, ext: &str) -> Option<std::path::PathBuf> {
-    let direct = base.join(src);
-    if direct.exists() {
-        return Some(direct);
-    }
-    let with_ext = base.join(format!("{src}.{ext}"));
-    with_ext.exists().then_some(with_ext)
 }

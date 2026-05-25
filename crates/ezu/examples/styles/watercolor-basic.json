@@ -3,10 +3,8 @@
   "version": "1",
   "tile-size": 512,
   "pad": 24,
-  "assets": {
-    "glazing": { "type": "brush", "src": "watercolor_glazing" }
-  },
   "sources": {
+    "glazing": { "type": "brush", "src": "builtin:watercolor_glazing" },
     "basemap": { "type": "mvt", "url": "https://papers.reearth.land/protomaps/tilejson.json" }
   },
   "nodes": {

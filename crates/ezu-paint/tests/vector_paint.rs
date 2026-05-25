@@ -117,7 +117,7 @@ fn stamp_places_image_at_each_point() {
     let json = r##"{
       "name": "demo",
       "tile-size": 32,
-      "assets": { "icon": { "type": "image", "src": "icon" } },
+      "sources": { "icon": { "type": "image", "src": "builtin:icon" } },
       "nodes": {
         "feats": { "op": "literal-geometry", "extent": 4096,
                    "points": [ [1024, 2048], [3072, 2048] ] },

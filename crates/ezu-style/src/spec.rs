@@ -27,11 +27,15 @@ pub struct Document {
     pub pad: u32,
     #[serde(default)]
     pub params: IndexMap<String, ParamDecl>,
-    #[serde(default)]
-    pub assets: IndexMap<String, AssetDecl>,
-    /// Per-tile data sources resolved by the host before each render and
-    /// bound as `tile.<source-name>` for source nodes to consume. The
-    /// payload type is source-kind specific (DEM, etc.).
+    /// External data the host provides. Mixes document-scoped resources
+    /// (`brush`, `image`) — resolved once per style — and tile-scoped
+    /// pyramids (`mvt`, `pmtiles`, `dem`) — fetched per tile. The
+    /// `type` discriminator selects the variant.
+    ///
+    /// Per-tile variants bind their payload under `tile.<source-name>`
+    /// for source nodes to consume. Document-scoped variants are
+    /// referenced by `@source-name` in node fields (the legacy
+    /// `assets` block from 0.2 is gone — its entries move here).
     #[serde(default)]
     pub sources: IndexMap<String, SourceDecl>,
     pub nodes: IndexMap<String, NodeSpec>,
@@ -87,41 +91,42 @@ pub enum ParamKind {
     Bool,
 }
 
-/// Declaration of a named asset (file-based source resolved by the host).
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub struct AssetDecl {
-    #[serde(rename = "type")]
-    pub kind: AssetKind,
-    pub src: String,
-}
-
-#[derive(Debug, Deserialize, PartialEq, Eq, Clone, Copy)]
-#[serde(rename_all = "kebab-case")]
-pub enum AssetKind {
-    Brush,
-    Image,
-    MaskImage,
-    Gradient,
-}
-
-/// Declaration of a per-tile data source. The host fetches the
-/// configured tiles before each render and binds the decoded payload
-/// for source nodes (`features`, `dem`) to consume.
+/// Declaration of one external data source. Mixes document-scoped
+/// resources (`brush`, `image`) — resolved once per style from a file
+/// path or `http(s)://` URL — and tile-scoped pyramids (`mvt`,
+/// `pmtiles`, `dem`) — fetched per tile via a URL template.
 ///
-/// - `dem` binds a stitched `ScalarField` under
-///   `tile.<source-name>` for `dem` source nodes.
+/// The legacy `mask-image` / `gradient` kinds from 0.2 are gone:
+/// `mask-image` was indistinguishable from `image` at runtime (host
+/// decoded both as RGBA8), so callers compose `image` →
+/// `pick-channel a` to get a single-channel mask; `gradient` was
+/// never wired up and the `gradient-*` node family covers that use
+/// case directly.
+///
+/// Binding conventions in the host's `TileLoader`:
+/// - Document-scoped: looked up by the source name (referenced in
+///   node fields as `@source-name`).
+/// - `dem` binds a stitched `ScalarField` under `tile.<source-name>`.
 /// - `mvt` and `pmtiles` bind every layer of the decoded vector tile
 ///   under `tile.<layer-name>` (i.e. by the layer's name *inside* the
-///   tile, not the source key — kept this way for backwards
-///   compatibility with the `tile.water` / `tile.roads` references the
-///   built-in styles already use).
+///   tile, not the source key — built-in styles reference layers like
+///   `tile.water` / `tile.roads`).
 #[derive(Debug, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum SourceDecl {
-    Dem(DemSource),
+    Brush(FileSource),
+    Image(FileSource),
     Mvt(MvtSource),
     Pmtiles(PmtilesSource),
+    Dem(DemSource),
+}
+
+/// A document-scoped, file-based source. `src` is a path the host
+/// resolves (relative to `--assets-dir`) or an `http(s)://` URL.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct FileSource {
+    pub src: String,
 }
 
 /// Templated XYZ MVT tile source.
@@ -305,14 +310,14 @@ mod tests {
     }
 
     #[test]
-    fn parses_params_and_assets() {
+    fn parses_params_and_sources() {
         let json = r##"{
           "name": "demo",
           "params": {
             "ink": { "type": "color", "default": "#000000" },
             "k":   { "type": "number", "default": 0.5, "min": 0, "max": 1 }
           },
-          "assets": {
+          "sources": {
             "brush": { "type": "brush", "src": "assets/wet.myb" }
           },
           "nodes": { "out": { "op": "solid", "color": "$ink" } },
@@ -320,7 +325,7 @@ mod tests {
         }"##;
         let doc = Document::from_json(json).unwrap();
         assert_eq!(doc.params["k"].kind, ParamKind::Number);
-        assert_eq!(doc.assets["brush"].kind, AssetKind::Brush);
+        assert!(matches!(doc.sources["brush"], SourceDecl::Brush(_)));
         assert_eq!(doc.params["k"].max, Some(1.0));
     }
 

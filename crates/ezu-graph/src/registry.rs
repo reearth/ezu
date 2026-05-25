@@ -33,10 +33,10 @@ pub struct BuiltNode {
 }
 
 /// Read-only context handed to factories: lets them resolve `$param`
-/// and asset references during construction.
+/// and source references during construction.
 pub struct FactoryCtx<'a> {
     pub params: &'a indexmap::IndexMap<String, spec::ParamDecl>,
-    pub assets: &'a indexmap::IndexMap<String, spec::AssetDecl>,
+    pub sources: &'a indexmap::IndexMap<String, spec::SourceDecl>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -216,15 +216,40 @@ impl NodeRegistry {
                         }
                     }
                 },
-                "assets": {
+                "sources": {
                     "type": "object",
                     "additionalProperties": {
-                        "type": "object",
-                        "required": ["type", "src"],
-                        "properties": {
-                            "type": { "enum": ["brush", "image", "mask-image", "gradient"] },
-                            "src": { "type": "string" }
-                        }
+                        "oneOf": [
+                            {
+                                "type": "object",
+                                "required": ["type", "src"],
+                                "properties": {
+                                    "type": { "enum": ["brush", "image"] },
+                                    "src": { "type": "string" }
+                                }
+                            },
+                            {
+                                "type": "object",
+                                "required": ["type", "url"],
+                                "properties": {
+                                    "type": { "enum": ["mvt", "pmtiles"] },
+                                    "url": { "type": "string" }
+                                }
+                            },
+                            {
+                                "type": "object",
+                                "required": ["type", "url", "encoding"],
+                                "properties": {
+                                    "type": { "const": "dem" },
+                                    "url": { "type": "string" },
+                                    "encoding": { "enum": ["terrarium", "mapbox-rgb"] },
+                                    "tile-size": { "type": "integer", "minimum": 1 },
+                                    "max-zoom": { "type": "integer", "minimum": 0 },
+                                    "neighbor-fetch": { "type": "boolean" },
+                                    "elevation-offset": { "type": "number" }
+                                }
+                            }
+                        ]
                     }
                 },
                 "nodes": {
