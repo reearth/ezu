@@ -187,7 +187,11 @@ The minimum op set ships in [`ezu-paint`](https://github.com/reearth/ezu/tree/ma
 - **Geometry (Voronoi family)** — `voronoi` (point set → diagram
   edges), `voronoi-fracture` (split polygons into Voronoi sub-cells
   via seed points), `medial-axis` (polygon → skeleton polylines for
-  river / lake centrelines and similar)
+  river / lake centrelines and similar), `triangulate` (Delaunay)
+- **Geometry (set + transform)** — `feature-boolean`
+  (union / intersection / difference / xor over polygons),
+  `transform` (translate / rotate / scale), `bbox` (axis-aligned
+  envelope), `smooth` (Chaikin), `densify`, `resample`
 - **Scalar math** — `map-range` (linear remap with optional clamp on a
   `ScalarField`), `threshold` (binarise with optional soft ramp)
 - **Gradients** — `gradient-linear`, `gradient-radial` (elliptical via

@@ -10,11 +10,16 @@
 //! decoder output. Internally each op promotes to `f64` as needed and
 //! rounds back on the way out.
 
+pub mod bbox;
+pub mod boolean;
 pub mod boundary;
 pub mod buffer;
 pub mod centroid;
 pub mod convert;
 pub mod convex_hull;
 pub mod hatch;
+pub mod resample;
 pub mod simplify;
+pub mod transform;
+pub mod triangulate;
 pub mod voronoi;

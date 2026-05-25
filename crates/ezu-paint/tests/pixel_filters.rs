@@ -1,8 +1,30 @@
-//! Smoke tests for the Tier 2 raster filter additions:
-//! `posterize`, `channel-shuffle`, `sharpen`.
+//! Smoke tests for per-pixel raster filters: `levels`, `posterize`,
+//! `channel-shuffle`, `sharpen`. All operate as pass-through over
+//! `Raster|Sprite`.
 
 mod common;
 use common::render;
+
+#[test]
+fn levels_with_gamma_lifts_midtones() {
+    // 50% gray, lifted by gamma=2.2 → noticeably brighter (~0xb4).
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 8,
+      "nodes": {
+        "base": { "op": "solid", "color": "#808080" },
+        "out":  { "op": "levels", "input": "@base", "gamma": 2.2 }
+      },
+      "output": "@out"
+    }"##;
+    let r = render(json, 8, 0);
+    let p = r.pixel(4, 4);
+    assert!(
+        p[0] > 0xa0 && p[0] < 0xd0,
+        "expected lifted gray, got {p:?}"
+    );
+    assert_eq!(p[3], 0xff);
+}
 
 #[test]
 fn posterize_snaps_midtone_to_quantised_level() {
@@ -102,9 +124,6 @@ fn sharpen_amplifies_edge_contrast() {
     }"##;
     let plain = render(json_plain, 32, 0);
     let sharp = render(json_sharp, 32, 0);
-    // Just outside the disk (≈ (29, 16)): plain shows the white
-    // background trending toward gray as we approach the rim;
-    // sharpen pushes it back toward white (overshoots).
     let p_plain = plain.pixel(29, 16);
     let p_sharp = sharp.pixel(29, 16);
     assert!(

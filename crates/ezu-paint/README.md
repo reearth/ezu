@@ -141,6 +141,13 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 | `voronoi` | `Features → Features` | Voronoi diagram of input points → edge polylines (2-point each). Polygons/lines ignored — pipe `centroid` upstream to derive seeds |
 | `voronoi-fracture` | `(Features, Features) → Features` | Fracture each polygon in `features` into Voronoi sub-cells seeded by `seeds`' points; cells clipped to the source polygon |
 | `medial-axis` | `Features → Features` | Approximate medial axis (skeleton) of each input polygon as polylines. `densify-px` controls boundary sampling, `min-branch-px` prunes short branches. Useful for river / lake centrelines |
+| `bbox` | `Features → Features` | Axis-aligned bounding box of every input vertex as a single rectangular polygon |
+| `transform` | `Features → Features` | Translate / rotate / scale every vertex. Rotation around an optional `pivot` |
+| `smooth` | `Features → Features` | Chaikin corner-smoothing on polylines and polygon rings; `iterations` controls passes |
+| `densify` | `Features → Features` | Insert intermediate vertices so no segment exceeds `target-px`. Originals preserved |
+| `resample` | `Features → Features` | Evenly-spaced vertices at `spacing-px` along arc length on each polyline / ring |
+| `feature-boolean` | `(Features, Features) → Features` | Polygon set ops: `mode: union/intersection/difference/symmetric-difference`. Lines / points on either input are dropped |
+| `triangulate` | `Features → Features` | Delaunay triangulation of input points → triangles as polygons |
 
 Each factory implements `NodeFactory::schema()` so editors picking up
 the registry-derived JSON Schema get per-op autocomplete. Adding a new

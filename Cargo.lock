@@ -667,6 +667,7 @@ dependencies = [
 name = "ezu-features"
 version = "0.1.0"
 dependencies = [
+ "delaunator",
  "ezu-core",
  "geo",
  "geojson",
