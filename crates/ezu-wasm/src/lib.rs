@@ -25,6 +25,10 @@
 //! discriminates the failure kind: `InvalidStyle`, `BrushParse`,
 //! `MvtDecode`, `RenderFailed`, `PngEncode`.
 
+mod log;
+
+pub use log::LogSink;
+
 use std::sync::Arc;
 
 use ezu_graph::{build_graph, Cache, CanvasInfo, Evaluator, Graph, ParamValues, PortValue, TileId};

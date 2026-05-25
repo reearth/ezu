@@ -109,6 +109,61 @@ const ctx = canvas.getContext("2d");
 ctx.putImageData(new ImageData(new Uint8ClampedArray(rgba.buffer), w, w), 0, 0);
 ```
 
+## Logging
+
+The renderer emits per-node `tracing` events (op name, cache hit/miss,
+output shape, eval duration). To surface them in the browser, install
+a `LogSink` once at startup:
+
+```js
+import init, { Renderer, LogSink } from "./ezu_wasm.js";
+await init();
+
+// Install once. The filter string is the same `EnvFilter` syntax the
+// CLI takes — e.g. "debug" or "info,ezu_graph::eval=debug".
+const sink = new LogSink("info,ezu_graph::eval=debug");
+
+// Option 1 — live forwarding (mirrors the CLI's `--verbose` output):
+sink.onEvent((e) => console.debug(`${e.target}: ${e.message}`, e.fields));
+
+// Option 2 — drain on demand (for a UI panel):
+function refreshLogPanel() {
+  for (const line of sink.drainLines()) appendToPanel(line);
+}
+setInterval(refreshLogPanel, 500);
+
+// Or pull structured records directly:
+for (const r of sink.drain()) {
+  // r = { level, target, message, fields, timestampMs }
+}
+```
+
+API surface:
+
+```ts
+class LogSink {
+  constructor(level: string);                // EnvFilter syntax
+  onEvent(cb: ((e: LogRecord) => void) | null): void;
+  drain(): LogRecord[];                       // structured, clears buffer
+  drainLines(): string[];                     // pre-formatted, clears buffer
+  clear(): void;
+  setCapacity(cap: number): void;             // default 4096; ring buffer
+  readonly len: number;
+}
+type LogRecord = {
+  level: "TRACE" | "DEBUG" | "INFO" | "WARN" | "ERROR";
+  target: string;             // e.g. "ezu_graph::eval"
+  message: string;
+  fields: Record<string, string>;
+  timestampMs: number;
+};
+```
+
+`new LogSink(...)` is idempotent — the underlying global subscriber is
+installed only on the first call. The `level` argument is honoured on
+first install and ignored afterwards; reconstructing the sink later
+just hands you a new handle to the same buffer.
+
 ## Building
 
 `wasm-pack` is the smoothest path. Two builds — one scalar, one with WebAssembly
