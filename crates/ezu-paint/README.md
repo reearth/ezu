@@ -90,6 +90,9 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 | `warp` | `Raster\|Sprite → same kind` | Domain warp via internal noise (same dial as `noise`: `type`, `scale-px`, `octaves`, `lacunarity`, `gain`, `seed`) plus `amp-px`. Pass-through over `Raster`/`Sprite`. `anchor: world` default → seamless across tile borders; grows upstream pad by `amp-px` |
 | `blend` | `Raster\|Sprite base + over [+ mask] → mirrors base` | W3C blend modes (normal/multiply/screen/overlay/darken/lighten/color-dodge/color-burn/hard-light/soft-light/difference/exclusion/hue/saturation/color/luminosity), `composite` operator (`over` default / `destination-out` for brush-eraser), `clip` (source-atop, PS clipping mask), optional alpha `mask`, `opacity`. All three inputs accept `Raster` or `Sprite`; output kind mirrors `base` |
 | `brightness-contrast` | `Raster\|Sprite → same kind` | Linear brightness shift + contrast slope around mid-gray; pass-through over `Raster`/`Sprite` |
+| `levels` | `Raster\|Sprite → same kind` | Photoshop-style levels: remap `[in-black, in-white]` through `gamma` onto `[out-black, out-white]`; generalises `brightness-contrast` with a midtone curve |
+| `erode` / `dilate` | `Raster\|Sprite → same kind` | Per-channel morphological min / max over a square kernel of `radius-px`. Classic mask cleanup after `color-to-alpha`. Grows upstream pad by `radius-px` |
+| `edge-detect` | `Raster\|Sprite → same kind` | Sobel gradient magnitude per channel, scaled by `strength` and clamped. Grows upstream pad by 1 |
 | `hsl` | `Raster\|Sprite → same kind` | Hue rotation (degrees) + saturation/lightness shift in `[-1, 1]`; pass-through over `Raster`/`Sprite` |
 | `invert` | `Raster\|Sprite → same kind` | Negate RGB (alpha preserved); pass-through over `Raster`/`Sprite` |
 | `color-to-alpha` | `Raster\|Sprite → same kind` | Chroma-key: pixels near `color` (Chebyshev distance) become transparent with `threshold`/`softness` ramp; pass-through over `Raster`/`Sprite` |
@@ -100,6 +103,8 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 | `hillshade` | `ScalarField → Raster` | Horn-method analytical hillshade. `azimuth-deg` / `altitude-deg` light angle, `z-factor` / `exaggeration`, optional ESRI `multidirectional`. `mode: shade` (grayscale) or `mode: relief` (transparent black for multiply-blend over a base map). Geographically accurate only when the input's `geo_scale` is populated (DEM source); otherwise produces pixel-space gradients (fine for stylization) |
 | `slope` | `ScalarField → Raster` | Per-pixel slope angle as grayscale, normalised to `0..1` against `max-deg`; optional `invert`. Same `geo_scale` caveat as `hillshade` |
 | `color-ramp` | `ScalarField → Raster` | Map scalar values to colour via a `stops: [{value, color}]` table; linear interp, end colours clamp out-of-range. Canonical use is hypsometric tinting over an elevation `ScalarField` (`stops[i].value` = metres) but works on any scalar field |
+| `map-range` | `ScalarField → ScalarField` | Linearly remap from `[in-min, in-max]` to `[out-min, out-max]` with optional `clamp`. Normalise a DEM or distance field into `[0, 1]` before `color-ramp` |
+| `threshold` | `ScalarField → ScalarField` | Binarise against `value`: emit `low` for samples ≤ `value`, `high` otherwise; `softness` gives a linear ramp instead of a hard step |
 
 **Sources** (`nodes::source`)
 

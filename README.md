@@ -175,8 +175,13 @@ The minimum op set ships in [`ezu-paint`](https://github.com/reearth/ezu/tree/ma
   built-in noise; world-anchored for seamless tile borders). Both grow
   upstream pad by `amp-px` and expose `clamp` / `transparent` /
   `mirror` boundary modes
-- **Adjustment** — `brightness-contrast`, `hsl` (hue rotation +
+- **Adjustment** — `brightness-contrast`, `levels` (Photoshop-style
+  in/out black/white + gamma), `hsl` (hue rotation +
   saturation/lightness shift), `invert`, `color-to-alpha` (chroma key)
+- **Morphology / edges** — `erode` / `dilate` (per-channel min/max box
+  filter, for mask cleanup), `edge-detect` (Sobel gradient magnitude)
+- **Scalar math** — `map-range` (linear remap with optional clamp on a
+  `ScalarField`), `threshold` (binarise with optional soft ramp)
 - **Gradients** — `gradient-linear`, `gradient-radial` (elliptical via
   `aspect`), `gradient-conic`, `gradient-diamond`. All take color stops
   and an `anchor: "tile" | "world"` for tile-local or world-anchored
