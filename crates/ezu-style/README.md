@@ -90,8 +90,9 @@ pub struct Document {
     pub tile_size: u32,
     pub pad: u32,
     pub params: IndexMap<String, ParamDecl>,
-    pub assets: IndexMap<String, AssetDecl>,
-    pub sources: IndexMap<String, SourceDecl>,   // per-tile data (DEM, …)
+    /// Document- and tile-scoped external data: brushes, images,
+    /// MVT / PMTiles / DEM pyramids.
+    pub sources: IndexMap<String, SourceDecl>,
     pub nodes: IndexMap<String, NodeSpec>,
     pub output: NodeRef,
 }
