@@ -8,7 +8,7 @@ in-memory brush bank — it renders one tile at a time from raw MVT bytes.
 ## Install
 
 ```sh
-npm install ezu
+npm install @reearth/ezu
 ```
 
 ## Usage
@@ -26,7 +26,7 @@ The package ships three builds and picks one automatically via the
 ### Bundler / Cloudflare Workers / Node.js
 
 ```js
-import { Renderer } from "ezu";
+import { Renderer } from "@reearth/ezu";
 
 const renderer = new Renderer(styleJson);
 const png = renderer.render(mvtBytes, z, x, y);
@@ -35,7 +35,7 @@ const png = renderer.render(mvtBytes, z, x, y);
 ### Browser (native ESM, no bundler)
 
 ```js
-import init, { Renderer } from "ezu/web";
+import init, { Renderer } from "@reearth/ezu/web";
 
 await init();
 const renderer = new Renderer(styleJson);
@@ -44,7 +44,7 @@ const renderer = new Renderer(styleJson);
 ### Explicit build selection
 
 If the auto-resolved entry doesn't fit your toolchain, import a build
-directly: `ezu/web`, `ezu/bundler`, or `ezu/nodejs`.
+directly: `@reearth/ezu/web`, `@reearth/ezu/bundler`, or `@reearth/ezu/nodejs`.
 
 ## API
 

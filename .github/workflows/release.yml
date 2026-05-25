@@ -96,7 +96,7 @@ jobs:
     # then CI takes over from the next tag.
     environment:
       name: npm
-      url: https://www.npmjs.com/package/ezu
+      url: https://www.npmjs.com/package/@reearth/ezu
     permissions:
       contents: read
       id-token: write   # required for Trusted Publishing + provenance
@@ -117,10 +117,16 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
-      # Trusted Publishing requires npm >= 11.5.1; Node 22 ships with an
-      # older npm, so upgrade explicitly.
-      - name: Upgrade npm CLI
-        run: npm install -g npm@latest
+      # Pin the npm version via Corepack so local and CI agree on what
+      # `npm publish` does. The pinned version lives in
+      # `crates/ezu-wasm/npm/package.json`'s `packageManager` field;
+      # Trusted Publishing requires npm >= 11.5.1, and the pinned
+      # version satisfies that.
+      - name: Activate pinned npm via Corepack
+        working-directory: crates/ezu-wasm/npm
+        run: |
+          corepack enable npm
+          npm --version
 
       - name: Install wasm-bindgen-cli
         uses: taiki-e/install-action@9185c192a96ba09167ad8663015b3fbbf007ec79 # v2.62.55
@@ -141,9 +147,10 @@ jobs:
         working-directory: crates/ezu-wasm/npm
         run: |
           # Skip if this version is already on npm (idempotent re-run).
+          name=$(node -p "require('./package.json').name")
           version=$(node -p "require('./package.json').version")
-          if npm view "ezu@$version" version >/dev/null 2>&1; then
-            echo "::notice::ezu@$version already on npm, skipping"
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "::notice::$name@$version already on npm, skipping"
             exit 0
           fi
           # --provenance is implied when publishing via Trusted Publishing

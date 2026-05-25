@@ -1,5 +1,5 @@
 {
-  "name": "ezu",
+  "name": "@reearth/ezu",
   "version": "0.2.0",
   "description": "Painterly map renderer — WebAssembly bindings",
   "license": "MIT OR Apache-2.0",
@@ -10,6 +10,7 @@
   "homepage": "https://github.com/reearth/ezu",
   "keywords": ["map", "renderer", "wasm", "webassembly", "mvt", "painterly"],
   "type": "module",
+  "packageManager": "npm@11.15.0",
   "scripts": {
     "prepublishOnly": "cd ../../.. && bash scripts/build-wasm-npm.sh"
   },
