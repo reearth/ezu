@@ -12,6 +12,7 @@ mod color_ramp;
 mod color_to_alpha;
 mod displace;
 mod edge_detect;
+mod generator_kind;
 mod gradient_common;
 mod gradient_conic;
 mod gradient_diamond;

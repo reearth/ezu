@@ -1,24 +1,34 @@
-//! `noise` — `() -> Raster`. Procedural noise raster source.
+//! `noise` — procedural noise source. Emits a coloured `Raster`
+//! (default) or a raw `ScalarField` depending on the `kind` field.
 //!
-//! A single op covering several noise flavours, all driven by the same
-//! shared parameters:
+//! Shared parameters:
 //!
 //! - `type`: `white` | `value` | `perlin` | `simplex` | `worley`
 //! - `scale-px`: wavelength in pixels at the current zoom (required)
 //! - `octaves` / `lacunarity` / `gain`: fBm stack (set `octaves: 1` to
 //!   disable)
 //! - `warp-amp` / `warp-freq`: optional domain warp (turbulence)
-//! - `low-color` / `high-color` / `opacity`: map the normalized noise
-//!   value to RGBA
 //! - `anchor`: `world` (default, seamless across tile borders) or
 //!   `tile` (per-tile pattern)
 //! - `seed`: explicit `u32`, otherwise derived from `EvalCtx::rng_seed`
+//!
+//! Raster mode (default, `kind: "raster"`) also takes
+//! `low-color` / `high-color` / `opacity` to map the normalised noise
+//! value to RGBA.
+//!
+//! Scalar mode (`kind: "scalar"`) emits the **raw** fBm value as a
+//! `ScalarField` (roughly `[-1, 1]` for value/perlin/simplex,
+//! `[0, 1]`-ish for worley/white). Compose with `map-range` to
+//! normalise before feeding `hillshade` / `slope` / `color-ramp`. The
+//! field has no `geo_scale` — gradient consumers treat each pixel
+//! as one unit, so the result is stylization-only, not geographically
+//! faithful.
 
 use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, Node,
-    NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    NodeFactory, PortKind, PortSpec, PortValue, RasterBuf, ScalarField,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -26,8 +36,15 @@ use xxhash_rust::xxh3::Xxh3;
 use crate::nodes::common::{read_color, read_number, read_number_or, read_optional_string, Anchor};
 use crate::nodes::raster::noise_field::{fbm, NoiseKind, Sampler};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutputKind {
+    Raster,
+    Scalar,
+}
+
 struct NoiseNode {
     kind: NoiseKind,
+    out_kind: OutputKind,
     scale_px: f64,
     octaves: u32,
     lacunarity: f64,
@@ -49,7 +66,10 @@ impl Node for NoiseNode {
         &[]
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
-        PortKind::Raster
+        match self.out_kind {
+            OutputKind::Raster => PortKind::Raster,
+            OutputKind::Scalar => PortKind::ScalarField,
+        }
     }
     fn coord_space(&self) -> CoordSpace {
         match self.anchor {
@@ -61,7 +81,6 @@ impl Node for NoiseNode {
         let size = ctx.canvas.padded_size();
         let pad = ctx.canvas.pad as f64;
         let tile_size = ctx.canvas.tile_size as f64;
-        let mut out = RasterBuf::new(size, size);
 
         let seed = self
             .seed
@@ -78,7 +97,6 @@ impl Node for NoiseNode {
             None
         };
 
-        // World-origin of this tile in pixels at the current zoom.
         let (origin_x, origin_y) = match self.anchor {
             Anchor::World => (ctx.tile.x as f64 * tile_size, ctx.tile.y as f64 * tile_size),
             Anchor::Tile => (0.0, 0.0),
@@ -87,45 +105,70 @@ impl Node for NoiseNode {
         let inv_scale = 1.0 / self.scale_px;
         let warp_inv_scale = inv_scale * self.warp_freq;
 
-        let [lr, lg, lb, la] = self.low;
-        let [hr, hg, hb, ha] = self.high;
-        let opacity = self.opacity.clamp(0.0, 1.0);
-
-        for y in 0..size {
+        // Sampling kernel shared between raster and scalar modes.
+        let sample_at = |x: u32, y: u32| -> f64 {
             let py = origin_y + (y as f64) - pad;
-            for x in 0..size {
-                let px = origin_x + (x as f64) - pad;
+            let px = origin_x + (x as f64) - pad;
+            let (sx, sy) = if let Some((wa, wb)) = warp.as_ref() {
+                let wx = wa.sample(px * warp_inv_scale, py * warp_inv_scale);
+                let wy = wb.sample(px * warp_inv_scale, py * warp_inv_scale);
+                (
+                    (px + wx * self.warp_amp) * inv_scale,
+                    (py + wy * self.warp_amp) * inv_scale,
+                )
+            } else {
+                (px * inv_scale, py * inv_scale)
+            };
+            fbm(&main, sx, sy, self.octaves, self.lacunarity, self.gain)
+        };
 
-                let (sx, sy) = if let Some((wa, wb)) = warp.as_ref() {
-                    let wx = wa.sample(px * warp_inv_scale, py * warp_inv_scale);
-                    let wy = wb.sample(px * warp_inv_scale, py * warp_inv_scale);
-                    (
-                        (px + wx * self.warp_amp) * inv_scale,
-                        (py + wy * self.warp_amp) * inv_scale,
-                    )
-                } else {
-                    (px * inv_scale, py * inv_scale)
-                };
-
-                let n = fbm(&main, sx, sy, self.octaves, self.lacunarity, self.gain);
-                let t = ((n * 0.5) + 0.5).clamp(0.0, 1.0) as f32;
-
-                let r = lr + (hr - lr) * t;
-                let g = lg + (hg - lg) * t;
-                let b = lb + (hb - lb) * t;
-                let a = (la + (ha - la) * t) * opacity;
-                let i = ((y * size + x) * 4) as usize;
-                out.pixels[i] = (r * a * 255.0).round() as u8;
-                out.pixels[i + 1] = (g * a * 255.0).round() as u8;
-                out.pixels[i + 2] = (b * a * 255.0).round() as u8;
-                out.pixels[i + 3] = (a * 255.0).round() as u8;
+        match self.out_kind {
+            OutputKind::Scalar => {
+                let mut values: Vec<f32> = Vec::with_capacity((size * size) as usize);
+                for y in 0..size {
+                    for x in 0..size {
+                        values.push(sample_at(x, y) as f32);
+                    }
+                }
+                Ok(PortValue::ScalarField(Arc::new(ScalarField {
+                    width: size,
+                    height: size,
+                    values: values.into(),
+                    nodata: None,
+                    geo_scale: None,
+                })))
+            }
+            OutputKind::Raster => {
+                let [lr, lg, lb, la] = self.low;
+                let [hr, hg, hb, ha] = self.high;
+                let opacity = self.opacity.clamp(0.0, 1.0);
+                let mut out = RasterBuf::new(size, size);
+                for y in 0..size {
+                    for x in 0..size {
+                        let n = sample_at(x, y);
+                        let t = ((n * 0.5) + 0.5).clamp(0.0, 1.0) as f32;
+                        let r = lr + (hr - lr) * t;
+                        let g = lg + (hg - lg) * t;
+                        let b = lb + (hb - lb) * t;
+                        let a = (la + (ha - la) * t) * opacity;
+                        let i = ((y * size + x) * 4) as usize;
+                        out.pixels[i] = (r * a * 255.0).round() as u8;
+                        out.pixels[i + 1] = (g * a * 255.0).round() as u8;
+                        out.pixels[i + 2] = (b * a * 255.0).round() as u8;
+                        out.pixels[i + 3] = (a * 255.0).round() as u8;
+                    }
+                }
+                Ok(PortValue::Raster(Arc::new(out)))
             }
         }
-        Ok(PortValue::Raster(Arc::new(out)))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"noise");
         h.update(&[self.kind.tag()]);
+        h.update(match self.out_kind {
+            OutputKind::Raster => b"r",
+            OutputKind::Scalar => b"s",
+        });
         h.update(&self.scale_px.to_le_bytes());
         h.update(&self.octaves.to_le_bytes());
         h.update(&self.lacunarity.to_le_bytes());
@@ -171,6 +214,16 @@ impl NodeFactory for NoiseFactory {
                     "unknown noise type `{s}`, expected white/value/perlin/simplex/worley"
                 ),
             })?,
+        };
+        let out_kind = match read_optional_string(fields, "kind")?.as_deref() {
+            None | Some("raster") => OutputKind::Raster,
+            Some("scalar") | Some("scalar-field") => OutputKind::Scalar,
+            Some(other) => {
+                return Err(FactoryError::BadField {
+                    field: "kind".into(),
+                    msg: format!("expected `raster` or `scalar`, got `{other}`"),
+                });
+            }
         };
 
         let scale_px = read_number(fields, "scale-px", ctx)?;
@@ -222,6 +275,7 @@ impl NodeFactory for NoiseFactory {
         Ok(BuiltNode {
             node: Box::new(NoiseNode {
                 kind,
+                out_kind,
                 scale_px,
                 octaves,
                 lacunarity,
@@ -239,12 +293,17 @@ impl NodeFactory for NoiseFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Procedural noise raster source. `scale-px` is the wavelength in pixels at the current zoom; `octaves`>1 stacks fBm; `warp-amp`>0 enables domain warp. `anchor=world` (default) keeps the field seamless across tile borders.",
+            "description": "Procedural noise source. With `kind: raster` (default) the noise is mapped to RGBA via `low-color`/`high-color`/`opacity`. With `kind: scalar` it emits a `ScalarField` of raw fBm values (~[-1, 1] for value/perlin/simplex) — compose with `map-range` before feeding `hillshade`/`color-ramp`. `anchor=world` (default) keeps the field seamless across tile borders.",
             "properties": {
                 "type": {
                     "type": "string",
                     "enum": ["white", "value", "perlin", "simplex", "worley"],
                     "default": "perlin",
+                },
+                "kind": {
+                    "type": "string",
+                    "enum": ["raster", "scalar"],
+                    "default": "raster",
                 },
                 "scale-px": schema_frag::px_number(),
                 "octaves": { "type": "integer", "minimum": 1, "maximum": 12, "default": 1 },

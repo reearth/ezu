@@ -153,10 +153,13 @@ GeoJSON vs synthesized) is a host concern, not a node concern.
 
 The minimum op set ships in [`ezu-paint`](https://github.com/reearth/ezu/tree/main/crates/ezu-paint):
 
-- **Sources** — `solid`, `circle`, `noise` (white / value / perlin /
-  simplex / worley, with fBm octaves and domain warp, world-anchored
-  for seamless tile borders), `features`, `brush-file`, `image` (load
-  a PNG/WebP asset as a `Sprite` for placement / tiling ops)
+- **Sources** — `solid`, `circle` (both with optional `kind: sprite`
+  for synthetic placement/tiling source), `noise` (white / value /
+  perlin / simplex / worley, with fBm octaves and domain warp,
+  world-anchored for seamless tile borders; `kind: scalar` emits raw
+  fBm as a `ScalarField` for terrain stylization), `features`,
+  `brush-file`, `image` (load a PNG/WebP asset as a `Sprite` for
+  placement / tiling ops)
 - **Rasterization** — `fill-solid` (tiny-skia + libblur), `fill-dabs`
   (hokusai scatter-dab fill, **world-deterministic** so dabs stay
   seamless across tile boundaries), `line` (hokusai stroke along

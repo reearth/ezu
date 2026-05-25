@@ -82,9 +82,9 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 
 | Op | Inputs → Output | Notes |
 |---|---|---|
-| `solid` | `() → Raster` | Constant-color fill |
-| `circle` | `() → Raster` | Centered disk with optional edge falloff |
-| `noise` | `() → Raster` | Procedural noise: `type` (`white`/`value`/`perlin`/`simplex`/`worley`), `scale-px`, fBm via `octaves`/`lacunarity`/`gain`, optional domain warp (`warp-amp`/`warp-freq`), `low-color`/`high-color` ramp, `opacity`, `anchor` (`world` default — seamless across tile borders) |
+| `solid` | `() → Raster\|Sprite` | Constant-color fill. `kind: raster` (default) fills the canvas; `kind: sprite` emits a Sprite at `width-px × height-px` |
+| `circle` | `() → Raster\|Sprite` | Centered disk with optional edge falloff. Sprite mode anchors radius to the shorter sprite side |
+| `noise` | `() → Raster\|ScalarField` | Procedural noise: `type` (`white`/`value`/`perlin`/`simplex`/`worley`), `scale-px`, fBm via `octaves`/`lacunarity`/`gain`, optional domain warp (`warp-amp`/`warp-freq`), `anchor` (`world` default — seamless across tile borders). `kind: raster` (default) maps the noise to RGBA via `low-color`/`high-color`/`opacity`; `kind: scalar` emits the raw fBm value as a `ScalarField` for downstream `map-range` / `hillshade` / `color-ramp` |
 | `blur` | `Raster\|Sprite → same kind` | Gaussian (libblur); pass-through over `Raster`/`Sprite` — the output kind mirrors the input. Grows upstream pad by 3σ |
 | `displace` | `Raster\|Sprite + Raster\|Sprite → mirrors main input` | Photoshop-style displacement map. `displacement` raster's R/G channels (0.5 = no offset) drive per-pixel offsets up to `amp-px`. Output kind mirrors the main `input`. Grows upstream pad by `amp-px`; `boundary` (`clamp`/`transparent`/`mirror`) handles edge sampling |
 | `warp` | `Raster\|Sprite → same kind` | Domain warp via internal noise (same dial as `noise`: `type`, `scale-px`, `octaves`, `lacunarity`, `gain`, `seed`) plus `amp-px`. Pass-through over `Raster`/`Sprite`. `anchor: world` default → seamless across tile borders; grows upstream pad by `amp-px` |
@@ -99,10 +99,10 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 | `posterize` | `Raster\|Sprite → same kind` | Quantise each RGB channel into `steps` evenly-spaced levels (non-premultiplied sRGB). Alpha preserved |
 | `channel-shuffle` | `Raster\|Sprite → same kind` | Rearrange RGBA channels: each output `r`/`g`/`b`/`a` names which input channel (or constant `0`/`1`) feeds it. Operates in non-premultiplied sRGB |
 | `sharpen` | `Raster\|Sprite → same kind` | 4-neighbour Laplacian sharpen with strength `amount`. Grows upstream pad by 1 |
-| `gradient-linear` | `() → Raster` | Linear gradient between two points. `start`/`end` as `[x, y]` fractions, `stops: [[t, "#hex"], …]`, optional `anchor: "tile" \| "world"` |
-| `gradient-radial` | `() → Raster` | Radial / elliptical gradient. `center`, `radius`, optional `aspect` |
-| `gradient-conic` | `() → Raster` | Sweep gradient around `center` starting at `start-angle` (degrees) |
-| `gradient-diamond` | `() → Raster` | Manhattan-distance gradient. `center`, `radius` |
+| `gradient-linear` | `() → Raster\|Sprite` | Linear gradient between two points. `start`/`end` as `[x, y]` fractions, `stops: [[t, "#hex"], …]`, optional `anchor: "tile" \| "world"`. `kind: sprite` switches to sprite-local `[0, 1]` coords at `width-px × height-px` |
+| `gradient-radial` | `() → Raster\|Sprite` | Radial / elliptical gradient. `center`, `radius`, optional `aspect`. Sprite mode same as linear |
+| `gradient-conic` | `() → Raster\|Sprite` | Sweep gradient around `center` starting at `start-angle` (degrees). Sprite mode same as linear |
+| `gradient-diamond` | `() → Raster\|Sprite` | Manhattan-distance gradient. `center`, `radius`. Sprite mode same as linear |
 | `hillshade` | `ScalarField → Raster` | Horn-method analytical hillshade. `azimuth-deg` / `altitude-deg` light angle, `z-factor` / `exaggeration`, optional ESRI `multidirectional`. `mode: shade` (grayscale) or `mode: relief` (transparent black for multiply-blend over a base map). Geographically accurate only when the input's `geo_scale` is populated (DEM source); otherwise produces pixel-space gradients (fine for stylization) |
 | `slope` | `ScalarField → Raster` | Per-pixel slope angle as grayscale, normalised to `0..1` against `max-deg`; optional `invert`. Same `geo_scale` caveat as `hillshade` |
 | `color-ramp` | `ScalarField → Raster` | Map scalar values to colour via a `stops: [{value, color}]` table; linear interp, end colours clamp out-of-range. Canonical use is hypsometric tinting over an elevation `ScalarField` (`stops[i].value` = metres) but works on any scalar field |

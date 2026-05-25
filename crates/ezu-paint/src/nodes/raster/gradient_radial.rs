@@ -1,12 +1,11 @@
-//! `gradient-radial` — `() -> Raster`. Radial gradient from `center`
-//! outward. `aspect != 1.0` makes it elliptical (>1 stretches X,
-//! <1 stretches Y). Coordinates in tile- or world-fractions.
-
-use std::sync::Arc;
+//! `gradient-radial` — Radial gradient from `center` outward.
+//! `aspect != 1.0` makes it elliptical (>1 stretches X, <1 stretches
+//! Y). Coordinates in tile/world fractions, or `[0, 1]` sprite-local
+//! fractions in `kind: sprite` mode.
 
 use ezu_graph::{
     BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, Node, NodeFactory,
-    PortKind, PortSpec, PortValue, RasterBuf,
+    PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -14,7 +13,8 @@ use xxhash_rust::xxh3::Xxh3;
 use crate::nodes::common::{
     read_anchor, read_number_or, read_stops, read_xy, sample_stops, Anchor,
 };
-use crate::nodes::raster::gradient_common::pixel_to_user;
+use crate::nodes::raster::generator_kind::{parse_generator_kind, GeneratorKind};
+use crate::nodes::raster::gradient_common::render_gradient;
 
 struct GradientRadialNode {
     center: [f32; 2],
@@ -22,6 +22,7 @@ struct GradientRadialNode {
     aspect: f32,
     stops: Vec<(f32, [f32; 4])>,
     anchor: Anchor,
+    out_kind: GeneratorKind,
 }
 
 impl Node for GradientRadialNode {
@@ -32,35 +33,30 @@ impl Node for GradientRadialNode {
         &[]
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
-        PortKind::Raster
+        match self.out_kind {
+            GeneratorKind::Raster => PortKind::Raster,
+            GeneratorKind::Sprite { .. } => PortKind::Sprite,
+        }
     }
     fn coord_space(&self) -> CoordSpace {
-        match self.anchor {
-            Anchor::Tile => CoordSpace::Tile,
-            Anchor::World => CoordSpace::World,
+        match (self.out_kind, self.anchor) {
+            (GeneratorKind::Sprite { .. }, _) => CoordSpace::Tile,
+            (_, Anchor::Tile) => CoordSpace::Tile,
+            (_, Anchor::World) => CoordSpace::World,
         }
     }
     fn eval(&self, ctx: &EvalCtx<'_>, _: &[Option<PortValue>]) -> Result<PortValue, EvalError> {
-        let size = ctx.canvas.padded_size();
-        let mut out = RasterBuf::new(size, size);
         let r = self.radius.max(1e-6);
         let ax = self.aspect.max(1e-6);
-        for y in 0..size {
-            for x in 0..size {
-                let (ux, uy) = pixel_to_user(x, y, ctx, self.anchor);
-                let dx = (ux - self.center[0]) / ax;
-                let dy = uy - self.center[1];
-                let t = (dx * dx + dy * dy).sqrt() / r;
-                let c = sample_stops(&self.stops, t);
-                let i = ((y * size + x) * 4) as usize;
-                let a = c[3].clamp(0.0, 1.0);
-                out.pixels[i] = (c[0].clamp(0.0, 1.0) * a * 255.0).round() as u8;
-                out.pixels[i + 1] = (c[1].clamp(0.0, 1.0) * a * 255.0).round() as u8;
-                out.pixels[i + 2] = (c[2].clamp(0.0, 1.0) * a * 255.0).round() as u8;
-                out.pixels[i + 3] = (a * 255.0).round() as u8;
-            }
-        }
-        Ok(PortValue::Raster(Arc::new(out)))
+        let center = self.center;
+        let stops = &self.stops;
+        let sample = |ux: f32, uy: f32| -> [f32; 4] {
+            let dx = (ux - center[0]) / ax;
+            let dy = uy - center[1];
+            let t = (dx * dx + dy * dy).sqrt() / r;
+            sample_stops(stops, t)
+        };
+        Ok(render_gradient(ctx, self.out_kind, self.anchor, sample))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"gradient-radial");
@@ -74,6 +70,12 @@ impl Node for GradientRadialNode {
             for v in c {
                 h.update(&v.to_le_bytes());
             }
+        }
+        let (tag, dims) = self.out_kind.hash_tag();
+        h.update(&tag);
+        if let Some((w, hh)) = dims {
+            h.update(&w.to_le_bytes());
+            h.update(&hh.to_le_bytes());
         }
     }
 }
@@ -93,6 +95,7 @@ impl NodeFactory for GradientRadialFactory {
         let aspect = read_number_or(fields, "aspect", ctx, 1.0)? as f32;
         let stops = read_stops(fields, "stops", ctx)?;
         let anchor = read_anchor(fields, "anchor", ctx)?;
+        let out_kind = parse_generator_kind(fields, ctx)?;
         Ok(BuiltNode {
             node: Box::new(GradientRadialNode {
                 center,
@@ -100,19 +103,23 @@ impl NodeFactory for GradientRadialFactory {
                 aspect,
                 stops,
                 anchor,
+                out_kind,
             }),
             connections: vec![],
         })
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Radial gradient from `center` outward. Gradient parameter is Euclidean distance / radius. `aspect > 1` stretches the ellipse along X, `< 1` along Y.",
+            "description": "Radial gradient from `center` outward. Gradient parameter is Euclidean distance / radius. `aspect > 1` stretches the ellipse along X, `< 1` along Y. `kind: sprite` switches to sprite-local [0, 1] coords.",
             "properties": {
                 "center": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "default": [0.5, 0.5] },
                 "radius": { "type": "number", "minimum": 0.0, "default": 0.5 },
                 "aspect": { "type": "number", "minimum": 0.0, "default": 1.0 },
                 "stops": { "type": "array", "items": { "type": "array", "minItems": 2, "maxItems": 2 }, "minItems": 2 },
                 "anchor": { "type": "string", "enum": ["tile", "world"], "default": "tile" },
+                "kind": { "type": "string", "enum": ["raster", "sprite"], "default": "raster" },
+                "width-px": { "type": "integer", "minimum": 1 },
+                "height-px": { "type": "integer", "minimum": 1 },
             },
             "required": ["stops"],
         })

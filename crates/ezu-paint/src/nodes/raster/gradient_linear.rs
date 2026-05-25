@@ -1,25 +1,25 @@
-//! `gradient-linear` — `() -> Raster`. Linear gradient between two
-//! points. Coordinates are fractions: `[0, 0]` = top-left, `[1, 1]` =
-//! bottom-right of the tile (tile-anchored) or of the full Mercator
-//! world at z=0 (world-anchored).
-
-use std::sync::Arc;
+//! `gradient-linear` — Linear gradient between two points. Coordinates
+//! are fractions: `[0, 0]` = top-left, `[1, 1]` = bottom-right of the
+//! tile (tile-anchored), of the full Mercator world at z=0
+//! (world-anchored), or of the sprite (`kind: sprite`).
 
 use ezu_graph::{
     BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, Node, NodeFactory,
-    PortKind, PortSpec, PortValue, RasterBuf,
+    PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{read_anchor, read_stops, read_xy, sample_stops, Anchor};
-use crate::nodes::raster::gradient_common::pixel_to_user;
+use crate::nodes::raster::generator_kind::{parse_generator_kind, GeneratorKind};
+use crate::nodes::raster::gradient_common::render_gradient;
 
 struct GradientLinearNode {
     start: [f32; 2],
     end: [f32; 2],
     stops: Vec<(f32, [f32; 4])>,
     anchor: Anchor,
+    out_kind: GeneratorKind,
 }
 
 impl Node for GradientLinearNode {
@@ -30,42 +30,34 @@ impl Node for GradientLinearNode {
         &[]
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
-        PortKind::Raster
+        match self.out_kind {
+            GeneratorKind::Raster => PortKind::Raster,
+            GeneratorKind::Sprite { .. } => PortKind::Sprite,
+        }
     }
     fn coord_space(&self) -> CoordSpace {
-        match self.anchor {
-            Anchor::Tile => CoordSpace::Tile,
-            Anchor::World => CoordSpace::World,
+        match (self.out_kind, self.anchor) {
+            // Sprite output isn't tied to canvas geometry; coord space
+            // is effectively local.
+            (GeneratorKind::Sprite { .. }, _) => CoordSpace::Tile,
+            (_, Anchor::Tile) => CoordSpace::Tile,
+            (_, Anchor::World) => CoordSpace::World,
         }
     }
     fn eval(&self, ctx: &EvalCtx<'_>, _: &[Option<PortValue>]) -> Result<PortValue, EvalError> {
-        let size = ctx.canvas.padded_size();
-        let mut out = RasterBuf::new(size, size);
         let dx = self.end[0] - self.start[0];
         let dy = self.end[1] - self.start[1];
         let len2 = dx * dx + dy * dy;
-        if len2 < 1e-12 {
-            // Degenerate (start == end): fill with first stop.
-            let c = self.stops.first().map(|s| s.1).unwrap_or([0.0; 4]);
-            let rgba = premul_u8(c);
-            return Ok(PortValue::Raster(Arc::new(RasterBuf::filled(
-                size, size, rgba,
-            ))));
-        }
-        for y in 0..size {
-            for x in 0..size {
-                let (ux, uy) = pixel_to_user(x, y, ctx, self.anchor);
-                let t = ((ux - self.start[0]) * dx + (uy - self.start[1]) * dy) / len2;
-                let c = sample_stops(&self.stops, t);
-                let i = ((y * size + x) * 4) as usize;
-                let rgba = premul_u8(c);
-                out.pixels[i] = rgba[0];
-                out.pixels[i + 1] = rgba[1];
-                out.pixels[i + 2] = rgba[2];
-                out.pixels[i + 3] = rgba[3];
+        let start = self.start;
+        let stops = &self.stops;
+        let sample = |ux: f32, uy: f32| -> [f32; 4] {
+            if len2 < 1e-12 {
+                return stops.first().map(|s| s.1).unwrap_or([0.0; 4]);
             }
-        }
-        Ok(PortValue::Raster(Arc::new(out)))
+            let t = ((ux - start[0]) * dx + (uy - start[1]) * dy) / len2;
+            sample_stops(stops, t)
+        };
+        Ok(render_gradient(ctx, self.out_kind, self.anchor, sample))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"gradient-linear");
@@ -80,18 +72,13 @@ impl Node for GradientLinearNode {
                 h.update(&v.to_le_bytes());
             }
         }
+        let (tag, dims) = self.out_kind.hash_tag();
+        h.update(&tag);
+        if let Some((w, hh)) = dims {
+            h.update(&w.to_le_bytes());
+            h.update(&hh.to_le_bytes());
+        }
     }
-}
-
-#[inline]
-fn premul_u8(c: [f32; 4]) -> [u8; 4] {
-    let a = c[3].clamp(0.0, 1.0);
-    [
-        (c[0].clamp(0.0, 1.0) * a * 255.0).round() as u8,
-        (c[1].clamp(0.0, 1.0) * a * 255.0).round() as u8,
-        (c[2].clamp(0.0, 1.0) * a * 255.0).round() as u8,
-        (a * 255.0).round() as u8,
-    ]
 }
 
 pub(super) struct GradientLinearFactory;
@@ -108,24 +95,29 @@ impl NodeFactory for GradientLinearFactory {
         let end = read_xy(fields, "end", ctx, [1.0, 0.0])?;
         let stops = read_stops(fields, "stops", ctx)?;
         let anchor = read_anchor(fields, "anchor", ctx)?;
+        let out_kind = parse_generator_kind(fields, ctx)?;
         Ok(BuiltNode {
             node: Box::new(GradientLinearNode {
                 start,
                 end,
                 stops,
                 anchor,
+                out_kind,
             }),
             connections: vec![],
         })
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Linear gradient from `start` to `end` (fractional coords). Pixels project onto the start→end line; gradient parameter is the projected fraction.",
+            "description": "Linear gradient from `start` to `end` (fractional coords). `kind: raster` (default) samples in tile/world coords; `kind: sprite` samples in [0, 1] sprite coords at `width-px × height-px`.",
             "properties": {
                 "start": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "default": [0.0, 0.0] },
                 "end":   { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "default": [1.0, 0.0] },
                 "stops": { "type": "array", "items": { "type": "array", "minItems": 2, "maxItems": 2 }, "minItems": 2 },
                 "anchor": { "type": "string", "enum": ["tile", "world"], "default": "tile" },
+                "kind": { "type": "string", "enum": ["raster", "sprite"], "default": "raster" },
+                "width-px": { "type": "integer", "minimum": 1 },
+                "height-px": { "type": "integer", "minimum": 1 },
             },
             "required": ["stops"],
         })
