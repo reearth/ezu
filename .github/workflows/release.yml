@@ -21,11 +21,9 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    # `crates-io` is a deployment environment configured on the repo with
-    # required reviewers, so cargo publish only runs after a maintainer
-    # signs off on the tag. Set this up in
-    # Settings → Environments → New environment → "crates-io" → enable
-    # "Required reviewers".
+    # `crates-io` is a deployment environment with required reviewers and
+    # a `v*` tag policy, so cargo publish only runs after a maintainer
+    # approves the deployment on a tag push.
     environment:
       name: crates-io
       url: https://crates.io/crates/ezu
@@ -58,13 +56,14 @@ jobs:
       # with a notice, so the workflow only attempts the *missing* crates.
       # `cargo publish --workspace` would fail hard on the first already-
       # uploaded crate, which is why we drive the loop manually.
-      # ezu-server is `publish = false` and is intentionally not listed.
+      # ezu-wasm is `publish = false` (shipped to npm instead) and is
+      # intentionally not listed.
       - name: Publish workspace
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: |
           set +e
-          for crate in ezu-core ezu-style ezu-mvt ezu-pmtiles ezu-paint ezu-wasm ezu; do
+          for crate in ezu-core ezu-style ezu-graph ezu-features ezu-paint ezu ezu-cli; do
             echo "::group::cargo publish -p $crate"
             output=$(cargo publish -p "$crate" 2>&1)
             status=$?
@@ -84,3 +83,70 @@ jobs:
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           generate_release_notes: true
+
+  publish-npm:
+    runs-on: ubuntu-latest
+    # `npm` is a deployment environment with required reviewers and a
+    # `v*` tag policy (same setup as `crates-io`). Authentication uses
+    # npm Trusted Publishing: the workflow's OIDC token is exchanged for
+    # a short-lived publish token, so no NPM_TOKEN secret is needed. The
+    # trusted publisher must be registered on npmjs.com against this
+    # repo + workflow + environment first; for the very first version
+    # (before the package exists on npm) run `npm publish` manually once,
+    # then CI takes over from the next tag.
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/ezu
+    permissions:
+      contents: read
+      id-token: write   # required for Trusted Publishing + provenance
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+        with:
+          key: wasm32
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted Publishing requires npm >= 11.5.1; Node 22 ships with an
+      # older npm, so upgrade explicitly.
+      - name: Upgrade npm CLI
+        run: npm install -g npm@latest
+
+      - name: Install wasm-bindgen-cli
+        uses: taiki-e/install-action@9185c192a96ba09167ad8663015b3fbbf007ec79 # v2.62.55
+        with:
+          tool: wasm-bindgen-cli,wasm-opt
+
+      - name: Sync npm package version to tag
+        working-directory: crates/ezu-wasm/npm
+        run: |
+          # Strip leading `v` from the git tag (refs/tags/vX.Y.Z → X.Y.Z).
+          version="${GITHUB_REF_NAME#v}"
+          npm version "$version" --no-git-tag-version --allow-same-version
+
+      - name: Build npm package
+        run: ./scripts/build-wasm-npm.sh
+
+      - name: Publish to npm
+        working-directory: crates/ezu-wasm/npm
+        run: |
+          # Skip if this version is already on npm (idempotent re-run).
+          version=$(node -p "require('./package.json').version")
+          if npm view "ezu@$version" version >/dev/null 2>&1; then
+            echo "::notice::ezu@$version already on npm, skipping"
+            exit 0
+          fi
+          # --provenance is implied when publishing via Trusted Publishing
+          # but pass it explicitly so a misconfigured environment fails
+          # loudly instead of silently falling back.
+          npm publish --provenance --access public

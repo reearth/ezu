@@ -1,0 +1,59 @@
+{
+  "name": "ezu",
+  "version": "0.1.0",
+  "description": "Painterly map renderer — WebAssembly bindings",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/reearth/ezu"
+  },
+  "homepage": "https://github.com/reearth/ezu",
+  "keywords": ["map", "renderer", "wasm", "webassembly", "mvt", "painterly"],
+  "type": "module",
+  "exports": {
+    ".": {
+      "workerd": {
+        "types": "./bundler/ezu.d.ts",
+        "default": "./bundler/ezu.js"
+      },
+      "browser": {
+        "types": "./web/ezu.d.ts",
+        "default": "./web/ezu.js"
+      },
+      "node": {
+        "types": "./nodejs/ezu.d.ts",
+        "default": "./nodejs/ezu.js"
+      },
+      "import": {
+        "types": "./bundler/ezu.d.ts",
+        "default": "./bundler/ezu.js"
+      }
+    },
+    "./web": {
+      "types": "./web/ezu.d.ts",
+      "default": "./web/ezu.js"
+    },
+    "./bundler": {
+      "types": "./bundler/ezu.d.ts",
+      "default": "./bundler/ezu.js"
+    },
+    "./nodejs": {
+      "types": "./nodejs/ezu.d.ts",
+      "default": "./nodejs/ezu.js"
+    }
+  },
+  "files": [
+    "web",
+    "bundler",
+    "nodejs",
+    "README.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
+  ],
+  "sideEffects": [
+    "*.wasm",
+    "./web/ezu.js",
+    "./bundler/ezu.js",
+    "./nodejs/ezu.js"
+  ]
+}

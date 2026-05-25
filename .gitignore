@@ -8,3 +8,7 @@ Cargo.lock.bak
 *.swp
 /tmp/
 /out/
+crates/ezu-wasm/npm/web/
+crates/ezu-wasm/npm/bundler/
+crates/ezu-wasm/npm/nodejs/
+crates/ezu-wasm/npm/LICENSE-*
