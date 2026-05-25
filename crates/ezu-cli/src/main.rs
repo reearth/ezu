@@ -19,7 +19,8 @@ use ezu::graph::{
     build_graph, Cache, CanvasInfo, Evaluator, Graph, ParamValues, PortValue, RasterBuf, TileId,
 };
 use ezu::paint::host::{
-    pixmap_to_webp, raster_to_png, raster_to_webp, BrushBankLoader, TileLoader,
+    bind_dem_sources, build_dem_sources, pixmap_to_webp, raster_to_png, raster_to_webp,
+    BrushBankLoader, DemSourceRegistry, TileLoader,
 };
 use ezu::paint::nodes::default_registry;
 use ezu::style::{AssetKind, Document};
@@ -225,7 +226,8 @@ struct Prepared {
     graph: Arc<Graph>,
     cache: Arc<Cache>,
     loader: Arc<BrushBankLoader>,
-    source: Arc<TileSource>,
+    source: Option<Arc<TileSource>>,
+    dem_sources: Arc<DemSourceRegistry>,
     canvas: CanvasInfo,
 }
 
@@ -261,19 +263,35 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
         pad: doc.pad,
     };
 
-    let spec = match (&common.pmtiles, &common.mvt) {
-        (Some(p), None) => SourceSpec::PmTiles(p.clone()),
-        (None, Some(u)) => SourceSpec::Mvt(u.clone()),
-        _ => return Err("one of --pmtiles or --mvt is required".into()),
+    let source = match (&common.pmtiles, &common.mvt) {
+        (Some(p), None) => Some(SourceSpec::PmTiles(p.clone())),
+        (None, Some(u)) => Some(SourceSpec::Mvt(u.clone())),
+        (None, None) => None,
+        _ => return Err("--pmtiles and --mvt are mutually exclusive".into()),
     };
-    tracing::info!("opening source: {spec:?}");
-    let source = Arc::new(TileSource::open(&spec).await?);
+    let source = match source {
+        Some(spec) => {
+            tracing::info!("opening source: {spec:?}");
+            Some(Arc::new(TileSource::open(&spec).await?))
+        }
+        None => {
+            tracing::info!("no MVT source — rendering will skip `tile.<feature>` bindings");
+            None
+        }
+    };
+
+    let dem_sources = Arc::new(build_dem_sources(&doc));
+    if !dem_sources.is_empty() {
+        let names: Vec<&str> = dem_sources.names().collect();
+        tracing::info!("dem sources: {}", names.join(", "));
+    }
 
     Ok(Prepared {
         graph,
         cache,
         loader,
         source,
+        dem_sources,
         canvas,
     })
 }
@@ -425,7 +443,8 @@ async fn run_tile(args: TileCmd) -> Result<(), Box<dyn std::error::Error>> {
         Arc::clone(&prep.graph),
         Arc::clone(&prep.cache),
         Arc::clone(&prep.loader),
-        Arc::clone(&prep.source),
+        prep.source.as_ref().map(Arc::clone),
+        Arc::clone(&prep.dem_sources),
         prep.canvas,
         args.tile,
     )
@@ -464,10 +483,12 @@ async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
             let graph = Arc::clone(&prep.graph);
             let cache = Arc::clone(&prep.cache);
             let loader = Arc::clone(&prep.loader);
-            let source = Arc::clone(&prep.source);
+            let source = prep.source.as_ref().map(Arc::clone);
+            let dem_sources = Arc::clone(&prep.dem_sources);
             let canvas = prep.canvas;
             tasks.push(tokio::spawn(async move {
-                let raster = render_one(graph, cache, loader, source, canvas, tile).await?;
+                let raster =
+                    render_one(graph, cache, loader, source, dem_sources, canvas, tile).await?;
                 Ok::<(CoreTileId, Arc<RasterBuf>), Box<dyn std::error::Error + Send + Sync>>((
                     tile, raster,
                 ))
@@ -546,7 +567,8 @@ async fn run_tiles(args: TilesCmd) -> Result<(), Box<dyn std::error::Error>> {
                     Arc::clone(&prep.graph),
                     Arc::clone(&prep.cache),
                     Arc::clone(&prep.loader),
-                    Arc::clone(&prep.source),
+                    prep.source.as_ref().map(Arc::clone),
+                    Arc::clone(&prep.dem_sources),
                     prep.canvas,
                     tile,
                 )
@@ -583,21 +605,44 @@ async fn render_one(
     graph: Arc<Graph>,
     cache: Arc<Cache>,
     loader: Arc<BrushBankLoader>,
-    source: Arc<TileSource>,
+    source: Option<Arc<TileSource>>,
+    dem_sources: Arc<DemSourceRegistry>,
     canvas: CanvasInfo,
     tile: CoreTileId,
 ) -> Result<Arc<RasterBuf>, Box<dyn std::error::Error + Send + Sync>> {
-    let mvt_bytes = source.fetch(tile).await?;
+    let mvt_bytes = match source {
+        Some(s) => s.fetch(tile).await?,
+        None => None,
+    };
+    let tile_id = TileId {
+        z: tile.z,
+        x: tile.x,
+        y: tile.y,
+    };
+    // Pre-fetch DEM mosaics for the tile before entering spawn_blocking
+    // so the blocking path doesn't have to juggle async fetches.
+    let mut dem_bindings: Vec<(String, ezu::graph::HeightField)> = Vec::new();
+    if !dem_sources.is_empty() {
+        let base_loader = BrushBankLoader::empty();
+        let mut tmp = TileLoader::new(&base_loader, tile_id);
+        bind_dem_sources(&mut tmp, &dem_sources, tile_id, canvas).await?;
+        for name in dem_sources.names() {
+            let key = format!("tile.{name}");
+            if let Ok(ezu::graph::Asset::HeightField(field)) =
+                ezu::graph::AssetLoader::load(&tmp, &key)
+            {
+                dem_bindings.push((key, (*field).clone()));
+            }
+        }
+    }
     let raster = tokio::task::spawn_blocking(
         move || -> Result<Arc<RasterBuf>, Box<dyn std::error::Error + Send + Sync>> {
-            let tile_id = TileId {
-                z: tile.z,
-                x: tile.x,
-                y: tile.y,
-            };
             let mut tile_loader = TileLoader::new(loader.as_ref(), tile_id);
             if let Some(bytes) = mvt_bytes {
                 tile_loader.bind_mvt(mvt::decode(&bytes)?);
+            }
+            for (name, field) in dem_bindings {
+                tile_loader.bind_height_field(name, field);
             }
             let ev = Evaluator::new(&graph, &cache, &tile_loader);
             let out = ev.render_parallel(tile_id, canvas, &ParamValues::new(), tile_seed(tile))?;

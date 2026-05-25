@@ -2,13 +2,18 @@
 //! conversion helpers between `ezu_graph::RasterBuf` and `tiny-skia` /
 //! PNG output.
 
+#[cfg(feature = "http")]
+pub mod dem;
+#[cfg(feature = "http")]
+pub use dem::{bind_dem_sources, build_dem_sources, DemFetchError, DemSourceRegistry};
+
 use std::any::Any;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use ezu_features::{mvt::DecodedTile, FeatureLayer};
-use ezu_graph::{Asset, AssetError, AssetLoader, OpaqueValue, RasterBuf, TileId};
+use ezu_graph::{Asset, AssetError, AssetLoader, HeightField, OpaqueValue, RasterBuf, TileId};
 use hokusai::Brush;
 use tiny_skia::{Pixmap, PixmapPaint, Transform};
 use xxhash_rust::xxh3::Xxh3;
@@ -183,6 +188,21 @@ impl<'a> TileLoader<'a> {
             name,
             Binding {
                 asset: Asset::Features(opaque),
+                hash,
+            },
+        );
+        self
+    }
+
+    /// Bind a decoded height field under `name` (by convention
+    /// `"tile.<source>"` to match the style's DEM `sources` entry).
+    pub fn bind_height_field(&mut self, name: impl Into<String>, field: HeightField) -> &mut Self {
+        let name = name.into();
+        let hash = self.binding_hash(&name);
+        self.bindings.insert(
+            name,
+            Binding {
+                asset: Asset::HeightField(Arc::new(field)),
                 hash,
             },
         );

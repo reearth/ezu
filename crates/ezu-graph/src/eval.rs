@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::buf::{OpaqueValue, RasterBuf};
+use crate::buf::{HeightField, OpaqueValue, RasterBuf};
 use crate::value::ScalarValue;
 
 /// Tile coordinate (z/x/y in TMS-ish form; the meaning is up to the host).
@@ -42,6 +42,7 @@ pub enum Asset {
     Image(Arc<RasterBuf>),
     Brush(OpaqueValue),
     Features(OpaqueValue),
+    HeightField(Arc<HeightField>),
 }
 
 #[derive(Debug, thiserror::Error)]

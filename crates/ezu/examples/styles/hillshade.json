@@ -1,0 +1,36 @@
+{
+  "name": "hillshade",
+  "tile-size": 512,
+  "pad": 16,
+  "sources": {
+    "terrain": {
+      "type": "dem",
+      "url": "https://terrain.reearth.land/mapterhorn-egm08/terrarium/ellipsoid/{z}/{x}/{y}.webp",
+      "encoding": "terrarium",
+      "tile-size": 512,
+      "max-zoom": 14,
+      "neighbor-fetch": true
+    }
+  },
+  "nodes": {
+    "dem":       { "op": "dem", "name": "tile.terrain" },
+    "elevation": {
+      "op": "hypsometric", "field": "@dem",
+      "stops": [
+        { "elev": -200,  "color": "#9bc8e5" },
+        { "elev": 0,     "color": "#cce6c8" },
+        { "elev": 500,   "color": "#e0d8a6" },
+        { "elev": 1500,  "color": "#b89271" },
+        { "elev": 2500,  "color": "#8b6b4a" },
+        { "elev": 3500,  "color": "#f4f1ea" }
+      ]
+    },
+    "shade":     {
+      "op": "hillshade", "field": "@dem",
+      "azimuth-deg": 315, "altitude-deg": 45,
+      "exaggeration": 1.5, "mode": "relief"
+    },
+    "out":       { "op": "blend", "base": "@elevation", "over": "@shade" }
+  },
+  "output": "@out"
+}

@@ -49,3 +49,32 @@ impl RasterBuf {
 /// types are a convention between producer and consumer node impls;
 /// downcasts happen inside nodes. The DAG only checks the `PortKind`.
 pub type OpaqueValue = Arc<dyn Any + Send + Sync>;
+
+/// Per-pixel elevation grid flowing along `HeightField` ports.
+///
+/// Layout is row-major, one `f32` per pixel, in **metres above ellipsoid**
+/// (or whatever the source declares — the host owns the datum). `width` /
+/// `height` MUST match the canvas's `padded_size()` so consumers (e.g.
+/// `hillshade`) can pair samples with the same geometry as their raster
+/// output. Missing samples (e.g. ocean nodata in some DEMs) surface as
+/// `nodata`; consumers fall back to `0.0` or pass-through.
+///
+/// `metres_per_pixel_x` / `_y` are filled by the producer from tile
+/// geometry and latitude (Web Mercator scale is latitude-dependent), so
+/// gradient-based consumers can produce geographically faithful slopes
+/// without re-deriving the tile geometry.
+#[derive(Debug, Clone)]
+pub struct HeightField {
+    pub width: u32,
+    pub height: u32,
+    pub metres_per_pixel_x: f32,
+    pub metres_per_pixel_y: f32,
+    pub elev: Arc<[f32]>,
+    pub nodata: Option<f32>,
+}
+
+impl HeightField {
+    pub fn sample(&self, x: u32, y: u32) -> f32 {
+        self.elev[(y * self.width + x) as usize]
+    }
+}

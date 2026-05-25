@@ -29,6 +29,11 @@ pub struct Document {
     pub params: IndexMap<String, ParamDecl>,
     #[serde(default)]
     pub assets: IndexMap<String, AssetDecl>,
+    /// Per-tile data sources resolved by the host before each render and
+    /// bound as `tile.<source-name>` for source nodes to consume. The
+    /// payload type is source-kind specific (DEM, etc.).
+    #[serde(default)]
+    pub sources: IndexMap<String, SourceDecl>,
     pub nodes: IndexMap<String, NodeSpec>,
     /// Node id (with or without `@` prefix) that produces the final raster.
     pub output: NodeRef,
@@ -98,6 +103,57 @@ pub enum AssetKind {
     Image,
     MaskImage,
     Gradient,
+}
+
+/// Declaration of a per-tile data source. The host fetches the
+/// configured tiles before each render and binds the decoded payload
+/// under `tile.<source-name>` for source nodes (e.g. `dem`) to consume.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum SourceDecl {
+    Dem(DemSource),
+}
+
+/// Raster-DEM source. Tiles encode elevation in the RGB channels using
+/// either the Mapzen / Terrarium scheme
+/// (`h = (R*256 + G + B/256) - 32768`) or the Mapbox / MapLibre Terrain-RGB
+/// scheme (`h = -10000 + (R*65536 + G*256 + B) * 0.1`).
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct DemSource {
+    /// XYZ URL template with `{z}`, `{x}`, `{y}` placeholders. PNG and
+    /// WebP are both supported (decided by content-type / extension).
+    pub url: String,
+    pub encoding: DemEncoding,
+    #[serde(default = "default_dem_tile_size")]
+    pub tile_size: u32,
+    /// Highest zoom available from the source. Requests above this zoom
+    /// overzoom from an ancestor tile.
+    #[serde(default)]
+    pub max_zoom: Option<u8>,
+    /// If true, fetch the 8 neighbouring tiles in addition to the
+    /// centre tile and stitch them so gradient-based ops (e.g.
+    /// `hillshade`) have seam-free samples in the pad region.
+    #[serde(default = "default_true")]
+    pub neighbor_fetch: bool,
+    /// Value subtracted from each decoded sample (metres). Useful for
+    /// rebasing geoid-relative datasets.
+    #[serde(default)]
+    pub elevation_offset: f32,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq, Clone, Copy)]
+#[serde(rename_all = "kebab-case")]
+pub enum DemEncoding {
+    Terrarium,
+    MapboxRgb,
+}
+
+fn default_dem_tile_size() -> u32 {
+    256
+}
+fn default_true() -> bool {
+    true
 }
 
 /// A reference to a node id, optionally prefixed with `@`. The prefix is

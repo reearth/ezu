@@ -13,7 +13,7 @@ concrete node implementations.
 
 ## Port types
 
-The DAG is typed. Every edge carries one of five `PortKind`s:
+The DAG is typed. Every edge carries one of six `PortKind`s:
 
 | Kind | Carries |
 |---|---|
@@ -22,6 +22,7 @@ The DAG is typed. Every edge carries one of five `PortKind`s:
 | `Sprite` | RGBA8 buffer at the **asset's native dimensions**, not canvas-sized. Used as the carrier for sprite / texture sources (`image`) consumed by placement ops (`place`, `tiling`, `stamp`). Cannot be wired directly into raster transforms or the document `output`. |
 | `Brush` | hokusai brush handle plus overrides |
 | `Scalar` | constant Color / Number / Bool |
+| `HeightField` | Per-pixel elevation grid (`f32`, metres), padded canvas-sized. Emitted by raster-DEM source nodes (`dem`) and consumed by terrain-derived raster ops (`hillshade`, `slope`, `hypsometric`). Carries `metres_per_pixel_x/y` so consumers can compute geographically faithful gradients. |
 
 `Features` and `Brush` ride as type-erased `Arc<dyn Any + Send + Sync>`
 so producer / consumer nodes can use whatever concrete payload they
@@ -80,6 +81,7 @@ pub enum Asset {
     Image(Arc<RasterBuf>),
     Brush(OpaqueValue),
     Features(OpaqueValue),
+    HeightField(Arc<HeightField>),
 }
 pub trait AssetLoader: Send + Sync {
     fn load(&self, name: &str) -> Result<Asset, AssetError>;

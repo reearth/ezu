@@ -165,6 +165,13 @@ The minimum op set ships in [`ezu-paint`](https://github.com/reearth/ezu/tree/ma
   `aspect`), `gradient-conic`, `gradient-diamond`. All take color stops
   and an `anchor: "tile" | "world"` for tile-local or world-anchored
   (seamless across tiles) patterns.
+- **Terrain** — `dem` (sample a host-bound raster-DEM mosaic as a
+  `HeightField`; the host declares the tile pyramid in `sources` and
+  handles fetch / decode / 3×3 stitch / overzoom upsampling for
+  terrarium and mapbox-rgb encodings), `hillshade` (Horn-method
+  analytical shade with `shade` or multiply-friendly `relief` mode,
+  optional ESRI multidirectional), `slope`, `hypsometric` (elevation
+  → colour ramp).
 
 Example: a watercolor water layer with a brushed road on top of an
 earth-tone background.

@@ -45,6 +45,24 @@ reference resolved against the host's base directory, or an
 prefetch URL assets via `ezu_paint::host::prefetch_doc_assets` before
 the first render, so the loader sees an already-decoded bank.
 
+The `sources` block declares per-tile data sources the host fetches
++ binds before each render. Today there is one source kind, `dem` —
+a raster-DEM tile pyramid (terrarium or mapbox-rgb encoding) that the
+host stitches into a per-tile `HeightField` and binds under
+`tile.<source-name>`, ready for the `dem` source node to pick up.
+
+```json
+"sources": {
+  "terrain": {
+    "type": "dem",
+    "url": "https://terrain.reearth.land/mapterhorn-egm08/terrarium/ellipsoid/{z}/{x}/{y}.webp",
+    "encoding": "terrarium",
+    "tile-size": 512,
+    "max-zoom": 14
+  }
+}
+```
+
 ## Types
 
 ```rust
@@ -54,6 +72,7 @@ pub struct Document {
     pub pad: u32,
     pub params: IndexMap<String, ParamDecl>,
     pub assets: IndexMap<String, AssetDecl>,
+    pub sources: IndexMap<String, SourceDecl>,   // per-tile data (DEM, …)
     pub nodes: IndexMap<String, NodeSpec>,
     pub output: NodeRef,
 }
