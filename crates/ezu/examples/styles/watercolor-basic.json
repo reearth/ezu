@@ -6,6 +6,9 @@
   "assets": {
     "glazing": { "type": "brush", "src": "watercolor_glazing" }
   },
+  "sources": {
+    "basemap": { "type": "mvt", "url": "https://papers.reearth.land/protomaps/tilejson.json" }
+  },
   "nodes": {
     "bg":              { "op": "solid", "color": "#fbf6e6" },
 

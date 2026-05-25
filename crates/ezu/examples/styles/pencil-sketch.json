@@ -7,6 +7,9 @@
     "pencil_hard":  { "type": "brush", "src": "4H_pencil" },
     "pencil_soft":  { "type": "brush", "src": "2B_pencil" }
   },
+  "sources": {
+    "basemap": { "type": "mvt", "url": "https://papers.reearth.land/protomaps/tilejson.json" }
+  },
   "nodes": {
     "paper_base":      { "op": "solid", "color": "#fbf7ec" },
 

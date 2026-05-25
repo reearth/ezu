@@ -79,19 +79,12 @@ pub async fn run(args: ServeCmd) -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Resolve the feature-tile source: CLI flags win, then a
-    // style-declared mvt / pmtiles entry, and as a last resort the
-    // public Protomaps daily build — but only when the style isn't a
-    // pure terrain document (in that case rendering without an MVT is
-    // exactly what the author asked for).
+    // style-declared mvt / pmtiles entry. No magic fallback — if the
+    // style declares no source and the user passes no flag, we render
+    // exactly what the author asked for (empty `tile.<feature>`
+    // bindings, which is correct for a pure-terrain document).
     let style_source = crate::feature_source_from_doc(&snapshot.doc);
-    let needs_features = style_references_features(&snapshot.doc);
-    let fallback = (cli_source.is_none() && style_source.is_none() && needs_features).then(|| {
-        (
-            SourceSpec::PmTiles("https://build.protomaps.com/20260520.pmtiles".into()),
-            "default Protomaps build",
-        )
-    });
-    let source = match cli_source.or(style_source).or(fallback) {
+    let source = match cli_source.or(style_source) {
         Some((spec, origin)) => {
             tracing::info!("opening tile source ({origin}): {spec:?}");
             Some(TileSource::open(&spec).await?)
@@ -134,13 +127,6 @@ pub async fn run(args: ServeCmd) -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
     axum::serve(listener, app).await?;
     Ok(())
-}
-
-/// Does the style reference any `features` node? Used to decide whether
-/// the legacy Protomaps fallback applies — a pure-terrain document
-/// (only `dem` sources) renders fine without an MVT pyramid.
-fn style_references_features(doc: &ezu::style::Document) -> bool {
-    doc.nodes.values().any(|n| n.op == "features")
 }
 
 fn is_url(s: &str) -> bool {

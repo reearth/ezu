@@ -47,20 +47,24 @@ raster DEM); CLI flags override anything declared there for one-off
 swaps:
 
 ```sh
-# Single tile to PNG (use `--out tile.webp` for lossless WebP).
-# The reference style uses built-in brushes bundled with `ezu-paint`,
-# so no `--assets-dir` is needed.
+# Single tile to PNG (use `--out tile.webp` for lossless WebP). The
+# reference styles bundle their own `sources` block (Protomaps daily
+# build + Re:Earth Terrain), so no `--pmtiles` / `--mvt` is needed —
+# pass them to override what the style declares.
 ezu tile \
   --style https://raw.githubusercontent.com/reearth/ezu/main/crates/ezu/examples/styles/watercolor-basic.json \
-  --pmtiles https://build.protomaps.com/20260520.pmtiles \
   --tile 13/7276/3225 --out tile.png
 
-# bbox mosaic — stitch the tiles covering a lon/lat box into one PNG
-ezu bbox --style URL_OR_PATH --pmtiles URL_OR_PATH \
+# Terrain style — pulls raster DEM tiles from terrain.reearth.land.
+ezu tile --style crates/ezu/examples/styles/hillshade.json \
+  --tile 11/1813/807 --out fuji.png
+
+# bbox mosaic — stitch the tiles covering a lon/lat box into one PNG.
+ezu bbox --style URL_OR_PATH \
   --bbox 139.74,35.65,139.78,35.69 --zoom 13 --out tokyo.png
 
-# XYZ pyramid — bulk-render `<out>/<z>/<x>/<y>.png` for a zoom range
-ezu tiles --style URL_OR_PATH --pmtiles URL_OR_PATH \
+# XYZ pyramid — bulk-render `<out>/<z>/<x>/<y>.png` for a zoom range.
+ezu tiles --style URL_OR_PATH \
   --bbox 139.74,35.65,139.78,35.69 \
   --min-zoom 10 --max-zoom 14 --out pyramid
 
@@ -68,10 +72,6 @@ ezu tiles --style URL_OR_PATH --pmtiles URL_OR_PATH \
 # Exits non-zero on error — drop into a pre-commit hook / CI step.
 ezu check style.json
 ezu check style.json --no-fetch    # parse + graph only, offline
-
-# Terrain styles declare their own tiles — no `--pmtiles` / `--mvt` needed.
-ezu tile --style crates/ezu/examples/styles/hillshade.json \
-  --tile 11/1813/807 --out fuji.png
 ```
 
 The reference style references brushes by name (`watercolor_glazing`,
