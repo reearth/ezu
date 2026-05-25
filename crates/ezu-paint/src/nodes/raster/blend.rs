@@ -22,7 +22,10 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{read_number_or, read_string_or};
+use crate::nodes::common::{
+    raster_or_sprite_output, read_number_or, read_string_or, unwrap_raster_or_sprite,
+    wrap_raster_like, ACCEPTS_RASTER_OR_SPRITE,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BlendMode {
@@ -133,52 +136,56 @@ impl Node for BlendNode {
         static SPECS: &[PortSpec] = &[
             PortSpec {
                 name: "base",
-                accepts: &[PortKind::Raster],
+                accepts: ACCEPTS_RASTER_OR_SPRITE,
                 optional: false,
             },
             PortSpec {
                 name: "over",
-                accepts: &[PortKind::Raster],
+                accepts: ACCEPTS_RASTER_OR_SPRITE,
                 optional: false,
             },
             PortSpec {
                 name: "mask",
-                accepts: &[PortKind::Raster],
+                accepts: ACCEPTS_RASTER_OR_SPRITE,
                 optional: true,
             },
         ];
         SPECS
     }
-    fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
-        PortKind::Raster
+    fn output(&self, input_kinds: &[Option<PortKind>]) -> PortKind {
+        // Output mirrors `base`. Mixing a `Sprite` base with a
+        // canvas-sized `Raster` over would normally fail the size
+        // check at eval time anyway — the type system stays out of
+        // that and just propagates `base`'s kind.
+        raster_or_sprite_output(input_kinds)
     }
     fn eval(
         &self,
         _ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
-        let base = inputs[0]
+        let base_in = inputs[0]
             .as_ref()
-            .and_then(PortValue::as_raster)
             .ok_or_else(|| EvalError::MissingInput("base".into()))?;
-        let over = inputs[1]
+        let (base, kind) = unwrap_raster_or_sprite(base_in, "base")?;
+        let over_in = inputs[1]
             .as_ref()
-            .and_then(PortValue::as_raster)
             .ok_or_else(|| EvalError::MissingInput("over".into()))?;
+        let (over, _) = unwrap_raster_or_sprite(over_in, "over")?;
         let mask = if self.has_mask {
-            Some(
-                inputs[2]
-                    .as_ref()
-                    .and_then(PortValue::as_raster)
-                    .ok_or_else(|| EvalError::MissingInput("mask".into()))?,
-            )
+            let m_in = inputs[2]
+                .as_ref()
+                .ok_or_else(|| EvalError::MissingInput("mask".into()))?;
+            let (m, _) = unwrap_raster_or_sprite(m_in, "mask")?;
+            Some(m)
         } else {
             None
         };
+        let mask_ref = mask.as_deref();
         if base.width != over.width || base.height != over.height {
             return Err(EvalError::Other("blend: base/over size mismatch".into()));
         }
-        if let Some(m) = mask {
+        if let Some(m) = mask_ref {
             if m.width != base.width || m.height != base.height {
                 return Err(EvalError::Other("blend: mask size mismatch".into()));
             }
@@ -191,7 +198,7 @@ impl Node for BlendNode {
             let (sr, sg, sb, sa_raw) = demul(&over.pixels[i..i + 4]);
             // Source effective alpha = sa * opacity * mask.alpha (mask
             // contributes coverage, not color).
-            let mask_a = match mask {
+            let mask_a = match mask_ref {
                 Some(m) => m.pixels[i + 3] as f32 / 255.0,
                 None => 1.0,
             };
@@ -236,7 +243,7 @@ impl Node for BlendNode {
             out.pixels[i + 2] = to_u8(ob);
             out.pixels[i + 3] = to_u8(oa);
         }
-        Ok(PortValue::Raster(Arc::new(out)))
+        Ok(wrap_raster_like(Arc::new(out), kind))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"blend");

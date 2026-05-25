@@ -1,5 +1,5 @@
-//! `warp` — `Raster -> Raster`. Domain warp using an internal noise
-//! field. Same noise dial as the `noise` op (`type`, `scale-px`,
+//! `warp` — domain warp over `Raster|Sprite` (pass-through) using an
+//! internal noise field. Same noise dial as the `noise` op (`type`, `scale-px`,
 //! `octaves`, `lacunarity`, `gain`, `seed`, `anchor`), plus `amp-px`
 //! for displacement magnitude and a boundary mode.
 //!
@@ -18,8 +18,9 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    read_boundary, read_number, read_number_or, read_optional_string, sample_bilinear, Anchor,
-    BoundaryMode,
+    raster_or_sprite_output, read_boundary, read_number, read_number_or, read_optional_string,
+    sample_bilinear, unwrap_raster_or_sprite, wrap_raster_like, Anchor, BoundaryMode,
+    ACCEPTS_RASTER_OR_SPRITE,
 };
 use crate::nodes::raster::noise_field::{fbm, NoiseKind, Sampler};
 
@@ -43,13 +44,13 @@ impl Node for WarpNode {
     fn inputs(&self) -> &[PortSpec] {
         static SPECS: &[PortSpec] = &[PortSpec {
             name: "input",
-            accepts: &[PortKind::Raster],
+            accepts: ACCEPTS_RASTER_OR_SPRITE,
             optional: false,
         }];
         SPECS
     }
-    fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
-        PortKind::Raster
+    fn output(&self, input_kinds: &[Option<PortKind>]) -> PortKind {
+        raster_or_sprite_output(input_kinds)
     }
     fn coord_space(&self) -> CoordSpace {
         match self.anchor {
@@ -66,10 +67,10 @@ impl Node for WarpNode {
         ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
-        let src = inputs[0]
+        let input = inputs[0]
             .as_ref()
-            .and_then(PortValue::as_raster)
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
+        let (src, kind) = unwrap_raster_or_sprite(input, "input")?;
         let (w, h) = (src.width, src.height);
         let mut out = RasterBuf::new(w, h);
 
@@ -112,12 +113,12 @@ impl Node for WarpNode {
                 ) * self.amp_y;
                 let sx = x as f64 + dx;
                 let sy = y as f64 + dy;
-                let pxv = sample_bilinear(src, sx, sy, self.boundary);
+                let pxv = sample_bilinear(&src, sx, sy, self.boundary);
                 let i = ((y * w + x) * 4) as usize;
                 out.pixels[i..i + 4].copy_from_slice(&pxv);
             }
         }
-        Ok(PortValue::Raster(Arc::new(out)))
+        Ok(wrap_raster_like(Arc::new(out), kind))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"warp");

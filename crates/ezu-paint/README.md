@@ -85,14 +85,14 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 | `solid` | `() → Raster` | Constant-color fill |
 | `circle` | `() → Raster` | Centered disk with optional edge falloff |
 | `noise` | `() → Raster` | Procedural noise: `type` (`white`/`value`/`perlin`/`simplex`/`worley`), `scale-px`, fBm via `octaves`/`lacunarity`/`gain`, optional domain warp (`warp-amp`/`warp-freq`), `low-color`/`high-color` ramp, `opacity`, `anchor` (`world` default — seamless across tile borders) |
-| `blur` | `Raster\|Sprite → same kind` | Gaussian (libblur); polymorphic over `Raster`/`Sprite` — the output port kind mirrors the input. Grows upstream pad by 3σ |
-| `displace` | `Raster + Raster → Raster` | Photoshop-style displacement map. `displacement` raster's R/G channels (0.5 = no offset) drive per-pixel offsets up to `amp-px`. Grows upstream pad by `amp-px`; `boundary` (`clamp`/`transparent`/`mirror`) handles edge sampling |
-| `warp` | `Raster → Raster` | Domain warp via internal noise (same dial as `noise`: `type`, `scale-px`, `octaves`, `lacunarity`, `gain`, `seed`) plus `amp-px`. `anchor: world` default → seamless across tile borders; grows upstream pad by `amp-px` |
-| `blend` | `Raster base + Raster over [+ Raster mask] → Raster` | W3C blend modes (normal/multiply/screen/overlay/darken/lighten/color-dodge/color-burn/hard-light/soft-light/difference/exclusion/hue/saturation/color/luminosity), `composite` operator (`over` default / `destination-out` for brush-eraser), `clip` (source-atop, PS clipping mask), optional alpha `mask`, `opacity` |
-| `brightness-contrast` | `Raster → Raster` | Linear brightness shift + contrast slope around mid-gray |
-| `hsl` | `Raster → Raster` | Hue rotation (degrees) + saturation/lightness shift in `[-1, 1]` |
-| `invert` | `Raster → Raster` | Negate RGB (alpha preserved) |
-| `color-to-alpha` | `Raster → Raster` | Chroma-key: pixels near `color` (Chebyshev distance) become transparent with `threshold`/`softness` ramp |
+| `blur` | `Raster\|Sprite → same kind` | Gaussian (libblur); pass-through over `Raster`/`Sprite` — the output kind mirrors the input. Grows upstream pad by 3σ |
+| `displace` | `Raster\|Sprite + Raster\|Sprite → mirrors main input` | Photoshop-style displacement map. `displacement` raster's R/G channels (0.5 = no offset) drive per-pixel offsets up to `amp-px`. Output kind mirrors the main `input`. Grows upstream pad by `amp-px`; `boundary` (`clamp`/`transparent`/`mirror`) handles edge sampling |
+| `warp` | `Raster\|Sprite → same kind` | Domain warp via internal noise (same dial as `noise`: `type`, `scale-px`, `octaves`, `lacunarity`, `gain`, `seed`) plus `amp-px`. Pass-through over `Raster`/`Sprite`. `anchor: world` default → seamless across tile borders; grows upstream pad by `amp-px` |
+| `blend` | `Raster\|Sprite base + over [+ mask] → mirrors base` | W3C blend modes (normal/multiply/screen/overlay/darken/lighten/color-dodge/color-burn/hard-light/soft-light/difference/exclusion/hue/saturation/color/luminosity), `composite` operator (`over` default / `destination-out` for brush-eraser), `clip` (source-atop, PS clipping mask), optional alpha `mask`, `opacity`. All three inputs accept `Raster` or `Sprite`; output kind mirrors `base` |
+| `brightness-contrast` | `Raster\|Sprite → same kind` | Linear brightness shift + contrast slope around mid-gray; pass-through over `Raster`/`Sprite` |
+| `hsl` | `Raster\|Sprite → same kind` | Hue rotation (degrees) + saturation/lightness shift in `[-1, 1]`; pass-through over `Raster`/`Sprite` |
+| `invert` | `Raster\|Sprite → same kind` | Negate RGB (alpha preserved); pass-through over `Raster`/`Sprite` |
+| `color-to-alpha` | `Raster\|Sprite → same kind` | Chroma-key: pixels near `color` (Chebyshev distance) become transparent with `threshold`/`softness` ramp; pass-through over `Raster`/`Sprite` |
 | `gradient-linear` | `() → Raster` | Linear gradient between two points. `start`/`end` as `[x, y]` fractions, `stops: [[t, "#hex"], …]`, optional `anchor: "tile" \| "world"` |
 | `gradient-radial` | `() → Raster` | Radial / elliptical gradient. `center`, `radius`, optional `aspect` |
 | `gradient-conic` | `() → Raster` | Sweep gradient around `center` starting at `start-angle` (degrees) |

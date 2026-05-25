@@ -1,5 +1,5 @@
-//! `invert` — `Raster -> Raster`. Negate RGB channels; alpha
-//! preserved. Operates in non-premultiplied space.
+//! `invert` — negate RGB channels over `Raster|Sprite` (pass-through);
+//! alpha preserved. Operates in non-premultiplied space.
 
 use std::sync::Arc;
 
@@ -10,6 +10,10 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
+use crate::nodes::common::{
+    raster_or_sprite_output, unwrap_raster_or_sprite, wrap_raster_like, ACCEPTS_RASTER_OR_SPRITE,
+};
+
 struct InvertNode;
 
 impl Node for InvertNode {
@@ -19,23 +23,23 @@ impl Node for InvertNode {
     fn inputs(&self) -> &[PortSpec] {
         static SPECS: &[PortSpec] = &[PortSpec {
             name: "input",
-            accepts: &[PortKind::Raster],
+            accepts: ACCEPTS_RASTER_OR_SPRITE,
             optional: false,
         }];
         SPECS
     }
-    fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
-        PortKind::Raster
+    fn output(&self, input_kinds: &[Option<PortKind>]) -> PortKind {
+        raster_or_sprite_output(input_kinds)
     }
     fn eval(
         &self,
         _ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
-        let src = inputs[0]
+        let input = inputs[0]
             .as_ref()
-            .and_then(PortValue::as_raster)
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
+        let (src, kind) = unwrap_raster_or_sprite(input, "input")?;
         let mut out = RasterBuf::new(src.width, src.height);
         for i in (0..src.pixels.len()).step_by(4) {
             let a = src.pixels[i + 3];
@@ -50,7 +54,7 @@ impl Node for InvertNode {
             out.pixels[i + 2] = a.saturating_sub(src.pixels[i + 2]);
             out.pixels[i + 3] = a;
         }
-        Ok(PortValue::Raster(Arc::new(out)))
+        Ok(wrap_raster_like(Arc::new(out), kind))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"invert");

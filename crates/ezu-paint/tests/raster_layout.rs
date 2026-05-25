@@ -202,6 +202,31 @@ fn place_none_with_scale_and_anchor_shrinks_source() {
 }
 
 #[test]
+fn hsl_passes_through_sprite_kind() {
+    // `hsl` is polymorphic; a red disk sprite rotated 120° (red → green)
+    // should still type-check through `place` and render green at the
+    // canvas center.
+    let sprite = disk_sprite(16, 16, 6.0, [255, 0, 0, 255]);
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 32,
+      "assets": { "src": { "type": "image", "src": "src" } },
+      "nodes": {
+        "src":     { "op": "image", "src": "@src" },
+        "shifted": { "op": "hsl",   "input": "@src", "hue-shift": 120.0 },
+        "out":     { "op": "place", "input": "@shifted", "fit": "cover" }
+      },
+      "output": "@out"
+    }"##;
+    let r = render_with_images(json, 32, 0, TileId { z: 0, x: 0, y: 0 }, &[("src", sprite)]);
+    let center = r.pixel(16, 16);
+    assert!(
+        center[1] > 150 && center[0] < 80,
+        "hue-shifted disk center should be greenish: {center:?}"
+    );
+}
+
+#[test]
 fn blur_passes_through_sprite_kind() {
     // `blur` is polymorphic over Raster/Sprite. Feeding a Sprite
     // (`image`) through `blur` into `place` (Sprite-only) must

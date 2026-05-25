@@ -1,6 +1,8 @@
-//! `displace` — `Raster + Raster -> Raster`. Photoshop-style
-//! displacement map: each output pixel reads from the input at a
-//! position offset by the displacement raster's R/G channels.
+//! `displace` — Photoshop-style displacement map over `Raster|Sprite`
+//! (the main `input` is pass-through; the `displacement` map is also
+//! polymorphic but its kind doesn't influence the output kind).
+//! Each output pixel reads from `input` at a position offset by the
+//! displacement raster's R/G channels.
 //!
 //! Displacement encoding: R = dx, G = dy, each treated as `[0, 1]`
 //! with `0.5` meaning "no offset". The final pixel offset is
@@ -22,7 +24,8 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    read_boundary, read_number, read_number_or, sample_bilinear, BoundaryMode,
+    raster_or_sprite_output, read_boundary, read_number, read_number_or, sample_bilinear,
+    unwrap_raster_or_sprite, wrap_raster_like, BoundaryMode, ACCEPTS_RASTER_OR_SPRITE,
 };
 
 struct DisplaceNode {
@@ -39,19 +42,21 @@ impl Node for DisplaceNode {
         static SPECS: &[PortSpec] = &[
             PortSpec {
                 name: "input",
-                accepts: &[PortKind::Raster],
+                accepts: ACCEPTS_RASTER_OR_SPRITE,
                 optional: false,
             },
             PortSpec {
                 name: "displacement",
-                accepts: &[PortKind::Raster],
+                accepts: ACCEPTS_RASTER_OR_SPRITE,
                 optional: false,
             },
         ];
         SPECS
     }
-    fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
-        PortKind::Raster
+    fn output(&self, input_kinds: &[Option<PortKind>]) -> PortKind {
+        // Output mirrors the main `input`'s kind; the displacement
+        // map's kind is independent.
+        raster_or_sprite_output(input_kinds)
     }
     fn required_pad(&self, downstream: u32) -> u32 {
         let bump = self.amp_x.abs().max(self.amp_y.abs()).ceil() as u32;
@@ -62,14 +67,14 @@ impl Node for DisplaceNode {
         _ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
-        let src = inputs[0]
+        let input = inputs[0]
             .as_ref()
-            .and_then(PortValue::as_raster)
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
-        let disp = inputs[1]
+        let (src, kind) = unwrap_raster_or_sprite(input, "input")?;
+        let disp_input = inputs[1]
             .as_ref()
-            .and_then(PortValue::as_raster)
             .ok_or_else(|| EvalError::MissingInput("displacement".into()))?;
+        let (disp, _) = unwrap_raster_or_sprite(disp_input, "displacement")?;
         // Output is the same size as the input. Displacement must
         // cover at least that area; if smaller, treat the missing
         // region according to the boundary mode.
@@ -95,12 +100,12 @@ impl Node for DisplaceNode {
                 let dy = ((dpix[1] as f64) / 255.0 - 0.5) * 2.0 * self.amp_y;
                 let sx = x as f64 + dx;
                 let sy = y as f64 + dy;
-                let px = sample_bilinear(src, sx, sy, self.boundary);
+                let px = sample_bilinear(&src, sx, sy, self.boundary);
                 let i = ((y * w + x) * 4) as usize;
                 out.pixels[i..i + 4].copy_from_slice(&px);
             }
         }
-        Ok(PortValue::Raster(Arc::new(out)))
+        Ok(wrap_raster_like(Arc::new(out), kind))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"displace");

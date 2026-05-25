@@ -1,8 +1,8 @@
-//! `color-to-alpha` — `Raster -> Raster`. Make pixels close to a
-//! target color transparent (chroma-key style). Distance is Chebyshev
-//! (max per-channel) in non-premultiplied sRGB; pixels within
-//! `threshold` become fully transparent, pixels beyond `softness`
-//! away are unaffected, with a linear ramp in between.
+//! `color-to-alpha` — chroma-key over `Raster|Sprite` (pass-through).
+//! Make pixels close to a target color transparent. Distance is
+//! Chebyshev (max per-channel) in non-premultiplied sRGB; pixels
+//! within `threshold` become fully transparent, pixels beyond
+//! `softness` away are unaffected, with a linear ramp in between.
 
 use std::sync::Arc;
 
@@ -13,7 +13,10 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{read_color, read_number_or};
+use crate::nodes::common::{
+    raster_or_sprite_output, read_color, read_number_or, unwrap_raster_or_sprite,
+    wrap_raster_like, ACCEPTS_RASTER_OR_SPRITE,
+};
 
 struct ColorToAlphaNode {
     color: [f32; 4],
@@ -28,23 +31,23 @@ impl Node for ColorToAlphaNode {
     fn inputs(&self) -> &[PortSpec] {
         static SPECS: &[PortSpec] = &[PortSpec {
             name: "input",
-            accepts: &[PortKind::Raster],
+            accepts: ACCEPTS_RASTER_OR_SPRITE,
             optional: false,
         }];
         SPECS
     }
-    fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
-        PortKind::Raster
+    fn output(&self, input_kinds: &[Option<PortKind>]) -> PortKind {
+        raster_or_sprite_output(input_kinds)
     }
     fn eval(
         &self,
         _ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
-        let src = inputs[0]
+        let input = inputs[0]
             .as_ref()
-            .and_then(PortValue::as_raster)
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
+        let (src, kind) = unwrap_raster_or_sprite(input, "input")?;
         let [tr, tg, tb, _] = self.color;
         let lo = self.threshold.max(0.0);
         let hi = (lo + self.softness).max(lo + 1e-6);
@@ -71,7 +74,7 @@ impl Node for ColorToAlphaNode {
             out.pixels[i + 2] = (b * new_a * 255.0).round() as u8;
             out.pixels[i + 3] = (new_a * 255.0).round() as u8;
         }
-        Ok(PortValue::Raster(Arc::new(out)))
+        Ok(wrap_raster_like(Arc::new(out), kind))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"color-to-alpha");
