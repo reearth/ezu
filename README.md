@@ -179,7 +179,11 @@ The minimum op set ships in [`ezu-paint`](https://github.com/reearth/ezu/tree/ma
   in/out black/white + gamma), `hsl` (hue rotation +
   saturation/lightness shift), `invert`, `color-to-alpha` (chroma key)
 - **Morphology / edges** — `erode` / `dilate` (per-channel min/max box
-  filter, for mask cleanup), `edge-detect` (Sobel gradient magnitude)
+  filter, for mask cleanup), `edge-detect` (Sobel gradient magnitude),
+  `sharpen` (4-neighbour Laplacian)
+- **Channel ops** — `channel-shuffle` (rearrange RGBA, or stamp
+  constants `0` / `1` into channels), `posterize` (per-channel
+  quantisation)
 - **Scalar math** — `map-range` (linear remap with optional clamp on a
   `ScalarField`), `threshold` (binarise with optional soft ramp)
 - **Gradients** — `gradient-linear`, `gradient-radial` (elliptical via

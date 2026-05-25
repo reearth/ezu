@@ -96,6 +96,9 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 | `hsl` | `Raster\|Sprite → same kind` | Hue rotation (degrees) + saturation/lightness shift in `[-1, 1]`; pass-through over `Raster`/`Sprite` |
 | `invert` | `Raster\|Sprite → same kind` | Negate RGB (alpha preserved); pass-through over `Raster`/`Sprite` |
 | `color-to-alpha` | `Raster\|Sprite → same kind` | Chroma-key: pixels near `color` (Chebyshev distance) become transparent with `threshold`/`softness` ramp; pass-through over `Raster`/`Sprite` |
+| `posterize` | `Raster\|Sprite → same kind` | Quantise each RGB channel into `steps` evenly-spaced levels (non-premultiplied sRGB). Alpha preserved |
+| `channel-shuffle` | `Raster\|Sprite → same kind` | Rearrange RGBA channels: each output `r`/`g`/`b`/`a` names which input channel (or constant `0`/`1`) feeds it. Operates in non-premultiplied sRGB |
+| `sharpen` | `Raster\|Sprite → same kind` | 4-neighbour Laplacian sharpen with strength `amount`. Grows upstream pad by 1 |
 | `gradient-linear` | `() → Raster` | Linear gradient between two points. `start`/`end` as `[x, y]` fractions, `stops: [[t, "#hex"], …]`, optional `anchor: "tile" \| "world"` |
 | `gradient-radial` | `() → Raster` | Radial / elliptical gradient. `center`, `radius`, optional `aspect` |
 | `gradient-conic` | `() → Raster` | Sweep gradient around `center` starting at `start-angle` (degrees) |

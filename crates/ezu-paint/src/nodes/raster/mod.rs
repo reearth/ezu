@@ -6,6 +6,7 @@
 mod blend;
 mod blur;
 mod brightness_contrast;
+mod channel_shuffle;
 mod circle;
 mod color_ramp;
 mod color_to_alpha;
@@ -26,6 +27,8 @@ mod mosaic;
 mod noise;
 mod noise_field;
 mod place;
+mod posterize;
+mod sharpen;
 mod slope;
 mod solid;
 mod terrain_common;
