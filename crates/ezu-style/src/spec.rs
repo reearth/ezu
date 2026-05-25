@@ -107,11 +107,37 @@ pub enum AssetKind {
 
 /// Declaration of a per-tile data source. The host fetches the
 /// configured tiles before each render and binds the decoded payload
-/// under `tile.<source-name>` for source nodes (e.g. `dem`) to consume.
+/// for source nodes (`features`, `dem`) to consume.
+///
+/// - `dem` binds a stitched `HeightField` under
+///   `tile.<source-name>` for `dem` source nodes.
+/// - `mvt` and `pmtiles` bind every layer of the decoded vector tile
+///   under `tile.<layer-name>` (i.e. by the layer's name *inside* the
+///   tile, not the source key — kept this way for backwards
+///   compatibility with the `tile.water` / `tile.roads` references the
+///   built-in styles already use).
 #[derive(Debug, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum SourceDecl {
     Dem(DemSource),
+    Mvt(MvtSource),
+    Pmtiles(PmtilesSource),
+}
+
+/// Templated XYZ MVT tile source.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct MvtSource {
+    /// XYZ URL template with `{z}`, `{x}`, `{y}` placeholders, or a
+    /// TileJSON document URL (anything ending in `.json`).
+    pub url: String,
+}
+
+/// PMTiles archive source — local path or `http(s)://` URL.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct PmtilesSource {
+    pub url: String,
 }
 
 /// Raster-DEM source. Tiles encode elevation in the RGB channels using

@@ -40,8 +40,11 @@ cargo install ezu-cli
 ```
 
 That puts an `ezu` binary on your `PATH`. Point it at any style (URL
-or local path) and any tile source (PMTiles URL/file, an `{z}/{x}/{y}`
-MVT URL/path, or a TileJSON) and it spits out PNGs:
+or local path) and a tile source (PMTiles URL/file, an `{z}/{x}/{y}`
+MVT URL/path, or a TileJSON) and it spits out PNGs. The style can
+declare its own tile sources in a `sources` block (MVT, PMTiles, or
+raster DEM); CLI flags override anything declared there for one-off
+swaps:
 
 ```sh
 # Single tile to PNG (use `--out tile.webp` for lossless WebP).
@@ -65,6 +68,10 @@ ezu tiles --style URL_OR_PATH --pmtiles URL_OR_PATH \
 # Exits non-zero on error — drop into a pre-commit hook / CI step.
 ezu check style.json
 ezu check style.json --no-fetch    # parse + graph only, offline
+
+# Terrain styles declare their own tiles — no `--pmtiles` / `--mvt` needed.
+ezu tile --style crates/ezu/examples/styles/hillshade.json \
+  --tile 11/1813/807 --out fuji.png
 ```
 
 The reference style references brushes by name (`watercolor_glazing`,

@@ -95,7 +95,9 @@ pub fn build_dem_sources(doc: &Document) -> DemSourceRegistry {
         .unwrap_or_default();
     let mut sources = Vec::new();
     for (name, decl) in &doc.sources {
-        let SourceDecl::Dem(spec) = decl;
+        let SourceDecl::Dem(spec) = decl else {
+            continue;
+        };
         sources.push((
             name.clone(),
             Arc::new(DemSourceState {

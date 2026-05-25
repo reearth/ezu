@@ -23,7 +23,7 @@ use ezu::paint::host::{
     BrushBankLoader, DemSourceRegistry, TileLoader,
 };
 use ezu::paint::nodes::default_registry;
-use ezu::style::{AssetKind, Document};
+use ezu::style::{AssetKind, Document, SourceDecl};
 use futures::future::try_join_all;
 use futures::stream::{StreamExt, TryStreamExt};
 use tiny_skia::{Pixmap, PixmapPaint, Transform};
@@ -263,15 +263,19 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
         pad: doc.pad,
     };
 
-    let source = match (&common.pmtiles, &common.mvt) {
-        (Some(p), None) => Some(SourceSpec::PmTiles(p.clone())),
-        (None, Some(u)) => Some(SourceSpec::Mvt(u.clone())),
+    // CLI flags take precedence over a style-declared feature source so
+    // a quick `--pmtiles` swap doesn't require editing the style.
+    let cli_source = match (&common.pmtiles, &common.mvt) {
+        (Some(p), None) => Some((SourceSpec::PmTiles(p.clone()), "--pmtiles flag")),
+        (None, Some(u)) => Some((SourceSpec::Mvt(u.clone()), "--mvt flag")),
         (None, None) => None,
         _ => return Err("--pmtiles and --mvt are mutually exclusive".into()),
     };
-    let source = match source {
-        Some(spec) => {
-            tracing::info!("opening source: {spec:?}");
+    let style_source = feature_source_from_doc(&doc);
+    let resolved = cli_source.or(style_source);
+    let source = match resolved {
+        Some((spec, origin)) => {
+            tracing::info!("opening source ({origin}): {spec:?}");
             Some(Arc::new(TileSource::open(&spec).await?))
         }
         None => {
@@ -693,6 +697,31 @@ pub(crate) async fn fetch_text(arg: &str) -> Result<String, Box<dyn std::error::
     } else {
         Ok(std::fs::read_to_string(arg)?)
     }
+}
+
+/// Return the first MVT/Pmtiles entry in the style's `sources` block as
+/// a [`SourceSpec`] the CLI can open. DEM sources are handled
+/// separately. Returns `None` if no compatible source is declared;
+/// when several are present the document order wins (later entries are
+/// ignored with a warning).
+pub(crate) fn feature_source_from_doc(doc: &Document) -> Option<(SourceSpec, &'static str)> {
+    let mut chosen: Option<(SourceSpec, &'static str)> = None;
+    for (name, decl) in &doc.sources {
+        let (spec, origin) = match decl {
+            SourceDecl::Mvt(s) => (SourceSpec::Mvt(s.url.clone()), "style sources (mvt)"),
+            SourceDecl::Pmtiles(s) => (
+                SourceSpec::PmTiles(s.url.clone()),
+                "style sources (pmtiles)",
+            ),
+            SourceDecl::Dem(_) => continue,
+        };
+        if chosen.is_some() {
+            tracing::warn!("multiple feature sources in style; ignoring `{name}`");
+            continue;
+        }
+        chosen = Some((spec, origin));
+    }
+    chosen
 }
 
 fn is_url(s: &str) -> bool {

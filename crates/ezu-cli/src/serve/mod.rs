@@ -53,15 +53,12 @@ pub struct ServeCmd {
 }
 
 pub async fn run(args: ServeCmd) -> Result<(), Box<dyn std::error::Error>> {
-    let spec = match (&args.pmtiles, &args.mvt) {
-        (Some(p), None) => SourceSpec::PmTiles(p.clone()),
-        (None, Some(u)) => SourceSpec::Mvt(u.clone()),
-        // Default when neither flag is given: the public Protomaps daily build.
-        (None, None) => SourceSpec::PmTiles("https://build.protomaps.com/20260520.pmtiles".into()),
+    let cli_source = match (&args.pmtiles, &args.mvt) {
+        (Some(p), None) => Some((SourceSpec::PmTiles(p.clone()), "--pmtiles flag")),
+        (None, Some(u)) => Some((SourceSpec::Mvt(u.clone()), "--mvt flag")),
+        (None, None) => None,
         _ => return Err("--pmtiles and --mvt are mutually exclusive".into()),
     };
-    tracing::info!("opening tile source: {spec:?}");
-    let source = TileSource::open(&spec).await?;
 
     let style_src = args
         .style_arg
@@ -71,14 +68,39 @@ pub async fn run(args: ServeCmd) -> Result<(), Box<dyn std::error::Error>> {
     let style_text = crate::fetch_text(style_src).await?;
     let snapshot = StyleSnapshot::build(style_text, 1, &args.assets_dir).await?;
     tracing::info!(
-        "loaded style {} ({} nodes, tile={}, pad={}, {} brushes, {} images)",
+        "loaded style {} ({} nodes, tile={}, pad={}, {} brushes, {} images, {} dem source(s))",
         snapshot.doc.name,
         snapshot.doc.nodes.len(),
         snapshot.doc.tile_size,
         snapshot.doc.pad,
         snapshot.assets.bank.len(),
         snapshot.assets.images.len(),
+        snapshot.dem_sources.len(),
     );
+
+    // Resolve the feature-tile source: CLI flags win, then a
+    // style-declared mvt / pmtiles entry, and as a last resort the
+    // public Protomaps daily build — but only when the style isn't a
+    // pure terrain document (in that case rendering without an MVT is
+    // exactly what the author asked for).
+    let style_source = crate::feature_source_from_doc(&snapshot.doc);
+    let needs_features = style_references_features(&snapshot.doc);
+    let fallback = (cli_source.is_none() && style_source.is_none() && needs_features).then(|| {
+        (
+            SourceSpec::PmTiles("https://build.protomaps.com/20260520.pmtiles".into()),
+            "default Protomaps build",
+        )
+    });
+    let source = match cli_source.or(style_source).or(fallback) {
+        Some((spec, origin)) => {
+            tracing::info!("opening tile source ({origin}): {spec:?}");
+            Some(TileSource::open(&spec).await?)
+        }
+        None => {
+            tracing::info!("no MVT source — `tile.<feature>` bindings will be empty");
+            None
+        }
+    };
 
     let state = AppState::new(source, snapshot, args.assets_dir.clone());
 
@@ -112,6 +134,13 @@ pub async fn run(args: ServeCmd) -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// Does the style reference any `features` node? Used to decide whether
+/// the legacy Protomaps fallback applies — a pure-terrain document
+/// (only `dem` sources) renders fine without an MVT pyramid.
+fn style_references_features(doc: &ezu::style::Document) -> bool {
+    doc.nodes.values().any(|n| n.op == "features")
 }
 
 fn is_url(s: &str) -> bool {

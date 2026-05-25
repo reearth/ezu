@@ -46,22 +46,32 @@ prefetch URL assets via `ezu_paint::host::prefetch_doc_assets` before
 the first render, so the loader sees an already-decoded bank.
 
 The `sources` block declares per-tile data sources the host fetches
-+ binds before each render. Today there is one source kind, `dem` —
-a raster-DEM tile pyramid (terrarium or mapbox-rgb encoding) that the
-host stitches into a per-tile `HeightField` and binds under
-`tile.<source-name>`, ready for the `dem` source node to pick up.
++ binds before each render. Three source kinds are recognised today:
+
+- `dem` — raster-DEM tile pyramid (terrarium or mapbox-rgb encoding).
+  The host stitches the 3×3 neighbourhood into a per-tile
+  `HeightField` and binds it under `tile.<source-name>`, ready for
+  the `dem` source node to pick up.
+- `mvt` — XYZ MVT URL template (or a TileJSON document). The host
+  fetches one tile per render, decodes every layer, and binds each
+  one under `tile.<layer-name>` — the same names existing
+  `features` nodes already reference.
+- `pmtiles` — PMTiles archive (local path or `http(s)://` URL).
+  Decoded layers bind the same way as `mvt`.
 
 ```json
 "sources": {
-  "terrain": {
-    "type": "dem",
-    "url": "https://terrain.reearth.land/mapterhorn-egm08/terrarium/ellipsoid/{z}/{x}/{y}.webp",
-    "encoding": "terrarium",
-    "tile-size": 512,
-    "max-zoom": 14
-  }
+  "terrain":  { "type": "dem", "encoding": "terrarium",
+                 "url": "https://terrain.reearth.land/mapterhorn-egm08/terrarium/ellipsoid/{z}/{x}/{y}.webp",
+                 "tile-size": 512, "max-zoom": 14 },
+  "basemap":  { "type": "mvt",
+                 "url": "https://example.com/tiles/{z}/{x}/{y}.pbf" }
 }
 ```
+
+For `mvt` / `pmtiles`, the source key (`basemap` above) is a label —
+bindings still use the layer names from the decoded tile. Declare only
+one MVT-flavoured source per style; later entries are ignored.
 
 ## Types
 

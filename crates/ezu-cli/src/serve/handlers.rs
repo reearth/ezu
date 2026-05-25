@@ -16,7 +16,9 @@ use axum::{
 use ezu::core::TileId as CoreTileId;
 use ezu::features::mvt;
 use ezu::graph::{CanvasInfo, Evaluator, ParamValues, PortValue, TileId};
-use ezu::paint::host::{raster_to_png, raster_to_webp, BrushBankLoader, TileLoader};
+use ezu::paint::host::{
+    bind_dem_sources, raster_to_png, raster_to_webp, BrushBankLoader, DemSourceRegistry, TileLoader,
+};
 use futures::stream::{self, Stream};
 use serde_json::json;
 use std::collections::HashMap;
@@ -175,16 +177,27 @@ async fn get_tile(
     let mvt = fetch_mvt(&s, tile).await?;
 
     // Take only what we need from the snapshot to keep the lock window short.
-    let (graph, cache, assets, tile_size, pad) = {
+    let (graph, cache, assets, dem_sources, tile_size, pad) = {
         let snap = s.style.read().await;
         (
             Arc::clone(&snap.graph),
             Arc::clone(&snap.cache),
             Arc::clone(&snap.assets),
+            Arc::clone(&snap.dem_sources),
             snap.doc.tile_size,
             snap.doc.pad,
         )
     };
+
+    let canvas = CanvasInfo { tile_size, pad };
+    let tile_id = TileId {
+        z: tile.z,
+        x: tile.x,
+        y: tile.y,
+    };
+    let dem_bindings = fetch_dem_bindings(&dem_sources, tile_id, canvas)
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e))?;
 
     let bytes = tokio::task::spawn_blocking({
         move || {
@@ -193,6 +206,7 @@ async fn get_tile(
                 &cache,
                 &assets,
                 mvt.as_deref(),
+                dem_bindings,
                 tile,
                 tile_size,
                 pad,
@@ -282,10 +296,13 @@ async fn fetch_mvt(
     s: &AppState,
     tile: CoreTileId,
 ) -> Result<Option<bytes::Bytes>, (StatusCode, String)> {
+    let Some(source) = s.source.as_ref() else {
+        return Ok(None);
+    };
     if let Some(b) = s.mvt_cache.get(&tile).map(|r| r.clone()) {
         return Ok(Some(b));
     }
-    match s.source.fetch(tile).await {
+    match source.fetch(tile).await {
         Ok(Some(b)) => {
             s.mvt_cache.insert(tile, b.clone());
             Ok(Some(b))
@@ -295,12 +312,40 @@ async fn fetch_mvt(
     }
 }
 
+/// Pre-fetch the DEM mosaic for every source in the snapshot so the
+/// blocking render path receives ready-to-bind [`HeightField`]s
+/// without juggling async fetches.
+async fn fetch_dem_bindings(
+    registry: &DemSourceRegistry,
+    tile: TileId,
+    canvas: CanvasInfo,
+) -> Result<Vec<(String, ezu::graph::HeightField)>, String> {
+    if registry.is_empty() {
+        return Ok(Vec::new());
+    }
+    let base = BrushBankLoader::empty();
+    let mut tmp = TileLoader::new(&base, tile);
+    bind_dem_sources(&mut tmp, registry, tile, canvas)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for name in registry.names() {
+        let key = format!("tile.{name}");
+        if let Ok(ezu::graph::Asset::HeightField(field)) = ezu::graph::AssetLoader::load(&tmp, &key)
+        {
+            out.push((key, (*field).clone()));
+        }
+    }
+    Ok(out)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_tile(
     graph: &ezu::graph::Graph,
     cache: &ezu::graph::Cache,
     assets: &BrushBankLoader,
     mvt_bytes: Option<&[u8]>,
+    dem_bindings: Vec<(String, ezu::graph::HeightField)>,
     tile: CoreTileId,
     tile_size: u32,
     pad: u32,
@@ -314,6 +359,9 @@ fn render_tile(
     let mut tile_loader = TileLoader::new(assets, tile_id);
     if let Some(bytes) = mvt_bytes {
         tile_loader.bind_mvt(mvt::decode(bytes).map_err(|e| format!("mvt decode: {e}"))?);
+    }
+    for (name, field) in dem_bindings {
+        tile_loader.bind_height_field(name, field);
     }
     let ev = Evaluator::new(graph, cache, &tile_loader);
     let out = ev

@@ -7,7 +7,7 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use ezu::core::TileId;
 use ezu::graph::{build_graph, Cache, Graph};
-use ezu::paint::host::BrushBankLoader;
+use ezu::paint::host::{build_dem_sources, BrushBankLoader, DemSourceRegistry};
 use ezu::paint::nodes::default_registry;
 use ezu::style::Document;
 use serde::Serialize;
@@ -18,7 +18,7 @@ use crate::source::TileSource;
 /// State held by every request handler.
 #[derive(Clone)]
 pub struct AppState {
-    pub source: Arc<TileSource>,
+    pub source: Option<Arc<TileSource>>,
     pub style: Arc<RwLock<StyleSnapshot>>,
     /// Base directory used to resolve relative asset `src` paths and
     /// as the fall-through for the per-snapshot loader's disk lookups.
@@ -52,6 +52,9 @@ pub struct StyleSnapshot {
     pub graph: Arc<Graph>,
     pub cache: Arc<Cache>,
     pub assets: Arc<BrushBankLoader>,
+    /// One fetcher per `dem` entry in the document's `sources` block.
+    /// Rebuilt with the snapshot so a style edit picks up new DEM URLs.
+    pub dem_sources: Arc<DemSourceRegistry>,
     pub text: String,
     pub version: u64,
 }
@@ -75,11 +78,13 @@ impl StyleSnapshot {
         ezu::paint::host::prefetch_doc_assets(&doc, assets_dir, &mut loader)
             .await
             .map_err(BuildSnapshotError::Assets)?;
+        let dem_sources = Arc::new(build_dem_sources(&doc));
         Ok(Self {
             doc,
             graph: Arc::new(graph),
             cache: Arc::new(Cache::new()),
             assets: Arc::new(loader),
+            dem_sources,
             text,
             version,
         })
@@ -108,13 +113,13 @@ pub fn validate_text(text: &str) -> Result<(), BuildSnapshotError> {
 }
 
 impl AppState {
-    pub fn new(source: TileSource, snapshot: StyleSnapshot, assets_dir: PathBuf) -> Self {
+    pub fn new(source: Option<TileSource>, snapshot: StyleSnapshot, assets_dir: PathBuf) -> Self {
         let schema = default_registry().document_schema();
         // Capacity 8 is enough: events are rare (file saves) and
         // subscribers (open editor tabs) typically count 0–2.
         let (events, _) = broadcast::channel(8);
         Self {
-            source: Arc::new(source),
+            source: source.map(Arc::new),
             style: Arc::new(RwLock::new(snapshot)),
             assets_dir: Arc::new(assets_dir),
             mvt_cache: Arc::new(DashMap::new()),
