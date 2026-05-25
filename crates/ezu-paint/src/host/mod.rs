@@ -284,25 +284,81 @@ fn rgba_to_premul_raster(img: image::RgbaImage) -> RasterBuf {
     }
 }
 
+/// Trade-off setting for PNG encoding. `Default` matches the historical
+/// behaviour (`tiny-skia` defaults, `miniz` mid-range deflate).
+///
+/// - `Fast` — smallest CPU cost, larger files. Good for live preview /
+///   live-editor refresh paths where you redraw constantly.
+/// - `Default` — balanced; the safe everywhere choice.
+/// - `Best` — smallest files at a 2–4× CPU cost. Good for cached tile
+///   pyramids that ship over the network.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PngCompression {
+    Fast,
+    #[default]
+    Default,
+    Best,
+}
+
 /// Crop a padded raster down to the central `tile_size` × `tile_size`
-/// region and encode as PNG.
+/// region and encode as PNG with the default compression preset.
 pub fn raster_to_png(buf: &RasterBuf, tile_size: u32, pad: u32) -> Result<Vec<u8>, PaintError> {
-    // Wrap our RGBA8 premul buffer as a tiny-skia Pixmap by copying. We
-    // could share memory but the API requires a Pixmap-owned allocation.
-    let padded = pixmap_from_raster(buf)?;
-    if pad == 0 && padded.width() == tile_size && padded.height() == tile_size {
-        return padded.encode_png().map_err(|_| PaintError::PngEncode);
+    raster_to_png_with(buf, tile_size, pad, PngCompression::Default)
+}
+
+/// Like [`raster_to_png`] but lets the caller pick a compression
+/// preset. The `Default` variant takes the original `tiny-skia` PNG
+/// fast path (no extra demultiply); the other variants route through
+/// `image`'s `PngEncoder` over the cropped, demultiplied RGBA buffer.
+pub fn raster_to_png_with(
+    buf: &RasterBuf,
+    tile_size: u32,
+    pad: u32,
+    compression: PngCompression,
+) -> Result<Vec<u8>, PaintError> {
+    if matches!(compression, PngCompression::Default) {
+        let padded = pixmap_from_raster(buf)?;
+        if pad == 0 && padded.width() == tile_size && padded.height() == tile_size {
+            return padded.encode_png().map_err(|_| PaintError::PngEncode);
+        }
+        let mut out = Pixmap::new(tile_size, tile_size).ok_or(PaintError::PngEncode)?;
+        out.draw_pixmap(
+            -(pad as i32),
+            -(pad as i32),
+            padded.as_ref(),
+            &PixmapPaint::default(),
+            Transform::identity(),
+            None,
+        );
+        return out.encode_png().map_err(|_| PaintError::PngEncode);
     }
-    let mut out = Pixmap::new(tile_size, tile_size).ok_or(PaintError::PngEncode)?;
-    out.draw_pixmap(
-        -(pad as i32),
-        -(pad as i32),
-        padded.as_ref(),
-        &PixmapPaint::default(),
-        Transform::identity(),
-        None,
-    );
-    out.encode_png().map_err(|_| PaintError::PngEncode)
+    let rgba = raster_to_rgba8(buf, tile_size, pad);
+    encode_rgba8_png(tile_size, tile_size, &rgba, compression)
+}
+
+fn encode_rgba8_png(
+    width: u32,
+    height: u32,
+    straight_rgba: &[u8],
+    compression: PngCompression,
+) -> Result<Vec<u8>, PaintError> {
+    use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+    let ct = match compression {
+        PngCompression::Fast => CompressionType::Fast,
+        PngCompression::Default => CompressionType::Default,
+        PngCompression::Best => CompressionType::Best,
+    };
+    let mut out = Vec::new();
+    let encoder = PngEncoder::new_with_quality(&mut out, ct, FilterType::Adaptive);
+    image::ImageEncoder::write_image(
+        encoder,
+        straight_rgba,
+        width,
+        height,
+        image::ExtendedColorType::Rgba8,
+    )
+    .map_err(|_| PaintError::PngEncode)?;
+    Ok(out)
 }
 
 fn pixmap_from_raster(buf: &RasterBuf) -> Result<Pixmap, PaintError> {

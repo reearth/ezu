@@ -24,18 +24,25 @@ class Renderer {
   readonly tileSize: number;
 
   // Render — pass `null` for `mvtBytes` to get a paper-only tile.
-  render(mvtBytes: Uint8Array | null, z: number, x: number, y: number): Uint8Array;        // PNG
-  renderWebp(mvtBytes: Uint8Array | null, z: number, x: number, y: number): Uint8Array;    // lossless WebP
+  // `options` is optional; see "Encoding options" below.
+  render(mvtBytes: Uint8Array | null, z: number, x: number, y: number,
+         options?: EncodeOptions): Uint8Array;                                              // PNG
+  renderWebp(mvtBytes: Uint8Array | null, z: number, x: number, y: number,
+             options?: EncodeOptions): Uint8Array;                                          // lossless WebP
   renderRgba(mvtBytes: Uint8Array | null, z: number, x: number, y: number): Uint8Array;    // straight RGBA
   renderAt(mvtBytes: Uint8Array | null, z: number, x: number, y: number,
-           tileSize: number, pad: number): Uint8Array;                                      // PNG, size override
+           tileSize: number, pad: number, options?: EncodeOptions): Uint8Array;             // PNG, size override
   renderWebpAt(mvtBytes: Uint8Array | null, z: number, x: number, y: number,
-               tileSize: number, pad: number): Uint8Array;                                  // WebP, size override
+               tileSize: number, pad: number, options?: EncodeOptions): Uint8Array;         // WebP, size override
   renderRgbaAt(mvtBytes: Uint8Array | null, z: number, x: number, y: number,
                tileSize: number, pad: number): Uint8Array;                                  // RGBA, size override
 
   free(): void;
 }
+
+type EncodeOptions = {
+  png?: { compression?: "fast" | "default" | "best" };
+};
 ```
 
 ### Output formats
@@ -55,6 +62,54 @@ class Renderer {
 The `*At` variants take `tileSize` and `pad` arguments that override the
 style-level values for that call. Useful for hi-DPI preview rendering
 without mutating the style.
+
+### Encoding options
+
+Every `render*` PNG / WebP method accepts an optional final `options`
+argument (`undefined` ⇒ defaults). Today the only knob is PNG
+compression:
+
+```js
+// Fast preset — biggest files, lowest CPU. Good for live-preview redraws.
+const fast = r.render(mvt, z, x, y, { png: { compression: "fast" } });
+
+// Best preset — smallest files, ~2-4× the CPU. Good for cached pyramids.
+const small = r.render(mvt, z, x, y, { png: { compression: "best" } });
+
+// Default preset (omit `options`) — tiny-skia / miniz mid-range deflate.
+const default_ = r.render(mvt, z, x, y);
+```
+
+WebP is lossless via the pure-Rust `image-webp` codec and has no
+quality knob — see the recipe below for lossy WebP without C
+dependencies.
+
+#### Lossy WebP without C bindings
+
+The WASM build stays pure-Rust on purpose (no `libwebp`, no native
+linker, smaller `.wasm`). If you want lossy WebP, ask the **browser**
+to do it after `renderRgba`:
+
+```js
+async function renderTileToLossyWebp(r, mvt, z, x, y, quality = 0.8) {
+  const w = r.tileSize;
+  const rgba = r.renderRgba(mvt, z, x, y);
+  const oc = new OffscreenCanvas(w, w);
+  const ctx = oc.getContext("2d");
+  ctx.putImageData(new ImageData(new Uint8ClampedArray(rgba.buffer), w, w), 0, 0);
+  const blob = await oc.convertToBlob({ type: "image/webp", quality });
+  return new Uint8Array(await blob.arrayBuffer());
+}
+```
+
+`OffscreenCanvas` (available in every Chromium / Firefox / Safari ≥ 16.4
+release as of writing) gives you the OS's `libwebp` for free. On the
+main thread, the equivalent is `<canvas>.toBlob('image/webp', q)`. For
+the rare case neither is available (very old Safari, headless
+environments without `OffscreenCanvas`), pipe `renderRgba` through any
+JS-side WebP encoder (e.g.
+[`@jsquash/webp`](https://github.com/jamsinclair/jSquash)) — bigger
+bundle, but still no native deps in the Rust side.
 
 ### Missing tiles
 

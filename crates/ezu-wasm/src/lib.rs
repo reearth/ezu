@@ -33,11 +33,13 @@ use std::sync::Arc;
 
 use ezu_graph::{build_graph, Cache, CanvasInfo, Evaluator, Graph, ParamValues, PortValue, TileId};
 use ezu_paint::host::{
-    raster_to_png, raster_to_rgba8, raster_to_webp, BrushBankLoader, TileLoader,
+    raster_to_png_with, raster_to_rgba8, raster_to_webp, BrushBankLoader, PngCompression,
+    TileLoader,
 };
 use ezu_paint::nodes::default_registry;
 use ezu_style::Document;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
 
 const ERR_STYLE: &str = "InvalidStyle";
 const ERR_BRUSH: &str = "BrushParse";
@@ -120,19 +122,33 @@ impl Renderer {
 
     /// Render a single tile to PNG bytes using the style's `tile-size` / `pad`.
     /// Pass `null` for `mvtBytes` to get a paper-only tile.
+    ///
+    /// Optional `options`: `{ png: { compression: 'fast' | 'default' | 'best' } }`.
     pub fn render(
         &self,
         mvt_bytes: Option<Vec<u8>>,
         z: u8,
         x: u32,
         y: u32,
+        options: Option<js_sys::Object>,
     ) -> Result<Vec<u8>, JsValue> {
-        self.render_inner(mvt_bytes.as_deref(), z, x, y, None, OutputFormat::Png)
+        self.render_inner(
+            mvt_bytes.as_deref(),
+            z,
+            x,
+            y,
+            None,
+            OutputFormat::Png,
+            parse_options(options.as_ref()),
+        )
     }
 
     /// Render a single tile to lossless WebP bytes. Smaller than PNG
     /// for the same painterly content and decoded natively by every
-    /// modern browser.
+    /// modern browser. WebP is lossless-only via the pure-Rust
+    /// `image-webp` codec; for lossy WebP, see the
+    /// `OffscreenCanvas.convertToBlob` recipe in the crate README.
+    #[allow(unused_variables)]
     #[wasm_bindgen(js_name = renderWebp)]
     pub fn render_webp(
         &self,
@@ -140,8 +156,17 @@ impl Renderer {
         z: u8,
         x: u32,
         y: u32,
+        options: Option<js_sys::Object>,
     ) -> Result<Vec<u8>, JsValue> {
-        self.render_inner(mvt_bytes.as_deref(), z, x, y, None, OutputFormat::Webp)
+        self.render_inner(
+            mvt_bytes.as_deref(),
+            z,
+            x,
+            y,
+            None,
+            OutputFormat::Webp,
+            EncodeOptions::default(),
+        )
     }
 
     /// Render a single tile to straight RGBA8 bytes (`tile_w * tile_h * 4`).
@@ -153,7 +178,15 @@ impl Renderer {
         x: u32,
         y: u32,
     ) -> Result<Vec<u8>, JsValue> {
-        self.render_inner(mvt_bytes.as_deref(), z, x, y, None, OutputFormat::Rgba)
+        self.render_inner(
+            mvt_bytes.as_deref(),
+            z,
+            x,
+            y,
+            None,
+            OutputFormat::Rgba,
+            EncodeOptions::default(),
+        )
     }
 
     /// Like `render` but with `tile_size` / `pad` overridden — useful for
@@ -167,6 +200,7 @@ impl Renderer {
         y: u32,
         tile_size: u32,
         pad: u32,
+        options: Option<js_sys::Object>,
     ) -> Result<Vec<u8>, JsValue> {
         self.render_inner(
             mvt_bytes.as_deref(),
@@ -175,10 +209,12 @@ impl Renderer {
             y,
             Some((tile_size, pad)),
             OutputFormat::Png,
+            parse_options(options.as_ref()),
         )
     }
 
     /// Like `renderWebp` but with `tile_size` / `pad` overridden.
+    #[allow(unused_variables)]
     #[wasm_bindgen(js_name = renderWebpAt)]
     pub fn render_webp_at(
         &self,
@@ -188,6 +224,7 @@ impl Renderer {
         y: u32,
         tile_size: u32,
         pad: u32,
+        options: Option<js_sys::Object>,
     ) -> Result<Vec<u8>, JsValue> {
         self.render_inner(
             mvt_bytes.as_deref(),
@@ -196,6 +233,7 @@ impl Renderer {
             y,
             Some((tile_size, pad)),
             OutputFormat::Webp,
+            EncodeOptions::default(),
         )
     }
 
@@ -217,6 +255,7 @@ impl Renderer {
             y,
             Some((tile_size, pad)),
             OutputFormat::Rgba,
+            EncodeOptions::default(),
         )
     }
 }
@@ -228,6 +267,36 @@ enum OutputFormat {
     Rgba,
 }
 
+#[derive(Clone, Copy, Default)]
+struct EncodeOptions {
+    png_compression: PngCompression,
+}
+
+/// Pull encoding options out of the JS `{ png: { compression } }`
+/// object. Unknown keys are silently ignored so adding fields later
+/// stays backwards-compatible; an unrecognised `compression` value
+/// falls back to the default rather than throwing — JS callers
+/// typically discover the right strings empirically.
+fn parse_options(obj: Option<&js_sys::Object>) -> EncodeOptions {
+    let mut out = EncodeOptions::default();
+    let Some(obj) = obj else {
+        return out;
+    };
+    let png = js_sys::Reflect::get(obj, &"png".into()).unwrap_or(JsValue::UNDEFINED);
+    if let Some(png_obj) = png.dyn_ref::<js_sys::Object>() {
+        let comp =
+            js_sys::Reflect::get(png_obj, &"compression".into()).unwrap_or(JsValue::UNDEFINED);
+        if let Some(s) = comp.as_string() {
+            out.png_compression = match s.as_str() {
+                "fast" => PngCompression::Fast,
+                "best" => PngCompression::Best,
+                _ => PngCompression::Default,
+            };
+        }
+    }
+    out
+}
+
 impl Renderer {
     fn render_inner(
         &self,
@@ -237,6 +306,7 @@ impl Renderer {
         y: u32,
         size_override: Option<(u32, u32)>,
         format: OutputFormat,
+        options: EncodeOptions,
     ) -> Result<Vec<u8>, JsValue> {
         let (tile_size, pad) = size_override.unwrap_or((self.doc.tile_size, self.doc.pad));
         let tile_id = TileId { z, x, y };
@@ -267,7 +337,8 @@ impl Renderer {
 
         Ok(match format {
             OutputFormat::Png => {
-                raster_to_png(&raster, tile_size, pad).map_err(|e| named_err(ERR_PNG, e))?
+                raster_to_png_with(&raster, tile_size, pad, options.png_compression)
+                    .map_err(|e| named_err(ERR_PNG, e))?
             }
             OutputFormat::Webp => {
                 raster_to_webp(&raster, tile_size, pad).map_err(|e| named_err(ERR_WEBP, e))?
