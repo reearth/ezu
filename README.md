@@ -72,6 +72,10 @@ ezu tiles --style URL_OR_PATH \
 # Exits non-zero on error — drop into a pre-commit hook / CI step.
 ezu check style.json
 ezu check style.json --no-fetch    # parse + graph only, offline
+
+# `--verbose` (or `-v`) enables per-node debug logs from the
+# evaluator: op name, cache hit/miss, output shape, eval duration.
+ezu --verbose tile --style style.json --tile 13/7276/3225 --out tile.png
 ```
 
 The reference style references brushes by name (`watercolor_glazing`,

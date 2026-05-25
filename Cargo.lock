@@ -678,6 +678,7 @@ dependencies = [
  "rayon",
  "serde_json",
  "thiserror",
+ "tracing",
  "xxhash-rust",
 ]
 

@@ -1,11 +1,13 @@
 //! Walk the DAG and evaluate one tile.
 
+use std::time::Instant;
+
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::cache::{Cache, CacheKey, Hash128};
 use crate::eval::{AssetLoader, CanvasInfo, EvalCtx, EvalError, ParamValues, TileId};
 use crate::graph::{Graph, NodeIx};
-use crate::port::CoordSpace;
+use crate::port::{CoordSpace, PortKind};
 use crate::value::PortValue;
 
 /// Entry point: evaluate a `Graph` for one tile.
@@ -156,10 +158,47 @@ impl<'a> Evaluator<'a> {
         let key = CacheKey::build(ctx.canvas, tile_for_key, params_hash, &input_hashes);
 
         if let Some(v) = self.cache.get(key) {
+            tracing::debug!(
+                target: "ezu_graph::eval",
+                node = self.graph.node_id(ix),
+                op = node.op_name(),
+                cache = "hit",
+                output = %describe_value(&v),
+                tile = %format!("{}/{}/{}", ctx.tile.z, ctx.tile.x, ctx.tile.y),
+                "cache hit",
+            );
             return Ok((v, key.0));
         }
+        let t0 = Instant::now();
         let value = node.eval(ctx, &input_vals)?;
+        let elapsed_us = t0.elapsed().as_micros();
+        tracing::debug!(
+            target: "ezu_graph::eval",
+            node = self.graph.node_id(ix),
+            op = node.op_name(),
+            cache = "miss",
+            output = %describe_value(&value),
+            tile = %format!("{}/{}/{}", ctx.tile.z, ctx.tile.x, ctx.tile.y),
+            elapsed_us,
+            "evaluated",
+        );
         self.cache.insert(key, value.clone());
         Ok((value, key.0))
+    }
+}
+
+/// One-line human-readable summary of a `PortValue` for debug logs.
+/// Keeps the format dense so node lines stay readable in a tail.
+fn describe_value(v: &PortValue) -> String {
+    match v {
+        PortValue::Raster(r) => format!("raster {}x{}", r.width, r.height),
+        PortValue::Sprite(s) => format!("sprite {}x{}", s.width, s.height),
+        PortValue::HeightField(h) => format!(
+            "height-field {}x{} (mpp~{:.2})",
+            h.width, h.height, h.metres_per_pixel_x,
+        ),
+        PortValue::Features(_) => "features".to_string(),
+        PortValue::Brush(_) => "brush".to_string(),
+        PortValue::Scalar(_) => format!("scalar:{}", PortKind::Scalar),
     }
 }

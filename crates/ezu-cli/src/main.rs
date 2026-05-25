@@ -34,6 +34,11 @@ use crate::source::{SourceSpec, TileSource};
 #[derive(Parser, Debug)]
 #[command(name = "ezu", about = "Render Ezu Style documents to PNG")]
 struct Cli {
+    /// Emit per-node debug logs from the graph evaluator (op name,
+    /// cache hit/miss, output shape, eval duration). Overrides
+    /// `RUST_LOG` for this run.
+    #[arg(long, short = 'v', global = true)]
+    verbose: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -205,10 +210,15 @@ struct BBox {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .init();
     let cli = Cli::parse();
+    let filter = if cli.verbose {
+        // Bump just the per-node evaluator target — info elsewhere keeps
+        // the noise focused on the graph trace the user asked for.
+        EnvFilter::new("info,ezu_graph::eval=debug")
+    } else {
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))
+    };
+    tracing_subscriber::fmt().with_env_filter(filter).init();
     match cli.cmd {
         Cmd::Tile(args) => run_tile(args).await,
         Cmd::Bbox(args) => run_bbox(args).await,
