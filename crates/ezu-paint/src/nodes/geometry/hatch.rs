@@ -25,12 +25,12 @@ impl Node for HatchNode {
     fn inputs(&self) -> &[PortSpec] {
         static SPECS: &[PortSpec] = &[PortSpec {
             name: "features",
-            kind: PortKind::Features,
+            accepts: &[PortKind::Features],
             optional: false,
         }];
         SPECS
     }
-    fn output(&self) -> PortKind {
+    fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Features
     }
     fn coord_space(&self) -> CoordSpace {

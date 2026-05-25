@@ -39,18 +39,18 @@ impl Node for DisplaceNode {
         static SPECS: &[PortSpec] = &[
             PortSpec {
                 name: "input",
-                kind: PortKind::Raster,
+                accepts: &[PortKind::Raster],
                 optional: false,
             },
             PortSpec {
                 name: "displacement",
-                kind: PortKind::Raster,
+                accepts: &[PortKind::Raster],
                 optional: false,
             },
         ];
         SPECS
     }
-    fn output(&self) -> PortKind {
+    fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Raster
     }
     fn required_pad(&self, downstream: u32) -> u32 {

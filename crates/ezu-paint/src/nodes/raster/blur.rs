@@ -1,5 +1,7 @@
-//! `blur` — `Raster -> Raster`. Gaussian blur (libblur, separable
-//! exact). Grows upstream pad by 3σ.
+//! `blur` — Gaussian blur (libblur, separable exact). Pass-through
+//! over `Raster` and `Sprite`: the output port kind mirrors the input.
+//! Grows upstream pad by 3σ (only meaningful for `Raster` inputs;
+//! `Sprite` producers ignore pad).
 
 use std::sync::Arc;
 
@@ -10,7 +12,10 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::read_number;
+use crate::nodes::common::{
+    raster_or_sprite_output, read_number, unwrap_raster_or_sprite, wrap_raster_like,
+    ACCEPTS_RASTER_OR_SPRITE,
+};
 
 struct BlurNode {
     sigma: f32,
@@ -23,13 +28,13 @@ impl Node for BlurNode {
     fn inputs(&self) -> &[PortSpec] {
         static SPECS: &[PortSpec] = &[PortSpec {
             name: "input",
-            kind: PortKind::Raster,
+            accepts: ACCEPTS_RASTER_OR_SPRITE,
             optional: false,
         }];
         SPECS
     }
-    fn output(&self) -> PortKind {
-        PortKind::Raster
+    fn output(&self, input_kinds: &[Option<PortKind>]) -> PortKind {
+        raster_or_sprite_output(input_kinds)
     }
     fn required_pad(&self, downstream: u32) -> u32 {
         downstream + (3.0 * self.sigma).ceil() as u32
@@ -39,12 +44,12 @@ impl Node for BlurNode {
         _ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
-        let src = inputs[0]
+        let input = inputs[0]
             .as_ref()
-            .and_then(PortValue::as_raster)
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
+        let (src, kind) = unwrap_raster_or_sprite(input, "input")?;
         if self.sigma <= 0.0 {
-            return Ok(PortValue::Raster(src.clone()));
+            return Ok(wrap_raster_like(src, kind));
         }
         let mut out = RasterBuf::new(src.width, src.height);
         // RasterBuf is premultiplied RGBA8; blurring premultiplied data
@@ -70,7 +75,7 @@ impl Node for BlurNode {
             libblur::ThreadingPolicy::Single,
             libblur::ConvolutionMode::Exact,
         );
-        Ok(PortValue::Raster(Arc::new(out)))
+        Ok(wrap_raster_like(Arc::new(out), kind))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"blur");

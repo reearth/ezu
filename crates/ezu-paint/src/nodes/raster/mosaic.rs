@@ -34,12 +34,12 @@ impl Node for MosaicNode {
     fn inputs(&self) -> &[PortSpec] {
         static SPECS: &[PortSpec] = &[PortSpec {
             name: "input",
-            kind: PortKind::Raster,
+            accepts: &[PortKind::Raster],
             optional: false,
         }];
         SPECS
     }
-    fn output(&self) -> PortKind {
+    fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Raster
     }
     fn coord_space(&self) -> CoordSpace {

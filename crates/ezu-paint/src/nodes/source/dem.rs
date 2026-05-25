@@ -29,7 +29,7 @@ impl Node for DemNode {
     fn inputs(&self) -> &[PortSpec] {
         &[]
     }
-    fn output(&self) -> PortKind {
+    fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::HeightField
     }
     fn asset_inputs(&self) -> Vec<String> {

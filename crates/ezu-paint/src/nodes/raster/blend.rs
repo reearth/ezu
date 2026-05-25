@@ -133,23 +133,23 @@ impl Node for BlendNode {
         static SPECS: &[PortSpec] = &[
             PortSpec {
                 name: "base",
-                kind: PortKind::Raster,
+                accepts: &[PortKind::Raster],
                 optional: false,
             },
             PortSpec {
                 name: "over",
-                kind: PortKind::Raster,
+                accepts: &[PortKind::Raster],
                 optional: false,
             },
             PortSpec {
                 name: "mask",
-                kind: PortKind::Raster,
+                accepts: &[PortKind::Raster],
                 optional: true,
             },
         ];
         SPECS
     }
-    fn output(&self) -> PortKind {
+    fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Raster
     }
     fn eval(

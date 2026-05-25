@@ -29,7 +29,7 @@ impl Node for GradientLinearNode {
     fn inputs(&self) -> &[PortSpec] {
         &[]
     }
-    fn output(&self) -> PortKind {
+    fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Raster
     }
     fn coord_space(&self) -> CoordSpace {

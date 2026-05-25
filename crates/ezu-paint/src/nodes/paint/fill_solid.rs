@@ -32,12 +32,12 @@ impl Node for FillSolidNode {
     fn inputs(&self) -> &[PortSpec] {
         static SPECS: &[PortSpec] = &[PortSpec {
             name: "features",
-            kind: PortKind::Features,
+            accepts: &[PortKind::Features],
             optional: false,
         }];
         SPECS
     }
-    fn output(&self) -> PortKind {
+    fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Raster
     }
     fn required_pad(&self, downstream: u32) -> u32 {

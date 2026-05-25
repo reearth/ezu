@@ -19,7 +19,18 @@ pub trait Node: Send + Sync {
     fn inputs(&self) -> &[PortSpec];
 
     /// The kind of value this node produces.
-    fn output(&self) -> PortKind;
+    ///
+    /// `input_kinds` carries the resolved [`PortKind`] of each input
+    /// port, in the same positional order as [`Node::inputs`]. Entries
+    /// are `Some` for connected ports (including optional ones) and
+    /// `None` for unconnected optional ports.
+    ///
+    /// Most nodes return a constant; polymorphic nodes (e.g. `blur`
+    /// accepting both `Raster` and `Sprite`) inspect `input_kinds` and
+    /// mirror the upstream kind. The graph builder resolves nodes in
+    /// topological order, so upstream kinds are always known when this
+    /// is called.
+    fn output(&self, input_kinds: &[Option<PortKind>]) -> PortKind;
 
     /// Coordinate space the node operates in. Defaults to inheriting
     /// from inputs.

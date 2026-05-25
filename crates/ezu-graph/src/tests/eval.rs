@@ -41,7 +41,7 @@ fn evaluator_evaluates_each_node_once_per_render() {
     let pass = |op: &'static str| {
         Mock::new(
             op,
-            vec![PortSpec::new("input", PortKind::Raster)],
+            vec![PortSpec::new("input", &[PortKind::Raster])],
             PortKind::Raster,
         )
         .boxed()
@@ -49,8 +49,8 @@ fn evaluator_evaluates_each_node_once_per_render() {
     let merge = Mock::new(
         "merge",
         vec![
-            PortSpec::new("left", PortKind::Raster),
-            PortSpec::new("right", PortKind::Raster),
+            PortSpec::new("left", &[PortKind::Raster]),
+            PortSpec::new("right", &[PortKind::Raster]),
         ],
         PortKind::Raster,
     )

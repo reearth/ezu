@@ -4,7 +4,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use ezu_core::TileId as CoreTileId;
-use ezu_graph::{EvalCtx, EvalError, FactoryCtx, FactoryError, PortValue, RasterBuf};
+use ezu_graph::{EvalCtx, EvalError, FactoryCtx, FactoryError, PortKind, PortValue, RasterBuf};
 use ezu_style as spec;
 use hokusai::Brush;
 use serde_json::Value;
@@ -522,6 +522,56 @@ pub(super) fn features_value(
         points,
     };
     PortValue::Features(Arc::new(payload) as Arc<dyn Any + Send + Sync>)
+}
+
+/// Accepts list for ports that take either a canvas `Raster` or a
+/// native-sized `Sprite`. Filter ops that don't care about the
+/// canvas-alignment of their input (e.g. `blur`, `hsl`) use this.
+pub(super) const ACCEPTS_RASTER_OR_SPRITE: &[PortKind] =
+    &[PortKind::Raster, PortKind::Sprite];
+
+/// Extract an `Arc<RasterBuf>` from a `PortValue` that is either
+/// `Raster` or `Sprite`, returning which variant it came from so the
+/// caller can re-wrap the result.
+pub(super) fn unwrap_raster_or_sprite(
+    v: &PortValue,
+    port_name: &str,
+) -> Result<(Arc<RasterBuf>, RasterKind), EvalError> {
+    match v {
+        PortValue::Raster(r) => Ok((r.clone(), RasterKind::Raster)),
+        PortValue::Sprite(s) => Ok((s.clone(), RasterKind::Sprite)),
+        _ => Err(EvalError::MissingInput(port_name.into())),
+    }
+}
+
+/// Re-wrap a `RasterBuf` into the same `PortValue` variant it came
+/// from — preserves the canvas-vs-native distinction through a
+/// pass-through filter node.
+pub(super) fn wrap_raster_like(buf: Arc<RasterBuf>, kind: RasterKind) -> PortValue {
+    match kind {
+        RasterKind::Raster => PortValue::Raster(buf),
+        RasterKind::Sprite => PortValue::Sprite(buf),
+    }
+}
+
+/// Which raster-flavoured [`PortValue`] variant a value originated
+/// from. Carried through pass-through filter ops so the output port
+/// kind mirrors the input.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum RasterKind {
+    Raster,
+    Sprite,
+}
+
+/// Resolve a polymorphic Raster/Sprite output kind from the first
+/// connected input. Used by `Node::output` for pass-through filter
+/// nodes (`blur`, `hsl`, …). Falls back to `Raster` if the input is
+/// unconnected (which is a build error anyway for required ports).
+pub(super) fn raster_or_sprite_output(input_kinds: &[Option<PortKind>]) -> PortKind {
+    match input_kinds.first().and_then(|k| *k) {
+        Some(PortKind::Sprite) => PortKind::Sprite,
+        _ => PortKind::Raster,
+    }
 }
 
 pub(super) fn downcast_features(v: &PortValue) -> Result<Arc<FilteredFeatures>, EvalError> {

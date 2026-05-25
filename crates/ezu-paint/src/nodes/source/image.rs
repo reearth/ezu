@@ -28,7 +28,7 @@ impl Node for ImageNode {
     fn inputs(&self) -> &[PortSpec] {
         &[]
     }
-    fn output(&self) -> PortKind {
+    fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Sprite
     }
     fn eval(&self, ctx: &EvalCtx<'_>, _: &[Option<PortValue>]) -> Result<PortValue, EvalError> {

@@ -47,22 +47,38 @@ impl fmt::Display for PortKind {
 }
 
 /// One declared input port on a node.
+///
+/// `accepts` lists the [`PortKind`]s this port will accept. A polymorphic
+/// port lists multiple kinds (e.g. `&[Raster, Sprite]`); a strict port
+/// lists exactly one. The graph builder checks the upstream node's
+/// resolved output kind against this list.
 #[derive(Debug, Clone)]
 pub struct PortSpec {
     /// Name of the port, e.g. `"mask"`, `"base"`. Used as the key in the
     /// style document's per-node JSON object.
     pub name: &'static str,
-    /// The kind of value this port expects.
-    pub kind: PortKind,
+    /// The kinds of value this port will accept. Non-empty.
+    pub accepts: &'static [PortKind],
     /// If true, the port may be left unconnected.
     pub optional: bool,
 }
 
 impl PortSpec {
-    pub const fn new(name: &'static str, kind: PortKind) -> Self {
+    /// Strict port — accepts exactly one kind. For polymorphic ports,
+    /// build the struct directly or use [`PortSpec::any_of`].
+    pub const fn new(name: &'static str, accepts: &'static [PortKind]) -> Self {
         Self {
             name,
-            kind,
+            accepts,
+            optional: false,
+        }
+    }
+
+    /// Polymorphic port — accepts any of the listed kinds.
+    pub const fn any_of(name: &'static str, accepts: &'static [PortKind]) -> Self {
+        Self {
+            name,
+            accepts,
             optional: false,
         }
     }
@@ -70,6 +86,17 @@ impl PortSpec {
     pub const fn optional(mut self) -> Self {
         self.optional = true;
         self
+    }
+
+    /// True if this port would accept a value of the given kind.
+    pub fn accepts_kind(&self, kind: PortKind) -> bool {
+        self.accepts.iter().any(|k| *k == kind)
+    }
+
+    /// The first kind in the accepts list — convenient for ports that
+    /// are de-facto monomorphic (most are).
+    pub fn primary_kind(&self) -> PortKind {
+        self.accepts[0]
     }
 }
 

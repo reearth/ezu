@@ -24,8 +24,8 @@ fn diamond_topo() {
     let merge = Mock::new(
         "merge",
         vec![
-            PortSpec::new("left", PortKind::Raster),
-            PortSpec::new("right", PortKind::Raster),
+            PortSpec::new("left", &[PortKind::Raster]),
+            PortSpec::new("right", &[PortKind::Raster]),
         ],
         PortKind::Raster,
     )
@@ -58,8 +58,8 @@ fn type_mismatch_is_rejected() {
         .connect("a", "b", "input")
         .set_output("b");
     match b.build() {
-        Err(BuildError::TypeMismatch { expected, got, .. }) => {
-            assert_eq!(expected, PortKind::Brush);
+        Err(BuildError::TypeMismatch { accepts, got, .. }) => {
+            assert_eq!(accepts, vec![PortKind::Brush]);
             assert_eq!(got, PortKind::Raster);
         }
         other => panic!("expected TypeMismatch, got {other:?}"),
@@ -85,8 +85,8 @@ fn optional_port_may_be_unconnected() {
     let opt = Mock::new(
         "opt",
         vec![
-            PortSpec::new("input", PortKind::Raster),
-            PortSpec::new("extra", PortKind::Raster).optional(),
+            PortSpec::new("input", &[PortKind::Raster]),
+            PortSpec::new("extra", &[PortKind::Raster]).optional(),
         ],
         PortKind::Raster,
     )
@@ -156,7 +156,7 @@ fn pad_propagates_upstream_through_blur() {
             "blur",
             Mock::new(
                 "blur",
-                vec![PortSpec::new("input", PortKind::Raster)],
+                vec![PortSpec::new("input", &[PortKind::Raster])],
                 PortKind::Raster,
             )
             .with_pad_grow(24)
@@ -191,7 +191,7 @@ fn pad_exceeded_errors() {
             "blur",
             Mock::new(
                 "blur",
-                vec![PortSpec::new("input", PortKind::Raster)],
+                vec![PortSpec::new("input", &[PortKind::Raster])],
                 PortKind::Raster,
             )
             .with_pad_grow(crate::MAX_PAD + 1)

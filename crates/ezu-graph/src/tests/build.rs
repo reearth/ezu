@@ -43,7 +43,7 @@ impl NodeFactory for BlurFactory {
         Ok(BuiltNode {
             node: Mock::new(
                 "blur",
-                vec![PortSpec::new("input", PortKind::Raster)],
+                vec![PortSpec::new("input", &[PortKind::Raster])],
                 PortKind::Raster,
             )
             .with_pad_grow(pad)

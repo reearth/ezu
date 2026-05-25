@@ -45,12 +45,12 @@ impl Node for HillshadeNode {
     fn inputs(&self) -> &[PortSpec] {
         static SPECS: &[PortSpec] = &[PortSpec {
             name: "field",
-            kind: PortKind::HeightField,
+            accepts: &[PortKind::HeightField],
             optional: false,
         }];
         SPECS
     }
-    fn output(&self) -> PortKind {
+    fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Raster
     }
     fn eval(

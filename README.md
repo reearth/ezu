@@ -131,11 +131,14 @@ The editor (MapLibre GL based) supports:
 ## How it paints
 
 A style is a **typed node DAG**, not an ordered layer list. Every
-operation is a node; ports are statically type-checked across five
+operation is a node; ports are statically type-checked across six
 kinds — `Features` (geometry + props), `Raster` (canvas-sized RGBA),
 `Sprite` (image at native dimensions, consumed by placement ops),
-`Brush` (hokusai brush handle), `Scalar` (constants); intermediate
-buffers are cached and reusable across tiles.
+`Brush` (hokusai brush handle), `Scalar` (constants),
+`HeightField` (per-pixel elevation grid). Ports list the kinds they
+accept, so polymorphic ops (e.g. `blur` over `Raster`/`Sprite`)
+pass the input kind straight through. Intermediate buffers are
+cached and reusable across tiles.
 
 External inputs — images, brushes, per-tile MVT/GeoJSON feature
 layers — enter through one uniform `AssetLoader` trait. The style

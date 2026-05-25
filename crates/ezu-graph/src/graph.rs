@@ -27,13 +27,14 @@ pub enum BuildError {
     DuplicateEdge { node: NodeId, port: String },
 
     #[error(
-        "type mismatch on `{node}.{port}`: expected {expected}, source `{src}` produces {got}"
+        "type mismatch on `{node}.{port}`: expected one of [{}], source `{src}` produces {got}",
+        accepts.iter().map(|k| k.to_string()).collect::<Vec<_>>().join(", ")
     )]
     TypeMismatch {
         node: NodeId,
         port: String,
         src: NodeId,
-        expected: PortKind,
+        accepts: Vec<PortKind>,
         got: PortKind,
     },
 
@@ -83,6 +84,11 @@ pub struct Graph {
     output: NodeIx,
     /// Topological order, output last.
     topo: Vec<NodeIx>,
+    /// Resolved output [`PortKind`] for every node, indexed by [`NodeIx`].
+    /// Polymorphic nodes (e.g. `blur` accepting both `Raster` and
+    /// `Sprite`) have their actual output kind decided here at build
+    /// time based on their connected inputs.
+    output_kinds: Vec<PortKind>,
 }
 
 /// Maximum allowed pad propagated to any node, in pixels. Prevents
@@ -148,6 +154,8 @@ impl GraphBuilder {
 
         let ix_of = |id: &str| -> Option<NodeIx> { self.nodes.get_index_of(id) };
 
+        // Pass 1: wire edges (no type check yet — output kinds may be
+        // polymorphic and only resolvable in topo order).
         for edge in &self.edges {
             let src_ix = ix_of(&edge.src).ok_or_else(|| BuildError::UnknownRef {
                 from: edge.src.clone(),
@@ -178,23 +186,6 @@ impl GraphBuilder {
                 });
             }
 
-            let src_kind = self
-                .nodes
-                .get_index(src_ix)
-                .expect("src_ix came from ix_of and is in range")
-                .1
-                .output();
-            let expected = dst_node.inputs()[port_ix].kind;
-            if src_kind != expected {
-                return Err(BuildError::TypeMismatch {
-                    node: edge.dst.clone(),
-                    port: edge.dst_port.clone(),
-                    src: edge.src.clone(),
-                    expected,
-                    got: src_kind,
-                });
-            }
-
             incoming[dst_ix][port_ix] = Some(src_ix);
             outgoing[src_ix].push(dst_ix);
         }
@@ -211,17 +202,47 @@ impl GraphBuilder {
             }
         }
 
+        let topo = topo_sort(n, &incoming, &self.nodes)?;
+
+        // Pass 2: walk topo order, resolve each node's output kind from
+        // its (already-resolved) upstream kinds, and check the upstream
+        // kind against each input port's `accepts` list.
+        let mut output_kinds: Vec<PortKind> = vec![PortKind::Raster; n];
+        for &ix in &topo {
+            let (id, node) = self.nodes.get_index(ix).expect("ix from topo is in range");
+            let specs = node.inputs();
+            let mut input_kinds: Vec<Option<PortKind>> = Vec::with_capacity(specs.len());
+            for (port_ix, spec) in specs.iter().enumerate() {
+                match incoming[ix][port_ix] {
+                    Some(src_ix) => {
+                        let src_kind = output_kinds[src_ix];
+                        if !spec.accepts_kind(src_kind) {
+                            let (src_id, _) = self
+                                .nodes
+                                .get_index(src_ix)
+                                .expect("src_ix from incoming is in range");
+                            return Err(BuildError::TypeMismatch {
+                                node: id.clone(),
+                                port: spec.name.to_string(),
+                                src: src_id.clone(),
+                                accepts: spec.accepts.to_vec(),
+                                got: src_kind,
+                            });
+                        }
+                        input_kinds.push(Some(src_kind));
+                    }
+                    None => input_kinds.push(None),
+                }
+            }
+            output_kinds[ix] = node.output(&input_kinds);
+        }
+
         let output_id = self.output.ok_or(BuildError::NoOutput)?;
         let output_ix = ix_of(&output_id).ok_or(BuildError::UnknownOutput(output_id.clone()))?;
         // Document output must be a canvas-padded raster — anything
         // smaller (e.g. a raw `Sprite`) will alias badly through the
         // host's `raster_to_png` crop. Catch this at build time.
-        let output_kind = self
-            .nodes
-            .get_index(output_ix)
-            .expect("output_ix came from ix_of and is in range")
-            .1
-            .output();
+        let output_kind = output_kinds[output_ix];
         if output_kind != PortKind::Raster {
             return Err(BuildError::OutputKindMismatch {
                 node: output_id.clone(),
@@ -229,14 +250,13 @@ impl GraphBuilder {
             });
         }
 
-        let topo = topo_sort(n, &incoming, &self.nodes)?;
-
         Ok(Graph {
             nodes: self.nodes,
             incoming,
             outgoing,
             output: output_ix,
             topo,
+            output_kinds,
         })
     }
 }
@@ -368,6 +388,12 @@ impl Graph {
     /// The source feeding `node.inputs()[port_ix]`, if connected.
     pub fn incoming(&self, ix: NodeIx, port_ix: usize) -> Option<NodeIx> {
         self.incoming[ix][port_ix]
+    }
+
+    /// Resolved output [`PortKind`] for `ix`. Decided at build time;
+    /// polymorphic nodes' kind is fixed once the graph is built.
+    pub fn output_kind(&self, ix: NodeIx) -> PortKind {
+        self.output_kinds[ix]
     }
 
     /// Group nodes into evaluation "levels". A node's level is one more

@@ -19,7 +19,7 @@ The DAG is typed. Every edge carries one of six `PortKind`s:
 |---|---|
 | `Features` | Vector features (geometry + properties), pre-filtered. Source-format agnostic — MVT, GeoJSON, or synthesized in-node. |
 | `Raster` | RGBA8 buffer (sRGB premultiplied), **padded canvas-sized**. The document's `output` must be this kind. |
-| `Sprite` | RGBA8 buffer at the **asset's native dimensions**, not canvas-sized. Used as the carrier for sprite / texture sources (`image`) consumed by placement ops (`place`, `tiling`, `stamp`). Cannot be wired directly into raster transforms or the document `output`. |
+| `Sprite` | RGBA8 buffer at the **asset's native dimensions**, not canvas-sized. Used as the carrier for sprite / texture sources (`image`) consumed by placement ops (`place`, `tiling`, `stamp`). Cannot be wired directly into the document `output`, but polymorphic filter ops (`blur`, …) accept both `Raster` and `Sprite` and pass the input kind through unchanged. |
 | `Brush` | hokusai brush handle plus overrides |
 | `Scalar` | constant Color / Number / Bool |
 | `HeightField` | Per-pixel elevation grid (`f32`, metres), padded canvas-sized. Emitted by raster-DEM source nodes (`dem`) and consumed by terrain-derived raster ops (`hillshade`, `slope`, `hypsometric`). Carries `metres_per_pixel_x/y` so consumers can compute geographically faithful gradients. |

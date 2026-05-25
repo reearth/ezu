@@ -20,7 +20,7 @@ impl Node for BrushFileNode {
     fn inputs(&self) -> &[PortSpec] {
         &[]
     }
-    fn output(&self) -> PortKind {
+    fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Brush
     }
     fn eval(&self, ctx: &EvalCtx<'_>, _: &[Option<PortValue>]) -> Result<PortValue, EvalError> {

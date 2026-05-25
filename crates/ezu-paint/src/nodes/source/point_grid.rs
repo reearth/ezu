@@ -44,7 +44,7 @@ impl Node for PointGridNode {
     fn inputs(&self) -> &[PortSpec] {
         &[]
     }
-    fn output(&self) -> PortKind {
+    fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Features
     }
     fn coord_space(&self) -> CoordSpace {

@@ -45,18 +45,18 @@ impl Node for LineNode {
         static SPECS: &[PortSpec] = &[
             PortSpec {
                 name: "features",
-                kind: PortKind::Features,
+                accepts: &[PortKind::Features],
                 optional: false,
             },
             PortSpec {
                 name: "brush",
-                kind: PortKind::Brush,
+                accepts: &[PortKind::Brush],
                 optional: false,
             },
         ];
         SPECS
     }
-    fn output(&self) -> PortKind {
+    fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Raster
     }
     fn coord_space(&self) -> CoordSpace {

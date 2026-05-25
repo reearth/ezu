@@ -200,3 +200,26 @@ fn place_none_with_scale_and_anchor_shrinks_source() {
         "shrunk disk should not reach (24,16): {outside:?}"
     );
 }
+
+#[test]
+fn blur_passes_through_sprite_kind() {
+    // `blur` is polymorphic over Raster/Sprite. Feeding a Sprite
+    // (`image`) through `blur` into `place` (Sprite-only) must
+    // type-check at graph build time, and the blurred sprite must
+    // render through place correctly.
+    let sprite = disk_sprite(16, 16, 6.0, [255, 0, 0, 255]);
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 32,
+      "assets": { "src": { "type": "image", "src": "src" } },
+      "nodes": {
+        "src":     { "op": "image", "src": "@src" },
+        "blurred": { "op": "blur",  "input": "@src", "sigma": 1.5 },
+        "out":     { "op": "place", "input": "@blurred", "fit": "cover" }
+      },
+      "output": "@out"
+    }"##;
+    let r = render_with_images(json, 32, 0, TileId { z: 0, x: 0, y: 0 }, &[("src", sprite)]);
+    let center = r.pixel(16, 16);
+    assert!(center[0] > 150, "blurred disk center should still be reddish: {center:?}");
+}

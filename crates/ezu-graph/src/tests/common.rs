@@ -45,7 +45,7 @@ impl Node for Mock {
     fn inputs(&self) -> &[PortSpec] {
         &self.inputs
     }
-    fn output(&self) -> PortKind {
+    fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         self.output
     }
     fn coord_space(&self) -> CoordSpace {
@@ -78,7 +78,15 @@ pub(super) fn src(kind: PortKind) -> Box<dyn Node> {
 }
 
 pub(super) fn passthrough(input: PortKind, output: PortKind) -> Box<dyn Node> {
-    Mock::new("pass", vec![PortSpec::new("input", input)], output).boxed()
+    let accepts: &'static [PortKind] = match input {
+        PortKind::Features => &[PortKind::Features],
+        PortKind::Raster => &[PortKind::Raster],
+        PortKind::Sprite => &[PortKind::Sprite],
+        PortKind::Brush => &[PortKind::Brush],
+        PortKind::Scalar => &[PortKind::Scalar],
+        PortKind::HeightField => &[PortKind::HeightField],
+    };
+    Mock::new("pass", vec![PortSpec::new("input", accepts)], output).boxed()
 }
 
 pub(super) fn small_canvas() -> CanvasInfo {
@@ -119,7 +127,7 @@ impl Node for Counter {
     fn inputs(&self) -> &[PortSpec] {
         &self.inputs
     }
-    fn output(&self) -> PortKind {
+    fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         self.output
     }
     fn eval(
@@ -153,8 +161,8 @@ impl Node for Forward {
     fn inputs(&self) -> &[PortSpec] {
         self.0.inputs()
     }
-    fn output(&self) -> PortKind {
-        self.0.output()
+    fn output(&self, input_kinds: &[Option<PortKind>]) -> PortKind {
+        self.0.output(input_kinds)
     }
     fn coord_space(&self) -> CoordSpace {
         self.0.coord_space()
