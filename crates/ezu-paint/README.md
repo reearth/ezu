@@ -149,6 +149,13 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 | `feature-boolean` | `(Features, Features) → Features` | Polygon set ops: `mode: union/intersection/difference/symmetric-difference`. Lines / points on either input are dropped |
 | `triangulate` | `Features → Features` | Delaunay triangulation of input points → triangles as polygons |
 
+**Utility** (`nodes::util`)
+
+| Op | Inputs → Output | Notes |
+|---|---|---|
+| `switch` | `(any, any) → mirrors selected` | Build-time pick between `a` and `b` via `select` (`"a"` / `"b"`, or bool / 0/1). Both inputs accept any port kind; output mirrors the selected input's kind. Use for A/B variants and param-driven branching |
+| `pick-channel` | `Raster → ScalarField` | Extract one of `r`/`g`/`b`/`a`/`luminance` as a `[0, 1]` ScalarField (non-premultiplied RGB; Rec. 601 luma). Bridges the raster pipeline into `map-range` / `threshold` / `color-ramp` |
+
 Each factory implements `NodeFactory::schema()` so editors picking up
 the registry-derived JSON Schema get per-op autocomplete. Adding a new
 op means dropping a file under the right category and ending it with

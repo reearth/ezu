@@ -43,6 +43,7 @@ mod geometry;
 mod paint;
 mod raster;
 mod source;
+mod util;
 
 pub use common::{BrushPayload, FilteredFeatures};
 

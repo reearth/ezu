@@ -192,6 +192,10 @@ The minimum op set ships in [`ezu-paint`](https://github.com/reearth/ezu/tree/ma
   (union / intersection / difference / xor over polygons),
   `transform` (translate / rotate / scale), `bbox` (axis-aligned
   envelope), `smooth` (Chaikin), `densify`, `resample`
+- **Utility** — `switch` (build-time A/B selection over any port
+  kind; great for param-driven variants), `pick-channel` (extract
+  R/G/B/A/luminance from a Raster as a `ScalarField`, bridging into
+  `map-range` / `threshold` / `color-ramp`)
 - **Scalar math** — `map-range` (linear remap with optional clamp on a
   `ScalarField`), `threshold` (binarise with optional soft ramp)
 - **Gradients** — `gradient-linear`, `gradient-radial` (elliptical via
