@@ -1,14 +1,21 @@
 //! `mosaic` — `Raster -> Raster`. Quantize the input into uniform
-//! square blocks: each block is filled with the average color of the
-//! source pixels it covers.
+//! square blocks. Each block is summarized to a single color via
+//! `mode`:
+//!
+//! - `mode: "average"` (default): the mean color of the source pixels
+//!   covered by the block. Smooth across colour transitions — the
+//!   classic "mosaic" filter.
+//! - `mode: "nearest"`: the source pixel at the block's center. No
+//!   blending across boundaries — adjacent blocks step crisply between
+//!   source colours.
 //!
 //! With `anchor: "world"` (default) the block grid is anchored to z=0
 //! world pixels, so adjacent map tiles see the same block boundaries
-//! and seams disappear. This requires the upstream to supply at least
-//! `block` extra padding so blocks straddling the tile edge can be
-//! averaged from the same source pixels in both tiles. With
-//! `anchor: "tile"` each map tile starts the grid at its own top-left
-//! and no extra padding is needed (but tile seams may be visible).
+//! and seams disappear. This requires upstream padding so blocks
+//! straddling the tile edge can be summarized from the same source
+//! pixels in both tiles. With `anchor: "tile"` each map tile starts
+//! the grid at its own top-left and no extra padding is needed (but
+//! tile seams may be visible).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -22,9 +29,16 @@ use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{read_number, read_optional_string, Anchor};
 
+#[derive(Clone, Copy)]
+enum Mode {
+    Average,
+    Nearest,
+}
+
 struct MosaicNode {
     block: u32,
     anchor: Anchor,
+    mode: Mode,
 }
 
 impl Node for MosaicNode {
@@ -49,12 +63,16 @@ impl Node for MosaicNode {
         }
     }
     fn required_pad(&self, downstream: u32) -> u32 {
-        // World-anchored blocks may straddle the tile edge; growing the
-        // upstream pad by `block` keeps the straddling block fully
-        // visible in every tile that touches it, so the average is the
-        // same on both sides of the seam.
+        // World-anchored blocks may straddle the tile edge. `average`
+        // mode needs the full straddling block visible (so both tiles
+        // see the same samples and produce the same mean). `nearest`
+        // mode only needs the block's center pixel reachable, which is
+        // at most `block / 2` pixels outside the tile.
         match self.anchor {
-            Anchor::World => downstream.saturating_add(self.block),
+            Anchor::World => match self.mode {
+                Mode::Average => downstream.saturating_add(self.block),
+                Mode::Nearest => downstream.saturating_add(self.block.div_ceil(2)),
+            },
             Anchor::Tile => downstream,
         }
     }
@@ -99,40 +117,55 @@ impl Node for MosaicNode {
             for x in 0..w {
                 let world_x = origin_x + x;
                 let bx = world_x.div_euclid(block);
-                let color = *cache.entry((bx, by)).or_insert_with(|| {
-                    // World-space block extent.
-                    let wx0 = bx * block;
-                    let wy0 = by * block;
-                    let wx1 = wx0 + block;
-                    let wy1 = wy0 + block;
-                    // Clip to the available source pixels (in source-local
-                    // coords).
-                    let sx0 = (wx0 - origin_x).max(0);
-                    let sy0 = (wy0 - origin_y).max(0);
-                    let sx1 = (wx1 - origin_x).min(w);
-                    let sy1 = (wy1 - origin_y).min(h);
-                    if sx1 <= sx0 || sy1 <= sy0 {
-                        return [0; 4];
-                    }
-                    let mut sum = [0u64; 4];
-                    let mut count = 0u64;
-                    for yy in sy0..sy1 {
-                        let row = (yy * w) as usize * 4;
-                        for xx in sx0..sx1 {
-                            let i = row + (xx as usize) * 4;
-                            sum[0] += src_px[i] as u64;
-                            sum[1] += src_px[i + 1] as u64;
-                            sum[2] += src_px[i + 2] as u64;
-                            sum[3] += src_px[i + 3] as u64;
-                            count += 1;
+                let color = *cache.entry((bx, by)).or_insert_with(|| match self.mode {
+                    Mode::Average => {
+                        // World-space block extent.
+                        let wx0 = bx * block;
+                        let wy0 = by * block;
+                        let wx1 = wx0 + block;
+                        let wy1 = wy0 + block;
+                        // Clip to the available source pixels.
+                        let sx0 = (wx0 - origin_x).max(0);
+                        let sy0 = (wy0 - origin_y).max(0);
+                        let sx1 = (wx1 - origin_x).min(w);
+                        let sy1 = (wy1 - origin_y).min(h);
+                        if sx1 <= sx0 || sy1 <= sy0 {
+                            return [0; 4];
                         }
+                        let mut sum = [0u64; 4];
+                        let mut count = 0u64;
+                        for yy in sy0..sy1 {
+                            let row = (yy * w) as usize * 4;
+                            for xx in sx0..sx1 {
+                                let i = row + (xx as usize) * 4;
+                                sum[0] += src_px[i] as u64;
+                                sum[1] += src_px[i + 1] as u64;
+                                sum[2] += src_px[i + 2] as u64;
+                                sum[3] += src_px[i + 3] as u64;
+                                count += 1;
+                            }
+                        }
+                        [
+                            (sum[0] / count) as u8,
+                            (sum[1] / count) as u8,
+                            (sum[2] / count) as u8,
+                            (sum[3] / count) as u8,
+                        ]
                     }
-                    [
-                        (sum[0] / count) as u8,
-                        (sum[1] / count) as u8,
-                        (sum[2] / count) as u8,
-                        (sum[3] / count) as u8,
-                    ]
+                    Mode::Nearest => {
+                        // Sample the source pixel at the block's center
+                        // (in world coords). Using a fixed offset means
+                        // adjacent tiles pick the same representative
+                        // for any straddling block.
+                        let half = block / 2;
+                        let cx = bx * block + half - origin_x;
+                        let cy = by * block + half - origin_y;
+                        if cx < 0 || cy < 0 || cx >= w || cy >= h {
+                            return [0; 4];
+                        }
+                        let i = ((cy * w + cx) as usize) * 4;
+                        [src_px[i], src_px[i + 1], src_px[i + 2], src_px[i + 3]]
+                    }
                 });
                 let i = ((y * w + x) as usize) * 4;
                 dst[i] = color[0];
@@ -149,6 +182,10 @@ impl Node for MosaicNode {
         match self.anchor {
             Anchor::World => h.update(b"w"),
             Anchor::Tile => h.update(b"t"),
+        }
+        match self.mode {
+            Mode::Average => h.update(b"a"),
+            Mode::Nearest => h.update(b"n"),
         }
     }
 }
@@ -182,8 +219,22 @@ impl NodeFactory for MosaicFactory {
                 });
             }
         };
+        let mode = match read_optional_string(fields, "mode")?.as_deref() {
+            None | Some("average") => Mode::Average,
+            Some("nearest") => Mode::Nearest,
+            Some(other) => {
+                return Err(FactoryError::BadField {
+                    field: "mode".into(),
+                    msg: format!("expected `average` or `nearest`, got `{other}`"),
+                });
+            }
+        };
         Ok(BuiltNode {
-            node: Box::new(MosaicNode { block, anchor }),
+            node: Box::new(MosaicNode {
+                block,
+                anchor,
+                mode,
+            }),
             connections: vec![Connection {
                 port: "input".into(),
                 src: input,
@@ -192,13 +243,15 @@ impl NodeFactory for MosaicFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Pixelate a raster into uniform square blocks; each block is filled with the average color of the source pixels it covers. World-anchored by default so adjacent map tiles share the same block grid.",
+            "description": "Quantize a raster into uniform square blocks. `mode` selects how each block is summarized: `average` (default) takes the mean of covered pixels (smooth, classic mosaic); `nearest` takes the block's centre pixel (crisp, no inter-colour blending). World-anchored by default so adjacent map tiles share the same block grid.",
             "properties": {
                 "input": schema_frag::node_ref(),
                 "block": { "type": "integer", "minimum": 1,
                            "description": "Block edge length in canvas pixels." },
                 "anchor": { "type": "string", "enum": ["world", "tile"], "default": "world",
                             "description": "`world` (default) makes the block grid seamless across map tiles by growing the upstream pad. `tile` restarts the grid at every map tile's top-left and requires no extra padding." },
+                "mode": { "type": "string", "enum": ["average", "nearest"], "default": "average",
+                          "description": "`average` (default) blends covered pixels into a mean colour. `nearest` samples the block's centre pixel verbatim — produces hard block edges without inter-colour averaging." },
             },
             "required": ["input", "block"],
         })

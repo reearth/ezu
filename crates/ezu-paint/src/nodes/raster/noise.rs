@@ -4,7 +4,9 @@
 //! Shared parameters:
 //!
 //! - `type`: `white` | `value` | `perlin` | `simplex` | `worley`
-//! - `scale-px`: wavelength in pixels at the current zoom (required)
+//! - `scale-px`: wavelength in pixels (required). Either a single
+//!   number (isotropic) or `[x, y]` for anisotropic noise — useful for
+//!   wood grain, brick patterns, or wave streaks.
 //! - `octaves` / `lacunarity` / `gain`: fBm stack (set `octaves: 1` to
 //!   disable)
 //! - `warp-amp` / `warp-freq`: optional domain warp (turbulence)
@@ -33,7 +35,9 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{read_color, read_number, read_number_or, read_optional_string, Anchor};
+use crate::nodes::common::{
+    read_color, read_number_or, read_optional_string, resolve_field, Anchor,
+};
 use crate::nodes::raster::noise_field::{fbm, NoiseKind, Sampler};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,7 +49,8 @@ enum OutputKind {
 struct NoiseNode {
     kind: NoiseKind,
     out_kind: OutputKind,
-    scale_px: f64,
+    scale_x: f64,
+    scale_y: f64,
     octaves: u32,
     lacunarity: f64,
     gain: f64,
@@ -102,22 +107,24 @@ impl Node for NoiseNode {
             Anchor::Tile => (0.0, 0.0),
         };
 
-        let inv_scale = 1.0 / self.scale_px;
-        let warp_inv_scale = inv_scale * self.warp_freq;
+        let inv_scale_x = 1.0 / self.scale_x;
+        let inv_scale_y = 1.0 / self.scale_y;
+        let warp_inv_scale_x = inv_scale_x * self.warp_freq;
+        let warp_inv_scale_y = inv_scale_y * self.warp_freq;
 
         // Sampling kernel shared between raster and scalar modes.
         let sample_at = |x: u32, y: u32| -> f64 {
             let py = origin_y + (y as f64) - pad;
             let px = origin_x + (x as f64) - pad;
             let (sx, sy) = if let Some((wa, wb)) = warp.as_ref() {
-                let wx = wa.sample(px * warp_inv_scale, py * warp_inv_scale);
-                let wy = wb.sample(px * warp_inv_scale, py * warp_inv_scale);
+                let wx = wa.sample(px * warp_inv_scale_x, py * warp_inv_scale_y);
+                let wy = wb.sample(px * warp_inv_scale_x, py * warp_inv_scale_y);
                 (
-                    (px + wx * self.warp_amp) * inv_scale,
-                    (py + wy * self.warp_amp) * inv_scale,
+                    (px + wx * self.warp_amp) * inv_scale_x,
+                    (py + wy * self.warp_amp) * inv_scale_y,
                 )
             } else {
-                (px * inv_scale, py * inv_scale)
+                (px * inv_scale_x, py * inv_scale_y)
             };
             fbm(&main, sx, sy, self.octaves, self.lacunarity, self.gain)
         };
@@ -169,7 +176,8 @@ impl Node for NoiseNode {
             OutputKind::Raster => b"r",
             OutputKind::Scalar => b"s",
         });
-        h.update(&self.scale_px.to_le_bytes());
+        h.update(&self.scale_x.to_le_bytes());
+        h.update(&self.scale_y.to_le_bytes());
         h.update(&self.octaves.to_le_bytes());
         h.update(&self.lacunarity.to_le_bytes());
         h.update(&self.gain.to_le_bytes());
@@ -226,13 +234,7 @@ impl NodeFactory for NoiseFactory {
             }
         };
 
-        let scale_px = read_number(fields, "scale-px", ctx)?;
-        if scale_px <= 0.0 {
-            return Err(FactoryError::BadField {
-                field: "scale-px".into(),
-                msg: "scale-px must be > 0".into(),
-            });
-        }
+        let (scale_x, scale_y) = read_scale_xy(fields, "scale-px", ctx)?;
         let octaves = read_number_or(fields, "octaves", ctx, 1.0)? as u32;
         let octaves = octaves.clamp(1, 12);
         let lacunarity = read_number_or(fields, "lacunarity", ctx, 2.0)?;
@@ -276,7 +278,8 @@ impl NodeFactory for NoiseFactory {
             node: Box::new(NoiseNode {
                 kind,
                 out_kind,
-                scale_px,
+                scale_x,
+                scale_y,
                 octaves,
                 lacunarity,
                 gain,
@@ -305,7 +308,14 @@ impl NodeFactory for NoiseFactory {
                     "enum": ["raster", "scalar"],
                     "default": "raster",
                 },
-                "scale-px": schema_frag::px_number(),
+                "scale-px": {
+                    "description": "Noise wavelength in pixels. A single number for isotropic noise; an `[x, y]` array for anisotropic noise (larger value = longer wavelength along that axis, i.e. stretched pattern).",
+                    "oneOf": [
+                        { "type": "number", "exclusiveMinimum": 0 },
+                        { "type": "array", "items": { "type": "number", "exclusiveMinimum": 0 },
+                          "minItems": 2, "maxItems": 2 },
+                    ],
+                },
                 "octaves": { "type": "integer", "minimum": 1, "maximum": 12, "default": 1 },
                 "lacunarity": { "type": "number", "default": 2.0 },
                 "gain": { "type": "number", "default": 0.5 },
@@ -323,3 +333,44 @@ impl NodeFactory for NoiseFactory {
 }
 
 ezu_graph::submit_node!(NoiseFactory);
+
+/// Read a field that may be either a single number (isotropic) or a
+/// `[x, y]` array (anisotropic). Both axis values must be > 0.
+fn read_scale_xy(
+    fields: &serde_json::Map<String, Value>,
+    name: &str,
+    ctx: &FactoryCtx<'_>,
+) -> Result<(f64, f64), FactoryError> {
+    let v = resolve_field(fields, name, ctx)?;
+    let (x, y) = if let Some(n) = v.as_f64() {
+        (n, n)
+    } else if let Some(arr) = v.as_array() {
+        if arr.len() != 2 {
+            return Err(FactoryError::BadField {
+                field: name.into(),
+                msg: format!("expected number or [x, y], got array of length {}", arr.len()),
+            });
+        }
+        let x = arr[0].as_f64().ok_or_else(|| FactoryError::BadField {
+            field: name.into(),
+            msg: "x must be a number".into(),
+        })?;
+        let y = arr[1].as_f64().ok_or_else(|| FactoryError::BadField {
+            field: name.into(),
+            msg: "y must be a number".into(),
+        })?;
+        (x, y)
+    } else {
+        return Err(FactoryError::BadField {
+            field: name.into(),
+            msg: "expected number or [x, y] array".into(),
+        });
+    };
+    if x <= 0.0 || y <= 0.0 {
+        return Err(FactoryError::BadField {
+            field: name.into(),
+            msg: "scale components must be > 0".into(),
+        });
+    }
+    Ok((x, y))
+}
