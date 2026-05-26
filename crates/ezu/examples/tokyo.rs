@@ -158,7 +158,10 @@ async fn render_one(
         let t1 = Instant::now();
         let mut tile_loader = TileLoader::new(loader.as_ref(), tile_id);
         if let Some(bytes) = mvt_bytes {
-            tile_loader.bind_mvt(mvt::decode(&bytes)?);
+            // Bind under the style's mvt source name so `features`
+            // nodes (which reference sources by name) can find their
+            // layers as `<source>.<layer>`.
+            tile_loader.bind_mvt("basemap", mvt::decode(&bytes)?);
         }
         let t_decode = t1.elapsed();
 

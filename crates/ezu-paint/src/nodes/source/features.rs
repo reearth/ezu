@@ -3,11 +3,12 @@
 //! optional property filter and `min-zoom-field`, and emits the
 //! surviving features as a [`FilteredFeatures`].
 //!
-//! Source-format agnostic: the host packs MVT layers, GeoJSON, or any
-//! other vector input into [`FeatureLayer`] and binds it by name. Use
-//! `tile.<layer>` for per-tile data; bare names for document-scoped
-//! bindings. A missing binding is treated as "no features for this
-//! tile" and yields an empty result.
+//! Style fields: `source` (optional, matches a `mvt`/`pmtiles` entry
+//! in the document's `sources` block; defaults to the single such
+//! entry when only one exists) + `layer` (the MVT layer name). The
+//! op looks up `<source>.<layer>` on the host's AssetLoader.
+//! A missing binding is treated as "no features for this tile" and
+//! yields an empty result.
 
 use ezu_features::FeatureLayer;
 use ezu_graph::{
@@ -111,13 +112,15 @@ impl NodeFactory for FeaturesFactory {
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
-        _ctx: &FactoryCtx<'_>,
+        ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
-        let name = fields
-            .get("name")
+        let layer = fields
+            .get("layer")
             .and_then(Value::as_str)
-            .ok_or_else(|| FactoryError::MissingField("name".into()))?
+            .ok_or_else(|| FactoryError::MissingField("layer".into()))?
             .to_string();
+        let source = resolve_feature_source(fields, ctx)?;
+        let name = format!("{source}.{layer}");
         let filter = match fields.get("filter") {
             Some(v) => Some(
                 serde_json::from_value::<ezu_style::FeatureFilter>(v.clone()).map_err(|e| {
@@ -145,10 +148,12 @@ impl NodeFactory for FeaturesFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Sample features from a host-bound layer. `name` is an AssetLoader binding (e.g. `tile.buildings`); use `tile.*` for per-tile data, bare names for document-scoped.",
+            "description": "Sample features from a host-bound vector tile layer. `source` names a `mvt`/`pmtiles` entry in the document's `sources` block (optional when exactly one exists); `layer` selects a layer within that source.",
             "properties": {
-                "name": { "type": "string",
-                          "description": "Asset binding name. `tile.<layer>` for per-tile features (MVT, GeoJSON, …) bound by the host." },
+                "source": { "type": "string",
+                            "description": "Name of an `mvt` or `pmtiles` entry in the document's `sources`. Optional — defaults to the only such source when the document declares exactly one." },
+                "layer": { "type": "string",
+                           "description": "Vector tile layer name within `source` (e.g. `earth`, `roads`)." },
                 "filter": {
                     "type": "object",
                     "additionalProperties": true,
@@ -161,8 +166,52 @@ impl NodeFactory for FeaturesFactory {
                 "max-zoom": { "type": "integer", "minimum": 0, "maximum": 24,
                               "description": "Style-level maximum zoom. Above this zoom the node emits an empty layer." },
             },
-            "required": ["name"],
+            "required": ["layer"],
         })
+    }
+}
+
+/// Resolve the `source` field for ops that target a vector tile
+/// source. When omitted, defaults to the document's single
+/// `mvt`/`pmtiles` source. Errors if `source` is omitted and the
+/// document has zero or multiple such sources, or if a named source
+/// doesn't exist / isn't a vector tile source.
+fn resolve_feature_source(
+    fields: &serde_json::Map<String, Value>,
+    ctx: &FactoryCtx<'_>,
+) -> Result<String, FactoryError> {
+    if let Some(name) = read_optional_string(fields, "source")? {
+        match ctx.sources.get(&name) {
+            Some(ezu_style::SourceDecl::Mvt(_)) | Some(ezu_style::SourceDecl::Pmtiles(_)) => {
+                Ok(name)
+            }
+            Some(_) => Err(FactoryError::BadField {
+                field: "source".into(),
+                msg: format!("`{name}` exists but is not an `mvt` / `pmtiles` source"),
+            }),
+            None => Err(FactoryError::BadField {
+                field: "source".into(),
+                msg: format!("no source named `{name}` in document"),
+            }),
+        }
+    } else {
+        let mut matches = ctx.sources.iter().filter(|(_, decl)| {
+            matches!(
+                decl,
+                ezu_style::SourceDecl::Mvt(_) | ezu_style::SourceDecl::Pmtiles(_)
+            )
+        });
+        match (matches.next(), matches.next()) {
+            (Some((name, _)), None) => Ok(name.clone()),
+            (None, _) => Err(FactoryError::BadField {
+                field: "source".into(),
+                msg: "no `mvt`/`pmtiles` source in document; declare one or pass `source` explicitly".into(),
+            }),
+            (Some(_), Some(_)) => Err(FactoryError::BadField {
+                field: "source".into(),
+                msg: "multiple `mvt`/`pmtiles` sources in document; pass `source` explicitly".into(),
+            }),
+        }
     }
 }
 

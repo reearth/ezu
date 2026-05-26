@@ -13,7 +13,7 @@
     }
   },
   "nodes": {
-    "dem":       { "op": "dem", "name": "tile.terrain" },
+    "dem":       { "op": "dem", "source": "terrain" },
     "elevation": {
       "op": "color-ramp", "field": "@dem",
       "stops": [

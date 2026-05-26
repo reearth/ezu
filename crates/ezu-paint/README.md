@@ -114,8 +114,8 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 
 | Op | Inputs → Output | Notes |
 |---|---|---|
-| `features` | `() → Features` | Samples a host-bound layer (`tile.<layer>` for per-tile MVT/GeoJSON) via `AssetLoader` |
-| `dem` | `() → ScalarField` | Samples a host-bound DEM mosaic (`tile.<source>` matching a `sources` entry). The host fetches + decodes raster-DEM tiles (terrarium / mapbox-rgb) and binds the stitched scalar field (with `geo_scale` populated) per render |
+| `features` | `() → Features` | Samples a host-bound vector tile layer. `source` (optional, matches a `mvt`/`pmtiles` entry in the document's `sources` block; defaults to the single such entry) + `layer` (the MVT layer name). Looked up as `<source>.<layer>` on the AssetLoader |
+| `dem` | `() → ScalarField` | Samples a host-bound DEM mosaic. `source` (optional, matches a `dem` entry in `sources`; defaults to the single such entry) — looked up by bare source name. The host fetches + decodes raster-DEM tiles (terrarium / mapbox-rgb) and binds the stitched scalar field (with `geo_scale` populated) per render |
 | `literal-geometry` | `() → Features` | Inline points / lines / polygons from style fields |
 | `tile-bounds` | `() → Features` | Polygon covering the current tile |
 | `point-grid` | `() → Features` | Regular grid of points across the tile |
@@ -190,9 +190,11 @@ let mut assets = BrushBankLoader::new().with_dir("assets/brushes".into());
 assets.insert("watercolor_glazing", hokusai::myb::from_str(&myb_json)?);
 
 // Per render, overlay tile-scoped feature layers on top of the base
-// loader. `bind_mvt` registers every layer under `tile.<layer-name>`.
+// loader. `bind_mvt` registers every layer under
+// `<source>.<layer-name>` so the style's `features` nodes
+// (`source: "basemap", layer: "earth"`) resolve to it.
 let mut tile_loader = TileLoader::new(&assets, tile_id);
-tile_loader.bind_mvt(ezu_features::mvt::decode(&bytes)?);
+tile_loader.bind_mvt("basemap", ezu_features::mvt::decode(&bytes)?);
 
 let ev = Evaluator::new(&graph, &cache, &tile_loader);
 let raster = ev.render(tile_id, canvas, &params, seed)?;
@@ -206,15 +208,23 @@ and brushes (in-memory + disk fallback). `TileLoader` is a per-render
 overlay that adds tile-scoped feature bindings on top of any base
 loader. Both compose freely with custom `AssetLoader` impls.
 
-### `tile.<layer>` convention
+### Tile binding convention
 
-Anything the `features` node refers to as `tile.<name>` is expected to
-be bound by the host once per tile. `TileLoader::bind_mvt(decoded)`
-walks every layer in a decoded MVT and registers each one under
-`tile.<layer-name>`; a custom binding (GeoJSON, in-memory synthesized
-data, …) goes through `bind_features("tile.<name>", layer)`. Names
-without the `tile.` prefix flow through to the base loader unchanged,
-which is where document-scoped image / brush assets live.
+Anything the style's `features` / `dem` node references is expected
+to be bound by the host once per tile. `TileLoader::bind_mvt("<source>",
+decoded)` walks every layer in a decoded MVT and registers each one
+under `<source>.<layer-name>`, matching the `features` node's
+`source` + `layer` fields. DEM bindings use the bare source name to
+match the `dem` node's `source` field. Custom bindings (GeoJSON, in-
+memory synthesized data, …) go through `bind_features(<key>, layer)`
+where `<key>` is whatever string the style references.
+
+Names that look like asset srcs — those with a `scheme:` prefix
+(`builtin:`, `file:`, `http(s)://`) — bypass the per-tile bindings
+and flow through to the base loader, which is where document-scoped
+image / brush assets live. Unbound names *without* a scheme surface
+as `NotFound`; the `features` op treats that as an empty layer so
+sparse / partial-layer tiles render cleanly.
 
 `raster_to_png` / `raster_to_webp` / `raster_to_rgba8` all crop the
 padded buffer down to the central tile region before encoding /
@@ -230,8 +240,8 @@ building one fetcher (terrarium or mapbox-rgb, PNG or WebP) per
 declared source; `bind_dem_sources(&mut tile_loader, &registry, tile,
 canvas)` fetches the 3×3 neighbourhood (date-line-wrapping in X,
 edge-clamping in Y), bilinear-resamples it onto the padded canvas,
-and binds the resulting `ScalarField` under `tile.<source-name>` so
-the style's `dem` node picks it up. Requests beyond the source's
+and binds the resulting `ScalarField` under the bare source name so
+the style's `dem` node (`source: "<name>"`) picks it up. Requests beyond the source's
 `max-zoom` upsample from the appropriate ancestor tile. Decoded tiles
 are cached unboundedly per source — well-suited to single-tile and
 modest-pyramid renders; swap in an LRU bound if working sets ever

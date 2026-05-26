@@ -4,10 +4,11 @@
 //!
 //! The host is expected to declare the underlying tile source in the
 //! style document's `sources` block, fetch + stitch the tiles, and bind
-//! the resulting [`ScalarField`] under `tile.<source-name>` via
-//! `TileLoader::bind_scalar_field` before each render. The `name` field
-//! on this node is the binding key (typically the same `tile.<source>`
-//! string).
+//! the resulting [`ScalarField`] under the source's bare name via
+//! `TileLoader::bind_scalar_field` before each render. The style's
+//! `dem` node references it via `source: "<name>"` matching the
+//! document's `sources` entry; the field is optional when the
+//! document has exactly one `dem` source.
 
 use std::sync::Arc;
 
@@ -17,6 +18,8 @@ use ezu_graph::{
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
+
+use crate::nodes::common::read_optional_string;
 
 struct DemNode {
     name: String,
@@ -76,13 +79,9 @@ impl NodeFactory for DemFactory {
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
-        _ctx: &FactoryCtx<'_>,
+        ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
-        let name = fields
-            .get("name")
-            .and_then(Value::as_str)
-            .ok_or_else(|| FactoryError::MissingField("name".into()))?
-            .to_string();
+        let name = resolve_dem_source(fields, ctx)?;
         Ok(BuiltNode {
             node: Box::new(DemNode { name }),
             connections: vec![],
@@ -90,15 +89,49 @@ impl NodeFactory for DemFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Sample a host-bound raster DEM as a ScalarField. `name` is an AssetLoader binding (typically `tile.<source>` matching a `sources` entry).",
+            "description": "Sample a host-bound raster DEM as a ScalarField. `source` names a `dem` entry in the document's `sources` block; optional when the document declares exactly one such source.",
             "properties": {
-                "name": {
+                "source": {
                     "type": "string",
-                    "description": "Asset binding name. `tile.<source>` for per-tile DEM mosaics bound by the host."
+                    "description": "Name of a `dem` source in the document's `sources` block. Optional when there is exactly one."
                 }
             },
-            "required": ["name"],
         })
+    }
+}
+
+fn resolve_dem_source(
+    fields: &serde_json::Map<String, Value>,
+    ctx: &FactoryCtx<'_>,
+) -> Result<String, FactoryError> {
+    if let Some(name) = read_optional_string(fields, "source")? {
+        match ctx.sources.get(&name) {
+            Some(ezu_style::SourceDecl::Dem(_)) => Ok(name),
+            Some(_) => Err(FactoryError::BadField {
+                field: "source".into(),
+                msg: format!("`{name}` exists but is not a `dem` source"),
+            }),
+            None => Err(FactoryError::BadField {
+                field: "source".into(),
+                msg: format!("no source named `{name}` in document"),
+            }),
+        }
+    } else {
+        let mut matches = ctx
+            .sources
+            .iter()
+            .filter(|(_, decl)| matches!(decl, ezu_style::SourceDecl::Dem(_)));
+        match (matches.next(), matches.next()) {
+            (Some((name, _)), None) => Ok(name.clone()),
+            (None, _) => Err(FactoryError::BadField {
+                field: "source".into(),
+                msg: "no `dem` source in document; declare one or pass `source` explicitly".into(),
+            }),
+            (Some(_), Some(_)) => Err(FactoryError::BadField {
+                field: "source".into(),
+                msg: "multiple `dem` sources in document; pass `source` explicitly".into(),
+            }),
+        }
     }
 }
 

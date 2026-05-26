@@ -142,10 +142,12 @@ pass the input kind straight through. Intermediate buffers are
 cached and reusable across tiles.
 
 External inputs — images, brushes, per-tile MVT/GeoJSON feature
-layers — enter through one uniform `AssetLoader` trait. The style
-references each binding by name (`tile.<layer>` for per-tile feature
-data, bare names for document-scoped assets); the host fills the
-bindings before rendering. Asset `src` entries can be local file
+layers — enter through one uniform `AssetLoader` trait. The style's
+`features` node references its layer by `(source, layer)` pointing
+into the document's `sources` block; the host binds decoded data
+under `<source>.<layer>` per tile before rendering. Document-scoped
+assets (brushes, images) use `scheme:`-prefixed names (`builtin:`,
+`file:`, `http(s)://`). Asset `src` entries can be local file
 paths or `http(s)://` URLs — native hosts (CLI, server, examples)
 prefetch URLs via `ezu_paint::host::prefetch_doc_assets` at startup
 (gated behind the `http` feature). Source-format choice (MVT vs
@@ -222,16 +224,19 @@ earth-tone background.
   "name": "demo",
   "tile-size": 512,
   "pad": 24,
-  "sources": { "glazing": { "type": "brush", "src": "builtin:watercolor_glazing" } },
+  "sources": {
+    "glazing":  { "type": "brush", "src": "builtin:watercolor_glazing" },
+    "basemap":  { "type": "mvt", "url": "https://papers.reearth.land/protomaps/tilejson.json" }
+  },
   "nodes": {
     "bg":     { "op": "solid", "color": "#fbf6e6" },
-    "earth":  { "op": "features", "name": "tile.earth" },
+    "earth":  { "op": "features", "layer": "earth" },
     "earth_p":{ "op": "fill-solid", "features": "@earth", "fill": "#e8d9b0" },
-    "water":  { "op": "features", "name": "tile.water" },
+    "water":  { "op": "features", "layer": "water" },
     "water_p":{ "op": "fill-dabs", "features": "@water",
                 "color": "#5876a0", "opacity": 0.22,
                 "radius-px": 7, "spacing-px": 3 },
-    "roads":  { "op": "features", "name": "tile.roads",
+    "roads":  { "op": "features", "layer": "roads",
                 "filter": { "kind_detail": "motorway" } },
     "brush":  { "op": "brush-file", "src": "@glazing" },
     "roads_p":{ "op": "line", "features": "@roads", "brush": "@brush",

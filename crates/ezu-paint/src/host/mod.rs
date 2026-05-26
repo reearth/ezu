@@ -264,7 +264,8 @@ fn is_brush_extension(path: &std::path::Path) -> bool {
 /// rendering a tile; document-scoped lookups fall through to the base.
 ///
 /// Bindings are keyed by the exact name the style references — by
-/// convention `tile.<layer>` for per-tile features.
+/// convention `<source>.<layer>` for per-tile MVT layers and bare
+/// `<source>` for per-tile scalar fields (DEM).
 pub struct TileLoader<'a> {
     base: &'a dyn AssetLoader,
     bindings: HashMap<String, Binding>,
@@ -289,8 +290,8 @@ impl<'a> TileLoader<'a> {
     }
 
     /// Bind a feature layer under `name`. By convention `name` is
-    /// `"tile.<layer>"`; the style's `features` node references it by
-    /// the same string.
+    /// `"<source>.<layer>"`; the style's `features` node references
+    /// the same `(source, layer)` pair.
     pub fn bind_features(&mut self, name: impl Into<String>, layer: FeatureLayer) -> &mut Self {
         let name = name.into();
         let hash = self.binding_hash(&name);
@@ -305,8 +306,8 @@ impl<'a> TileLoader<'a> {
         self
     }
 
-    /// Bind a decoded scalar field under `name` (by convention
-    /// `"tile.<source>"` to match the style's DEM `sources` entry).
+    /// Bind a decoded scalar field under `name` (by convention the
+    /// bare `<source>` name matching the style's DEM `sources` entry).
     /// For DEM data, populate `geo_scale` on the field so gradient
     /// consumers (`hillshade`, `slope`) produce real-world slopes.
     pub fn bind_scalar_field(&mut self, name: impl Into<String>, field: ScalarField) -> &mut Self {
@@ -322,11 +323,13 @@ impl<'a> TileLoader<'a> {
         self
     }
 
-    /// Bind every layer of a decoded MVT tile under `tile.<layer-name>`.
-    /// Convenience for hosts that decode MVT bytes per tile.
-    pub fn bind_mvt(&mut self, tile: DecodedTile) -> &mut Self {
+    /// Bind every layer of a decoded MVT tile under
+    /// `<source-name>.<layer-name>`. The style's `features` nodes
+    /// reference the same `source` (matching one of the document's
+    /// `sources` entries) plus a `layer` to look up these bindings.
+    pub fn bind_mvt(&mut self, source: &str, tile: DecodedTile) -> &mut Self {
         for layer in tile.layers {
-            let key = format!("tile.{}", layer.name);
+            let key = format!("{source}.{}", layer.name);
             self.bind_features(key, layer);
         }
         self
@@ -347,13 +350,14 @@ impl AssetLoader for TileLoader<'_> {
         if let Some(b) = self.bindings.get(name) {
             return Ok(b.asset.clone());
         }
-        // `tile.<layer>` is the tile-bound namespace. If no binding
-        // exists (the source had no such layer, or no MVT was bound at
-        // all for this tile), surface a clean `NotFound` so consumers
-        // like the `features` op can fall back to an empty layer
-        // instead of bubbling a "missing scheme" error from the base
-        // (URL/file) loader.
-        if name.starts_with("tile.") {
+        // Tile bindings (`<source>` or `<source>.<layer>`) never carry
+        // a scheme; asset srcs (`builtin:`, `file:`, `http(s)://`) do.
+        // An unbound name without a scheme means the source had no
+        // such layer (or no MVT was bound for this tile at all) —
+        // surface a clean `NotFound` so consumers like the `features`
+        // op can fall back to an empty layer instead of bubbling a
+        // "missing scheme" error from the URL/file loader.
+        if !looks_like_asset_src(name) {
             return Err(AssetError::NotFound(name.to_string()));
         }
         self.base.load(name)
@@ -362,13 +366,19 @@ impl AssetLoader for TileLoader<'_> {
         if let Some(b) = self.bindings.get(name) {
             return b.hash;
         }
-        if name.starts_with("tile.") {
+        if !looks_like_asset_src(name) {
             // Bindings absent → constant hash so cache keys are stable
             // across tiles that share the "missing" state.
             return 0;
         }
         self.base.hash(name)
     }
+}
+
+/// `true` iff `name` looks like a URL/file/builtin asset src (i.e.
+/// has a `scheme:` prefix). Tile bindings never carry a scheme.
+fn looks_like_asset_src(name: &str) -> bool {
+    name.contains(':')
 }
 
 /// Decode a PNG (or other format supported by the `image` crate) into a

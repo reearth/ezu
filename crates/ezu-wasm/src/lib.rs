@@ -272,7 +272,7 @@ impl Renderer {
                 SourceBinding::Mvt(bytes) => {
                     let decoded =
                         ezu_features::mvt::decode(bytes).map_err(|e| named_err(ERR_MVT, e))?;
-                    tile_loader.bind_mvt(decoded);
+                    tile_loader.bind_mvt(name, decoded);
                 }
                 SourceBinding::Dem(byte_map) => {
                     let encoding = match self.doc.sources.get(name) {

@@ -56,8 +56,10 @@ pub enum AssetError {
 }
 
 /// Pluggable backend for resolving named asset bindings (images,
-/// brushes, tile features, …). Names that start with `tile.` are by
-/// convention tile-scoped — the host rebinds them per render.
+/// brushes, tile features, …). Names without a scheme prefix
+/// (`<source>` or `<source>.<layer>`) are by convention tile-scoped —
+/// the host rebinds them per render. Asset srcs carry a scheme
+/// (`builtin:`, `file:`, `http(s)://`) and are document-scoped.
 ///
 /// `hash` returns a stable content/identity hash the evaluator folds
 /// into every consuming node's cache key, so changes in a bound asset

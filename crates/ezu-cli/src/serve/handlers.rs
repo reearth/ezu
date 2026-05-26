@@ -199,6 +199,7 @@ async fn get_tile(
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, e))?;
 
+    let source_name = s.source_name.as_ref().map(Arc::clone);
     let bytes = tokio::task::spawn_blocking({
         move || {
             render_tile(
@@ -206,6 +207,7 @@ async fn get_tile(
                 &cache,
                 &assets,
                 fetched,
+                source_name.as_deref(),
                 dem_bindings,
                 tile,
                 tile_size,
@@ -362,10 +364,9 @@ async fn fetch_dem_bindings(
         .map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     for name in registry.names() {
-        let key = format!("tile.{name}");
-        if let Ok(ezu::graph::Asset::ScalarField(field)) = ezu::graph::AssetLoader::load(&tmp, &key)
+        if let Ok(ezu::graph::Asset::ScalarField(field)) = ezu::graph::AssetLoader::load(&tmp, name)
         {
-            out.push((key, (*field).clone()));
+            out.push((name.to_string(), (*field).clone()));
         }
     }
     Ok(out)
@@ -377,6 +378,7 @@ fn render_tile(
     cache: &ezu::graph::Cache,
     assets: &BrushBankLoader,
     fetched_mvt: Option<(bytes::Bytes, CoreTileId)>,
+    source_name: Option<&str>,
     dem_bindings: Vec<(String, ezu::graph::ScalarField)>,
     tile: CoreTileId,
     tile_size: u32,
@@ -389,7 +391,7 @@ fn render_tile(
         y: tile.y,
     };
     let mut tile_loader = TileLoader::new(assets, tile_id);
-    if let Some((bytes, src_tile)) = fetched_mvt {
+    if let (Some((bytes, src_tile)), Some(src_name)) = (fetched_mvt, source_name) {
         let mut decoded = mvt::decode(&bytes).map_err(|e| format!("mvt decode: {e}"))?;
         if src_tile != tile {
             tracing::debug!(
@@ -399,7 +401,7 @@ fn render_tile(
             decoded = mvt::clip_to_descendant(&decoded, src_tile, tile)
                 .map_err(|e| format!("overzoom clip: {e}"))?;
         }
-        tile_loader.bind_mvt(decoded);
+        tile_loader.bind_mvt(src_name, decoded);
     }
     for (name, field) in dem_bindings {
         tile_loader.bind_scalar_field(name, field);

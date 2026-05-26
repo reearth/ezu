@@ -19,6 +19,9 @@ use crate::source::TileSource;
 #[derive(Clone)]
 pub struct AppState {
     pub source: Option<Arc<TileSource>>,
+    /// Document source name that `source`'s bytes get bound under.
+    /// Mirrors the `Prepared::source_name` in the one-shot CLI path.
+    pub source_name: Option<Arc<str>>,
     pub style: Arc<RwLock<StyleSnapshot>>,
     /// Base directory used to resolve relative asset `src` paths and
     /// as the fall-through for the per-snapshot loader's disk lookups.
@@ -118,6 +121,7 @@ pub fn validate_text(text: &str) -> Result<(), BuildSnapshotError> {
 impl AppState {
     pub fn new(
         source: Option<TileSource>,
+        source_name: Option<String>,
         snapshot: StyleSnapshot,
         assets_dir: PathBuf,
         overzoom_levels: u8,
@@ -128,6 +132,7 @@ impl AppState {
         let (events, _) = broadcast::channel(8);
         Self {
             source: source.map(Arc::new),
+            source_name: source_name.map(Arc::from),
             style: Arc::new(RwLock::new(snapshot)),
             assets_dir: Arc::new(assets_dir),
             mvt_cache: Arc::new(DashMap::new()),

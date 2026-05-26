@@ -25,7 +25,7 @@
                          "high-color": "#6a5234",
                          "opacity": 0.18, "anchor": "world" },
 
-    "earth_feat":      { "op": "features", "name": "tile.earth" },
+    "earth_feat":      { "op": "features", "layer": "earth" },
     "earth_fill_raw":  { "op": "fill-solid", "features": "@earth_feat",
                          "fill": "#efe8d6", "fill-alpha": 1.0 },
     "earth_fill":      { "op": "warp", "input": "@earth_fill_raw",
@@ -35,7 +35,7 @@
 
     "pencil_hard_b":   { "op": "brush-file", "src": "@pencil_hard" },
 
-    "ocean_feat":      { "op": "features", "name": "tile.water",
+    "ocean_feat":      { "op": "features", "layer": "water",
                          "filter": { "kind": "ocean" } },
     "ocean_hatch_geo": { "op": "hatch", "features": "@ocean_feat",
                          "angle-deg": -30.0, "spacing": 24.0 },
@@ -48,7 +48,7 @@
                          "opacity": 0.7, "pressure-base": 0.65,
                          "pressure-jitter": 0.45, "dtime": 0.055 },
 
-    "inland_feat":     { "op": "features", "name": "tile.water",
+    "inland_feat":     { "op": "features", "layer": "water",
                          "filter": { "kind": "water",
                                      "kind_detail": ["lake", "basin"] } },
     "inland_hatch_geo":{ "op": "hatch", "features": "@inland_feat",
@@ -62,7 +62,7 @@
                          "opacity": 0.7, "pressure-base": 0.65,
                          "pressure-jitter": 0.45, "dtime": 0.055 },
 
-    "river_feat":      { "op": "features", "name": "tile.water",
+    "river_feat":      { "op": "features", "layer": "water",
                          "min-zoom-field": "min_zoom",
                          "filter": { "kind": ["river", "canal", "stream"] } },
     "river_wob":       { "op": "wave", "features": "@river_feat",
@@ -89,7 +89,7 @@
                          "radius-stroke-curve":  [[0.0, -1.4], [0.1, 0.0], [0.9, 0.0], [1.0, -1.6]],
                          "opacity-stroke-curve": [[0.0, -0.3], [0.08, 0.0], [0.92, 0.0], [1.0, -0.4]] },
 
-    "roads_minor_f":   { "op": "features", "name": "tile.roads",
+    "roads_minor_f":   { "op": "features", "layer": "roads",
                          "min-zoom-field": "min_zoom", "min-zoom": 12,
                          "filter": { "kind": "minor_road" } },
     "roads_minor_w":   { "op": "wave", "features": "@roads_minor_f",
@@ -103,7 +103,7 @@
                          "radius-stroke-curve":  [[0.0, -1.2], [0.12, 0.0], [0.88, 0.0], [1.0, -1.4]],
                          "opacity-stroke-curve": [[0.0, -0.3], [0.1, 0.0], [0.9, 0.0], [1.0, -0.4]] },
 
-    "roads_med_f":     { "op": "features", "name": "tile.roads",
+    "roads_med_f":     { "op": "features", "layer": "roads",
                          "min-zoom-field": "min_zoom",
                          "filter": { "kind": "medium_road" } },
     "roads_med_w":     { "op": "wave", "features": "@roads_med_f",
@@ -117,7 +117,7 @@
                          "radius-stroke-curve":  [[0.0, -1.4], [0.1, 0.0], [0.9, 0.0], [1.0, -1.6]],
                          "opacity-stroke-curve": [[0.0, -0.3], [0.08, 0.0], [0.92, 0.0], [1.0, -0.4]] },
 
-    "roads_major_low_f":{"op": "features", "name": "tile.roads",
+    "roads_major_low_f":{"op": "features", "layer": "roads",
                          "min-zoom-field": "min_zoom", "max-zoom": 11,
                          "filter": { "kind": "major_road",
                                      "kind_detail": ["trunk", "primary"] } },
@@ -132,7 +132,7 @@
                          "radius-stroke-curve":  [[0.0, -1.6], [0.08, 0.0], [0.92, 0.0], [1.0, -2.0]],
                          "opacity-stroke-curve": [[0.0, -0.35], [0.06, 0.0], [0.94, 0.0], [1.0, -0.45]] },
 
-    "roads_major_f":   { "op": "features", "name": "tile.roads",
+    "roads_major_f":   { "op": "features", "layer": "roads",
                          "min-zoom-field": "min_zoom", "min-zoom": 12,
                          "filter": { "kind": "major_road",
                                      "kind_detail": ["trunk", "primary"] } },
@@ -148,7 +148,7 @@
                          "opacity-stroke-curve": [[0.0, -0.35], [0.06, 0.0], [0.94, 0.0], [1.0, -0.45]],
                          "dtime-stroke-curve":   [[0.0, 2.5], [0.1, 1.0], [0.9, 1.0], [1.0, 3.0]] },
 
-    "roads_path_f":    { "op": "features", "name": "tile.roads",
+    "roads_path_f":    { "op": "features", "layer": "roads",
                          "min-zoom-field": "min_zoom", "min-zoom": 14,
                          "filter": { "kind": "path",
                                      "kind_detail": { "not": ["steps"] } } },
@@ -163,7 +163,7 @@
                          "radius-stroke-curve":  [[0.0, -1.2], [0.12, 0.0], [0.88, 0.0], [1.0, -1.4]],
                          "opacity-stroke-curve": [[0.0, -0.3], [0.1, 0.0], [0.9, 0.0], [1.0, -0.4]] },
 
-    "roads_sec_f":     { "op": "features", "name": "tile.roads",
+    "roads_sec_f":     { "op": "features", "layer": "roads",
                          "min-zoom-field": "min_zoom", "min-zoom": 12,
                          "filter": { "kind": "major_road",
                                      "kind_detail": ["secondary", "tertiary", "primary_link"] } },
@@ -178,7 +178,7 @@
                          "radius-stroke-curve":  [[0.0, -1.4], [0.1, 0.0], [0.9, 0.0], [1.0, -1.6]],
                          "opacity-stroke-curve": [[0.0, -0.3], [0.08, 0.0], [0.92, 0.0], [1.0, -0.4]] },
 
-    "roads_hwy_low_f": { "op": "features", "name": "tile.roads",
+    "roads_hwy_low_f": { "op": "features", "layer": "roads",
                          "min-zoom-field": "min_zoom", "max-zoom": 11,
                          "filter": { "kind": "highway" } },
     "roads_hwy_low_w": { "op": "wave", "features": "@roads_hwy_low_f",
@@ -193,7 +193,7 @@
                          "opacity-stroke-curve": [[0.0, -0.4], [0.05, 0.0], [0.95, 0.0], [1.0, -0.5]],
                          "dtime-stroke-curve":   [[0.0, 3.0], [0.08, 1.0], [0.92, 1.0], [1.0, 3.5]] },
 
-    "roads_hwy_f":     { "op": "features", "name": "tile.roads",
+    "roads_hwy_f":     { "op": "features", "layer": "roads",
                          "min-zoom-field": "min_zoom", "min-zoom": 12,
                          "filter": { "kind": "highway" } },
     "roads_hwy_w":     { "op": "wave", "features": "@roads_hwy_f",

@@ -242,6 +242,10 @@ struct Prepared {
     cache: Arc<Cache>,
     loader: Arc<BrushBankLoader>,
     source: Option<Arc<TileSource>>,
+    /// Name of the document's mvt/pmtiles source that `source`
+    /// resolves to; passed to `bind_mvt` so that bindings land under
+    /// the same name the style's `features` nodes reference.
+    source_name: Option<Arc<str>>,
     dem_sources: Arc<DemSourceRegistry>,
     canvas: CanvasInfo,
     overzoom_levels: u8,
@@ -279,26 +283,45 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
         pad: doc.pad,
     };
 
-    // CLI flags take precedence over a style-declared feature source so
-    // a quick `--pmtiles` swap doesn't require editing the style.
-    let cli_source = match (&common.pmtiles, &common.mvt) {
+    // CLI flags override the URL but keep the doc's source NAME, since
+    // the style's `features` nodes reference sources by name.
+    let cli_override = match (&common.pmtiles, &common.mvt) {
         (Some(p), None) => Some((SourceSpec::PmTiles(p.clone()), "--pmtiles flag")),
         (None, Some(u)) => Some((SourceSpec::Mvt(u.clone()), "--mvt flag")),
         (None, None) => None,
         _ => return Err("--pmtiles and --mvt are mutually exclusive".into()),
     };
-    let style_source = feature_source_from_doc(&doc);
-    let resolved = cli_source.or(style_source);
-    let source = match resolved {
-        Some((spec, origin)) => {
-            tracing::info!("opening source ({origin}): {spec:?}");
-            Some(Arc::new(TileSource::open(&spec).await?))
-        }
-        None => {
-            tracing::info!("no MVT source — rendering will skip `tile.<feature>` bindings");
-            None
-        }
-    };
+    let pick = feature_source_from_doc(&doc);
+    let (source, source_name): (Option<Arc<TileSource>>, Option<Arc<str>>) =
+        match (pick, cli_override) {
+            (Some(p), Some((spec, origin))) => {
+                tracing::info!(
+                    "opening source ({origin}, bound as `{}`): {spec:?}",
+                    p.name
+                );
+                (
+                    Some(Arc::new(TileSource::open(&spec).await?)),
+                    Some(Arc::from(p.name)),
+                )
+            }
+            (Some(p), None) => {
+                tracing::info!("opening source ({}): {:?}", p.origin, p.spec);
+                (
+                    Some(Arc::new(TileSource::open(&p.spec).await?)),
+                    Some(Arc::from(p.name)),
+                )
+            }
+            (None, Some((spec, origin))) => {
+                return Err(format!(
+                    "{origin} ({spec:?}) requires the style to declare a matching `mvt`/`pmtiles` source, but the document has none — `features` nodes have no source to reference"
+                )
+                .into());
+            }
+            (None, None) => {
+                tracing::info!("no MVT source — `features` bindings will be empty");
+                (None, None)
+            }
+        };
 
     let dem_sources = Arc::new(build_dem_sources(&doc));
     if !dem_sources.is_empty() {
@@ -311,6 +334,7 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
         cache,
         loader,
         source,
+        source_name,
         dem_sources,
         canvas,
         overzoom_levels: common.overzoom_levels,
@@ -477,6 +501,7 @@ async fn run_tile(args: TileCmd) -> Result<(), Box<dyn std::error::Error>> {
         Arc::clone(&prep.cache),
         Arc::clone(&prep.loader),
         prep.source.as_ref().map(Arc::clone),
+        prep.source_name.as_ref().map(Arc::clone),
         Arc::clone(&prep.dem_sources),
         prep.canvas,
         args.tile,
@@ -518,12 +543,21 @@ async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
             let cache = Arc::clone(&prep.cache);
             let loader = Arc::clone(&prep.loader);
             let source = prep.source.as_ref().map(Arc::clone);
+            let source_name = prep.source_name.as_ref().map(Arc::clone);
             let dem_sources = Arc::clone(&prep.dem_sources);
             let canvas = prep.canvas;
             let overzoom_levels = prep.overzoom_levels;
             tasks.push(tokio::spawn(async move {
                 let raster = render_one(
-                    graph, cache, loader, source, dem_sources, canvas, tile, overzoom_levels,
+                    graph,
+                    cache,
+                    loader,
+                    source,
+                    source_name,
+                    dem_sources,
+                    canvas,
+                    tile,
+                    overzoom_levels,
                 )
                 .await?;
                 Ok::<(CoreTileId, Arc<RasterBuf>), Box<dyn std::error::Error + Send + Sync>>((
@@ -605,6 +639,7 @@ async fn run_tiles(args: TilesCmd) -> Result<(), Box<dyn std::error::Error>> {
                     Arc::clone(&prep.cache),
                     Arc::clone(&prep.loader),
                     prep.source.as_ref().map(Arc::clone),
+                    prep.source_name.as_ref().map(Arc::clone),
                     Arc::clone(&prep.dem_sources),
                     prep.canvas,
                     tile,
@@ -639,11 +674,13 @@ async fn run_tiles(args: TilesCmd) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn render_one(
     graph: Arc<Graph>,
     cache: Arc<Cache>,
     loader: Arc<BrushBankLoader>,
     source: Option<Arc<TileSource>>,
+    source_name: Option<Arc<str>>,
     dem_sources: Arc<DemSourceRegistry>,
     canvas: CanvasInfo,
     tile: CoreTileId,
@@ -666,23 +703,22 @@ async fn render_one(
         let mut tmp = TileLoader::new(&base_loader, tile_id);
         bind_dem_sources(&mut tmp, &dem_sources, tile_id, canvas).await?;
         for name in dem_sources.names() {
-            let key = format!("tile.{name}");
             if let Ok(ezu::graph::Asset::ScalarField(field)) =
-                ezu::graph::AssetLoader::load(&tmp, &key)
+                ezu::graph::AssetLoader::load(&tmp, name)
             {
-                dem_bindings.push((key, (*field).clone()));
+                dem_bindings.push((name.to_string(), (*field).clone()));
             }
         }
     }
     let raster = tokio::task::spawn_blocking(
         move || -> Result<Arc<RasterBuf>, Box<dyn std::error::Error + Send + Sync>> {
             let mut tile_loader = TileLoader::new(loader.as_ref(), tile_id);
-            if let Some((bytes, src_tile)) = fetched {
+            if let (Some((bytes, src_tile)), Some(src_name)) = (fetched, source_name) {
                 let mut decoded = mvt::decode(&bytes)?;
                 if src_tile != tile {
                     decoded = mvt::clip_to_descendant(&decoded, src_tile, tile)?;
                 }
-                tile_loader.bind_mvt(decoded);
+                tile_loader.bind_mvt(&src_name, decoded);
             }
             for (name, field) in dem_bindings {
                 tile_loader.bind_scalar_field(name, field);
@@ -740,8 +776,14 @@ pub(crate) async fn fetch_text(arg: &str) -> Result<String, Box<dyn std::error::
 /// separately. Returns `None` if no compatible source is declared;
 /// when several are present the document order wins (later entries are
 /// ignored with a warning).
-pub(crate) fn feature_source_from_doc(doc: &Document) -> Option<(SourceSpec, &'static str)> {
-    let mut chosen: Option<(SourceSpec, &'static str)> = None;
+pub(crate) struct FeatureSourcePick {
+    pub name: String,
+    pub spec: SourceSpec,
+    pub origin: &'static str,
+}
+
+pub(crate) fn feature_source_from_doc(doc: &Document) -> Option<FeatureSourcePick> {
+    let mut chosen: Option<FeatureSourcePick> = None;
     for (name, decl) in &doc.sources {
         let (spec, origin) = match decl {
             SourceDecl::Mvt(s) => (SourceSpec::Mvt(s.url.clone()), "style sources (mvt)"),
@@ -757,7 +799,11 @@ pub(crate) fn feature_source_from_doc(doc: &Document) -> Option<(SourceSpec, &'s
             tracing::warn!("multiple feature sources in style; ignoring `{name}`");
             continue;
         }
-        chosen = Some((spec, origin));
+        chosen = Some(FeatureSourcePick {
+            name: name.clone(),
+            spec,
+            origin,
+        });
     }
     chosen
 }

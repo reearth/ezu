@@ -105,8 +105,9 @@ pub fn build_dem_sources(doc: &Document) -> DemSourceRegistry {
 }
 
 /// Fetch the DEM mosaic for every source in the registry and bind each
-/// one onto `tile_loader` under `"tile.<source-name>"`. Cache hits
-/// short-circuit the HTTP round trip.
+/// one onto `tile_loader` under the source's bare name (the style's
+/// `dem` op references it via the same `source: "<name>"` field).
+/// Cache hits short-circuit the HTTP round trip.
 pub async fn bind_dem_sources(
     tile_loader: &mut TileLoader<'_>,
     registry: &DemSourceRegistry,
@@ -118,7 +119,7 @@ pub async fn bind_dem_sources(
     }
     for (name, src) in &registry.sources {
         let field = src.clone().build_padded(tile, canvas).await?;
-        tile_loader.bind_scalar_field(format!("tile.{name}"), field);
+        tile_loader.bind_scalar_field(name.to_string(), field);
     }
     Ok(())
 }
