@@ -347,11 +347,25 @@ impl AssetLoader for TileLoader<'_> {
         if let Some(b) = self.bindings.get(name) {
             return Ok(b.asset.clone());
         }
+        // `tile.<layer>` is the tile-bound namespace. If no binding
+        // exists (the source had no such layer, or no MVT was bound at
+        // all for this tile), surface a clean `NotFound` so consumers
+        // like the `features` op can fall back to an empty layer
+        // instead of bubbling a "missing scheme" error from the base
+        // (URL/file) loader.
+        if name.starts_with("tile.") {
+            return Err(AssetError::NotFound(name.to_string()));
+        }
         self.base.load(name)
     }
     fn hash(&self, name: &str) -> u128 {
         if let Some(b) = self.bindings.get(name) {
             return b.hash;
+        }
+        if name.starts_with("tile.") {
+            // Bindings absent → constant hash so cache keys are stable
+            // across tiles that share the "missing" state.
+            return 0;
         }
         self.base.hash(name)
     }
