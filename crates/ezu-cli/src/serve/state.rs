@@ -24,6 +24,9 @@ pub struct AppState {
     /// as the fall-through for the per-snapshot loader's disk lookups.
     pub assets_dir: Arc<PathBuf>,
     pub mvt_cache: Arc<DashMap<TileId, Bytes>>,
+    /// Maximum number of parent-zoom fallbacks attempted when the
+    /// requested tile is missing from the source. `0` disables overzoom.
+    pub overzoom_levels: u8,
     /// Cached JSON Schema derived from the node registry. Built once at
     /// startup since registry contents don't change at runtime.
     pub schema: Arc<serde_json::Value>,
@@ -113,7 +116,12 @@ pub fn validate_text(text: &str) -> Result<(), BuildSnapshotError> {
 }
 
 impl AppState {
-    pub fn new(source: Option<TileSource>, snapshot: StyleSnapshot, assets_dir: PathBuf) -> Self {
+    pub fn new(
+        source: Option<TileSource>,
+        snapshot: StyleSnapshot,
+        assets_dir: PathBuf,
+        overzoom_levels: u8,
+    ) -> Self {
         let schema = default_registry().document_schema();
         // Capacity 8 is enough: events are rare (file saves) and
         // subscribers (open editor tabs) typically count 0–2.
@@ -125,6 +133,7 @@ impl AppState {
             mvt_cache: Arc::new(DashMap::new()),
             schema: Arc::new(schema),
             events,
+            overzoom_levels,
         }
     }
 }

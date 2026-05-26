@@ -50,6 +50,11 @@ pub struct ServeCmd {
     /// Bind address.
     #[arg(long, default_value = "127.0.0.1:8080", env = "EZU_BIND")]
     bind: SocketAddr,
+    /// When a requested tile is missing, fall back to a parent tile
+    /// up to this many zoom levels up and re-project its geometry
+    /// onto the requested tile (MVT "overzoom"). `0` disables.
+    #[arg(long, default_value_t = 4)]
+    overzoom_levels: u8,
 }
 
 pub async fn run(args: ServeCmd) -> Result<(), Box<dyn std::error::Error>> {
@@ -95,7 +100,7 @@ pub async fn run(args: ServeCmd) -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let state = AppState::new(source, snapshot, args.assets_dir.clone());
+    let state = AppState::new(source, snapshot, args.assets_dir.clone(), args.overzoom_levels);
 
     // Spawn a polling watcher when the style was loaded from a local
     // path. URL-sourced styles aren't watched (we don't know how the

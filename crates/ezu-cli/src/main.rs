@@ -78,6 +78,11 @@ struct CommonArgs {
     /// template (e.g. `/tiles/{z}/{x}/{y}.pbf`).
     #[arg(long, conflicts_with = "pmtiles")]
     mvt: Option<String>,
+    /// When a requested tile is missing, fall back to a parent tile
+    /// up to this many zoom levels up and re-project its geometry
+    /// onto the requested tile (MVT "overzoom"). `0` disables.
+    #[arg(long, default_value_t = 4)]
+    overzoom_levels: u8,
 }
 
 /// Output raster format. Pure-Rust pipelines on both sides — WebP is
@@ -239,6 +244,7 @@ struct Prepared {
     source: Option<Arc<TileSource>>,
     dem_sources: Arc<DemSourceRegistry>,
     canvas: CanvasInfo,
+    overzoom_levels: u8,
 }
 
 async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Error>> {
@@ -307,6 +313,7 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
         source,
         dem_sources,
         canvas,
+        overzoom_levels: common.overzoom_levels,
     })
 }
 
@@ -473,6 +480,7 @@ async fn run_tile(args: TileCmd) -> Result<(), Box<dyn std::error::Error>> {
         Arc::clone(&prep.dem_sources),
         prep.canvas,
         args.tile,
+        prep.overzoom_levels,
     )
     .await
     .map_err(|e| e.to_string())?;
@@ -512,9 +520,12 @@ async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
             let source = prep.source.as_ref().map(Arc::clone);
             let dem_sources = Arc::clone(&prep.dem_sources);
             let canvas = prep.canvas;
+            let overzoom_levels = prep.overzoom_levels;
             tasks.push(tokio::spawn(async move {
-                let raster =
-                    render_one(graph, cache, loader, source, dem_sources, canvas, tile).await?;
+                let raster = render_one(
+                    graph, cache, loader, source, dem_sources, canvas, tile, overzoom_levels,
+                )
+                .await?;
                 Ok::<(CoreTileId, Arc<RasterBuf>), Box<dyn std::error::Error + Send + Sync>>((
                     tile, raster,
                 ))
@@ -597,6 +608,7 @@ async fn run_tiles(args: TilesCmd) -> Result<(), Box<dyn std::error::Error>> {
                     Arc::clone(&prep.dem_sources),
                     prep.canvas,
                     tile,
+                    prep.overzoom_levels,
                 )
                 .await?;
                 let bytes = tokio::task::spawn_blocking({
@@ -635,9 +647,10 @@ async fn render_one(
     dem_sources: Arc<DemSourceRegistry>,
     canvas: CanvasInfo,
     tile: CoreTileId,
+    overzoom_levels: u8,
 ) -> Result<Arc<RasterBuf>, Box<dyn std::error::Error + Send + Sync>> {
-    let mvt_bytes = match source {
-        Some(s) => s.fetch(tile).await?,
+    let fetched = match source {
+        Some(s) => s.fetch_with_fallback(tile, overzoom_levels).await?,
         None => None,
     };
     let tile_id = TileId {
@@ -664,8 +677,12 @@ async fn render_one(
     let raster = tokio::task::spawn_blocking(
         move || -> Result<Arc<RasterBuf>, Box<dyn std::error::Error + Send + Sync>> {
             let mut tile_loader = TileLoader::new(loader.as_ref(), tile_id);
-            if let Some(bytes) = mvt_bytes {
-                tile_loader.bind_mvt(mvt::decode(&bytes)?);
+            if let Some((bytes, src_tile)) = fetched {
+                let mut decoded = mvt::decode(&bytes)?;
+                if src_tile != tile {
+                    decoded = mvt::clip_to_descendant(&decoded, src_tile, tile)?;
+                }
+                tile_loader.bind_mvt(decoded);
             }
             for (name, field) in dem_bindings {
                 tile_loader.bind_scalar_field(name, field);

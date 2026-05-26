@@ -174,7 +174,7 @@ async fn get_tile(
         .map_err(|_| (StatusCode::BAD_REQUEST, "bad y".into()))?;
     let tile = CoreTileId::new(z, x, y);
 
-    let mvt = fetch_mvt(&s, tile).await?;
+    let fetched = fetch_mvt(&s, tile).await?;
 
     // Take only what we need from the snapshot to keep the lock window short.
     let (graph, cache, assets, dem_sources, tile_size, pad) = {
@@ -205,7 +205,7 @@ async fn get_tile(
                 &graph,
                 &cache,
                 &assets,
-                mvt.as_deref(),
+                fetched,
                 dem_bindings,
                 tile,
                 tile_size,
@@ -215,8 +215,14 @@ async fn get_tile(
         }
     })
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    .map_err(|e| {
+        tracing::error!("tile {z}/{x}/{} render task panicked: {e}", tile.y);
+        (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    })?
+    .map_err(|e| {
+        tracing::error!("tile {z}/{x}/{}: {e}", tile.y);
+        (StatusCode::INTERNAL_SERVER_ERROR, e)
+    })?;
 
     Ok(Response::builder()
         .header(header::CONTENT_TYPE, format.content_type())
@@ -232,10 +238,16 @@ async fn get_mvt(
     Path((z, x, y)): Path<(u8, u32, u32)>,
 ) -> Result<Response, (StatusCode, String)> {
     let tile = CoreTileId::new(z, x, y);
-    let mvt = fetch_mvt(&s, tile).await?;
-    let Some(bytes) = mvt else {
+    // This endpoint serves native MVT bytes that callers expect to
+    // decode at the requested tile's coordinate frame, so a parent
+    // fallback (different coords) would be wrong. Treat overzoom hits
+    // as misses here.
+    let Some((bytes, src)) = fetch_mvt(&s, tile).await? else {
         return Err((StatusCode::NOT_FOUND, "tile not in source".into()));
     };
+    if src != tile {
+        return Err((StatusCode::NOT_FOUND, "tile not in source".into()));
+    }
     Ok(Response::builder()
         .header(header::CONTENT_TYPE, "application/vnd.mapbox-vector-tile")
         .header(header::CACHE_CONTROL, "public, max-age=300")
@@ -251,7 +263,9 @@ async fn get_mvt_meta(
     Path((z, x, y)): Path<(u8, u32, u32)>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let tile = CoreTileId::new(z, x, y);
-    let Some(bytes) = fetch_mvt(&s, tile).await? else {
+    // Layer names + geometry kinds don't change under overzoom, so it's
+    // fine if the bytes came from an ancestor — no clipping needed.
+    let Some((bytes, _src)) = fetch_mvt(&s, tile).await? else {
         return Ok(Json(json!({ "layers": [] })));
     };
     let decoded =
@@ -292,24 +306,42 @@ async fn get_mvt_meta(
     Ok(Json(json!({ "layers": layers })))
 }
 
+/// Fetch the MVT for `tile`, walking up to `overzoom_levels` parents on
+/// misses. The returned `CoreTileId` identifies which tile the bytes
+/// actually came from — equal to `tile` on a direct hit, an ancestor
+/// on overzoom. Callers that intend to render must run those bytes
+/// through [`ezu_features::mvt::clip_to_descendant`] when the IDs
+/// differ; callers that need the raw native bytes (the `/mvt`
+/// endpoint) should treat a non-matching ID as a miss.
+///
+/// Each level is cached independently, so two sibling tiles requesting
+/// the same parent share the fetch.
 async fn fetch_mvt(
     s: &AppState,
     tile: CoreTileId,
-) -> Result<Option<bytes::Bytes>, (StatusCode, String)> {
+) -> Result<Option<(bytes::Bytes, CoreTileId)>, (StatusCode, String)> {
     let Some(source) = s.source.as_ref() else {
         return Ok(None);
     };
-    if let Some(b) = s.mvt_cache.get(&tile).map(|r| r.clone()) {
-        return Ok(Some(b));
-    }
-    match source.fetch(tile).await {
-        Ok(Some(b)) => {
-            s.mvt_cache.insert(tile, b.clone());
-            Ok(Some(b))
+    let mut current = tile;
+    for _ in 0..=s.overzoom_levels {
+        if let Some(b) = s.mvt_cache.get(&current).map(|r| r.clone()) {
+            return Ok(Some((b, current)));
         }
-        Ok(None) => Ok(None),
-        Err(e) => Err((StatusCode::BAD_GATEWAY, e.to_string())),
+        match source.fetch(current).await {
+            Ok(Some(b)) => {
+                s.mvt_cache.insert(current, b.clone());
+                return Ok(Some((b, current)));
+            }
+            Ok(None) => {}
+            Err(e) => return Err((StatusCode::BAD_GATEWAY, e.to_string())),
+        }
+        let Some(parent) = current.parent() else {
+            break;
+        };
+        current = parent;
     }
+    Ok(None)
 }
 
 /// Pre-fetch the DEM mosaic for every source in the snapshot so the
@@ -344,7 +376,7 @@ fn render_tile(
     graph: &ezu::graph::Graph,
     cache: &ezu::graph::Cache,
     assets: &BrushBankLoader,
-    mvt_bytes: Option<&[u8]>,
+    fetched_mvt: Option<(bytes::Bytes, CoreTileId)>,
     dem_bindings: Vec<(String, ezu::graph::ScalarField)>,
     tile: CoreTileId,
     tile_size: u32,
@@ -357,8 +389,17 @@ fn render_tile(
         y: tile.y,
     };
     let mut tile_loader = TileLoader::new(assets, tile_id);
-    if let Some(bytes) = mvt_bytes {
-        tile_loader.bind_mvt(mvt::decode(bytes).map_err(|e| format!("mvt decode: {e}"))?);
+    if let Some((bytes, src_tile)) = fetched_mvt {
+        let mut decoded = mvt::decode(&bytes).map_err(|e| format!("mvt decode: {e}"))?;
+        if src_tile != tile {
+            tracing::debug!(
+                "overzoom clip {}/{}/{} ← {}/{}/{}",
+                tile.z, tile.x, tile.y, src_tile.z, src_tile.x, src_tile.y
+            );
+            decoded = mvt::clip_to_descendant(&decoded, src_tile, tile)
+                .map_err(|e| format!("overzoom clip: {e}"))?;
+        }
+        tile_loader.bind_mvt(decoded);
     }
     for (name, field) in dem_bindings {
         tile_loader.bind_scalar_field(name, field);

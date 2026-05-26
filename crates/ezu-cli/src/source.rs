@@ -78,6 +78,31 @@ impl TileSource {
         }
     }
 
+    /// Fetch a tile, walking up the pyramid up to `max_parent_levels`
+    /// times on `None` (404 / missing). Returns the raw bytes together
+    /// with the `TileId` they actually came from — the caller passes
+    /// that to [`ezu_features::mvt::clip_to_descendant`] to remap the
+    /// parent's coordinate frame onto the requested tile.
+    ///
+    /// `max_parent_levels = 0` is identical to [`Self::fetch`].
+    pub async fn fetch_with_fallback(
+        &self,
+        tile: TileId,
+        max_parent_levels: u8,
+    ) -> Result<Option<(Bytes, TileId)>, SourceError> {
+        let mut current = tile;
+        for _ in 0..=max_parent_levels {
+            if let Some(bytes) = self.fetch(current).await? {
+                return Ok(Some((bytes, current)));
+            }
+            let Some(parent) = current.parent() else {
+                break;
+            };
+            current = parent;
+        }
+        Ok(None)
+    }
+
     pub async fn fetch(&self, tile: TileId) -> Result<Option<Bytes>, SourceError> {
         match self {
             Self::PmTilesHttp(r) => {

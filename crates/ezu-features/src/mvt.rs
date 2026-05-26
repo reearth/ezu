@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+use ezu_core::TileId;
 use geozero::mvt::{tile, Message, Tile};
 
 use crate::{Feature, FeatureLayer, Geometry, Polygon, Value};
@@ -14,6 +15,8 @@ use crate::{Feature, FeatureLayer, Geometry, Polygon, Value};
 pub enum MvtError {
     #[error("mvt decode: {0}")]
     Decode(String),
+    #[error("clip target {target:?} is not a descendant of {parent:?}")]
+    NotDescendant { parent: TileId, target: TileId },
 }
 
 /// Decode raw MVT bytes (already gunzipped) into owned layers.
@@ -183,6 +186,146 @@ fn is_exterior(ring: &[(i32, i32)]) -> bool {
     sum > 0
 }
 
+/// Overzoom helper: re-express a decoded parent tile as if it had been
+/// natively encoded at `descendant`'s zoom level. Each feature's
+/// vertices are translated and scaled into the descendant's own
+/// `[0, extent]` frame; features whose bounding box doesn't intersect
+/// the descendant's region are dropped.
+///
+/// Used by hosts to fall back on a higher-zoom (parent) tile when the
+/// requested tile is missing (e.g. PMTiles archive ends at zoom 12 but
+/// the renderer asks for zoom 14). The library performs only the
+/// coordinate transform — fetching / 404 detection is the host's job.
+///
+/// Geometry that straddles the descendant's edges is *not* clipped;
+/// vertices outside `[0, extent]` after the transform are passed
+/// through, matching MVT's "buffer" convention. Downstream rasterizers
+/// already cope with out-of-tile vertices.
+pub fn clip_to_descendant(
+    parent_decoded: &DecodedTile,
+    parent_id: TileId,
+    descendant_id: TileId,
+) -> Result<DecodedTile, MvtError> {
+    if !parent_id.is_ancestor_of(descendant_id) {
+        return Err(MvtError::NotDescendant {
+            parent: parent_id,
+            target: descendant_id,
+        });
+    }
+    let dz = descendant_id.z - parent_id.z;
+    let scale = 1u32 << dz;
+    // Descendant's offset within the parent in tile units.
+    let sub_x = descendant_id.x - parent_id.x * scale;
+    let sub_y = descendant_id.y - parent_id.y * scale;
+
+    let layers = parent_decoded
+        .layers
+        .iter()
+        .map(|layer| clip_layer(layer, sub_x, sub_y, scale))
+        .collect();
+    Ok(DecodedTile { layers })
+}
+
+fn clip_layer(layer: &FeatureLayer, sub_x: u32, sub_y: u32, scale: u32) -> FeatureLayer {
+    let extent = layer.extent as i64;
+    // Edge length of the descendant's sub-region in parent coords.
+    let sub_extent = extent / scale as i64;
+    let ox = sub_x as i64 * sub_extent;
+    let oy = sub_y as i64 * sub_extent;
+    let scale_i = scale as i64;
+
+    // Drop features whose bbox lies entirely outside the descendant
+    // window. Vertices on or just past the edge survive — the
+    // downstream renderer handles out-of-tile clipping.
+    let features: Vec<Feature> = layer
+        .features
+        .iter()
+        .filter_map(|f| {
+            let bbox = geometry_bbox(&f.geometry)?;
+            if bbox.max_x < ox || bbox.min_x > ox + sub_extent {
+                return None;
+            }
+            if bbox.max_y < oy || bbox.min_y > oy + sub_extent {
+                return None;
+            }
+            Some(Feature {
+                id: f.id,
+                geometry: transform_geometry(&f.geometry, ox, oy, scale_i),
+                properties: f.properties.clone(),
+            })
+        })
+        .collect();
+
+    FeatureLayer {
+        name: layer.name.clone(),
+        extent: layer.extent,
+        features,
+    }
+}
+
+struct Bbox {
+    min_x: i64,
+    min_y: i64,
+    max_x: i64,
+    max_y: i64,
+}
+
+fn geometry_bbox(g: &Geometry) -> Option<Bbox> {
+    let mut it = std::iter::empty()
+        .chain(g.points.iter().copied())
+        .chain(g.lines.iter().flatten().copied())
+        .chain(
+            g.polygons
+                .iter()
+                .flat_map(|p| p.exterior.iter().chain(p.holes.iter().flatten()).copied()),
+        );
+    let (x0, y0) = it.next()?;
+    let mut bb = Bbox {
+        min_x: x0 as i64,
+        min_y: y0 as i64,
+        max_x: x0 as i64,
+        max_y: y0 as i64,
+    };
+    for (x, y) in it {
+        let x = x as i64;
+        let y = y as i64;
+        bb.min_x = bb.min_x.min(x);
+        bb.min_y = bb.min_y.min(y);
+        bb.max_x = bb.max_x.max(x);
+        bb.max_y = bb.max_y.max(y);
+    }
+    Some(bb)
+}
+
+fn transform_geometry(g: &Geometry, ox: i64, oy: i64, scale: i64) -> Geometry {
+    let xf = |(x, y): (i32, i32)| -> (i32, i32) {
+        let nx = (x as i64 - ox) * scale;
+        let ny = (y as i64 - oy) * scale;
+        (nx.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+         ny.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
+    };
+    Geometry {
+        points: g.points.iter().copied().map(xf).collect(),
+        lines: g
+            .lines
+            .iter()
+            .map(|ring| ring.iter().copied().map(xf).collect())
+            .collect(),
+        polygons: g
+            .polygons
+            .iter()
+            .map(|p| Polygon {
+                exterior: p.exterior.iter().copied().map(xf).collect(),
+                holes: p
+                    .holes
+                    .iter()
+                    .map(|h| h.iter().copied().map(xf).collect())
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,5 +345,99 @@ mod tests {
         assert!(is_exterior(&cw));
         let ccw = vec![(0, 0), (0, 10), (10, 10), (10, 0)];
         assert!(!is_exterior(&ccw));
+    }
+
+    fn point_feature(x: i32, y: i32) -> Feature {
+        Feature {
+            id: None,
+            geometry: Geometry {
+                points: vec![(x, y)],
+                ..Default::default()
+            },
+            properties: HashMap::new(),
+        }
+    }
+
+    fn tile_with_points(extent: u32, pts: &[(i32, i32)]) -> DecodedTile {
+        DecodedTile {
+            layers: vec![FeatureLayer {
+                name: "pts".into(),
+                extent,
+                features: pts.iter().map(|&(x, y)| point_feature(x, y)).collect(),
+            }],
+        }
+    }
+
+    #[test]
+    fn clip_top_left_quadrant() {
+        // Parent extent 4096. Descendant = top-left quadrant
+        // (z+1, 2x, 2y) → sub-region [0, 2048) × [0, 2048) in parent
+        // coords, scaled ×2 into descendant's own extent.
+        let parent = TileId::new(10, 100, 200);
+        let descendant = TileId::new(11, 200, 400);
+        let src = tile_with_points(
+            4096,
+            &[
+                (100, 100),   // inside top-left sub-region
+                (2000, 1000), // inside
+                (3000, 1000), // outside in x
+                (1000, 3000), // outside in y
+            ],
+        );
+        let out = clip_to_descendant(&src, parent, descendant).unwrap();
+        let pts = &out.layers[0].features;
+        assert_eq!(pts.len(), 2);
+        // (100, 100) → (200, 200) after ×2 scale.
+        assert_eq!(pts[0].geometry.points, vec![(200, 200)]);
+        // (2000, 1000) → (4000, 2000).
+        assert_eq!(pts[1].geometry.points, vec![(4000, 2000)]);
+    }
+
+    #[test]
+    fn clip_bottom_right_quadrant() {
+        let parent = TileId::new(5, 10, 20);
+        // Bottom-right child: (z+1, 2x+1, 2y+1) → sub_x=1, sub_y=1.
+        let descendant = TileId::new(6, 21, 41);
+        let src = tile_with_points(4096, &[(2049, 2049), (2048, 2048), (0, 0)]);
+        let out = clip_to_descendant(&src, parent, descendant).unwrap();
+        let pts: Vec<_> = out.layers[0]
+            .features
+            .iter()
+            .flat_map(|f| f.geometry.points.iter().copied())
+            .collect();
+        // (2049, 2049) → ((2049-2048)*2, (2049-2048)*2) = (2, 2).
+        // (2048, 2048) → (0, 0). (0, 0) is outside; dropped.
+        assert!(pts.contains(&(2, 2)));
+        assert!(pts.contains(&(0, 0)));
+        assert_eq!(pts.len(), 2);
+    }
+
+    #[test]
+    fn clip_two_zooms_deep() {
+        // dz=2 → scale ×4. Parent (8,1,1) covers a 4096-extent tile;
+        // descendant (10, 5, 6) is at sub_x=1, sub_y=2 of the 4×4 grid.
+        let parent = TileId::new(8, 1, 1);
+        let descendant = TileId::new(10, 5, 6);
+        let src = tile_with_points(4096, &[(1100, 2100)]);
+        // Sub-extent = 4096/4 = 1024. sub_x=1 → ox=1024, sub_y=2 → oy=2048.
+        // (1100, 2100) → ((1100-1024)*4, (2100-2048)*4) = (304, 208).
+        let out = clip_to_descendant(&src, parent, descendant).unwrap();
+        assert_eq!(out.layers[0].features[0].geometry.points, vec![(304, 208)]);
+    }
+
+    #[test]
+    fn clip_rejects_non_descendant() {
+        let parent = TileId::new(5, 10, 20);
+        // Same zoom is not a descendant.
+        assert!(matches!(
+            clip_to_descendant(&tile_with_points(4096, &[(0, 0)]), parent, parent),
+            Err(MvtError::NotDescendant { .. })
+        ));
+        // Different branch of the tree.
+        let unrelated = TileId::new(6, 0, 0);
+        assert!(matches!(
+            clip_to_descendant(&tile_with_points(4096, &[(0, 0)]), parent, unrelated),
+            Err(MvtError::NotDescendant { .. })
+        ));
     }
 }
