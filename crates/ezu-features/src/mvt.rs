@@ -301,8 +301,10 @@ fn transform_geometry(g: &Geometry, ox: i64, oy: i64, scale: i64) -> Geometry {
     let xf = |(x, y): (i32, i32)| -> (i32, i32) {
         let nx = (x as i64 - ox) * scale;
         let ny = (y as i64 - oy) * scale;
-        (nx.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
-         ny.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
+        (
+            nx.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+            ny.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+        )
     };
     Geometry {
         points: g.points.iter().copied().map(xf).collect(),

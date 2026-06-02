@@ -205,11 +205,14 @@ fn resolve_feature_source(
             (Some((name, _)), None) => Ok(name.clone()),
             (None, _) => Err(FactoryError::BadField {
                 field: "source".into(),
-                msg: "no `mvt`/`pmtiles` source in document; declare one or pass `source` explicitly".into(),
+                msg:
+                    "no `mvt`/`pmtiles` source in document; declare one or pass `source` explicitly"
+                        .into(),
             }),
             (Some(_), Some(_)) => Err(FactoryError::BadField {
                 field: "source".into(),
-                msg: "multiple `mvt`/`pmtiles` sources in document; pass `source` explicitly".into(),
+                msg: "multiple `mvt`/`pmtiles` sources in document; pass `source` explicitly"
+                    .into(),
             }),
         }
     }

@@ -86,10 +86,7 @@ mod tests {
     #[test]
     fn parent_walks_one_level() {
         assert_eq!(TileId::new(0, 0, 0).parent(), None);
-        assert_eq!(
-            TileId::new(3, 5, 6).parent(),
-            Some(TileId::new(2, 2, 3))
-        );
+        assert_eq!(TileId::new(3, 5, 6).parent(), Some(TileId::new(2, 2, 3)));
     }
 
     #[test]

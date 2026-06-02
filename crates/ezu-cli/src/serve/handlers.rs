@@ -396,7 +396,12 @@ fn render_tile(
         if src_tile != tile {
             tracing::debug!(
                 "overzoom clip {}/{}/{} ← {}/{}/{}",
-                tile.z, tile.x, tile.y, src_tile.z, src_tile.x, src_tile.y
+                tile.z,
+                tile.x,
+                tile.y,
+                src_tile.z,
+                src_tile.x,
+                src_tile.y
             );
             decoded = mvt::clip_to_descendant(&decoded, src_tile, tile)
                 .map_err(|e| format!("overzoom clip: {e}"))?;

@@ -292,36 +292,35 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
         _ => return Err("--pmtiles and --mvt are mutually exclusive".into()),
     };
     let pick = feature_source_from_doc(&doc);
-    let (source, source_name): (Option<Arc<TileSource>>, Option<Arc<str>>) =
-        match (pick, cli_override) {
-            (Some(p), Some((spec, origin))) => {
-                tracing::info!(
-                    "opening source ({origin}, bound as `{}`): {spec:?}",
-                    p.name
-                );
-                (
-                    Some(Arc::new(TileSource::open(&spec).await?)),
-                    Some(Arc::from(p.name)),
-                )
-            }
-            (Some(p), None) => {
-                tracing::info!("opening source ({}): {:?}", p.origin, p.spec);
-                (
-                    Some(Arc::new(TileSource::open(&p.spec).await?)),
-                    Some(Arc::from(p.name)),
-                )
-            }
-            (None, Some((spec, origin))) => {
-                return Err(format!(
+    let (source, source_name): (Option<Arc<TileSource>>, Option<Arc<str>>) = match (
+        pick,
+        cli_override,
+    ) {
+        (Some(p), Some((spec, origin))) => {
+            tracing::info!("opening source ({origin}, bound as `{}`): {spec:?}", p.name);
+            (
+                Some(Arc::new(TileSource::open(&spec).await?)),
+                Some(Arc::from(p.name)),
+            )
+        }
+        (Some(p), None) => {
+            tracing::info!("opening source ({}): {:?}", p.origin, p.spec);
+            (
+                Some(Arc::new(TileSource::open(&p.spec).await?)),
+                Some(Arc::from(p.name)),
+            )
+        }
+        (None, Some((spec, origin))) => {
+            return Err(format!(
                     "{origin} ({spec:?}) requires the style to declare a matching `mvt`/`pmtiles` source, but the document has none — `features` nodes have no source to reference"
                 )
                 .into());
-            }
-            (None, None) => {
-                tracing::info!("no MVT source — `features` bindings will be empty");
-                (None, None)
-            }
-        };
+        }
+        (None, None) => {
+            tracing::info!("no MVT source — `features` bindings will be empty");
+            (None, None)
+        }
+    };
 
     let dem_sources = Arc::new(build_dem_sources(&doc));
     if !dem_sources.is_empty() {
