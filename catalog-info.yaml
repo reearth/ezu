@@ -1,0 +1,26 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: ezu
+  namespace: reearth
+  description: Painterly cartography — render MVT/PMTiles vector tiles as paintings
+    (watercolor, ink wash, pencil sketch, …) with a typed node-DAG style language
+  annotations:
+    github.com/project-slug: reearth/ezu
+  links:
+  - url: https://github.com/reearth/ezu
+    title: GitHub
+    icon: github
+  - url: https://crates.io/crates/ezu
+    title: Website
+    icon: web
+  tags:
+  - rust
+  - cartography
+  - generative-art
+  - gis
+  - map-rendering
+spec:
+  type: service
+  lifecycle: experimental
+  owner: reearth/cto-office
