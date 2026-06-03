@@ -348,7 +348,10 @@ fn read_scale_xy(
         if arr.len() != 2 {
             return Err(FactoryError::BadField {
                 field: name.into(),
-                msg: format!("expected number or [x, y], got array of length {}", arr.len()),
+                msg: format!(
+                    "expected number or [x, y], got array of length {}",
+                    arr.len()
+                ),
             });
         }
         let x = arr[0].as_f64().ok_or_else(|| FactoryError::BadField {
