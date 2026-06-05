@@ -52,7 +52,7 @@ swaps:
 # build + Re:Earth Terrain), so no `--pmtiles` / `--mvt` is needed —
 # pass them to override what the style declares.
 ezu tile \
-  --style https://raw.githubusercontent.com/reearth/ezu/main/crates/ezu/examples/styles/watercolor-basic.json \
+  --style https://raw.githubusercontent.com/reearth/ezu/main/crates/ezu/examples/styles/watercolor.json \
   --tile 13/7276/3225 --out tile.png
 
 # Terrain style — pulls raster DEM tiles from terrain.reearth.land.
@@ -154,7 +154,7 @@ that depend on it. Override them per render:
 
 ```sh
 # CLI: repeatable --param flags, validated against the declarations.
-ezu tile --style watercolor-params.json --tile 13/7276/3225   --param 'paper=#ffe0f0' --param softness=2 --out tile.png
+ezu tile --style watercolor.json --tile 13/7276/3225   --param 'paper=#ffe0f0' --param softness=2 --out tile.png
 
 # Tile server: query-string overrides on the tile endpoint.
 curl 'http://127.0.0.1:8080/tiles/13/7276/3225.png?paper=%23ffe0f0&softness=2'
@@ -182,7 +182,7 @@ sigmas and friends) need a static upper bound — a literal, or a
 `$param` with `max` declared. Wiring those from a `@node` port is a
 build error.
 
-See `crates/ezu/examples/styles/watercolor-params.json` for a complete
+See `crates/ezu/examples/styles/watercolor.json` for a complete
 parametric style.
 
 ## How it paints
@@ -307,7 +307,7 @@ earth-tone background.
 ```
 
 The full reference watercolor style is in
-[`crates/ezu/examples/styles/watercolor-basic.json`](https://github.com/reearth/ezu/tree/main/crates/ezu/examples/styles/watercolor-basic.json).
+[`crates/ezu/examples/styles/watercolor.json`](https://github.com/reearth/ezu/tree/main/crates/ezu/examples/styles/watercolor.json).
 
 All painting happens on a **padded canvas** (`tile_size + 2 * pad`) so
 gaussian blurs and MVT buffer geometry that overflows `[0, extent]`

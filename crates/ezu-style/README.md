@@ -11,7 +11,7 @@ evaluator. To execute a document, feed it to
 
 ```json
 {
-  "name": "watercolor-basic",
+  "name": "watercolor",
   "tile-size": 512,
   "pad": 24,
   "sources": {
