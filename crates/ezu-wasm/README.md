@@ -28,8 +28,15 @@ class Renderer {
   //   - dem    → decode + 3×3 stitch at render time. Bind each
   //              neighbour with `{ coord: [dx, dy] }` (dx, dy ∈ {-1, 0, 1};
   //              the centre is `[0, 0]`, the default).
+  //   - raster → RGBA imagery tiles (PNG/WebP/JPEG); decode + 3×3
+  //              stitch at render time, same `coord` convention as dem
   bindSource(name: string, bytes: Uint8Array,
              opts?: { coord?: [number, number] }): void;
+
+  // Attribution declared by the style (document + sources), joined
+  // with ` | `; undefined when none is declared. Upstream TileJSON /
+  // PMTiles metadata is the JS host's concern — merge it on that side.
+  readonly attribution: string | undefined;
 
   // Drop every pending tile-scoped binding. Document-scoped sources
   // (brush / image) keep their bank entries.

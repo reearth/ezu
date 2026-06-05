@@ -116,6 +116,7 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 |---|---|---|
 | `features` | `() → Features` | Samples a host-bound vector tile layer. `source` (optional, matches a `mvt`/`pmtiles` entry in the document's `sources` block; defaults to the single such entry) + `layer` (the MVT layer name). Looked up as `<source>.<layer>` on the AssetLoader |
 | `dem` | `() → ScalarField` | Samples a host-bound DEM mosaic. `source` (optional, matches a `dem` entry in `sources`; defaults to the single such entry) — looked up by bare source name. The host fetches + decodes raster-DEM tiles (terrarium / mapbox-rgb) and binds the stitched scalar field (with `geo_scale` populated) per render |
+| `raster` | `() → Raster` | Samples a host-bound RGBA imagery mosaic (satellite photos, pre-rendered basemaps). `source` (optional, matches a `raster` entry in `sources`; defaults to the single such entry) — looked up by bare source name. The host fetches PNG/WebP/JPEG tiles (XYZ / TileJSON / PMTiles), stitches the 3×3 neighbourhood onto the padded canvas, and binds it per render; unbound tiles (`on-missing: empty`) emit transparent pixels |
 | `literal-geometry` | `() → Features` | Inline points / lines / polygons from style fields |
 | `tile-bounds` | `() → Features` | Polygon covering the current tile |
 | `point-grid` | `() → Features` | Regular grid of points across the tile |
