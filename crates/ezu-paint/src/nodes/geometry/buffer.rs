@@ -10,16 +10,18 @@ use ezu_features::ops::buffer::{
 };
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value, read_number, read_optional_string};
+use crate::nodes::common::{downcast_features, features_value, read_optional_string};
 
 struct BufferNode {
-    distance: f64,
+    distance: In<f64>,
     join: BufferJoin,
+    ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
 
 impl Node for BufferNode {
@@ -27,12 +29,7 @@ impl Node for BufferNode {
         "buffer"
     }
     fn inputs(&self) -> &[PortSpec] {
-        static SPECS: &[PortSpec] = &[PortSpec {
-            name: "features",
-            accepts: &[PortKind::Features],
-            optional: false,
-        }];
-        SPECS
+        &self.ports
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Features
@@ -42,7 +39,7 @@ impl Node for BufferNode {
     }
     fn eval(
         &self,
-        _ctx: &EvalCtx<'_>,
+        ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
         let feats = downcast_features(
@@ -51,7 +48,7 @@ impl Node for BufferNode {
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
         let opts = BufferOpts {
-            distance: self.distance,
+            distance: self.distance.get(ctx, inputs)?,
             join: self.join,
         };
         let mut polygons = buffer_polygons(&feats.polygons, &opts);
@@ -61,7 +58,7 @@ impl Node for BufferNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"buffer");
-        h.update(&self.distance.to_le_bytes());
+        self.distance.param_hash(h);
         match self.join {
             BufferJoin::Bevel => h.update(&[0]),
             BufferJoin::Miter { min_angle_rad } => {
@@ -76,6 +73,9 @@ impl Node for BufferNode {
             }
         }
     }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
+    }
 }
 
 pub(super) struct BufferFactory;
@@ -89,7 +89,6 @@ impl NodeFactory for BufferFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let features = take_input_ref(fields, "features")?;
-        let distance = read_number(fields, "distance", ctx)?;
         let join_kind =
             read_optional_string(fields, "join")?.unwrap_or_else(|| "miter".to_string());
         let join = match join_kind.as_str() {
@@ -107,12 +106,31 @@ impl NodeFactory for BufferFactory {
                 });
             }
         };
+
+        let mut r = InReader::new(fields, ctx, 1);
+        let distance = r.number("distance")?;
+        let parts = r.finish();
+
+        let mut ports = vec![PortSpec {
+            name: "features",
+            accepts: &[PortKind::Features],
+            optional: false,
+        }];
+        ports.extend(parts.ports);
+        let mut connections = vec![Connection {
+            port: "features".into(),
+            src: features,
+        }];
+        connections.extend(parts.connections);
+
         Ok(BuiltNode {
-            node: Box::new(BufferNode { distance, join }),
-            connections: vec![Connection {
-                port: "features".into(),
-                src: features,
-            }],
+            node: Box::new(BufferNode {
+                distance,
+                join,
+                ports,
+                param_refs: parts.param_refs,
+            }),
+            connections,
         })
     }
     fn schema(&self) -> Value {
@@ -120,8 +138,8 @@ impl NodeFactory for BufferFactory {
             "description": "Minkowski sum / offset with a disk. Polygons accept negative distance for erosion; lines and points are inflated by |distance|.",
             "properties": {
                 "features": schema_frag::node_ref(),
-                "distance": { "type": "number",
-                              "description": "Offset distance in tile pixels. Positive inflates, negative erodes (polygons only)." },
+                "distance": schema_frag::in_number(serde_json::json!({ "type": "number",
+                              "description": "Offset distance in tile pixels. Positive inflates, negative erodes (polygons only)." })),
                 "join": { "type": "string", "enum": ["miter", "round", "bevel"], "default": "miter" },
             },
             "required": ["features", "distance"],

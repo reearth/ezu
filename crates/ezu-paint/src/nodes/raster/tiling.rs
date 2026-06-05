@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -34,8 +34,10 @@ struct TilingNode {
     /// `None` → use the source raster's width as the natural period.
     scale_px: Option<f64>,
     offset_px: [f64; 2],
-    rotation_deg: f64,
-    opacity: f32,
+    rotation_deg: In<f64>,
+    opacity: In<f64>,
+    ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
 
 impl Node for TilingNode {
@@ -43,12 +45,7 @@ impl Node for TilingNode {
         "tiling"
     }
     fn inputs(&self) -> &[PortSpec] {
-        static SPECS: &[PortSpec] = &[PortSpec {
-            name: "input",
-            accepts: ACCEPTS_RASTER_OR_SPRITE,
-            optional: false,
-        }];
-        SPECS
+        &self.ports
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Raster
@@ -90,15 +87,16 @@ impl Node for TilingNode {
         // Rotation maps canvas-space back to pattern-space, so the
         // sampler uses `-rotation_deg`. Rotating the pattern itself
         // visually clockwise corresponds to sampling counterclockwise.
-        let theta = -self.rotation_deg.to_radians();
+        let rotation_deg = self.rotation_deg.get(ctx, inputs)?;
+        let theta = -rotation_deg.to_radians();
         let (sin_t, cos_t) = theta.sin_cos();
-        let needs_rotation = self.rotation_deg.abs() > 1e-9;
+        let needs_rotation = rotation_deg.abs() > 1e-9;
 
         let sw = src.width as f64;
         let sh = src.height as f64;
         let src_w = src.width as usize;
         let src_h = src.height as usize;
-        let opacity = self.opacity.clamp(0.0, 1.0);
+        let opacity = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
 
         let mut out = RasterBuf::new(size, size);
         let dst = &mut out.pixels;
@@ -147,8 +145,11 @@ impl Node for TilingNode {
         }
         h.update(&self.offset_px[0].to_le_bytes());
         h.update(&self.offset_px[1].to_le_bytes());
-        h.update(&self.rotation_deg.to_le_bytes());
-        h.update(&self.opacity.to_le_bytes());
+        self.rotation_deg.param_hash(h);
+        self.opacity.param_hash(h);
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -216,8 +217,23 @@ impl NodeFactory for TilingFactory {
         };
         let offset = read_xy(fields, "offset-px", ctx, [0.0, 0.0])?;
         let offset_px = [offset[0] as f64, offset[1] as f64];
-        let rotation_deg = read_number_or(fields, "rotation-deg", ctx, 0.0)?;
-        let opacity = read_number_or(fields, "opacity", ctx, 1.0)? as f32;
+        let mut r = InReader::new(fields, ctx, 1);
+        let rotation_deg = r.number_or("rotation-deg", 0.0)?;
+        let opacity = r.number_or("opacity", 1.0)?;
+        let parts = r.finish();
+
+        let mut ports = vec![PortSpec {
+            name: "input",
+            accepts: ACCEPTS_RASTER_OR_SPRITE,
+            optional: false,
+        }];
+        ports.extend(parts.ports);
+        let mut connections = vec![Connection {
+            port: "input".into(),
+            src: input,
+        }];
+        connections.extend(parts.connections);
+
         Ok(BuiltNode {
             node: Box::new(TilingNode {
                 anchor,
@@ -225,11 +241,10 @@ impl NodeFactory for TilingFactory {
                 offset_px,
                 rotation_deg,
                 opacity,
+                ports,
+                param_refs: parts.param_refs,
             }),
-            connections: vec![Connection {
-                port: "input".into(),
-                src: input,
-            }],
+            connections,
         })
     }
     fn schema(&self) -> Value {
@@ -243,8 +258,8 @@ impl NodeFactory for TilingFactory {
                               "description": "Canvas pixels per one source repetition. Defaults to the source image's native width." },
                 "offset-px": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2,
                                "description": "Pattern offset in canvas pixels [x, y]." },
-                "rotation-deg": { "type": "number",
-                                  "description": "Rotation of the pattern in degrees (clockwise)." },
+                "rotation-deg": schema_frag::in_number(serde_json::json!({ "type": "number",
+                                  "description": "Rotation of the pattern in degrees (clockwise)." })),
                 "opacity": schema_frag::unit_number(),
             },
             "required": ["input"],

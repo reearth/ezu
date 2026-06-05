@@ -8,17 +8,19 @@
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value, read_number, read_number_or};
+use crate::nodes::common::{downcast_features, features_value};
 
 struct DashNode {
-    dash_px: f64,
-    gap_px: f64,
-    phase_px: f64,
+    dash_px: In<f64>,
+    gap_px: In<f64>,
+    phase_px: In<f64>,
+    ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
 
 impl Node for DashNode {
@@ -26,12 +28,7 @@ impl Node for DashNode {
         "dash"
     }
     fn inputs(&self) -> &[PortSpec] {
-        static SPECS: &[PortSpec] = &[PortSpec {
-            name: "features",
-            accepts: &[PortKind::Features],
-            optional: false,
-        }];
-        SPECS
+        &self.ports
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Features
@@ -50,9 +47,9 @@ impl Node for DashNode {
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
         let scale = feats.extent as f64 / ctx.canvas.tile_size.max(1) as f64;
-        let dash = self.dash_px * scale;
-        let gap = self.gap_px * scale;
-        let phase = self.phase_px * scale;
+        let dash = self.dash_px.get(ctx, inputs)? * scale;
+        let gap = self.gap_px.get(ctx, inputs)? * scale;
+        let phase = self.phase_px.get(ctx, inputs)? * scale;
 
         let mut out_lines: Vec<Vec<(i32, i32)>> = Vec::new();
         for line in &feats.lines {
@@ -67,9 +64,12 @@ impl Node for DashNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"dash");
-        h.update(&self.dash_px.to_le_bytes());
-        h.update(&self.gap_px.to_le_bytes());
-        h.update(&self.phase_px.to_le_bytes());
+        self.dash_px.param_hash(h);
+        self.gap_px.param_hash(h);
+        self.phase_px.param_hash(h);
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -183,19 +183,33 @@ impl NodeFactory for DashFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let features = take_input_ref(fields, "features")?;
-        let dash_px = read_number(fields, "dash-px", ctx)?;
-        let gap_px = read_number(fields, "gap-px", ctx)?;
-        let phase_px = read_number_or(fields, "phase-px", ctx, 0.0)?;
+        let mut r = InReader::new(fields, ctx, 1);
+        let dash_px = r.number("dash-px")?;
+        let gap_px = r.number("gap-px")?;
+        let phase_px = r.number_or("phase-px", 0.0)?;
+        let parts = r.finish();
+
+        let mut ports = vec![PortSpec {
+            name: "features",
+            accepts: &[PortKind::Features],
+            optional: false,
+        }];
+        ports.extend(parts.ports);
+        let mut connections = vec![Connection {
+            port: "features".into(),
+            src: features,
+        }];
+        connections.extend(parts.connections);
+
         Ok(BuiltNode {
             node: Box::new(DashNode {
                 dash_px,
                 gap_px,
                 phase_px,
+                ports,
+                param_refs: parts.param_refs,
             }),
-            connections: vec![Connection {
-                port: "features".into(),
-                src: features,
-            }],
+            connections,
         })
     }
     fn schema(&self) -> Value {
@@ -205,8 +219,8 @@ impl NodeFactory for DashFactory {
                 "features": schema_frag::node_ref(),
                 "dash-px": schema_frag::px_number(),
                 "gap-px": schema_frag::px_number(),
-                "phase-px": { "type": "number",
-                              "description": "Initial offset into the dash/gap pattern, in pixels. May be negative." },
+                "phase-px": schema_frag::in_number(serde_json::json!({ "type": "number",
+                              "description": "Initial offset into the dash/gap pattern, in pixels. May be negative." })),
             },
             "required": ["features", "dash-px", "gap-px"],
         })

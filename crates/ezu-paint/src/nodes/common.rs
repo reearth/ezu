@@ -60,22 +60,6 @@ pub(super) fn resolve_field(
     Ok(v.clone())
 }
 
-pub(super) fn read_color(
-    fields: &serde_json::Map<String, Value>,
-    name: &str,
-    ctx: &FactoryCtx<'_>,
-) -> Result<[f32; 4], FactoryError> {
-    let v = resolve_field(fields, name, ctx)?;
-    let s = v.as_str().ok_or_else(|| FactoryError::BadField {
-        field: name.into(),
-        msg: "expected #rrggbb[aa] string".into(),
-    })?;
-    parse_hex_color(s).ok_or_else(|| FactoryError::BadField {
-        field: name.into(),
-        msg: format!("bad color: {s}"),
-    })
-}
-
 pub(super) fn read_number(
     fields: &serde_json::Map<String, Value>,
     name: &str,

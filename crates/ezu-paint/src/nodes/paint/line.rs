@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use hokusai::Brush;
 use serde_json::Value;
@@ -14,7 +14,7 @@ use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
     canvas_into_raster, core_tile, downcast_brush, downcast_features, empty_raster, make_canvas,
-    read_color, read_number, read_number_or, resolve_field, srgb_to_linear_rgba,
+    resolve_field, srgb_to_linear_rgba,
 };
 use crate::{paint_lines, LineStrokeStyle};
 // NOTE: `paint_lines_parallel` exists behind the `parallel` feature but
@@ -25,16 +25,18 @@ use crate::{paint_lines, LineStrokeStyle};
 // bit-identical output. See `out/hokusai-parallelization-reply.md`.
 
 struct LineNode {
-    color: [f32; 3],
-    pressure_base: f32,
-    pressure_jitter: f32,
-    dtime: f32,
-    radius_px: Option<f32>,
-    opacity: Option<f32>,
+    color: In<[f32; 4]>,
+    pressure_base: In<f64>,
+    pressure_jitter: In<f64>,
+    dtime: In<f64>,
+    radius_px: Option<In<f64>>,
+    opacity: Option<In<f64>>,
     radius_stroke_curve: Option<Vec<(f32, f32)>>,
     opacity_stroke_curve: Option<Vec<(f32, f32)>>,
     hardness_stroke_curve: Option<Vec<(f32, f32)>>,
     dtime_stroke_curve: Option<Vec<(f32, f32)>>,
+    ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
 
 impl Node for LineNode {
@@ -42,19 +44,7 @@ impl Node for LineNode {
         "line"
     }
     fn inputs(&self) -> &[PortSpec] {
-        static SPECS: &[PortSpec] = &[
-            PortSpec {
-                name: "features",
-                accepts: &[PortKind::Features],
-                optional: false,
-            },
-            PortSpec {
-                name: "brush",
-                accepts: &[PortKind::Brush],
-                optional: false,
-            },
-        ];
-        SPECS
+        &self.ports
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Raster
@@ -83,17 +73,20 @@ impl Node for LineNode {
         let mut canvas = make_canvas(ctx)?;
         // Clone brush and apply optional radius / opacity overrides.
         let mut brush: Brush = (*brush_arc).clone();
-        if let Some(r) = self.radius_px {
+        if let Some(r) = &self.radius_px {
+            let r = r.get(ctx, inputs)? as f32;
             brush.get_mut(hokusai::BrushSetting::Radius).base_value = r.max(0.05).ln();
         }
-        if let Some(o) = self.opacity {
+        if let Some(o) = &self.opacity {
+            let o = o.get(ctx, inputs)? as f32;
             brush.get_mut(hokusai::BrushSetting::Opaque).base_value = o.clamp(0.0, 1.0);
         }
+        let lin = srgb_to_linear_rgba(self.color.get(ctx, inputs)?);
         let style = LineStrokeStyle {
-            color: self.color,
-            pressure_base: self.pressure_base,
-            pressure_jitter: self.pressure_jitter,
-            dtime: self.dtime,
+            color: [lin[0], lin[1], lin[2]],
+            pressure_base: self.pressure_base.get(ctx, inputs)? as f32,
+            pressure_jitter: self.pressure_jitter.get(ctx, inputs)? as f32,
+            dtime: self.dtime.get(ctx, inputs)? as f32,
             radius_stroke_curve: self.radius_stroke_curve.clone(),
             opacity_stroke_curve: self.opacity_stroke_curve.clone(),
             hardness_stroke_curve: self.hardness_stroke_curve.clone(),
@@ -111,21 +104,19 @@ impl Node for LineNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"line");
-        for c in self.color {
-            h.update(&c.to_le_bytes());
-        }
-        for v in [self.pressure_base, self.pressure_jitter, self.dtime] {
-            h.update(&v.to_le_bytes());
-        }
-        if let Some(r) = self.radius_px {
+        self.color.param_hash(h);
+        self.pressure_base.param_hash(h);
+        self.pressure_jitter.param_hash(h);
+        self.dtime.param_hash(h);
+        if let Some(r) = &self.radius_px {
             h.update(&[1]);
-            h.update(&r.to_le_bytes());
+            r.param_hash(h);
         } else {
             h.update(&[0]);
         }
-        if let Some(o) = self.opacity {
+        if let Some(o) = &self.opacity {
             h.update(&[1]);
-            h.update(&o.to_le_bytes());
+            o.param_hash(h);
         } else {
             h.update(&[0]);
         }
@@ -133,6 +124,9 @@ impl Node for LineNode {
         hash_curve(h, b"o", self.opacity_stroke_curve.as_deref());
         hash_curve(h, b"h", self.hardness_stroke_curve.as_deref());
         hash_curve(h, b"d", self.dtime_stroke_curve.as_deref());
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -163,26 +157,52 @@ impl NodeFactory for LineFactory {
     ) -> Result<BuiltNode, FactoryError> {
         let features = take_input_ref(fields, "features")?;
         let brush = take_input_ref(fields, "brush")?;
-        let color_srgb = read_color(fields, "color", ctx)?;
-        let lin = srgb_to_linear_rgba(color_srgb);
-        let color = [lin[0], lin[1], lin[2]];
-        let pressure_base = read_number_or(fields, "pressure-base", ctx, 0.7)? as f32;
-        let pressure_jitter = read_number_or(fields, "pressure-jitter", ctx, 0.2)? as f32;
-        let dtime = read_number_or(fields, "dtime", ctx, 0.02)? as f32;
+        let mut r = InReader::new(fields, ctx, 2);
+        let color = r.color("color")?;
+        let pressure_base = r.number_or("pressure-base", 0.7)?;
+        let pressure_jitter = r.number_or("pressure-jitter", 0.2)?;
+        let dtime = r.number_or("dtime", 0.02)?;
         let radius_px = if fields.contains_key("radius-px") {
-            Some(read_number(fields, "radius-px", ctx)? as f32)
+            Some(r.number("radius-px")?)
         } else {
             None
         };
         let opacity = if fields.contains_key("opacity") {
-            Some(read_number(fields, "opacity", ctx)? as f32)
+            Some(r.number("opacity")?)
         } else {
             None
         };
+        let parts = r.finish();
         let radius_stroke_curve = read_stroke_curve(fields, "radius-stroke-curve", ctx)?;
         let opacity_stroke_curve = read_stroke_curve(fields, "opacity-stroke-curve", ctx)?;
         let hardness_stroke_curve = read_stroke_curve(fields, "hardness-stroke-curve", ctx)?;
         let dtime_stroke_curve = read_stroke_curve(fields, "dtime-stroke-curve", ctx)?;
+
+        let mut ports = vec![
+            PortSpec {
+                name: "features",
+                accepts: &[PortKind::Features],
+                optional: false,
+            },
+            PortSpec {
+                name: "brush",
+                accepts: &[PortKind::Brush],
+                optional: false,
+            },
+        ];
+        ports.extend(parts.ports);
+        let mut connections = vec![
+            Connection {
+                port: "features".into(),
+                src: features,
+            },
+            Connection {
+                port: "brush".into(),
+                src: brush,
+            },
+        ];
+        connections.extend(parts.connections);
+
         Ok(BuiltNode {
             node: Box::new(LineNode {
                 color,
@@ -195,17 +215,10 @@ impl NodeFactory for LineFactory {
                 opacity_stroke_curve,
                 hardness_stroke_curve,
                 dtime_stroke_curve,
+                ports,
+                param_refs: parts.param_refs,
             }),
-            connections: vec![
-                Connection {
-                    port: "features".into(),
-                    src: features,
-                },
-                Connection {
-                    port: "brush".into(),
-                    src: brush,
-                },
-            ],
+            connections,
         })
     }
     fn schema(&self) -> Value {
@@ -245,7 +258,7 @@ impl NodeFactory for LineFactory {
                 "opacity": schema_frag::unit_number(),
                 "pressure-base": schema_frag::unit_number(),
                 "pressure-jitter": schema_frag::unit_number(),
-                "dtime": { "type": "number", "minimum": 0.0 },
+                "dtime": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0 })),
                 "radius-stroke-curve": brush_curve.clone(),
                 "opacity-stroke-curve": brush_curve.clone(),
                 "hardness-stroke-curve": brush_curve,

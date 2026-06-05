@@ -7,18 +7,18 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue, ScalarField,
+    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, ScalarField,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::read_number_or;
-
 struct ThresholdNode {
-    value: f32,
-    softness: f32,
-    low: f32,
-    high: f32,
+    value: In<f64>,
+    softness: In<f64>,
+    low: In<f64>,
+    high: In<f64>,
+    ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
 
 impl Node for ThresholdNode {
@@ -26,32 +26,31 @@ impl Node for ThresholdNode {
         "threshold"
     }
     fn inputs(&self) -> &[PortSpec] {
-        static SPECS: &[PortSpec] = &[PortSpec {
-            name: "field",
-            accepts: &[PortKind::ScalarField],
-            optional: false,
-        }];
-        SPECS
+        &self.ports
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::ScalarField
     }
     fn eval(
         &self,
-        _ctx: &EvalCtx<'_>,
+        ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
         let field = inputs[0]
             .as_ref()
             .and_then(PortValue::as_scalar_field)
             .ok_or_else(|| EvalError::MissingInput("field".into()))?;
-        let half = self.softness * 0.5;
-        let lo = self.value - half;
-        let hi = self.value + half;
+        let value = self.value.get(ctx, inputs)? as f32;
+        let softness = self.softness.get(ctx, inputs)?.max(0.0) as f32;
+        let low = self.low.get(ctx, inputs)? as f32;
+        let high = self.high.get(ctx, inputs)? as f32;
+        let half = softness * 0.5;
+        let lo = value - half;
+        let hi = value + half;
         let mut out: Vec<f32> = Vec::with_capacity(field.values.len());
         for &v in field.values.iter() {
-            let t = if self.softness <= 0.0 {
-                if v <= self.value {
+            let t = if softness <= 0.0 {
+                if v <= value {
                     0.0
                 } else {
                     1.0
@@ -61,9 +60,9 @@ impl Node for ThresholdNode {
             } else if v >= hi {
                 1.0
             } else {
-                (v - lo) / self.softness
+                (v - lo) / softness
             };
-            out.push(self.low + t * (self.high - self.low));
+            out.push(low + t * (high - low));
         }
         Ok(PortValue::ScalarField(Arc::new(ScalarField {
             width: field.width,
@@ -75,10 +74,13 @@ impl Node for ThresholdNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"threshold");
-        h.update(&self.value.to_le_bytes());
-        h.update(&self.softness.to_le_bytes());
-        h.update(&self.low.to_le_bytes());
-        h.update(&self.high.to_le_bytes());
+        self.value.param_hash(h);
+        self.softness.param_hash(h);
+        self.low.param_hash(h);
+        self.high.param_hash(h);
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -93,21 +95,35 @@ impl NodeFactory for ThresholdFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let input = take_input_ref(fields, "field")?;
-        let value = read_number_or(fields, "value", ctx, 0.5)? as f32;
-        let softness = read_number_or(fields, "softness", ctx, 0.0)?.max(0.0) as f32;
-        let low = read_number_or(fields, "low", ctx, 0.0)? as f32;
-        let high = read_number_or(fields, "high", ctx, 1.0)? as f32;
+        let mut r = InReader::new(fields, ctx, 1);
+        let value = r.number_or("value", 0.5)?;
+        let softness = r.number_or("softness", 0.0)?;
+        let low = r.number_or("low", 0.0)?;
+        let high = r.number_or("high", 1.0)?;
+        let parts = r.finish();
+
+        let mut ports = vec![PortSpec {
+            name: "field",
+            accepts: &[PortKind::ScalarField],
+            optional: false,
+        }];
+        ports.extend(parts.ports);
+        let mut connections = vec![Connection {
+            port: "field".into(),
+            src: input,
+        }];
+        connections.extend(parts.connections);
+
         Ok(BuiltNode {
             node: Box::new(ThresholdNode {
                 value,
                 softness,
                 low,
                 high,
+                ports,
+                param_refs: parts.param_refs,
             }),
-            connections: vec![Connection {
-                port: "field".into(),
-                src: input,
-            }],
+            connections,
         })
     }
     fn schema(&self) -> Value {
@@ -115,10 +131,10 @@ impl NodeFactory for ThresholdFactory {
             "description": "Binarise a scalar field: emit `low` for samples ≤ `value`, `high` otherwise. With `softness > 0` the transition is a linear ramp of width `softness` centred on `value`.",
             "properties": {
                 "field": schema_frag::node_ref(),
-                "value": { "type": "number", "default": 0.5 },
-                "softness": { "type": "number", "minimum": 0.0, "default": 0.0 },
-                "low": { "type": "number", "default": 0.0 },
-                "high": { "type": "number", "default": 1.0 },
+                "value": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 0.5 })),
+                "softness": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0, "default": 0.0 })),
+                "low": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 0.0 })),
+                "high": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 1.0 })),
             },
             "required": ["field"],
         })

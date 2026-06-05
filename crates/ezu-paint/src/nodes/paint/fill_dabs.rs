@@ -7,29 +7,31 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use hokusai::color::RgbaF32;
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    canvas_into_raster, core_tile, downcast_features, empty_raster, make_canvas, read_color,
-    read_number, read_number_or, srgb_to_linear_rgba,
+    canvas_into_raster, core_tile, downcast_features, empty_raster, make_canvas,
+    srgb_to_linear_rgba,
 };
 use crate::{paint_polygons_dabs, DabFillStyle};
 
 struct FillDabsNode {
-    color: [f32; 4],
-    opacity: f32,
-    radius_px: f32,
-    hardness: f32,
-    paint: f32,
-    spacing_px: f32,
-    position_jitter: f32,
-    size_jitter: f32,
-    opacity_jitter: f32,
-    value_jitter: f32,
+    color: In<[f32; 4]>,
+    opacity: In<f64>,
+    radius_px: In<f64>,
+    hardness: In<f64>,
+    paint: In<f64>,
+    spacing_px: In<f64>,
+    position_jitter: In<f64>,
+    size_jitter: In<f64>,
+    opacity_jitter: In<f64>,
+    value_jitter: In<f64>,
+    ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
 
 impl Node for FillDabsNode {
@@ -37,12 +39,7 @@ impl Node for FillDabsNode {
         "fill-dabs"
     }
     fn inputs(&self) -> &[PortSpec] {
-        static SPECS: &[PortSpec] = &[PortSpec {
-            name: "features",
-            accepts: &[PortKind::Features],
-            optional: false,
-        }];
-        SPECS
+        &self.ports
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Raster
@@ -62,18 +59,19 @@ impl Node for FillDabsNode {
         if feats.polygons.is_empty() {
             return Ok(empty_raster(ctx));
         }
+        let color = srgb_to_linear_rgba(self.color.get(ctx, inputs)?);
         let mut canvas = make_canvas(ctx)?;
         let style = DabFillStyle {
-            color: RgbaF32::new(self.color[0], self.color[1], self.color[2], 1.0),
-            opacity: self.opacity,
-            radius_px: self.radius_px,
-            hardness: self.hardness,
-            paint: self.paint,
-            spacing_px: self.spacing_px,
-            position_jitter: self.position_jitter,
-            size_jitter: self.size_jitter,
-            opacity_jitter: self.opacity_jitter,
-            value_jitter: self.value_jitter,
+            color: RgbaF32::new(color[0], color[1], color[2], 1.0),
+            opacity: self.opacity.get(ctx, inputs)? as f32,
+            radius_px: self.radius_px.get(ctx, inputs)? as f32,
+            hardness: self.hardness.get(ctx, inputs)? as f32,
+            paint: self.paint.get(ctx, inputs)? as f32,
+            spacing_px: self.spacing_px.get(ctx, inputs)? as f32,
+            position_jitter: self.position_jitter.get(ctx, inputs)? as f32,
+            size_jitter: self.size_jitter.get(ctx, inputs)? as f32,
+            opacity_jitter: self.opacity_jitter.get(ctx, inputs)? as f32,
+            value_jitter: self.value_jitter.get(ctx, inputs)? as f32,
         };
         paint_polygons_dabs(
             &mut canvas,
@@ -86,22 +84,19 @@ impl Node for FillDabsNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"fill-dabs");
-        for c in self.color {
-            h.update(&c.to_le_bytes());
-        }
-        for v in [
-            self.opacity,
-            self.radius_px,
-            self.hardness,
-            self.paint,
-            self.spacing_px,
-            self.position_jitter,
-            self.size_jitter,
-            self.opacity_jitter,
-            self.value_jitter,
-        ] {
-            h.update(&v.to_le_bytes());
-        }
+        self.color.param_hash(h);
+        self.opacity.param_hash(h);
+        self.radius_px.param_hash(h);
+        self.hardness.param_hash(h);
+        self.paint.param_hash(h);
+        self.spacing_px.param_hash(h);
+        self.position_jitter.param_hash(h);
+        self.size_jitter.param_hash(h);
+        self.opacity_jitter.param_hash(h);
+        self.value_jitter.param_hash(h);
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -116,17 +111,31 @@ impl NodeFactory for FillDabsFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let features = take_input_ref(fields, "features")?;
-        let color_srgb = read_color(fields, "color", ctx)?;
-        let color = srgb_to_linear_rgba(color_srgb);
-        let opacity = read_number(fields, "opacity", ctx)? as f32;
-        let radius_px = read_number(fields, "radius-px", ctx)? as f32;
-        let hardness = read_number_or(fields, "hardness", ctx, 0.5)? as f32;
-        let paint = read_number_or(fields, "paint", ctx, 1.0)? as f32;
-        let spacing_px = read_number(fields, "spacing-px", ctx)? as f32;
-        let position_jitter = read_number_or(fields, "position-jitter", ctx, 0.9)? as f32;
-        let size_jitter = read_number_or(fields, "size-jitter", ctx, 0.0)? as f32;
-        let opacity_jitter = read_number_or(fields, "opacity-jitter", ctx, 0.0)? as f32;
-        let value_jitter = read_number_or(fields, "value-jitter", ctx, 0.0)? as f32;
+        let mut r = InReader::new(fields, ctx, 1);
+        let color = r.color("color")?;
+        let opacity = r.number("opacity")?;
+        let radius_px = r.number("radius-px")?;
+        let hardness = r.number_or("hardness", 0.5)?;
+        let paint = r.number_or("paint", 1.0)?;
+        let spacing_px = r.number("spacing-px")?;
+        let position_jitter = r.number_or("position-jitter", 0.9)?;
+        let size_jitter = r.number_or("size-jitter", 0.0)?;
+        let opacity_jitter = r.number_or("opacity-jitter", 0.0)?;
+        let value_jitter = r.number_or("value-jitter", 0.0)?;
+        let parts = r.finish();
+
+        let mut ports = vec![PortSpec {
+            name: "features",
+            accepts: &[PortKind::Features],
+            optional: false,
+        }];
+        ports.extend(parts.ports);
+        let mut connections = vec![Connection {
+            port: "features".into(),
+            src: features,
+        }];
+        connections.extend(parts.connections);
+
         Ok(BuiltNode {
             node: Box::new(FillDabsNode {
                 color,
@@ -139,11 +148,10 @@ impl NodeFactory for FillDabsFactory {
                 size_jitter,
                 opacity_jitter,
                 value_jitter,
+                ports,
+                param_refs: parts.param_refs,
             }),
-            connections: vec![Connection {
-                port: "features".into(),
-                src: features,
-            }],
+            connections,
         })
     }
     fn schema(&self) -> Value {

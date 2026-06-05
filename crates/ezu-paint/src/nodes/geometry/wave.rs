@@ -19,21 +19,25 @@ use std::f64::consts::PI;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value, read_number, read_number_or};
+use crate::nodes::common::{downcast_features, features_value, read_number_or};
 
 struct WaveNode {
-    amplitude_px: f64,
-    wavelength_px: f64,
-    phase_px: f64,
+    amplitude_px: In<f64>,
+    wavelength_px: In<f64>,
+    phase_px: In<f64>,
     samples_per_wavelength: u32,
-    noise_amp_px: f64,
-    noise_scale_px: f64,
+    noise_amp_px: In<f64>,
+    /// Cell size of the noise jitter. A non-positive value (the
+    /// default sentinel) means "fall back to `wavelength-px`".
+    noise_scale_px: In<f64>,
     seed: Option<u32>,
+    ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
 
 impl Node for WaveNode {
@@ -41,12 +45,7 @@ impl Node for WaveNode {
         "wave"
     }
     fn inputs(&self) -> &[PortSpec] {
-        static SPECS: &[PortSpec] = &[PortSpec {
-            name: "features",
-            accepts: &[PortKind::Features],
-            optional: false,
-        }];
-        SPECS
+        &self.ports
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Features
@@ -64,12 +63,23 @@ impl Node for WaveNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
+        let amplitude_px = self.amplitude_px.get(ctx, inputs)?;
+        let wavelength_px = self.wavelength_px.get(ctx, inputs)?;
+        let phase_px = self.phase_px.get(ctx, inputs)?;
+        let noise_amp_px = self.noise_amp_px.get(ctx, inputs)?;
+        // A non-positive `noise-scale-px` means "use the wavelength".
+        let noise_scale_raw = self.noise_scale_px.get(ctx, inputs)?;
+        let noise_scale_px = if noise_scale_raw > 0.0 {
+            noise_scale_raw
+        } else {
+            wavelength_px.max(1.0)
+        };
         let scale = feats.extent as f64 / ctx.canvas.tile_size.max(1) as f64;
-        let amp = self.amplitude_px * scale;
-        let wavelen = self.wavelength_px * scale;
-        let phase = self.phase_px * scale;
-        let noise_amp = self.noise_amp_px * scale;
-        let noise_scale = self.noise_scale_px * scale;
+        let amp = amplitude_px * scale;
+        let wavelen = wavelength_px * scale;
+        let phase = phase_px * scale;
+        let noise_amp = noise_amp_px * scale;
+        let noise_scale = noise_scale_px * scale;
         // Use a constant default seed so the world-anchored noise is
         // deterministic across tiles. Per-tile rng_seed would make the
         // noise pattern shift at every tile border.
@@ -105,16 +115,19 @@ impl Node for WaveNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"wave");
-        h.update(&self.amplitude_px.to_le_bytes());
-        h.update(&self.wavelength_px.to_le_bytes());
-        h.update(&self.phase_px.to_le_bytes());
+        self.amplitude_px.param_hash(h);
+        self.wavelength_px.param_hash(h);
+        self.phase_px.param_hash(h);
         h.update(&self.samples_per_wavelength.to_le_bytes());
-        h.update(&self.noise_amp_px.to_le_bytes());
-        h.update(&self.noise_scale_px.to_le_bytes());
+        self.noise_amp_px.param_hash(h);
+        self.noise_scale_px.param_hash(h);
         if let Some(s) = self.seed {
             h.update(b"seed");
             h.update(&s.to_le_bytes());
         }
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -302,18 +315,38 @@ impl NodeFactory for WaveFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let features = take_input_ref(fields, "features")?;
-        let amplitude_px = read_number(fields, "amplitude-px", ctx)?;
-        let wavelength_px = read_number(fields, "wavelength-px", ctx)?;
-        let phase_px = read_number_or(fields, "phase-px", ctx, 0.0)?;
+        // `samples-per-wavelength` is clamped to an integer count at
+        // build time, so it stays a static literal.
         let samples_per_wavelength =
             read_number_or(fields, "samples-per-wavelength", ctx, 16.0)?.clamp(2.0, 256.0) as u32;
-        let noise_amp_px = read_number_or(fields, "noise-amp-px", ctx, 0.0)?;
-        // Default noise scale to wavelength when not provided.
-        let noise_scale_px = read_number_or(fields, "noise-scale-px", ctx, wavelength_px.max(1.0))?;
         let seed = match fields.get("seed") {
             Some(Value::Number(n)) => n.as_u64().map(|v| v as u32),
             _ => None,
         };
+
+        let mut r = InReader::new(fields, ctx, 1);
+        let amplitude_px = r.number("amplitude-px")?;
+        let wavelength_px = r.number("wavelength-px")?;
+        let phase_px = r.number_or("phase-px", 0.0)?;
+        let noise_amp_px = r.number_or("noise-amp-px", 0.0)?;
+        // Default noise scale to wavelength when not provided: use a
+        // non-positive sentinel resolved at eval time (the build-time
+        // wavelength value is no longer available as a literal).
+        let noise_scale_px = r.number_or("noise-scale-px", 0.0)?;
+        let parts = r.finish();
+
+        let mut ports = vec![PortSpec {
+            name: "features",
+            accepts: &[PortKind::Features],
+            optional: false,
+        }];
+        ports.extend(parts.ports);
+        let mut connections = vec![Connection {
+            port: "features".into(),
+            src: features,
+        }];
+        connections.extend(parts.connections);
+
         Ok(BuiltNode {
             node: Box::new(WaveNode {
                 amplitude_px,
@@ -323,11 +356,10 @@ impl NodeFactory for WaveFactory {
                 noise_amp_px,
                 noise_scale_px,
                 seed,
+                ports,
+                param_refs: parts.param_refs,
             }),
-            connections: vec![Connection {
-                port: "features".into(),
-                src: features,
-            }],
+            connections,
         })
     }
     fn schema(&self) -> Value {
@@ -335,17 +367,17 @@ impl NodeFactory for WaveFactory {
             "description": "Displace polylines laterally with a sine wave. Lengths in canvas pixels. Sharp corners may kink (no tangent smoothing). Polygons/points pass through.",
             "properties": {
                 "features": schema_frag::node_ref(),
-                "amplitude-px": { "type": "number",
-                                  "description": "Peak lateral deviation in pixels. May be negative to flip phase." },
-                "wavelength-px": { "type": "number", "minimum": 0.5 },
-                "phase-px": { "type": "number",
-                              "description": "Offset into the wave at the polyline start, in pixels." },
+                "amplitude-px": schema_frag::in_number(serde_json::json!({ "type": "number",
+                                  "description": "Peak lateral deviation in pixels. May be negative to flip phase." })),
+                "wavelength-px": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.5 })),
+                "phase-px": schema_frag::in_number(serde_json::json!({ "type": "number",
+                              "description": "Offset into the wave at the polyline start, in pixels." })),
                 "samples-per-wavelength": { "type": "number", "minimum": 2, "maximum": 256,
                                             "description": "Subdivisions per wavelength. Higher = smoother but more vertices. Default 16." },
-                "noise-amp-px": { "type": "number",
-                                  "description": "Peak 1D-value-noise jitter added on top of the sine, in pixels. 0 = pure sine (default)." },
-                "noise-scale-px": { "type": "number", "minimum": 0.5,
-                                    "description": "Cell length of the noise jitter along arc length, in pixels. Defaults to `wavelength-px`." },
+                "noise-amp-px": schema_frag::in_number(serde_json::json!({ "type": "number",
+                                  "description": "Peak 1D-value-noise jitter added on top of the sine, in pixels. 0 = pure sine (default)." })),
+                "noise-scale-px": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.5,
+                                    "description": "Cell length of the noise jitter along arc length, in pixels. Defaults to `wavelength-px`." })),
                 "seed": { "type": "integer", "minimum": 0,
                           "description": "Optional explicit u32 seed for the world-anchored 2D value noise. Default: a fixed constant so adjacent tiles agree across the seam." },
             },

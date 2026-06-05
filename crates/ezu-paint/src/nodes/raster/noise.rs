@@ -29,15 +29,13 @@
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, Node,
-    NodeFactory, PortKind, PortSpec, PortValue, RasterBuf, ScalarField,
+    schema_frag, BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, In, InReader,
+    Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf, ScalarField,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{
-    read_color, read_number_or, read_optional_string, resolve_field, Anchor,
-};
+use crate::nodes::common::{read_number_or, read_optional_string, resolve_field, Anchor};
 use crate::nodes::raster::noise_field::{fbm, NoiseKind, Sampler};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,15 +50,17 @@ struct NoiseNode {
     scale_x: f64,
     scale_y: f64,
     octaves: u32,
-    lacunarity: f64,
-    gain: f64,
-    warp_amp: f64,
-    warp_freq: f64,
+    lacunarity: In<f64>,
+    gain: In<f64>,
+    warp_amp: In<f64>,
+    warp_freq: In<f64>,
     seed: Option<u32>,
-    low: [f32; 4],
-    high: [f32; 4],
-    opacity: f32,
+    low: In<[f32; 4]>,
+    high: In<[f32; 4]>,
+    opacity: In<f64>,
     anchor: Anchor,
+    ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
 
 impl Node for NoiseNode {
@@ -68,7 +68,7 @@ impl Node for NoiseNode {
         "noise"
     }
     fn inputs(&self) -> &[PortSpec] {
-        &[]
+        &self.ports
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         match self.out_kind {
@@ -82,10 +82,19 @@ impl Node for NoiseNode {
             Anchor::Tile => CoordSpace::Tile,
         }
     }
-    fn eval(&self, ctx: &EvalCtx<'_>, _: &[Option<PortValue>]) -> Result<PortValue, EvalError> {
+    fn eval(
+        &self,
+        ctx: &EvalCtx<'_>,
+        inputs: &[Option<PortValue>],
+    ) -> Result<PortValue, EvalError> {
         let size = ctx.canvas.padded_size();
         let pad = ctx.canvas.pad as f64;
         let tile_size = ctx.canvas.tile_size as f64;
+
+        let lacunarity = self.lacunarity.get(ctx, inputs)?;
+        let gain = self.gain.get(ctx, inputs)?;
+        let warp_amp = self.warp_amp.get(ctx, inputs)?;
+        let warp_freq = self.warp_freq.get(ctx, inputs)?;
 
         let seed = self
             .seed
@@ -93,7 +102,7 @@ impl Node for NoiseNode {
         let main = Sampler::build(self.kind, seed);
         // Warp uses an offset seed so the warp field decorrelates from
         // the main field. Only built when warp is active.
-        let warp = if self.warp_amp != 0.0 {
+        let warp = if warp_amp != 0.0 {
             Some((
                 Sampler::build(self.kind, seed.wrapping_add(0x9E37_79B9)),
                 Sampler::build(self.kind, seed.wrapping_add(0x1234_5678)),
@@ -109,8 +118,8 @@ impl Node for NoiseNode {
 
         let inv_scale_x = 1.0 / self.scale_x;
         let inv_scale_y = 1.0 / self.scale_y;
-        let warp_inv_scale_x = inv_scale_x * self.warp_freq;
-        let warp_inv_scale_y = inv_scale_y * self.warp_freq;
+        let warp_inv_scale_x = inv_scale_x * warp_freq;
+        let warp_inv_scale_y = inv_scale_y * warp_freq;
 
         // Sampling kernel shared between raster and scalar modes.
         let sample_at = |x: u32, y: u32| -> f64 {
@@ -120,13 +129,13 @@ impl Node for NoiseNode {
                 let wx = wa.sample(px * warp_inv_scale_x, py * warp_inv_scale_y);
                 let wy = wb.sample(px * warp_inv_scale_x, py * warp_inv_scale_y);
                 (
-                    (px + wx * self.warp_amp) * inv_scale_x,
-                    (py + wy * self.warp_amp) * inv_scale_y,
+                    (px + wx * warp_amp) * inv_scale_x,
+                    (py + wy * warp_amp) * inv_scale_y,
                 )
             } else {
                 (px * inv_scale_x, py * inv_scale_y)
             };
-            fbm(&main, sx, sy, self.octaves, self.lacunarity, self.gain)
+            fbm(&main, sx, sy, self.octaves, lacunarity, gain)
         };
 
         match self.out_kind {
@@ -146,9 +155,9 @@ impl Node for NoiseNode {
                 })))
             }
             OutputKind::Raster => {
-                let [lr, lg, lb, la] = self.low;
-                let [hr, hg, hb, ha] = self.high;
-                let opacity = self.opacity.clamp(0.0, 1.0);
+                let [lr, lg, lb, la] = self.low.get(ctx, inputs)?;
+                let [hr, hg, hb, ha] = self.high.get(ctx, inputs)?;
+                let opacity = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
                 let mut out = RasterBuf::new(size, size);
                 for y in 0..size {
                     for x in 0..size {
@@ -179,10 +188,10 @@ impl Node for NoiseNode {
         h.update(&self.scale_x.to_le_bytes());
         h.update(&self.scale_y.to_le_bytes());
         h.update(&self.octaves.to_le_bytes());
-        h.update(&self.lacunarity.to_le_bytes());
-        h.update(&self.gain.to_le_bytes());
-        h.update(&self.warp_amp.to_le_bytes());
-        h.update(&self.warp_freq.to_le_bytes());
+        self.lacunarity.param_hash(h);
+        self.gain.param_hash(h);
+        self.warp_amp.param_hash(h);
+        self.warp_freq.param_hash(h);
         match self.seed {
             Some(s) => {
                 h.update(&[1]);
@@ -190,17 +199,16 @@ impl Node for NoiseNode {
             }
             None => h.update(&[0]),
         }
-        for c in self.low {
-            h.update(&c.to_le_bytes());
-        }
-        for c in self.high {
-            h.update(&c.to_le_bytes());
-        }
-        h.update(&self.opacity.to_le_bytes());
+        self.low.param_hash(h);
+        self.high.param_hash(h);
+        self.opacity.param_hash(h);
         h.update(match self.anchor {
             Anchor::Tile => &[0u8],
             Anchor::World => &[1u8],
         });
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -235,12 +243,11 @@ impl NodeFactory for NoiseFactory {
         };
 
         let (scale_x, scale_y) = read_scale_xy(fields, "scale-px", ctx)?;
+        // `octaves` is clamped to an integer range at build time and
+        // stored as a `u32`, so it stays a static field rather than an
+        // `In<f64>` scalar input.
         let octaves = read_number_or(fields, "octaves", ctx, 1.0)? as u32;
         let octaves = octaves.clamp(1, 12);
-        let lacunarity = read_number_or(fields, "lacunarity", ctx, 2.0)?;
-        let gain = read_number_or(fields, "gain", ctx, 0.5)?;
-        let warp_amp = read_number_or(fields, "warp-amp", ctx, 0.0)?;
-        let warp_freq = read_number_or(fields, "warp-freq", ctx, 1.0)?;
 
         let seed = match fields.get("seed") {
             None => None,
@@ -250,18 +257,6 @@ impl NodeFactory for NoiseFactory {
                 msg: "expected non-negative integer".into(),
             })? as u32),
         };
-
-        let low = if fields.contains_key("low-color") {
-            read_color(fields, "low-color", ctx)?
-        } else {
-            [0.0, 0.0, 0.0, 1.0]
-        };
-        let high = if fields.contains_key("high-color") {
-            read_color(fields, "high-color", ctx)?
-        } else {
-            [1.0, 1.0, 1.0, 1.0]
-        };
-        let opacity = read_number_or(fields, "opacity", ctx, 1.0)? as f32;
 
         let anchor = match read_optional_string(fields, "anchor")?.as_deref() {
             None | Some("world") => Anchor::World,
@@ -273,6 +268,16 @@ impl NodeFactory for NoiseFactory {
                 });
             }
         };
+
+        let mut r = InReader::new(fields, ctx, 0);
+        let lacunarity = r.number_or("lacunarity", 2.0)?;
+        let gain = r.number_or("gain", 0.5)?;
+        let warp_amp = r.number_or("warp-amp", 0.0)?;
+        let warp_freq = r.number_or("warp-freq", 1.0)?;
+        let low = r.color_or("low-color", [0.0, 0.0, 0.0, 1.0])?;
+        let high = r.color_or("high-color", [1.0, 1.0, 1.0, 1.0])?;
+        let opacity = r.number_or("opacity", 1.0)?;
+        let parts = r.finish();
 
         Ok(BuiltNode {
             node: Box::new(NoiseNode {
@@ -290,8 +295,10 @@ impl NodeFactory for NoiseFactory {
                 high,
                 opacity,
                 anchor,
+                ports: parts.ports,
+                param_refs: parts.param_refs,
             }),
-            connections: vec![],
+            connections: parts.connections,
         })
     }
     fn schema(&self) -> Value {
@@ -317,10 +324,10 @@ impl NodeFactory for NoiseFactory {
                     ],
                 },
                 "octaves": { "type": "integer", "minimum": 1, "maximum": 12, "default": 1 },
-                "lacunarity": { "type": "number", "default": 2.0 },
-                "gain": { "type": "number", "default": 0.5 },
-                "warp-amp": { "type": "number", "default": 0.0 },
-                "warp-freq": { "type": "number", "default": 1.0 },
+                "lacunarity": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 2.0 })),
+                "gain": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 0.5 })),
+                "warp-amp": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 0.0 })),
+                "warp-freq": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 1.0 })),
                 "seed": { "type": "integer", "minimum": 0 },
                 "low-color": schema_frag::color(),
                 "high-color": schema_frag::color(),

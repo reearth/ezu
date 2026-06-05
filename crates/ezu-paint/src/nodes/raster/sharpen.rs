@@ -8,18 +8,19 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    raster_or_sprite_output, read_number_or, unwrap_raster_or_sprite, wrap_raster_like,
-    ACCEPTS_RASTER_OR_SPRITE,
+    raster_or_sprite_output, unwrap_raster_or_sprite, wrap_raster_like, ACCEPTS_RASTER_OR_SPRITE,
 };
 
 struct SharpenNode {
-    amount: f32,
+    amount: In<f64>,
+    ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
 
 impl Node for SharpenNode {
@@ -27,12 +28,7 @@ impl Node for SharpenNode {
         "sharpen"
     }
     fn inputs(&self) -> &[PortSpec] {
-        static SPECS: &[PortSpec] = &[PortSpec {
-            name: "input",
-            accepts: ACCEPTS_RASTER_OR_SPRITE,
-            optional: false,
-        }];
-        SPECS
+        &self.ports
     }
     fn output(&self, input_kinds: &[Option<PortKind>]) -> PortKind {
         raster_or_sprite_output(input_kinds)
@@ -42,19 +38,19 @@ impl Node for SharpenNode {
     }
     fn eval(
         &self,
-        _ctx: &EvalCtx<'_>,
+        ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
         let input = inputs[0]
             .as_ref()
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
         let (src, kind) = unwrap_raster_or_sprite(input, "input")?;
-        if self.amount.abs() < 1e-6 {
+        let amount = self.amount.get(ctx, inputs)? as f32;
+        if amount.abs() < 1e-6 {
             return Ok(wrap_raster_like(src, kind));
         }
         let w = src.width;
         let h = src.height;
-        let amount = self.amount;
         // Convolution with the cross Laplacian:
         //     0  -k   0
         //    -k 1+4k -k
@@ -86,7 +82,10 @@ impl Node for SharpenNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"sharpen");
-        h.update(&self.amount.to_le_bytes());
+        self.amount.param_hash(h);
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -101,13 +100,29 @@ impl NodeFactory for SharpenFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let input = take_input_ref(fields, "input")?;
-        let amount = read_number_or(fields, "amount", ctx, 0.5)? as f32;
+        let mut r = InReader::new(fields, ctx, 1);
+        let amount = r.number_or("amount", 0.5)?;
+        let parts = r.finish();
+
+        let mut ports = vec![PortSpec {
+            name: "input",
+            accepts: ACCEPTS_RASTER_OR_SPRITE,
+            optional: false,
+        }];
+        ports.extend(parts.ports);
+        let mut connections = vec![Connection {
+            port: "input".into(),
+            src: input,
+        }];
+        connections.extend(parts.connections);
+
         Ok(BuiltNode {
-            node: Box::new(SharpenNode { amount }),
-            connections: vec![Connection {
-                port: "input".into(),
-                src: input,
-            }],
+            node: Box::new(SharpenNode {
+                amount,
+                ports,
+                param_refs: parts.param_refs,
+            }),
+            connections,
         })
     }
     fn schema(&self) -> Value {
@@ -115,8 +130,10 @@ impl NodeFactory for SharpenFactory {
             "description": "4-neighbour Laplacian sharpen: amplifies each pixel relative to its orthogonal neighbours by `amount`. Around 0.5–1.0 is a typical unsharp-mask look; negative values give a soft halo. Grows upstream pad by 1.",
             "properties": {
                 "input": schema_frag::node_ref(),
-                "amount": { "type": "number", "default": 0.5,
-                            "description": "Sharpening strength. 0 = pass-through, ~1 = strong." },
+                "amount": schema_frag::in_number(serde_json::json!({
+                    "type": "number", "default": 0.5,
+                    "description": "Sharpening strength. 0 = pass-through, ~1 = strong."
+                })),
             },
             "required": ["input"],
         })

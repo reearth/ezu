@@ -22,12 +22,12 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{read_number, read_optional_string, Anchor};
+use crate::nodes::common::{read_optional_string, Anchor};
 
 #[derive(Clone, Copy)]
 enum Mode {
@@ -36,9 +36,13 @@ enum Mode {
 }
 
 struct MosaicNode {
-    block: u32,
+    block: In<f64>,
+    /// Build-time upper bound on `block`, for pad propagation.
+    block_bound: u32,
     anchor: Anchor,
     mode: Mode,
+    ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
 
 impl Node for MosaicNode {
@@ -46,12 +50,7 @@ impl Node for MosaicNode {
         "mosaic"
     }
     fn inputs(&self) -> &[PortSpec] {
-        static SPECS: &[PortSpec] = &[PortSpec {
-            name: "input",
-            accepts: &[PortKind::Raster],
-            optional: false,
-        }];
-        SPECS
+        &self.ports
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Raster
@@ -70,8 +69,8 @@ impl Node for MosaicNode {
         // at most `block / 2` pixels outside the tile.
         match self.anchor {
             Anchor::World => match self.mode {
-                Mode::Average => downstream.saturating_add(self.block),
-                Mode::Nearest => downstream.saturating_add(self.block.div_ceil(2)),
+                Mode::Average => downstream.saturating_add(self.block_bound),
+                Mode::Nearest => downstream.saturating_add(self.block_bound.div_ceil(2)),
             },
             Anchor::Tile => downstream,
         }
@@ -85,7 +84,7 @@ impl Node for MosaicNode {
             .as_ref()
             .and_then(PortValue::as_raster)
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
-        let block = self.block.max(1) as i64;
+        let block = (self.block.get(ctx, inputs)?.round() as i64).max(1);
         if block == 1 {
             return Ok(PortValue::Raster(src.clone()));
         }
@@ -178,7 +177,7 @@ impl Node for MosaicNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"mosaic");
-        h.update(&self.block.to_le_bytes());
+        self.block.param_hash(h);
         match self.anchor {
             Anchor::World => h.update(b"w"),
             Anchor::Tile => h.update(b"t"),
@@ -187,6 +186,9 @@ impl Node for MosaicNode {
             Mode::Average => h.update(b"a"),
             Mode::Nearest => h.update(b"n"),
         }
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -201,14 +203,22 @@ impl NodeFactory for MosaicFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let input = take_input_ref(fields, "input")?;
-        let block_raw = read_number(fields, "block", ctx)?;
-        if !(block_raw.is_finite() && block_raw >= 1.0) {
+        let mut r = InReader::new(fields, ctx, 1);
+        let block = r.number("block")?;
+        let parts = r.finish();
+        let block_bound_raw = block.static_bound().ok_or_else(|| FactoryError::BadField {
+            field: "block".into(),
+            msg: "pad depends on block at build time: use a literal, or a `$param` with \
+                          `max` (a `@node` port has no static bound)"
+                .into(),
+        })?;
+        if !(block_bound_raw.is_finite() && block_bound_raw >= 1.0) {
             return Err(FactoryError::BadField {
                 field: "block".into(),
                 msg: "expected integer >= 1".into(),
             });
         }
-        let block = block_raw.round() as u32;
+        let block_bound = block_bound_raw.round() as u32;
         let anchor = match read_optional_string(fields, "anchor")?.as_deref() {
             None | Some("world") => Anchor::World,
             Some("tile") => Anchor::Tile,
@@ -229,16 +239,28 @@ impl NodeFactory for MosaicFactory {
                 });
             }
         };
+        let mut ports = vec![PortSpec {
+            name: "input",
+            accepts: &[PortKind::Raster],
+            optional: false,
+        }];
+        ports.extend(parts.ports);
+        let mut connections = vec![Connection {
+            port: "input".into(),
+            src: input,
+        }];
+        connections.extend(parts.connections);
+
         Ok(BuiltNode {
             node: Box::new(MosaicNode {
                 block,
+                block_bound,
                 anchor,
                 mode,
+                ports,
+                param_refs: parts.param_refs,
             }),
-            connections: vec![Connection {
-                port: "input".into(),
-                src: input,
-            }],
+            connections,
         })
     }
     fn schema(&self) -> Value {
@@ -246,8 +268,10 @@ impl NodeFactory for MosaicFactory {
             "description": "Quantize a raster into uniform square blocks. `mode` selects how each block is summarized: `average` (default) takes the mean of covered pixels (smooth, classic mosaic); `nearest` takes the block's centre pixel (crisp, no inter-colour blending). World-anchored by default so adjacent map tiles share the same block grid.",
             "properties": {
                 "input": schema_frag::node_ref(),
-                "block": { "type": "integer", "minimum": 1,
-                           "description": "Block edge length in canvas pixels." },
+                "block": schema_frag::in_number(serde_json::json!({
+                    "type": "integer", "minimum": 1,
+                    "description": "Block edge length in canvas pixels."
+                })),
                 "anchor": { "type": "string", "enum": ["world", "tile"], "default": "world",
                             "description": "`world` (default) makes the block grid seamless across map tiles by growing the upstream pad. `tile` restarts the grid at every map tile's top-left and requires no extra padding." },
                 "mode": { "type": "string", "enum": ["average", "nearest"], "default": "average",

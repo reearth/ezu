@@ -5,17 +5,19 @@
 use ezu_features::ops::hatch::{hatch_polygons, HatchOpts};
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value, read_number, read_number_or};
+use crate::nodes::common::{downcast_features, features_value};
 
 struct HatchNode {
-    angle_deg: f64,
-    spacing: f64,
-    phase: f64,
+    angle_deg: In<f64>,
+    spacing: In<f64>,
+    phase: In<f64>,
+    ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
 
 impl Node for HatchNode {
@@ -23,12 +25,7 @@ impl Node for HatchNode {
         "hatch"
     }
     fn inputs(&self) -> &[PortSpec] {
-        static SPECS: &[PortSpec] = &[PortSpec {
-            name: "features",
-            accepts: &[PortKind::Features],
-            optional: false,
-        }];
-        SPECS
+        &self.ports
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Features
@@ -54,9 +51,9 @@ impl Node for HatchNode {
         let lines = hatch_polygons(
             &feats.polygons,
             &HatchOpts {
-                angle_deg: self.angle_deg,
-                spacing: self.spacing,
-                phase: self.phase,
+                angle_deg: self.angle_deg.get(ctx, inputs)?,
+                spacing: self.spacing.get(ctx, inputs)?,
+                phase: self.phase.get(ctx, inputs)?,
                 origin,
             },
         );
@@ -64,9 +61,12 @@ impl Node for HatchNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"hatch");
-        h.update(&self.angle_deg.to_le_bytes());
-        h.update(&self.spacing.to_le_bytes());
-        h.update(&self.phase.to_le_bytes());
+        self.angle_deg.param_hash(h);
+        self.spacing.param_hash(h);
+        self.phase.param_hash(h);
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -81,19 +81,33 @@ impl NodeFactory for HatchFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let features = take_input_ref(fields, "features")?;
-        let angle_deg = read_number_or(fields, "angle-deg", ctx, 0.0)?;
-        let spacing = read_number(fields, "spacing", ctx)?;
-        let phase = read_number_or(fields, "phase", ctx, 0.0)?;
+        let mut r = InReader::new(fields, ctx, 1);
+        let angle_deg = r.number_or("angle-deg", 0.0)?;
+        let spacing = r.number("spacing")?;
+        let phase = r.number_or("phase", 0.0)?;
+        let parts = r.finish();
+
+        let mut ports = vec![PortSpec {
+            name: "features",
+            accepts: &[PortKind::Features],
+            optional: false,
+        }];
+        ports.extend(parts.ports);
+        let mut connections = vec![Connection {
+            port: "features".into(),
+            src: features,
+        }];
+        connections.extend(parts.connections);
+
         Ok(BuiltNode {
             node: Box::new(HatchNode {
                 angle_deg,
                 spacing,
                 phase,
+                ports,
+                param_refs: parts.param_refs,
             }),
-            connections: vec![Connection {
-                port: "features".into(),
-                src: features,
-            }],
+            connections,
         })
     }
     fn schema(&self) -> Value {
@@ -101,12 +115,12 @@ impl NodeFactory for HatchFactory {
             "description": "Parallel-line hatching of input polygons.",
             "properties": {
                 "features": schema_frag::node_ref(),
-                "angle-deg": { "type": "number", "default": 0.0,
-                                "description": "Hatch direction (degrees, CCW from +X)." },
-                "spacing": { "type": "number", "minimum": 0.0,
-                              "description": "Perpendicular spacing between consecutive lines, in tile pixels." },
-                "phase": { "type": "number", "default": 0.0,
-                            "description": "Per-line offset in spacing units (0..1 cycles through one period)." },
+                "angle-deg": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 0.0,
+                                "description": "Hatch direction (degrees, CCW from +X)." })),
+                "spacing": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0,
+                              "description": "Perpendicular spacing between consecutive lines, in tile pixels." })),
+                "phase": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 0.0,
+                            "description": "Per-line offset in spacing units (0..1 cycles through one period)." })),
             },
             "required": ["features", "spacing"],
         })

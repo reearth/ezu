@@ -4,15 +4,17 @@
 use ezu_features::ops::simplify::{simplify_line, simplify_polygon};
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value, read_number};
+use crate::nodes::common::{downcast_features, features_value};
 
 struct SimplifyNode {
-    epsilon: f64,
+    epsilon: In<f64>,
+    ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
 
 impl Node for SimplifyNode {
@@ -20,12 +22,7 @@ impl Node for SimplifyNode {
         "simplify"
     }
     fn inputs(&self) -> &[PortSpec] {
-        static SPECS: &[PortSpec] = &[PortSpec {
-            name: "features",
-            accepts: &[PortKind::Features],
-            optional: false,
-        }];
-        SPECS
+        &self.ports
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Features
@@ -35,7 +32,7 @@ impl Node for SimplifyNode {
     }
     fn eval(
         &self,
-        _ctx: &EvalCtx<'_>,
+        ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
         let feats = downcast_features(
@@ -43,15 +40,16 @@ impl Node for SimplifyNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
+        let epsilon = self.epsilon.get(ctx, inputs)?;
         let lines: Vec<_> = feats
             .lines
             .iter()
-            .filter_map(|l| simplify_line(l, self.epsilon))
+            .filter_map(|l| simplify_line(l, epsilon))
             .collect();
         let polygons: Vec<_> = feats
             .polygons
             .iter()
-            .filter_map(|p| simplify_polygon(p, self.epsilon))
+            .filter_map(|p| simplify_polygon(p, epsilon))
             .collect();
         Ok(features_value(
             feats.extent,
@@ -62,7 +60,10 @@ impl Node for SimplifyNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"simplify");
-        h.update(&self.epsilon.to_le_bytes());
+        self.epsilon.param_hash(h);
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -77,13 +78,29 @@ impl NodeFactory for SimplifyFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let features = take_input_ref(fields, "features")?;
-        let epsilon = read_number(fields, "epsilon", ctx)?;
+        let mut r = InReader::new(fields, ctx, 1);
+        let epsilon = r.number("epsilon")?;
+        let parts = r.finish();
+
+        let mut ports = vec![PortSpec {
+            name: "features",
+            accepts: &[PortKind::Features],
+            optional: false,
+        }];
+        ports.extend(parts.ports);
+        let mut connections = vec![Connection {
+            port: "features".into(),
+            src: features,
+        }];
+        connections.extend(parts.connections);
+
         Ok(BuiltNode {
-            node: Box::new(SimplifyNode { epsilon }),
-            connections: vec![Connection {
-                port: "features".into(),
-                src: features,
-            }],
+            node: Box::new(SimplifyNode {
+                epsilon,
+                ports,
+                param_refs: parts.param_refs,
+            }),
+            connections,
         })
     }
     fn schema(&self) -> Value {
@@ -91,8 +108,8 @@ impl NodeFactory for SimplifyFactory {
             "description": "Douglas-Peucker simplify polylines and polygon rings; points pass through.",
             "properties": {
                 "features": schema_frag::node_ref(),
-                "epsilon": { "type": "number", "minimum": 0.0,
-                              "description": "Max perpendicular distance a vertex may be from the simplified line, in tile pixels." },
+                "epsilon": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0,
+                              "description": "Max perpendicular distance a vertex may be from the simplified line, in tile pixels." })),
             },
             "required": ["features", "epsilon"],
         })

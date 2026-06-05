@@ -20,15 +20,15 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use tiny_skia::{PixmapPaint, PixmapRef, Transform};
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    canvas_into_raster, make_canvas, read_number_or, read_optional_string, read_xy,
-    unwrap_raster_or_sprite, ACCEPTS_RASTER_OR_SPRITE,
+    canvas_into_raster, make_canvas, read_optional_string, read_xy, unwrap_raster_or_sprite,
+    ACCEPTS_RASTER_OR_SPRITE,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,9 +75,11 @@ struct PlaceNode {
     fit: Fit,
     position_px: [f32; 2],
     anchor: Anchor9,
-    scale: f32,
-    rotation_deg: f32,
-    opacity: f32,
+    scale: In<f64>,
+    rotation_deg: In<f64>,
+    opacity: In<f64>,
+    ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
 
 impl Node for PlaceNode {
@@ -85,12 +87,7 @@ impl Node for PlaceNode {
         "place"
     }
     fn inputs(&self) -> &[PortSpec] {
-        static SPECS: &[PortSpec] = &[PortSpec {
-            name: "input",
-            accepts: ACCEPTS_RASTER_OR_SPRITE,
-            optional: false,
-        }];
-        SPECS
+        &self.ports
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Raster
@@ -120,6 +117,10 @@ impl Node for PlaceNode {
         let sw = src.width as f32;
         let sh = src.height as f32;
 
+        let scale = (self.scale.get(ctx, inputs)? as f32).max(0.0);
+        let rotation_deg = self.rotation_deg.get(ctx, inputs)? as f32;
+        let opacity = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
+
         // Build the transform that maps source-image space to padded
         // canvas space. All builders end with `pre_translate(-ax, -ay)`
         // so the source-image anchor point ends up at the chosen
@@ -130,8 +131,8 @@ impl Node for PlaceNode {
                 let ax = sw * fx;
                 let ay = sh * fy;
                 Transform::from_translate(self.position_px[0] + pad, self.position_px[1] + pad)
-                    .pre_rotate(self.rotation_deg)
-                    .pre_scale(self.scale, self.scale)
+                    .pre_rotate(rotation_deg)
+                    .pre_scale(scale, scale)
                     .pre_translate(-ax, -ay)
             }
             Fit::Cover | Fit::Contain => {
@@ -143,7 +144,7 @@ impl Node for PlaceNode {
                 let cx = tile_w * 0.5 + self.position_px[0] + pad;
                 let cy = tile_h * 0.5 + self.position_px[1] + pad;
                 Transform::from_translate(cx, cy)
-                    .pre_rotate(self.rotation_deg)
+                    .pre_rotate(rotation_deg)
                     .pre_scale(s_uniform, s_uniform)
                     .pre_translate(-sw * 0.5, -sh * 0.5)
             }
@@ -153,14 +154,14 @@ impl Node for PlaceNode {
                 let cx = tile_w * 0.5 + self.position_px[0] + pad;
                 let cy = tile_h * 0.5 + self.position_px[1] + pad;
                 Transform::from_translate(cx, cy)
-                    .pre_rotate(self.rotation_deg)
+                    .pre_rotate(rotation_deg)
                     .pre_scale(sx, sy)
                     .pre_translate(-sw * 0.5, -sh * 0.5)
             }
         };
 
         let paint = PixmapPaint {
-            opacity: self.opacity,
+            opacity,
             ..PixmapPaint::default()
         };
         canvas
@@ -179,9 +180,12 @@ impl Node for PlaceNode {
         h.update(&self.position_px[0].to_le_bytes());
         h.update(&self.position_px[1].to_le_bytes());
         h.update(&(self.anchor as u8).to_le_bytes());
-        h.update(&self.scale.to_le_bytes());
-        h.update(&self.rotation_deg.to_le_bytes());
-        h.update(&self.opacity.to_le_bytes());
+        self.scale.param_hash(h);
+        self.rotation_deg.param_hash(h);
+        self.opacity.param_hash(h);
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -226,22 +230,36 @@ impl NodeFactory for PlaceFactory {
                 });
             }
         };
-        let scale = read_number_or(fields, "scale", ctx, 1.0)? as f32;
-        let rotation_deg = read_number_or(fields, "rotation-deg", ctx, 0.0)? as f32;
-        let opacity = read_number_or(fields, "opacity", ctx, 1.0)?.clamp(0.0, 1.0) as f32;
+        let mut r = InReader::new(fields, ctx, 1);
+        let scale = r.number_or("scale", 1.0)?;
+        let rotation_deg = r.number_or("rotation-deg", 0.0)?;
+        let opacity = r.number_or("opacity", 1.0)?;
+        let parts = r.finish();
+
+        let mut ports = vec![PortSpec {
+            name: "input",
+            accepts: ACCEPTS_RASTER_OR_SPRITE,
+            optional: false,
+        }];
+        ports.extend(parts.ports);
+        let mut connections = vec![Connection {
+            port: "input".into(),
+            src: input,
+        }];
+        connections.extend(parts.connections);
+
         Ok(BuiltNode {
             node: Box::new(PlaceNode {
                 fit,
                 position_px,
                 anchor,
-                scale: scale.max(0.0),
+                scale,
                 rotation_deg,
                 opacity,
+                ports,
+                param_refs: parts.param_refs,
             }),
-            connections: vec![Connection {
-                port: "input".into(),
-                src: input,
-            }],
+            connections,
         })
     }
     fn schema(&self) -> Value {
@@ -262,10 +280,10 @@ impl NodeFactory for PlaceFactory {
                                      "bottom-left", "bottom-center", "bottom-right"],
                             "default": "top-left",
                             "description": "Only used when fit=none." },
-                "scale": { "type": "number", "minimum": 0.0,
-                           "description": "Uniform scale for fit=none. Ignored for other fits." },
-                "rotation-deg": { "type": "number",
-                                  "description": "Rotation (degrees clockwise) around the placement anchor / canvas center." },
+                "scale": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0,
+                           "description": "Uniform scale for fit=none. Ignored for other fits." })),
+                "rotation-deg": schema_frag::in_number(serde_json::json!({ "type": "number",
+                                  "description": "Rotation (degrees clockwise) around the placement anchor / canvas center." })),
                 "opacity": schema_frag::unit_number(),
             },
             "required": ["input"],

@@ -12,29 +12,33 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    raster_or_sprite_output, read_boundary, read_number, read_number_or, read_optional_string,
-    sample_bilinear, unwrap_raster_or_sprite, wrap_raster_like, Anchor, BoundaryMode,
-    ACCEPTS_RASTER_OR_SPRITE,
+    raster_or_sprite_output, read_boundary, read_number_or, read_optional_string, sample_bilinear,
+    unwrap_raster_or_sprite, wrap_raster_like, Anchor, BoundaryMode, ACCEPTS_RASTER_OR_SPRITE,
 };
 use crate::nodes::raster::noise_field::{fbm, NoiseKind, Sampler};
 
 struct WarpNode {
     kind: NoiseKind,
-    scale_px: f64,
+    scale_px: In<f64>,
     octaves: u32,
-    lacunarity: f64,
-    gain: f64,
-    amp_x: f64,
-    amp_y: f64,
+    lacunarity: In<f64>,
+    gain: In<f64>,
+    amp_x: In<f64>,
+    amp_y: In<f64>,
+    /// Build-time upper bounds on `amp-x-px` / `amp-y-px`, for pad.
+    amp_x_bound: f64,
+    amp_y_bound: f64,
     seed: Option<u32>,
     anchor: Anchor,
     boundary: BoundaryMode,
+    ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
 
 impl Node for WarpNode {
@@ -42,12 +46,7 @@ impl Node for WarpNode {
         "warp"
     }
     fn inputs(&self) -> &[PortSpec] {
-        static SPECS: &[PortSpec] = &[PortSpec {
-            name: "input",
-            accepts: ACCEPTS_RASTER_OR_SPRITE,
-            optional: false,
-        }];
-        SPECS
+        &self.ports
     }
     fn output(&self, input_kinds: &[Option<PortKind>]) -> PortKind {
         raster_or_sprite_output(input_kinds)
@@ -59,7 +58,7 @@ impl Node for WarpNode {
         }
     }
     fn required_pad(&self, downstream: u32) -> u32 {
-        let bump = self.amp_x.abs().max(self.amp_y.abs()).ceil() as u32;
+        let bump = self.amp_x_bound.abs().max(self.amp_y_bound.abs()).ceil() as u32;
         downstream + bump
     }
     fn eval(
@@ -74,6 +73,12 @@ impl Node for WarpNode {
         let (w, h) = (src.width, src.height);
         let mut out = RasterBuf::new(w, h);
 
+        let scale_px = self.scale_px.get(ctx, inputs)?;
+        let lacunarity = self.lacunarity.get(ctx, inputs)?;
+        let gain = self.gain.get(ctx, inputs)?;
+        let amp_x = self.amp_x.get(ctx, inputs)?;
+        let amp_y = self.amp_y.get(ctx, inputs)?;
+
         let seed = self
             .seed
             .unwrap_or((ctx.rng_seed as u32) ^ ((ctx.rng_seed >> 32) as u32));
@@ -86,7 +91,7 @@ impl Node for WarpNode {
             Anchor::World => (ctx.tile.x as f64 * tile_size, ctx.tile.y as f64 * tile_size),
             Anchor::Tile => (0.0, 0.0),
         };
-        let inv_scale = 1.0 / self.scale_px;
+        let inv_scale = if scale_px > 0.0 { 1.0 / scale_px } else { 0.0 };
 
         for y in 0..h {
             // `py` is the world-pixel coord at the current zoom (or tile-
@@ -100,17 +105,17 @@ impl Node for WarpNode {
                     px * inv_scale,
                     py * inv_scale,
                     self.octaves,
-                    self.lacunarity,
-                    self.gain,
-                ) * self.amp_x;
+                    lacunarity,
+                    gain,
+                ) * amp_x;
                 let dy = fbm(
                     &ny,
                     px * inv_scale,
                     py * inv_scale,
                     self.octaves,
-                    self.lacunarity,
-                    self.gain,
-                ) * self.amp_y;
+                    lacunarity,
+                    gain,
+                ) * amp_y;
                 let sx = x as f64 + dx;
                 let sy = y as f64 + dy;
                 let pxv = sample_bilinear(&src, sx, sy, self.boundary);
@@ -123,12 +128,12 @@ impl Node for WarpNode {
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"warp");
         h.update(&[self.kind.tag()]);
-        h.update(&self.scale_px.to_le_bytes());
+        self.scale_px.param_hash(h);
         h.update(&self.octaves.to_le_bytes());
-        h.update(&self.lacunarity.to_le_bytes());
-        h.update(&self.gain.to_le_bytes());
-        h.update(&self.amp_x.to_le_bytes());
-        h.update(&self.amp_y.to_le_bytes());
+        self.lacunarity.param_hash(h);
+        self.gain.param_hash(h);
+        self.amp_x.param_hash(h);
+        self.amp_y.param_hash(h);
         match self.seed {
             Some(s) => {
                 h.update(&[1]);
@@ -145,6 +150,9 @@ impl Node for WarpNode {
             BoundaryMode::Transparent => 1,
             BoundaryMode::Mirror => 2,
         }]);
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -168,19 +176,54 @@ impl NodeFactory for WarpFactory {
                 ),
             })?,
         };
-        let scale_px = read_number(fields, "scale-px", ctx)?;
-        if scale_px <= 0.0 {
-            return Err(FactoryError::BadField {
-                field: "scale-px".into(),
-                msg: "scale-px must be > 0".into(),
-            });
-        }
+        // `octaves` stays static: it's clamped to a derived integer range
+        // (1..=12) at build time and used as a loop count in eval.
         let octaves = (read_number_or(fields, "octaves", ctx, 1.0)? as u32).clamp(1, 12);
-        let lacunarity = read_number_or(fields, "lacunarity", ctx, 2.0)?;
-        let gain = read_number_or(fields, "gain", ctx, 0.5)?;
-        let amp = read_number(fields, "amp-px", ctx)?;
-        let amp_x = read_number_or(fields, "amp-x-px", ctx, amp)?;
-        let amp_y = read_number_or(fields, "amp-y-px", ctx, amp)?;
+
+        let mut r = InReader::new(fields, ctx, 1);
+        let scale_px = r.number("scale-px")?;
+        let lacunarity = r.number_or("lacunarity", 2.0)?;
+        let gain = r.number_or("gain", 0.5)?;
+        // `amp-px` is the shared default for the per-axis amplitudes; when
+        // `amp-x-px` / `amp-y-px` are omitted they inherit `amp-px` as-is
+        // (same literal / `$param` / `@node` binding).
+        let amp = r.number("amp-px")?;
+        let amp_x = if fields.contains_key("amp-x-px") {
+            r.number("amp-x-px")?
+        } else {
+            amp.clone()
+        };
+        let amp_y = if fields.contains_key("amp-y-px") {
+            r.number("amp-y-px")?
+        } else {
+            amp.clone()
+        };
+        let parts = r.finish();
+
+        // scale-px must be > 0; check the static bound (literal value, or a
+        // `$param`'s declared `max`). A `@node` port has no static bound, so
+        // its value is guarded at eval (treated as no-warp when <= 0).
+        if let Some(b) = scale_px.static_bound() {
+            if b <= 0.0 {
+                return Err(FactoryError::BadField {
+                    field: "scale-px".into(),
+                    msg: "scale-px must be > 0".into(),
+                });
+            }
+        }
+        let amp_x_bound = amp_x.static_bound().ok_or_else(|| FactoryError::BadField {
+            field: "amp-x-px".into(),
+            msg: "pad depends on amp-x-px (or amp-px) at build time: use a literal, or a \
+                  `$param` with `max` (a `@node` port has no static bound)"
+                .into(),
+        })?;
+        let amp_y_bound = amp_y.static_bound().ok_or_else(|| FactoryError::BadField {
+            field: "amp-y-px".into(),
+            msg: "pad depends on amp-y-px (or amp-px) at build time: use a literal, or a \
+                  `$param` with `max` (a `@node` port has no static bound)"
+                .into(),
+        })?;
+
         let seed = match fields.get("seed") {
             None => None,
             Some(v) if v.is_null() => None,
@@ -200,6 +243,19 @@ impl NodeFactory for WarpFactory {
             }
         };
         let boundary = read_boundary(fields, "boundary", BoundaryMode::Clamp)?;
+
+        let mut ports = vec![PortSpec {
+            name: "input",
+            accepts: ACCEPTS_RASTER_OR_SPRITE,
+            optional: false,
+        }];
+        ports.extend(parts.ports);
+        let mut connections = vec![Connection {
+            port: "input".into(),
+            src: input,
+        }];
+        connections.extend(parts.connections);
+
         Ok(BuiltNode {
             node: Box::new(WarpNode {
                 kind,
@@ -209,14 +265,15 @@ impl NodeFactory for WarpFactory {
                 gain,
                 amp_x,
                 amp_y,
+                amp_x_bound,
+                amp_y_bound,
                 seed,
                 anchor,
                 boundary,
+                ports,
+                param_refs: parts.param_refs,
             }),
-            connections: vec![Connection {
-                port: "input".into(),
-                src: input,
-            }],
+            connections,
         })
     }
     fn schema(&self) -> Value {
@@ -231,8 +288,8 @@ impl NodeFactory for WarpFactory {
                 },
                 "scale-px": schema_frag::px_number(),
                 "octaves": { "type": "integer", "minimum": 1, "maximum": 12, "default": 1 },
-                "lacunarity": { "type": "number", "default": 2.0 },
-                "gain": { "type": "number", "default": 0.5 },
+                "lacunarity": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 2.0 })),
+                "gain": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 0.5 })),
                 "amp-px": schema_frag::px_number(),
                 "amp-x-px": schema_frag::px_number(),
                 "amp-y-px": schema_frag::px_number(),

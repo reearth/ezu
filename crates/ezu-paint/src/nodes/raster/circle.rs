@@ -7,20 +7,21 @@
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, BuiltNode, EvalCtx, EvalError, FactoryCtx, FactoryError, Node, NodeFactory,
-    PortKind, PortSpec, PortValue, RasterBuf,
+    schema_frag, BuiltNode, EvalCtx, EvalError, FactoryCtx, FactoryError, In, InReader, Node,
+    NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{read_color, read_number, read_number_or};
 use crate::nodes::raster::generator_kind::{parse_generator_kind, GeneratorKind};
 
 struct CircleNode {
-    color: [f32; 4],
-    radius_frac: f32,
-    hardness: f32,
+    color: In<[f32; 4]>,
+    radius_frac: In<f64>,
+    hardness: In<f64>,
     out_kind: GeneratorKind,
+    ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
 
 impl Node for CircleNode {
@@ -28,7 +29,7 @@ impl Node for CircleNode {
         "circle"
     }
     fn inputs(&self) -> &[PortSpec] {
-        &[]
+        &self.ports
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         match self.out_kind {
@@ -36,7 +37,11 @@ impl Node for CircleNode {
             GeneratorKind::Sprite { .. } => PortKind::Sprite,
         }
     }
-    fn eval(&self, ctx: &EvalCtx<'_>, _: &[Option<PortValue>]) -> Result<PortValue, EvalError> {
+    fn eval(
+        &self,
+        ctx: &EvalCtx<'_>,
+        inputs: &[Option<PortValue>],
+    ) -> Result<PortValue, EvalError> {
         // Raster mode anchors radius to `tile-size` (so the disk
         // visually scales with the tile geometry). Sprite mode
         // anchors to the shorter sprite side so the disk fits.
@@ -47,13 +52,16 @@ impl Node for CircleNode {
             }
             GeneratorKind::Sprite { width, height } => (width, height, width.min(height) as f32),
         };
+        let color = self.color.get(ctx, inputs)?;
+        let radius_frac = self.radius_frac.get(ctx, inputs)? as f32;
+        let hardness = self.hardness.get(ctx, inputs)? as f32;
         let mut out = RasterBuf::new(out_w, out_h);
         let cx = out_w as f32 * 0.5;
         let cy = out_h as f32 * 0.5;
-        let r = radius_unit * self.radius_frac;
-        let h = self.hardness.clamp(0.0, 0.999);
+        let r = radius_unit * radius_frac;
+        let h = hardness.clamp(0.0, 0.999);
         let inner = r * h;
-        let [cr, cg, cb, ca] = self.color;
+        let [cr, cg, cb, ca] = color;
         for y in 0..out_h {
             for x in 0..out_w {
                 let dx = x as f32 + 0.5 - cx;
@@ -82,17 +90,18 @@ impl Node for CircleNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"circle");
-        for c in self.color {
-            h.update(&c.to_le_bytes());
-        }
-        h.update(&self.radius_frac.to_le_bytes());
-        h.update(&self.hardness.to_le_bytes());
+        self.color.param_hash(h);
+        self.radius_frac.param_hash(h);
+        self.hardness.param_hash(h);
         let (tag, dims) = self.out_kind.hash_tag();
         h.update(&tag);
         if let Some((w, hh)) = dims {
             h.update(&w.to_le_bytes());
             h.update(&hh.to_le_bytes());
         }
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -106,9 +115,11 @@ impl NodeFactory for CircleFactory {
         fields: &serde_json::Map<String, Value>,
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
-        let color = read_color(fields, "color", ctx)?;
-        let radius_frac = read_number(fields, "radius-frac", ctx)? as f32;
-        let hardness = read_number_or(fields, "hardness", ctx, 1.0)? as f32;
+        let mut r = InReader::new(fields, ctx, 0);
+        let color = r.color("color")?;
+        let radius_frac = r.number("radius-frac")?;
+        let hardness = r.number_or("hardness", 1.0)?;
+        let parts = r.finish();
         let out_kind = parse_generator_kind(fields, ctx)?;
         Ok(BuiltNode {
             node: Box::new(CircleNode {
@@ -116,8 +127,10 @@ impl NodeFactory for CircleFactory {
                 radius_frac,
                 hardness,
                 out_kind,
+                ports: parts.ports,
+                param_refs: parts.param_refs,
             }),
-            connections: vec![],
+            connections: parts.connections,
         })
     }
     fn schema(&self) -> Value {

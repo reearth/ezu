@@ -10,18 +10,19 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    raster_or_sprite_output, read_number_or, unwrap_raster_or_sprite, wrap_raster_like,
-    ACCEPTS_RASTER_OR_SPRITE,
+    raster_or_sprite_output, unwrap_raster_or_sprite, wrap_raster_like, ACCEPTS_RASTER_OR_SPRITE,
 };
 
 struct EdgeDetectNode {
-    strength: f32,
+    strength: In<f64>,
+    ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
 
 impl Node for EdgeDetectNode {
@@ -29,12 +30,7 @@ impl Node for EdgeDetectNode {
         "edge-detect"
     }
     fn inputs(&self) -> &[PortSpec] {
-        static SPECS: &[PortSpec] = &[PortSpec {
-            name: "input",
-            accepts: ACCEPTS_RASTER_OR_SPRITE,
-            optional: false,
-        }];
-        SPECS
+        &self.ports
     }
     fn output(&self, input_kinds: &[Option<PortKind>]) -> PortKind {
         raster_or_sprite_output(input_kinds)
@@ -44,13 +40,14 @@ impl Node for EdgeDetectNode {
     }
     fn eval(
         &self,
-        _ctx: &EvalCtx<'_>,
+        ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
         let input = inputs[0]
             .as_ref()
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
         let (src, kind) = unwrap_raster_or_sprite(input, "input")?;
+        let strength = self.strength.get(ctx, inputs)?.max(0.0) as f32;
         let w = src.width;
         let h = src.height;
         let mut out = RasterBuf::new(w, h);
@@ -77,7 +74,7 @@ impl Node for EdgeDetectNode {
                     let p22 = sample(x + 1, y + 1, c);
                     let gx = (p20 + 2 * p21 + p22) - (p00 + 2 * p01 + p02);
                     let gy = (p02 + 2 * p12 + p22) - (p00 + 2 * p10 + p20);
-                    let mag = ((gx * gx + gy * gy) as f32).sqrt() * self.strength;
+                    let mag = ((gx * gx + gy * gy) as f32).sqrt() * strength;
                     out.pixels[off + c] = mag.clamp(0.0, 255.0) as u8;
                 }
             }
@@ -86,7 +83,10 @@ impl Node for EdgeDetectNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"edge-detect");
-        h.update(&self.strength.to_le_bytes());
+        self.strength.param_hash(h);
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -101,13 +101,29 @@ impl NodeFactory for EdgeDetectFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let input = take_input_ref(fields, "input")?;
-        let strength = read_number_or(fields, "strength", ctx, 1.0)?.max(0.0) as f32;
+        let mut r = InReader::new(fields, ctx, 1);
+        let strength = r.number_or("strength", 1.0)?;
+        let parts = r.finish();
+
+        let mut ports = vec![PortSpec {
+            name: "input",
+            accepts: ACCEPTS_RASTER_OR_SPRITE,
+            optional: false,
+        }];
+        ports.extend(parts.ports);
+        let mut connections = vec![Connection {
+            port: "input".into(),
+            src: input,
+        }];
+        connections.extend(parts.connections);
+
         Ok(BuiltNode {
-            node: Box::new(EdgeDetectNode { strength }),
-            connections: vec![Connection {
-                port: "input".into(),
-                src: input,
-            }],
+            node: Box::new(EdgeDetectNode {
+                strength,
+                ports,
+                param_refs: parts.param_refs,
+            }),
+            connections,
         })
     }
     fn schema(&self) -> Value {
@@ -115,8 +131,10 @@ impl NodeFactory for EdgeDetectFactory {
             "description": "Sobel gradient magnitude per channel, scaled by `strength` and clamped to [0, 255]. Pass-through over Raster / Sprite. Use after a hillshade for stylised outlines, or on a flat fill to derive an outline mask.",
             "properties": {
                 "input": schema_frag::node_ref(),
-                "strength": { "type": "number", "minimum": 0.0, "default": 1.0,
-                              "description": "Scale factor applied to the gradient magnitude before clamping." },
+                "strength": schema_frag::in_number(serde_json::json!({
+                    "type": "number", "minimum": 0.0, "default": 1.0,
+                    "description": "Scale factor applied to the gradient magnitude before clamping."
+                })),
             },
             "required": ["input"],
         })

@@ -16,15 +16,15 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, take_optional_input_ref, BuiltNode, Connection, EvalCtx,
-    EvalError, FactoryCtx, FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
-    RasterBuf,
+    EvalError, FactoryCtx, FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec,
+    PortValue, RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    raster_or_sprite_output, read_number_or, read_string_or, unwrap_raster_or_sprite,
-    wrap_raster_like, ACCEPTS_RASTER_OR_SPRITE,
+    raster_or_sprite_output, read_string_or, unwrap_raster_or_sprite, wrap_raster_like,
+    ACCEPTS_RASTER_OR_SPRITE,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,9 +120,11 @@ impl Composite {
 struct BlendNode {
     mode: BlendMode,
     composite: Composite,
-    opacity: f32,
-    clip: bool,
+    opacity: In<f64>,
+    clip: In<bool>,
     has_mask: bool,
+    ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
 
 impl Node for BlendNode {
@@ -130,27 +132,7 @@ impl Node for BlendNode {
         "blend"
     }
     fn inputs(&self) -> &[PortSpec] {
-        // PortSpec layout is fixed across instances; the optional `mask`
-        // is declared optional at the port level regardless of whether
-        // the style connects it.
-        static SPECS: &[PortSpec] = &[
-            PortSpec {
-                name: "base",
-                accepts: ACCEPTS_RASTER_OR_SPRITE,
-                optional: false,
-            },
-            PortSpec {
-                name: "over",
-                accepts: ACCEPTS_RASTER_OR_SPRITE,
-                optional: false,
-            },
-            PortSpec {
-                name: "mask",
-                accepts: ACCEPTS_RASTER_OR_SPRITE,
-                optional: true,
-            },
-        ];
-        SPECS
+        &self.ports
     }
     fn output(&self, input_kinds: &[Option<PortKind>]) -> PortKind {
         // Output mirrors `base`. Mixing a `Sprite` base with a
@@ -161,7 +143,7 @@ impl Node for BlendNode {
     }
     fn eval(
         &self,
-        _ctx: &EvalCtx<'_>,
+        ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
         let base_in = inputs[0]
@@ -191,7 +173,8 @@ impl Node for BlendNode {
             }
         }
         let mut out = RasterBuf::new(base.width, base.height);
-        let op = self.opacity.clamp(0.0, 1.0);
+        let op = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
+        let clip = self.clip.get(ctx, inputs)?;
         for i in (0..base.pixels.len()).step_by(4) {
             // Demultiply base + over to [0,1] RGB + alpha.
             let (br, bg, bb, ba) = demul(&base.pixels[i..i + 4]);
@@ -221,7 +204,7 @@ impl Node for BlendNode {
             let bsg = (1.0 - ba) * sg + ba * mg;
             let bsb = (1.0 - ba) * sb + ba * mb;
             // Composite. `clip` switches source-over -> source-atop.
-            let (or, og, ob, oa) = if self.clip {
+            let (or, og, ob, oa) = if clip {
                 // source-atop: αo = αb, co = αs*αb*Cs' + (1-αs)*αb*Cb
                 let oa = ba;
                 let or = sa * ba * bsr + (1.0 - sa) * ba * br;
@@ -249,8 +232,12 @@ impl Node for BlendNode {
         h.update(b"blend");
         h.update(self.mode.as_tag());
         h.update(self.composite.as_tag());
-        h.update(&self.opacity.to_le_bytes());
-        h.update(&[self.clip as u8, self.has_mask as u8]);
+        self.opacity.param_hash(h);
+        self.clip.param_hash(h);
+        h.update(&[self.has_mask as u8]);
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -267,7 +254,6 @@ impl NodeFactory for BlendFactory {
         let base = take_input_ref(fields, "base")?;
         let over = take_input_ref(fields, "over")?;
         let mask = take_optional_input_ref(fields, "mask")?;
-        let opacity = read_number_or(fields, "opacity", ctx, 1.0)? as f32;
         let mode_str = read_string_or(fields, "mode", ctx, "normal")?;
         let mode = BlendMode::parse(&mode_str).ok_or_else(|| FactoryError::BadField {
             field: "mode".into(),
@@ -278,11 +264,34 @@ impl NodeFactory for BlendFactory {
             field: "composite".into(),
             msg: format!("unknown composite op `{composite_str}`"),
         })?;
-        let clip = fields
-            .get("clip")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
         let has_mask = mask.is_some();
+        // Scalar port indices start after the three fixed ports
+        // (base, over, mask) — `mask` always occupies index 2 even
+        // when unconnected, so eval's `inputs[2]` lookup stays valid.
+        let mut r = InReader::new(fields, ctx, 3);
+        let opacity = r.number_or("opacity", 1.0)?;
+        let clip = r.bool_or("clip", false)?;
+        let parts = r.finish();
+
+        let mut ports = vec![
+            PortSpec {
+                name: "base",
+                accepts: ACCEPTS_RASTER_OR_SPRITE,
+                optional: false,
+            },
+            PortSpec {
+                name: "over",
+                accepts: ACCEPTS_RASTER_OR_SPRITE,
+                optional: false,
+            },
+            PortSpec {
+                name: "mask",
+                accepts: ACCEPTS_RASTER_OR_SPRITE,
+                optional: true,
+            },
+        ];
+        ports.extend(parts.ports);
+
         let mut connections = vec![
             Connection {
                 port: "base".into(),
@@ -299,6 +308,8 @@ impl NodeFactory for BlendFactory {
                 src: m,
             });
         }
+        connections.extend(parts.connections);
+
         Ok(BuiltNode {
             node: Box::new(BlendNode {
                 mode,
@@ -306,6 +317,8 @@ impl NodeFactory for BlendFactory {
                 opacity,
                 clip,
                 has_mask,
+                ports,
+                param_refs: parts.param_refs,
             }),
             connections,
         })
@@ -332,7 +345,7 @@ impl NodeFactory for BlendFactory {
                     "enum": ["over", "source-over", "destination-out", "dest-out", "erase"],
                     "default": "over"
                 },
-                "clip": { "type": "boolean", "default": false },
+                "clip": { "oneOf": [{"type": "boolean"}, {"type": "string", "pattern": "^[$@].+"}], "default": false },
                 "opacity": schema_frag::unit_number(),
             },
             "required": ["base", "over"],

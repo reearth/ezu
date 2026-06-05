@@ -12,16 +12,18 @@
 use ezu_features::ops::voronoi::medial_axis;
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value, read_number_or};
+use crate::nodes::common::{downcast_features, features_value};
 
 struct MedialAxisNode {
-    densify_px: f64,
-    min_branch_px: f64,
+    densify_px: In<f64>,
+    min_branch_px: In<f64>,
+    ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
 
 impl Node for MedialAxisNode {
@@ -29,12 +31,7 @@ impl Node for MedialAxisNode {
         "medial-axis"
     }
     fn inputs(&self) -> &[PortSpec] {
-        static SPECS: &[PortSpec] = &[PortSpec {
-            name: "features",
-            accepts: &[PortKind::Features],
-            optional: false,
-        }];
-        SPECS
+        &self.ports
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Features
@@ -44,7 +41,7 @@ impl Node for MedialAxisNode {
     }
     fn eval(
         &self,
-        _ctx: &EvalCtx<'_>,
+        ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
         let feats = downcast_features(
@@ -52,16 +49,21 @@ impl Node for MedialAxisNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
+        let densify_px = self.densify_px.get(ctx, inputs)?;
+        let min_branch_px = self.min_branch_px.get(ctx, inputs)?;
         let mut lines = Vec::new();
         for polygon in &feats.polygons {
-            lines.extend(medial_axis(polygon, self.densify_px, self.min_branch_px));
+            lines.extend(medial_axis(polygon, densify_px, min_branch_px));
         }
         Ok(features_value(feats.extent, vec![], lines, vec![]))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"medial-axis");
-        h.update(&self.densify_px.to_le_bytes());
-        h.update(&self.min_branch_px.to_le_bytes());
+        self.densify_px.param_hash(h);
+        self.min_branch_px.param_hash(h);
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -76,23 +78,43 @@ impl NodeFactory for MedialAxisFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let features = take_input_ref(fields, "features")?;
-        let densify_px = read_number_or(fields, "densify-px", ctx, 4.0)?;
-        let min_branch_px = read_number_or(fields, "min-branch-px", ctx, 8.0)?;
-        if densify_px <= 0.0 {
-            return Err(FactoryError::BadField {
-                field: "densify-px".into(),
-                msg: "must be > 0".into(),
-            });
+        let mut r = InReader::new(fields, ctx, 1);
+        let densify_px = r.number_or("densify-px", 4.0)?;
+        let min_branch_px = r.number_or("min-branch-px", 8.0)?;
+        let parts = r.finish();
+
+        // densify-px must be > 0; check the static bound (literal, or a
+        // `$param`'s declared `max`). A `@node` port has no static bound —
+        // the underlying op returns no axis for non-positive values.
+        if let Some(b) = densify_px.static_bound() {
+            if b <= 0.0 {
+                return Err(FactoryError::BadField {
+                    field: "densify-px".into(),
+                    msg: "densify-px must be > 0".into(),
+                });
+            }
         }
+
+        let mut ports = vec![PortSpec {
+            name: "features",
+            accepts: &[PortKind::Features],
+            optional: false,
+        }];
+        ports.extend(parts.ports);
+        let mut connections = vec![Connection {
+            port: "features".into(),
+            src: features,
+        }];
+        connections.extend(parts.connections);
+
         Ok(BuiltNode {
             node: Box::new(MedialAxisNode {
                 densify_px,
                 min_branch_px,
+                ports,
+                param_refs: parts.param_refs,
             }),
-            connections: vec![Connection {
-                port: "features".into(),
-                src: features,
-            }],
+            connections,
         })
     }
     fn schema(&self) -> Value {
@@ -100,8 +122,8 @@ impl NodeFactory for MedialAxisFactory {
             "description": "Approximate medial axis of each input polygon, emitted as polylines. Smaller `densify-px` → more accurate but slower; `min-branch-px` prunes short side branches after stitching.",
             "properties": {
                 "features": schema_frag::node_ref(),
-                "densify-px": { "type": "number", "minimum": 0.5, "default": 4.0 },
-                "min-branch-px": { "type": "number", "minimum": 0.0, "default": 8.0 },
+                "densify-px": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.5, "default": 4.0 })),
+                "min-branch-px": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0, "default": 8.0 })),
             },
             "required": ["features"],
         })

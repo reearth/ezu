@@ -13,14 +13,13 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    raster_or_sprite_output, read_number, unwrap_raster_or_sprite, wrap_raster_like,
-    ACCEPTS_RASTER_OR_SPRITE,
+    raster_or_sprite_output, unwrap_raster_or_sprite, wrap_raster_like, ACCEPTS_RASTER_OR_SPRITE,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -52,7 +51,11 @@ impl Op {
 
 struct MorphNode {
     op: Op,
-    radius: u32,
+    radius: In<f64>,
+    /// Build-time upper bound on `radius-px`, for pad propagation.
+    radius_bound: u32,
+    ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
 
 impl Node for MorphNode {
@@ -63,36 +66,32 @@ impl Node for MorphNode {
         }
     }
     fn inputs(&self) -> &[PortSpec] {
-        static SPECS: &[PortSpec] = &[PortSpec {
-            name: "input",
-            accepts: ACCEPTS_RASTER_OR_SPRITE,
-            optional: false,
-        }];
-        SPECS
+        &self.ports
     }
     fn output(&self, input_kinds: &[Option<PortKind>]) -> PortKind {
         raster_or_sprite_output(input_kinds)
     }
     fn required_pad(&self, downstream: u32) -> u32 {
-        downstream + self.radius
+        downstream + self.radius_bound
     }
     fn eval(
         &self,
-        _ctx: &EvalCtx<'_>,
+        ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
         let input = inputs[0]
             .as_ref()
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
         let (src, kind) = unwrap_raster_or_sprite(input, "input")?;
-        if self.radius == 0 {
+        let radius = (self.radius.get(ctx, inputs)?.round().clamp(0.0, 256.0)) as u32;
+        if radius == 0 {
             return Ok(wrap_raster_like(src, kind));
         }
         let w = src.width;
         let h = src.height;
         // Separable: horizontal pass then vertical pass.
-        let mid = run_axis(&src.pixels, w, h, self.radius, self.op, Axis::Horizontal);
-        let final_ = run_axis(&mid, w, h, self.radius, self.op, Axis::Vertical);
+        let mid = run_axis(&src.pixels, w, h, radius, self.op, Axis::Horizontal);
+        let final_ = run_axis(&mid, w, h, radius, self.op, Axis::Vertical);
         Ok(wrap_raster_like(
             Arc::new(RasterBuf {
                 width: w,
@@ -104,7 +103,10 @@ impl Node for MorphNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(self.op.tag());
-        h.update(&self.radius.to_le_bytes());
+        self.radius.param_hash(h);
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -188,22 +190,46 @@ fn build_morph(
     op: Op,
 ) -> Result<BuiltNode, FactoryError> {
     let input = take_input_ref(fields, "input")?;
-    let radius = read_number(fields, "radius-px", ctx)?.round();
-    if !(0.0..=256.0).contains(&radius) {
+    let mut r = InReader::new(fields, ctx, 1);
+    let radius = r.number("radius-px")?;
+    let parts = r.finish();
+    let radius_bound = radius
+        .static_bound()
+        .ok_or_else(|| FactoryError::BadField {
+            field: "radius-px".into(),
+            msg: "pad depends on radius-px at build time: use a literal, or a `$param` with \
+                  `max` (a `@node` port has no static bound)"
+                .into(),
+        })?
+        .round();
+    if !(0.0..=256.0).contains(&radius_bound) {
         return Err(FactoryError::BadField {
             field: "radius-px".into(),
             msg: "expected a non-negative integer ≤ 256".into(),
         });
     }
+
+    let mut ports = vec![PortSpec {
+        name: "input",
+        accepts: ACCEPTS_RASTER_OR_SPRITE,
+        optional: false,
+    }];
+    ports.extend(parts.ports);
+    let mut connections = vec![Connection {
+        port: "input".into(),
+        src: input,
+    }];
+    connections.extend(parts.connections);
+
     Ok(BuiltNode {
         node: Box::new(MorphNode {
             op,
-            radius: radius as u32,
+            radius,
+            radius_bound: radius_bound as u32,
+            ports,
+            param_refs: parts.param_refs,
         }),
-        connections: vec![Connection {
-            port: "input".into(),
-            src: input,
-        }],
+        connections,
     })
 }
 
@@ -212,7 +238,9 @@ fn morph_schema(description: &str) -> Value {
         "description": description,
         "properties": {
             "input": schema_frag::node_ref(),
-            "radius-px": { "type": "integer", "minimum": 0, "maximum": 256 },
+            "radius-px": schema_frag::in_number(serde_json::json!({
+                "type": "integer", "minimum": 0, "maximum": 256
+            })),
         },
         "required": ["input", "radius-px"],
     })

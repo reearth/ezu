@@ -8,20 +8,21 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    raster_or_sprite_output, read_color, read_number_or, unwrap_raster_or_sprite, wrap_raster_like,
-    ACCEPTS_RASTER_OR_SPRITE,
+    raster_or_sprite_output, unwrap_raster_or_sprite, wrap_raster_like, ACCEPTS_RASTER_OR_SPRITE,
 };
 
 struct ColorToAlphaNode {
-    color: [f32; 4],
-    threshold: f32,
-    softness: f32,
+    color: In<[f32; 4]>,
+    threshold: In<f64>,
+    softness: In<f64>,
+    ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
 
 impl Node for ColorToAlphaNode {
@@ -29,28 +30,25 @@ impl Node for ColorToAlphaNode {
         "color-to-alpha"
     }
     fn inputs(&self) -> &[PortSpec] {
-        static SPECS: &[PortSpec] = &[PortSpec {
-            name: "input",
-            accepts: ACCEPTS_RASTER_OR_SPRITE,
-            optional: false,
-        }];
-        SPECS
+        &self.ports
     }
     fn output(&self, input_kinds: &[Option<PortKind>]) -> PortKind {
         raster_or_sprite_output(input_kinds)
     }
     fn eval(
         &self,
-        _ctx: &EvalCtx<'_>,
+        ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
         let input = inputs[0]
             .as_ref()
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
         let (src, kind) = unwrap_raster_or_sprite(input, "input")?;
-        let [tr, tg, tb, _] = self.color;
-        let lo = self.threshold.max(0.0);
-        let hi = (lo + self.softness).max(lo + 1e-6);
+        let [tr, tg, tb, _] = self.color.get(ctx, inputs)?;
+        let threshold = self.threshold.get(ctx, inputs)? as f32;
+        let softness = self.softness.get(ctx, inputs)? as f32;
+        let lo = threshold.max(0.0);
+        let hi = (lo + softness).max(lo + 1e-6);
         let mut out = RasterBuf::new(src.width, src.height);
         for i in (0..src.pixels.len()).step_by(4) {
             let a = src.pixels[i + 3] as f32 / 255.0;
@@ -78,11 +76,12 @@ impl Node for ColorToAlphaNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"color-to-alpha");
-        for c in self.color {
-            h.update(&c.to_le_bytes());
-        }
-        h.update(&self.threshold.to_le_bytes());
-        h.update(&self.softness.to_le_bytes());
+        self.color.param_hash(h);
+        self.threshold.param_hash(h);
+        self.softness.param_hash(h);
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -97,19 +96,33 @@ impl NodeFactory for ColorToAlphaFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let input = take_input_ref(fields, "input")?;
-        let color = read_color(fields, "color", ctx)?;
-        let threshold = read_number_or(fields, "threshold", ctx, 0.0)? as f32;
-        let softness = read_number_or(fields, "softness", ctx, 0.1)? as f32;
+        let mut r = InReader::new(fields, ctx, 1);
+        let color = r.color("color")?;
+        let threshold = r.number_or("threshold", 0.0)?;
+        let softness = r.number_or("softness", 0.1)?;
+        let parts = r.finish();
+
+        let mut ports = vec![PortSpec {
+            name: "input",
+            accepts: ACCEPTS_RASTER_OR_SPRITE,
+            optional: false,
+        }];
+        ports.extend(parts.ports);
+        let mut connections = vec![Connection {
+            port: "input".into(),
+            src: input,
+        }];
+        connections.extend(parts.connections);
+
         Ok(BuiltNode {
             node: Box::new(ColorToAlphaNode {
                 color,
                 threshold,
                 softness,
+                ports,
+                param_refs: parts.param_refs,
             }),
-            connections: vec![Connection {
-                port: "input".into(),
-                src: input,
-            }],
+            connections,
         })
     }
     fn schema(&self) -> Value {
@@ -118,8 +131,8 @@ impl NodeFactory for ColorToAlphaFactory {
             "properties": {
                 "input": schema_frag::node_ref(),
                 "color": schema_frag::color(),
-                "threshold": { "type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.0 },
-                "softness": { "type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.1 },
+                "threshold": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.0 })),
+                "softness": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.1 })),
             },
             "required": ["input", "color"],
         })

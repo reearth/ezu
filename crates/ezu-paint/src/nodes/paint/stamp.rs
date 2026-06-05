@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use tiny_skia::{PixmapPaint, PixmapRef, Transform};
@@ -19,18 +19,20 @@ use xxhash_rust::xxh3::Xxh3;
 use ezu_core::{seed::world_seed, WorldPos};
 
 use crate::nodes::common::{
-    canvas_into_raster, downcast_features, empty_raster, make_canvas, read_number_or,
-    unwrap_raster_or_sprite, ACCEPTS_RASTER_OR_SPRITE,
+    canvas_into_raster, downcast_features, empty_raster, make_canvas, unwrap_raster_or_sprite,
+    ACCEPTS_RASTER_OR_SPRITE,
 };
 
 const STAMP_SALT: u32 = 0x5354_4d50; // 'STMP'
 
 struct StampNode {
-    scale: f32,
-    rotation_deg: f32,
-    rotation_jitter_deg: f32,
-    scale_jitter: f32,
-    opacity: f32,
+    scale: In<f64>,
+    rotation_deg: In<f64>,
+    rotation_jitter_deg: In<f64>,
+    scale_jitter: In<f64>,
+    opacity: In<f64>,
+    ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
 
 impl Node for StampNode {
@@ -38,19 +40,7 @@ impl Node for StampNode {
         "stamp"
     }
     fn inputs(&self) -> &[PortSpec] {
-        static SPECS: &[PortSpec] = &[
-            PortSpec {
-                name: "features",
-                accepts: &[PortKind::Features],
-                optional: false,
-            },
-            PortSpec {
-                name: "image",
-                accepts: ACCEPTS_RASTER_OR_SPRITE,
-                optional: false,
-            },
-        ];
-        SPECS
+        &self.ports
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Raster
@@ -76,12 +66,18 @@ impl Node for StampNode {
             return Ok(empty_raster(ctx));
         }
 
+        let scale = (self.scale.get(ctx, inputs)? as f32).max(0.0);
+        let rotation_deg = self.rotation_deg.get(ctx, inputs)? as f32;
+        let rotation_jitter_deg = self.rotation_jitter_deg.get(ctx, inputs)? as f32;
+        let scale_jitter = self.scale_jitter.get(ctx, inputs)? as f32;
+        let opacity = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
+
         let img_ref = PixmapRef::from_bytes(&image.pixels, image.width, image.height)
             .ok_or_else(|| EvalError::Other("stamp: invalid image pixmap bytes".into()))?;
         let iw = image.width as f32;
         let ih = image.height as f32;
         let pix_paint = PixmapPaint {
-            opacity: self.opacity,
+            opacity,
             ..PixmapPaint::default()
         };
 
@@ -109,17 +105,17 @@ impl Node for StampNode {
             let wy = world_origin_y + (py as f64 - pad as f64) * world_per_px;
 
             let (mut rot_off, mut scale_off) = (0.0_f32, 0.0_f32);
-            if self.rotation_jitter_deg != 0.0 || self.scale_jitter != 0.0 {
+            if rotation_jitter_deg != 0.0 || scale_jitter != 0.0 {
                 let mut seed = world_seed(WorldPos::new(wx, wy), STAMP_SALT);
-                rot_off = (next_unit(&mut seed) - 0.5) * 2.0 * self.rotation_jitter_deg;
-                scale_off = (next_unit(&mut seed) - 0.5) * 2.0 * self.scale_jitter;
+                rot_off = (next_unit(&mut seed) - 0.5) * 2.0 * rotation_jitter_deg;
+                scale_off = (next_unit(&mut seed) - 0.5) * 2.0 * scale_jitter;
             }
-            let s = (self.scale * (1.0 + scale_off)).max(0.0);
+            let s = (scale * (1.0 + scale_off)).max(0.0);
             if s <= 0.0 {
                 continue;
             }
             let t = Transform::from_translate(px, py)
-                .pre_rotate(self.rotation_deg + rot_off)
+                .pre_rotate(rotation_deg + rot_off)
                 .pre_scale(s, s)
                 .pre_translate(-iw * 0.5, -ih * 0.5);
             pm.draw_pixmap(0, 0, img_ref, &pix_paint, t, None);
@@ -129,15 +125,14 @@ impl Node for StampNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"stamp");
-        for v in [
-            self.scale,
-            self.rotation_deg,
-            self.rotation_jitter_deg,
-            self.scale_jitter,
-            self.opacity,
-        ] {
-            h.update(&v.to_le_bytes());
-        }
+        self.scale.param_hash(h);
+        self.rotation_deg.param_hash(h);
+        self.rotation_jitter_deg.param_hash(h);
+        self.scale_jitter.param_hash(h);
+        self.opacity.param_hash(h);
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -165,29 +160,50 @@ impl NodeFactory for StampFactory {
     ) -> Result<BuiltNode, FactoryError> {
         let features = take_input_ref(fields, "features")?;
         let image = take_input_ref(fields, "image")?;
-        let scale = read_number_or(fields, "scale", ctx, 1.0)? as f32;
-        let rotation_deg = read_number_or(fields, "rotation-deg", ctx, 0.0)? as f32;
-        let rotation_jitter_deg = read_number_or(fields, "rotation-jitter-deg", ctx, 0.0)? as f32;
-        let scale_jitter = read_number_or(fields, "scale-jitter", ctx, 0.0)? as f32;
-        let opacity = read_number_or(fields, "opacity", ctx, 1.0)?.clamp(0.0, 1.0) as f32;
+        let mut r = InReader::new(fields, ctx, 2);
+        let scale = r.number_or("scale", 1.0)?;
+        let rotation_deg = r.number_or("rotation-deg", 0.0)?;
+        let rotation_jitter_deg = r.number_or("rotation-jitter-deg", 0.0)?;
+        let scale_jitter = r.number_or("scale-jitter", 0.0)?;
+        let opacity = r.number_or("opacity", 1.0)?;
+        let parts = r.finish();
+
+        let mut ports = vec![
+            PortSpec {
+                name: "features",
+                accepts: &[PortKind::Features],
+                optional: false,
+            },
+            PortSpec {
+                name: "image",
+                accepts: ACCEPTS_RASTER_OR_SPRITE,
+                optional: false,
+            },
+        ];
+        ports.extend(parts.ports);
+        let mut connections = vec![
+            Connection {
+                port: "features".into(),
+                src: features,
+            },
+            Connection {
+                port: "image".into(),
+                src: image,
+            },
+        ];
+        connections.extend(parts.connections);
+
         Ok(BuiltNode {
             node: Box::new(StampNode {
-                scale: scale.max(0.0),
+                scale,
                 rotation_deg,
                 rotation_jitter_deg,
                 scale_jitter,
                 opacity,
+                ports,
+                param_refs: parts.param_refs,
             }),
-            connections: vec![
-                Connection {
-                    port: "features".into(),
-                    src: features,
-                },
-                Connection {
-                    port: "image".into(),
-                    src: image,
-                },
-            ],
+            connections,
         })
     }
     fn schema(&self) -> Value {
@@ -196,14 +212,14 @@ impl NodeFactory for StampFactory {
             "properties": {
                 "features": schema_frag::node_ref(),
                 "image": schema_frag::node_ref(),
-                "scale": { "type": "number", "minimum": 0.0,
-                           "description": "Uniform scale applied to the sprite. Default 1.0 (native size)." },
-                "rotation-deg": { "type": "number",
-                                  "description": "Constant rotation around each point, in degrees clockwise." },
-                "rotation-jitter-deg": { "type": "number", "minimum": 0.0,
-                                         "description": "Per-point random rotation, ±value degrees." },
-                "scale-jitter": { "type": "number", "minimum": 0.0,
-                                  "description": "Per-point random scale, ±value as a fraction of `scale` (0.2 = ±20%)." },
+                "scale": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0,
+                           "description": "Uniform scale applied to the sprite. Default 1.0 (native size)." })),
+                "rotation-deg": schema_frag::in_number(serde_json::json!({ "type": "number",
+                                  "description": "Constant rotation around each point, in degrees clockwise." })),
+                "rotation-jitter-deg": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0,
+                                         "description": "Per-point random rotation, ±value degrees." })),
+                "scale-jitter": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0,
+                                  "description": "Per-point random scale, ±value as a fraction of `scale` (0.2 = ±20%)." })),
                 "opacity": schema_frag::unit_number(),
             },
             "required": ["features", "image"],
