@@ -133,120 +133,6 @@ The editor (MapLibre GL based) supports:
   (drawn per tile via `maplibregl.addProtocol`), and read the live
   zoom value (click to copy `z @ lat,lng`).
 
-## Parametric styles
-
-A style can declare typed parameters in a `params` block and reference
-them anywhere a scalar field lives, with `$name`:
-
-```jsonc
-{
-  "params": {
-    "paper":    { "type": "color",  "default": "#fbf6e6" },
-    "softness": { "type": "number", "default": 0, "min": 0, "max": 4,
-                  "description": "Blur over the finished tile, in px." }
-  },
-  "nodes": {
-    "bg":  { "op": "solid", "color": "$paper" },
-    "out": { "op": "blur", "input": "@c4", "sigma": "$softness" }
-  }
-}
-```
-
-Parameters resolve at render time — the same built graph serves every
-parameter combination, and the intermediate cache keys on the values a
-node actually reads, so flipping one param only re-evaluates the nodes
-that depend on it. Override them per render:
-
-```sh
-# CLI: repeatable --param flags, validated against the declarations.
-ezu tile --style watercolor.json --tile 13/7276/3225   --param 'paper=#ffe0f0' --param softness=2 --out tile.png
-
-# Tile server: query-string overrides on the tile endpoint.
-curl 'http://127.0.0.1:8080/tiles/13/7276/3225.png?paper=%23ffe0f0&softness=2'
-
-# JSON Schema for the current style's parameters (defaults, ranges,
-# descriptions) — drive sliders / color pickers off this.
-curl http://127.0.0.1:8080/style/params
-```
-
-For computed values, wire scalars through the graph: `math` does
-arithmetic over numbers (literals, `$param`s, or `@node` scalar ports)
-and `zoom` emits the tile's zoom level, so zoom-dependent styling is a
-two-node chain:
-
-```jsonc
-"z":        { "op": "zoom" },
-"zfrac":    { "op": "math", "fn": "div", "a": "@z", "b": 16 },
-"lu_alpha": { "op": "math", "fn": "mul", "a": "$landuse-alpha", "b": "@zfrac" },
-"landuse":  { "op": "fill-solid", "features": "@landuse_feat",
-              "fill": "#a6c084", "fill-alpha": "@lu_alpha" }
-```
-
-One constraint: fields that decide canvas padding at build time (blur
-sigmas and friends) need a static upper bound — a literal, or a
-`$param` with `max` declared. Wiring those from a `@node` port is a
-build error.
-
-See `crates/ezu/examples/styles/watercolor.json` for a complete
-parametric style.
-
-## Functions
-
-Repeated node patterns factor into user-defined functions: a `functions`
-block declares reusable subgraphs with typed input ports and an output
-kind, and `op: "func"` calls them:
-
-```jsonc
-{
-  "functions": {
-    "sketchy-line": {
-      "inputs": {
-        "features": { "kind": "features" },
-        "brush":    { "kind": "brush" },
-        "color":    { "kind": "scalar" },
-        "radius":   { "kind": "scalar", "default": 1.0 }
-      },
-      "output": "@draw",
-      "output-kind": "raster",
-      "nodes": {
-        "wob":  { "op": "wave", "features": "@features", "amplitude-px": 0.8 },
-        "draw": { "op": "line", "features": "@wob", "brush": "@brush",
-                  "color": "@color", "radius-px": "@radius" }
-      }
-    }
-  },
-  "nodes": {
-    "roads": { "op": "func", "fn": "sketchy-line",
-               "features": "@roads_f", "brush": "@pencil", "color": "$ink" }
-  }
-}
-```
-
-Functions expand inline at graph-build time, like hygienic macros:
-
-- Inside a body, `@name` resolves to a function input, another body
-  node, or a document-scoped source — nothing else. Functions are
-  closed over their inputs, so a typo can't silently capture a caller
-  node.
-- Arguments substitute structurally: literals stay literals, `$param`
-  references keep their runtime-override behavior, `@node` arguments
-  become port connections. Scalar arguments substitute verbatim — even
-  into places plain `$param`s can't reach, like gradient stops or
-  stroke-curve arrays. A `null` default (or argument) removes the
-  substituted field entirely, for op fields whose absence is
-  meaningful.
-- Functions may call functions; cyclic calls are a build error reported
-  with the cycle path (`a → b → a`).
-- Expanded body nodes are namespaced `<call>/<node>` (the output node
-  takes the call id), so build errors and `--verbose` logs read
-  naturally. Because the intermediate cache is content-addressed, two
-  calls with identical arguments share cache entries — inlining doesn't
-  duplicate work.
-
-`pencil-sketch.json` is the live demo: its ten wave-then-line stroke
-layers are one `sketchy-line` function, and the water hatching is a
-`water-hatch` function that calls it.
-
 ## How it paints
 
 A style is a **typed node DAG**, not an ordered layer list. Every
@@ -375,6 +261,70 @@ All painting happens on a **padded canvas** (`tile_size + 2 * pad`) so
 gaussian blurs and MVT buffer geometry that overflows `[0, extent]`
 land inside the buffer; the output is cropped to the tile by
 [`ezu-paint::host`](https://github.com/reearth/ezu/tree/main/crates/ezu-paint) before encoding.
+
+## Parametric styles
+
+A style can declare typed parameters in a `params` block and reference
+them anywhere a scalar field lives, with `$name`:
+
+```jsonc
+{
+  "params": {
+    "paper":    { "type": "color",  "default": "#fbf6e6" },
+    "softness": { "type": "number", "default": 0, "min": 0, "max": 4,
+                  "description": "Blur over the finished tile, in px." }
+  },
+  "nodes": {
+    "bg":  { "op": "solid", "color": "$paper" },
+    "out": { "op": "blur", "input": "@c4", "sigma": "$softness" }
+  }
+}
+```
+
+Parameters resolve at render time — the same built graph serves every
+parameter combination, and the intermediate cache keys on the values a
+node actually reads, so flipping one param only re-evaluates the nodes
+that depend on it. Override them per render:
+
+```sh
+# CLI: repeatable --param flags, validated against the declarations.
+ezu tile --style watercolor.json --tile 13/7276/3225   --param 'paper=#ffe0f0' --param softness=2 --out tile.png
+
+# Tile server: query-string overrides on the tile endpoint.
+curl 'http://127.0.0.1:8080/tiles/13/7276/3225.png?paper=%23ffe0f0&softness=2'
+
+# JSON Schema for the current style's parameters (defaults, ranges,
+# descriptions) — drive sliders / color pickers off this.
+curl http://127.0.0.1:8080/style/params
+```
+
+For computed values, wire scalars through the graph: `math` does
+arithmetic over numbers (literals, `$param`s, or `@node` scalar ports)
+and `zoom` emits the tile's zoom level, so zoom-dependent styling is a
+two-node chain:
+
+```jsonc
+"z":        { "op": "zoom" },
+"zfrac":    { "op": "math", "fn": "div", "a": "@z", "b": 16 },
+"lu_alpha": { "op": "math", "fn": "mul", "a": "$landuse-alpha", "b": "@zfrac" },
+"landuse":  { "op": "fill-solid", "features": "@landuse_feat",
+              "fill": "#a6c084", "fill-alpha": "@lu_alpha" }
+```
+
+One constraint: fields that decide canvas padding at build time (blur
+sigmas and friends) need a static upper bound — a literal, or a
+`$param` with `max` declared. Wiring those from a `@node` port is a
+build error.
+
+See `crates/ezu/examples/styles/watercolor.json` for a complete
+parametric style.
+
+Styles can also factor repeated node patterns into **user-defined
+functions** — reusable subgraphs with typed input ports, called with
+`op: "func"` and expanded inline at build time. The full semantics
+(argument substitution, hygiene, recursion errors) live in the
+[`ezu-style` README](https://github.com/reearth/ezu/tree/main/crates/ezu-style#functions);
+`pencil-sketch.json` shows them in action.
 
 ## Custom ops
 
