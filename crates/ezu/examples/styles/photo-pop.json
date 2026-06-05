@@ -1,0 +1,25 @@
+{
+  "name": "photo-pop",
+  "version": "1",
+  "tile-size": 512,
+  "pad": 8,
+  "attribution": "Style: ezu photo-pop demo",
+  "params": {
+    "saturation": { "type": "number", "default": 0.45, "min": -1, "max": 1,
+                    "description": "Saturation boost over the photo." },
+    "lightness":  { "type": "number", "default": 0.05, "min": -1, "max": 1 }
+  },
+  "sources": {
+    "photo": { "type": "raster",
+               "url": "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg",
+               "max-zoom": 18,
+               "attribution": "© 国土地理院" }
+  },
+  "nodes": {
+    "photo": { "op": "raster" },
+    "pop":   { "op": "hsl", "input": "@photo",
+               "saturation": "$saturation", "lightness": "$lightness" },
+    "out":   { "op": "posterize", "input": "@pop", "steps": 12 }
+  },
+  "output": "@out"
+}

@@ -159,6 +159,10 @@
 
   let version = 0;
   let tileSize = 512;
+  // Attribution shown on the MapLibre control. Refreshed from
+  // GET /style/attribution (style declarations + upstream TileJSON /
+  // PMTiles metadata) on load and after every Apply.
+  let attributionHtml = '\u00a9 <a href="https://github.com/reearth/ezu">ezu</a>';
   // Param overrides for the rendered raster: name -> query value.
   // Holds only values that differ from the style's declared defaults.
   const paramOverrides = new Map();
@@ -213,7 +217,7 @@
       tileSize,
       minzoom: 0,
       maxzoom: 15,
-      attribution: '© <a href="https://github.com/reearth/ezu">ezu</a> | © OpenStreetMap contributors | © Protomaps',
+      attribution: attributionHtml,
     });
     map.addLayer({
       id: 'ezu-raster',
@@ -353,6 +357,7 @@
         refreshRasterTiles();
       }
       loadParams(); // declarations may have changed with the style
+      loadAttribution();
       setStatus(`applied (v${v})`, 'ok');
     } catch (e) {
       setStatus('error: ' + e, 'error');
@@ -911,6 +916,28 @@
     return c;
   }
 
+  async function loadAttribution() {
+    let next = '\u00a9 <a href="https://github.com/reearth/ezu">ezu</a>';
+    try {
+      const r = await fetch('/style/attribution');
+      if (r.ok) {
+        const body = await r.json();
+        if (body.attribution) next += ' | ' + body.attribution;
+      }
+    } catch (e) {
+      console.warn('attribution load failed:', e);
+    }
+    if (next === attributionHtml) return;
+    attributionHtml = next;
+    // MapLibre reads attribution at addSource time — rebuild the
+    // raster source to apply the change.
+    if (map.getSource('ezu-raster')) {
+      if (map.getLayer('ezu-raster')) map.removeLayer('ezu-raster');
+      map.removeSource('ezu-raster');
+      ensureRasterLayer();
+    }
+  }
+
   async function loadParams() {
     let schema;
     try {
@@ -1188,6 +1215,7 @@
   map.on('load', async () => {
     updateZoom();
     await loadSchema();
+    await loadAttribution();
     await loadStyle();
     loadParams();
   });

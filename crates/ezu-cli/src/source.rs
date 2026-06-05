@@ -29,8 +29,15 @@ pub enum SourceError {
 
 /// One of the supported tile-byte sources. Each `fetch` returns the
 /// raw (already gzip-decompressed) MVT bytes for the requested tile,
-/// or `None` if the source has no data at that coordinate.
-pub enum TileSource {
+/// or `None` if the source has no data at that coordinate. `open`
+/// captures upstream attribution metadata (TileJSON `attribution`,
+/// PMTiles archive metadata) for hosts to surface.
+pub struct TileSource {
+    kind: TileSourceKind,
+    attribution: Option<String>,
+}
+
+enum TileSourceKind {
     PmTilesHttp(Arc<AsyncPmTilesReader<HttpBackend>>),
     PmTilesLocal(Arc<AsyncPmTilesReader<MmapBackend>>),
     MvtHttp { pattern: String, client: Client },
@@ -41,41 +48,58 @@ impl TileSource {
     pub async fn open(spec: &SourceSpec) -> Result<Self, SourceError> {
         match spec {
             SourceSpec::PmTiles(arg) => {
-                if is_url(arg) {
+                let (kind, metadata) = if is_url(arg) {
                     let client = Client::new();
                     let reader = AsyncPmTilesReader::new_with_url(client, arg)
                         .await
                         .map_err(|e| SourceError::PmTilesOpen(e.to_string()))?;
-                    Ok(Self::PmTilesHttp(Arc::new(reader)))
+                    let meta = reader.get_metadata().await.ok();
+                    (TileSourceKind::PmTilesHttp(Arc::new(reader)), meta)
                 } else {
                     let reader = AsyncPmTilesReader::new_with_path(arg)
                         .await
                         .map_err(|e| SourceError::PmTilesOpen(e.to_string()))?;
-                    Ok(Self::PmTilesLocal(Arc::new(reader)))
-                }
+                    let meta = reader.get_metadata().await.ok();
+                    (TileSourceKind::PmTilesLocal(Arc::new(reader)), meta)
+                };
+                let attribution = metadata.and_then(|m| {
+                    serde_json::from_str::<serde_json::Value>(&m)
+                        .ok()?
+                        .get("attribution")?
+                        .as_str()
+                        .map(str::to_string)
+                });
+                Ok(Self { kind, attribution })
             }
             SourceSpec::Mvt(arg) => {
-                let pattern = if looks_like_tilejson(arg) {
-                    let resolved = load_tilejson_pattern(arg).await?;
+                let (pattern, attribution) = if looks_like_tilejson(arg) {
+                    let (resolved, attribution) = load_tilejson_pattern(arg).await?;
                     tracing::info!("tilejson {arg} → {resolved}");
-                    resolved
+                    (resolved, attribution)
                 } else {
-                    arg.clone()
+                    (arg.clone(), None)
                 };
                 if !pattern.contains("{z}") || !pattern.contains("{x}") || !pattern.contains("{y}")
                 {
                     return Err(SourceError::BadPattern(pattern));
                 }
-                if is_url(&pattern) {
-                    Ok(Self::MvtHttp {
+                let kind = if is_url(&pattern) {
+                    TileSourceKind::MvtHttp {
                         pattern,
                         client: Client::new(),
-                    })
+                    }
                 } else {
-                    Ok(Self::MvtFile { pattern })
-                }
+                    TileSourceKind::MvtFile { pattern }
+                };
+                Ok(Self { kind, attribution })
             }
         }
+    }
+
+    /// Upstream attribution captured at open time (TileJSON
+    /// `attribution` field, PMTiles metadata), if any.
+    pub fn attribution(&self) -> Option<&str> {
+        self.attribution.as_deref()
     }
 
     /// Fetch a tile, walking up the pyramid up to `max_parent_levels`
@@ -104,20 +128,20 @@ impl TileSource {
     }
 
     pub async fn fetch(&self, tile: TileId) -> Result<Option<Bytes>, SourceError> {
-        match self {
-            Self::PmTilesHttp(r) => {
+        match &self.kind {
+            TileSourceKind::PmTilesHttp(r) => {
                 let coord = make_coord(tile)?;
                 r.get_tile_decompressed(coord)
                     .await
                     .map_err(|e| SourceError::PmTilesRead(e.to_string()))
             }
-            Self::PmTilesLocal(r) => {
+            TileSourceKind::PmTilesLocal(r) => {
                 let coord = make_coord(tile)?;
                 r.get_tile_decompressed(coord)
                     .await
                     .map_err(|e| SourceError::PmTilesRead(e.to_string()))
             }
-            Self::MvtHttp { pattern, client } => {
+            TileSourceKind::MvtHttp { pattern, client } => {
                 let url = expand_pattern(pattern, tile);
                 let resp = client.get(&url).send().await?;
                 if resp.status() == reqwest::StatusCode::NOT_FOUND {
@@ -126,7 +150,7 @@ impl TileSource {
                 let resp = resp.error_for_status()?;
                 Ok(Some(resp.bytes().await?))
             }
-            Self::MvtFile { pattern } => {
+            TileSourceKind::MvtFile { pattern } => {
                 let path = PathBuf::from(expand_pattern(pattern, tile));
                 match tokio::fs::read(&path).await {
                     Ok(buf) => Ok(Some(Bytes::from(buf))),
@@ -179,9 +203,10 @@ fn looks_like_tilejson(arg: &str) -> bool {
 }
 
 /// Fetch a TileJSON document (URL or path) and return the first entry
-/// of its `tiles` array. The spec allows multiple endpoints for load
-/// balancing; we pick the first deterministically.
-async fn load_tilejson_pattern(src: &str) -> Result<String, SourceError> {
+/// of its `tiles` array plus its `attribution`, if any. The spec
+/// allows multiple endpoints for load balancing; we pick the first
+/// deterministically.
+async fn load_tilejson_pattern(src: &str) -> Result<(String, Option<String>), SourceError> {
     let text = if is_url(src) {
         let resp = reqwest::get(src)
             .await
@@ -222,5 +247,9 @@ async fn load_tilejson_pattern(src: &str) -> Result<String, SourceError> {
             src: src.into(),
             msg: "`tiles[0]` is missing or not a string".into(),
         })?;
-    Ok(first.to_string())
+    let attribution = v
+        .get("attribution")
+        .and_then(|a| a.as_str())
+        .map(str::to_string);
+    Ok((first.to_string(), attribution))
 }

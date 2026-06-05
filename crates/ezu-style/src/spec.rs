@@ -27,6 +27,12 @@ pub struct Document {
     pub pad: u32,
     #[serde(default)]
     pub params: IndexMap<String, ParamDecl>,
+    /// Attribution for the style itself (HTML allowed, like MapLibre).
+    /// Per-source attributions live on the `sources` entries; hosts
+    /// merge both with upstream metadata (TileJSON / PMTiles) — see
+    /// [`Document::attributions`].
+    #[serde(default)]
+    pub attribution: Option<String>,
     /// User-defined functions: reusable node subgraphs called with
     /// `{ "op": "func", "fn": "<name>", ...args }`. Expanded inline at
     /// graph-build time — see [`expand_functions`](crate::expand_functions).
@@ -51,6 +57,25 @@ pub struct Document {
 impl Document {
     pub fn from_json(s: &str) -> Result<Self, StyleError> {
         Ok(serde_json::from_str(s)?)
+    }
+
+    /// Every attribution string declared in the document: the style's
+    /// own `attribution` plus each source's, in declaration order,
+    /// deduplicated. Upstream metadata (TileJSON `attribution`,
+    /// PMTiles metadata) is a host concern — hosts merge it with this
+    /// list after opening their sources.
+    pub fn attributions(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = Vec::new();
+        let candidates = std::iter::once(&self.attribution)
+            .chain(self.sources.values().map(|d| d.attribution()));
+        for a in candidates {
+            if let Some(a) = a.as_deref() {
+                if !a.is_empty() && !out.contains(&a) {
+                    out.push(a);
+                }
+            }
+        }
+        out
     }
 
     /// JSON Schema describing the *parameter values* object a caller
@@ -226,6 +251,27 @@ pub enum ParamKind {
     Bool,
 }
 
+/// What a tile-pyramid source does when a tile request 404s within
+/// the source's zoom range. (Other HTTP failures are always errors;
+/// requests past `max-zoom` always upsample from the ancestor at
+/// `max-zoom`.)
+#[derive(Debug, Deserialize, PartialEq, Eq, Clone, Copy, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum OnMissing {
+    /// Treat the tile as empty: transparent pixels for `raster`,
+    /// zero elevation for `dem`. Missing *neighbour* tiles always
+    /// degrade this way (the stitch edge-clamps).
+    #[default]
+    Empty,
+    /// Walk up parent zooms until a tile exists and upsample the
+    /// covered sub-region; falls back to `empty` when nothing is
+    /// found all the way to z0.
+    Upsample,
+    /// Fail the whole tile render. Hosts surface it (the tile server
+    /// returns HTTP 404 for the rendered tile).
+    Error,
+}
+
 /// Declaration of one external data source. Mixes document-scoped
 /// resources (`brush`, `image`) — resolved once per style from a file
 /// path or `http(s)://` URL — and tile-scoped pyramids (`mvt`,
@@ -254,6 +300,20 @@ pub enum SourceDecl {
     Mvt(MvtSource),
     Pmtiles(PmtilesSource),
     Dem(DemSource),
+    Raster(RasterSource),
+}
+
+impl SourceDecl {
+    /// The source's declared attribution, if any.
+    pub fn attribution(&self) -> &Option<String> {
+        match self {
+            SourceDecl::Brush(s) | SourceDecl::Image(s) => &s.attribution,
+            SourceDecl::Mvt(s) => &s.attribution,
+            SourceDecl::Pmtiles(s) => &s.attribution,
+            SourceDecl::Dem(s) => &s.attribution,
+            SourceDecl::Raster(s) => &s.attribution,
+        }
+    }
 }
 
 /// A document-scoped, file-based source. `src` is a path the host
@@ -262,6 +322,8 @@ pub enum SourceDecl {
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct FileSource {
     pub src: String,
+    #[serde(default)]
+    pub attribution: Option<String>,
 }
 
 /// Templated XYZ MVT tile source.
@@ -271,6 +333,10 @@ pub struct MvtSource {
     /// XYZ URL template with `{z}`, `{x}`, `{y}` placeholders, or a
     /// TileJSON document URL (anything ending in `.json`).
     pub url: String,
+    /// Explicit attribution. When absent, hosts inherit the upstream
+    /// TileJSON `attribution` field.
+    #[serde(default)]
+    pub attribution: Option<String>,
 }
 
 /// PMTiles archive source — local path or `http(s)://` URL.
@@ -278,6 +344,10 @@ pub struct MvtSource {
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct PmtilesSource {
     pub url: String,
+    /// Explicit attribution. When absent, hosts inherit the
+    /// `attribution` key of the archive's metadata JSON.
+    #[serde(default)]
+    pub attribution: Option<String>,
 }
 
 /// Raster-DEM source. Tiles encode elevation in the RGB channels using
@@ -287,10 +357,19 @@ pub struct PmtilesSource {
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct DemSource {
-    /// XYZ URL template with `{z}`, `{x}`, `{y}` placeholders. PNG and
-    /// WebP are both supported (decided by content-type / extension).
+    /// XYZ URL template with `{z}`, `{x}`, `{y}` placeholders, or a
+    /// TileJSON document URL (anything ending in `.json`). PNG and
+    /// WebP tiles are both supported (sniffed from content).
     pub url: String,
     pub encoding: DemEncoding,
+    /// What a 404 within the zoom range means — empty (zero
+    /// elevation), upsample from a parent, or fail the render.
+    #[serde(default)]
+    pub on_missing: OnMissing,
+    /// Explicit attribution. When absent and `url` is a TileJSON,
+    /// hosts inherit its `attribution` field.
+    #[serde(default)]
+    pub attribution: Option<String>,
     #[serde(default = "default_dem_tile_size")]
     pub tile_size: u32,
     /// Highest zoom available from the source. Requests above this zoom
@@ -313,6 +392,38 @@ pub struct DemSource {
 pub enum DemEncoding {
     Terrarium,
     MapboxRgb,
+}
+
+/// RGBA raster tile pyramid (satellite imagery, pre-rendered
+/// basemaps, …) consumed by the `raster` node as a canvas-sized
+/// `Raster`. The host fetches the 3×3 neighbourhood per render and
+/// stitches it onto the padded canvas, so downstream filters see
+/// seamless pixels across tile borders.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct RasterSource {
+    /// XYZ URL template with `{z}`, `{x}`, `{y}` placeholders, a
+    /// TileJSON document URL (anything ending in `.json`), or a
+    /// PMTiles archive (anything ending in `.pmtiles`; local path or
+    /// `http(s)://` URL). PNG / WebP / JPEG tiles are sniffed from
+    /// content.
+    pub url: String,
+    /// Highest zoom available from the source. Requests above this
+    /// zoom upsample from the ancestor at `max-zoom`.
+    #[serde(default)]
+    pub max_zoom: Option<u8>,
+    /// Fetch the 8 neighbouring tiles and stitch them so the pad
+    /// region has real pixels.
+    #[serde(default = "default_true")]
+    pub neighbor_fetch: bool,
+    /// What a 404 within the zoom range means — transparent pixels,
+    /// upsample from a parent, or fail the render.
+    #[serde(default)]
+    pub on_missing: OnMissing,
+    /// Explicit attribution. When absent, hosts inherit upstream
+    /// metadata (TileJSON `attribution` / PMTiles metadata).
+    #[serde(default)]
+    pub attribution: Option<String>,
 }
 
 fn default_dem_tile_size() -> u32 {
@@ -487,6 +598,38 @@ mod tests {
         assert_eq!(props["k"]["maximum"], 1.0);
         assert_eq!(props["on"]["type"], "boolean");
         assert_eq!(schema["additionalProperties"], false);
+    }
+
+    #[test]
+    fn parses_raster_source_and_attributions() {
+        let json = r##"{
+          "name": "demo",
+          "attribution": "Style © Demo",
+          "sources": {
+            "photo":   { "type": "raster",
+                         "url": "https://example.com/{z}/{x}/{y}.jpg",
+                         "max-zoom": 18, "on-missing": "upsample",
+                         "attribution": "© Example Sat" },
+            "archive": { "type": "raster", "url": "tiles.pmtiles" },
+            "basemap": { "type": "mvt", "url": "https://example.com/t.json",
+                         "attribution": "Style © Demo" }
+          },
+          "nodes": { "out": { "op": "raster", "source": "photo" } },
+          "output": "@out"
+        }"##;
+        let doc = Document::from_json(json).unwrap();
+        let SourceDecl::Raster(r) = &doc.sources["photo"] else {
+            panic!("expected raster source");
+        };
+        assert_eq!(r.max_zoom, Some(18));
+        assert_eq!(r.on_missing, OnMissing::Upsample);
+        assert!(r.neighbor_fetch);
+        let SourceDecl::Raster(r) = &doc.sources["archive"] else {
+            panic!("expected raster source");
+        };
+        assert_eq!(r.on_missing, OnMissing::Empty);
+        // Dedup: the doc attribution and basemap's identical one merge.
+        assert_eq!(doc.attributions(), ["Style © Demo", "© Example Sat"]);
     }
 
     #[test]

@@ -56,8 +56,9 @@ use std::sync::Arc;
 
 use ezu_graph::{build_graph, Cache, CanvasInfo, Evaluator, Graph, ParamValues, PortValue, TileId};
 use ezu_paint::host::{
-    decode_dem_tile, raster_to_png_with, raster_to_rgba8, raster_to_webp, stitch_padded_field,
-    BrushBankLoader, DemTile, PngCompression, TileLoader,
+    decode_dem_tile, decode_raster_tile, raster_to_png_with, raster_to_rgba8, raster_to_webp,
+    stitch_padded_field, stitch_padded_raster, BrushBankLoader, DemTile, PngCompression,
+    RasterTile, TileLoader,
 };
 use ezu_paint::nodes::default_registry;
 use ezu_style::{Document, SourceDecl};
@@ -68,6 +69,7 @@ const ERR_STYLE: &str = "InvalidStyle";
 const ERR_BRUSH: &str = "BrushParse";
 const ERR_MVT: &str = "MvtDecode";
 const ERR_DEM: &str = "DemDecode";
+const ERR_RASTER: &str = "RasterDecode";
 const ERR_RENDER: &str = "RenderFailed";
 const ERR_PNG: &str = "PngEncode";
 const ERR_WEBP: &str = "WebpEncode";
@@ -82,6 +84,9 @@ const ERR_SOURCE: &str = "UnknownSource";
 enum SourceBinding {
     Mvt(Vec<u8>),
     Dem(HashMap<(i32, i32), Vec<u8>>),
+    /// RGBA imagery tiles per `(dx, dy)` neighbour offset, decoded +
+    /// stitched at render time like DEM.
+    Raster(HashMap<(i32, i32), Vec<u8>>),
 }
 
 /// Stateful WASM renderer.
@@ -201,8 +206,36 @@ impl Renderer {
                     ));
                 }
             }
+            SourceDecl::Raster(_) => {
+                let coord = parse_coord_opt(opts.as_ref())?;
+                let entry = self
+                    .bindings
+                    .entry(name.to_string())
+                    .or_insert_with(|| SourceBinding::Raster(HashMap::new()));
+                if let SourceBinding::Raster(map) = entry {
+                    map.insert(coord, bytes);
+                } else {
+                    return Err(named_err(
+                        ERR_SOURCE,
+                        format!("source `{name}` already bound as a different kind"),
+                    ));
+                }
+            }
         }
         Ok(())
+    }
+
+    /// Effective attribution declared by the style (document +
+    /// sources), joined with ` | `. Upstream TileJSON / PMTiles
+    /// metadata is the JS host's concern — merge it on that side.
+    #[wasm_bindgen(getter)]
+    pub fn attribution(&self) -> Option<String> {
+        let list = self.doc.attributions();
+        if list.is_empty() {
+            None
+        } else {
+            Some(list.join(" | "))
+        }
     }
 
     /// Drop every pending source binding. Call between tile renders.
@@ -310,7 +343,30 @@ impl Renderer {
                             ),
                         )
                     })?;
-                    tile_loader.bind_scalar_field(format!("tile.{name}"), field);
+                    // Bare source name — the `dem` node's asset lookup key.
+                    tile_loader.bind_scalar_field(name.clone(), field);
+                }
+                SourceBinding::Raster(byte_map) => {
+                    let mut decoded: HashMap<(i32, i32), RasterTile> =
+                        HashMap::with_capacity(byte_map.len());
+                    for (&(dx, dy), bytes) in byte_map {
+                        let abs_x = (x as i32 + dx) as u32;
+                        let abs_y = (y as i32 + dy) as u32;
+                        let t = decode_raster_tile(bytes, z, abs_x, abs_y)
+                            .map_err(|e| named_err(ERR_RASTER, e))?;
+                        decoded.insert((dx, dy), t);
+                    }
+                    let borrowed: HashMap<(i32, i32), &RasterTile> =
+                        decoded.iter().map(|(k, v)| (*k, v)).collect();
+                    let buf = stitch_padded_raster(&borrowed, canvas).ok_or_else(|| {
+                        named_err(
+                            ERR_RASTER,
+                            format!(
+                                "source `{name}`: missing centre tile (bind with coord [0, 0])"
+                            ),
+                        )
+                    })?;
+                    tile_loader.bind_raster(name.clone(), buf);
                 }
             }
         }

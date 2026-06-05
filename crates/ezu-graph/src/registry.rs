@@ -226,6 +226,10 @@ impl NodeRegistry {
                 "version": { "type": "string" },
                 "tile-size": { "type": "integer", "minimum": 1 },
                 "pad": { "type": "integer", "minimum": 0 },
+                "attribution": {
+                    "type": "string",
+                    "description": "Attribution for the style itself (HTML allowed). Merged with per-source and upstream attributions."
+                },
                 "params": {
                     "type": "object",
                     "additionalProperties": {
@@ -278,7 +282,8 @@ impl NodeRegistry {
                                 "required": ["type", "src"],
                                 "properties": {
                                     "type": { "enum": ["brush", "image"] },
-                                    "src": { "type": "string" }
+                                    "src": { "type": "string" },
+                                    "attribution": { "type": "string" }
                                 }
                             },
                             {
@@ -286,7 +291,8 @@ impl NodeRegistry {
                                 "required": ["type", "url"],
                                 "properties": {
                                     "type": { "enum": ["mvt", "pmtiles"] },
-                                    "url": { "type": "string" }
+                                    "url": { "type": "string" },
+                                    "attribution": { "type": "string", "description": "Explicit attribution; inherits upstream TileJSON / PMTiles metadata when absent." }
                                 }
                             },
                             {
@@ -294,12 +300,26 @@ impl NodeRegistry {
                                 "required": ["type", "url", "encoding"],
                                 "properties": {
                                     "type": { "const": "dem" },
-                                    "url": { "type": "string" },
+                                    "url": { "type": "string", "description": "XYZ template or TileJSON URL." },
                                     "encoding": { "enum": ["terrarium", "mapbox-rgb"] },
                                     "tile-size": { "type": "integer", "minimum": 1 },
                                     "max-zoom": { "type": "integer", "minimum": 0 },
                                     "neighbor-fetch": { "type": "boolean" },
-                                    "elevation-offset": { "type": "number" }
+                                    "elevation-offset": { "type": "number" },
+                                    "on-missing": { "enum": ["empty", "upsample", "error"], "default": "empty", "description": "404 within zoom range: zero elevation, upsample a parent, or fail the tile." },
+                                    "attribution": { "type": "string" }
+                                }
+                            },
+                            {
+                                "type": "object",
+                                "required": ["type", "url"],
+                                "properties": {
+                                    "type": { "const": "raster" },
+                                    "url": { "type": "string", "description": "XYZ template, TileJSON URL, or PMTiles archive (`.pmtiles`). PNG/WebP/JPEG tiles." },
+                                    "max-zoom": { "type": "integer", "minimum": 0 },
+                                    "neighbor-fetch": { "type": "boolean" },
+                                    "on-missing": { "enum": ["empty", "upsample", "error"], "default": "empty", "description": "404 within zoom range: transparent pixels, upsample a parent, or fail the tile." },
+                                    "attribution": { "type": "string" }
                                 }
                             }
                         ]

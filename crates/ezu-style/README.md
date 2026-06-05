@@ -71,6 +71,26 @@ Tile-scoped source kinds:
   `features` nodes already reference.
 - `pmtiles` — PMTiles archive (local path or `http(s)://` URL).
   Decoded layers bind the same way as `mvt`.
+- `raster` — RGBA imagery pyramid (satellite photos, pre-rendered
+  basemaps; PNG / WebP / JPEG). The `url` is an XYZ template, a
+  TileJSON document, or a PMTiles archive (`.pmtiles`). The host
+  stitches the 3×3 neighbourhood onto the padded canvas and binds it
+  under the source name for the `raster` node, which emits a
+  canvas-sized `Raster` ready for any downstream filter.
+
+Tile pyramids (`raster`, `dem`) take an `on-missing` policy deciding
+what an in-range 404 means: `empty` (default — transparent pixels /
+zero elevation), `upsample` (walk up parent zooms and upsample the
+covered sub-region), or `error` (fail the tile render; the tile
+server returns HTTP 404). Requests past `max-zoom` always upsample
+from the `max-zoom` ancestor.
+
+Every source (and the document itself, via a top-level `attribution`
+field) may declare an `attribution` string. Sources that don't
+declare one inherit upstream metadata — the TileJSON `attribution`
+field or the PMTiles archive metadata — when the host opens them.
+`Document::attributions()` returns the declared list; the tile
+server's `GET /style/attribution` serves the fully merged result.
 
 ```json
 "sources": {

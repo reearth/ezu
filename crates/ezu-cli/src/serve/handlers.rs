@@ -17,7 +17,8 @@ use ezu::core::TileId as CoreTileId;
 use ezu::features::mvt;
 use ezu::graph::{CanvasInfo, Evaluator, ParamValues, PortValue, TileId};
 use ezu::paint::host::{
-    bind_dem_sources, raster_to_png, raster_to_webp, BrushBankLoader, DemSourceRegistry, TileLoader,
+    bind_dem_sources, bind_raster_sources, raster_to_png, raster_to_webp, BrushBankLoader,
+    DemFetchError, DemSourceRegistry, RasterFetchError, RasterSourceRegistry, TileLoader,
 };
 use futures::stream::{self, Stream};
 use serde_json::json;
@@ -32,6 +33,7 @@ pub fn router() -> Router<AppState> {
         .route("/", get(index))
         .route("/style", get(get_style).put(put_style))
         .route("/style/params", get(get_params_schema))
+        .route("/style/attribution", get(get_attribution))
         .route("/style/validate", axum::routing::post(post_validate))
         .route("/style/fetch", get(get_style_fetch))
         .route("/style/events", get(get_style_events))
@@ -73,6 +75,57 @@ async fn put_style(
 async fn get_params_schema(State(s): State<AppState>) -> Json<serde_json::Value> {
     let snap = s.style.read().await;
     Json(snap.doc.params_schema())
+}
+
+/// Effective attribution for the current style: the document's own
+/// declarations merged with upstream metadata (TileJSON `attribution`,
+/// PMTiles archive metadata) inherited by sources that declare none.
+/// The editor feeds this to the MapLibre attribution control.
+async fn get_attribution(State(s): State<AppState>) -> Json<serde_json::Value> {
+    let snap = s.style.read().await;
+    let mut list: Vec<String> = snap
+        .doc
+        .attributions()
+        .iter()
+        .map(|a| a.to_string())
+        .collect();
+    let mut push = |a: String| {
+        if !a.is_empty() && !list.contains(&a) {
+            list.push(a);
+        }
+    };
+    for a in snap
+        .dem_sources
+        .resolve_metadata()
+        .await
+        .unwrap_or_default()
+    {
+        push(a);
+    }
+    for a in snap
+        .raster_sources
+        .resolve_metadata()
+        .await
+        .unwrap_or_default()
+    {
+        push(a);
+    }
+    // The MVT/PMTiles feature source: inherit upstream metadata only
+    // when the document's own entry doesn't declare attribution.
+    let mvt_declares = snap.doc.sources.values().any(|d| {
+        matches!(
+            d,
+            ezu::style::SourceDecl::Mvt(_) | ezu::style::SourceDecl::Pmtiles(_)
+        ) && d.attribution().is_some()
+    });
+    if !mvt_declares {
+        if let Some(src) = s.source.as_ref() {
+            if let Some(a) = src.attribution() {
+                push(a.to_string());
+            }
+        }
+    }
+    Json(json!({ "attributions": list, "attribution": list.join(" | ") }))
 }
 
 /// Dry-run the parse + graph-build pipeline `PUT /style` would run,
@@ -189,7 +242,7 @@ async fn get_tile(
     // Take only what we need from the snapshot to keep the lock window
     // short. Query-string parameter overrides are validated against
     // the document's `params` declarations while we hold the lock.
-    let (graph, cache, assets, dem_sources, tile_size, pad, params) = {
+    let (graph, cache, assets, dem_sources, raster_sources, tile_size, pad, params) = {
         let snap = s.style.read().await;
         let mut params = ParamValues::new();
         for (name, raw) in &q {
@@ -206,6 +259,7 @@ async fn get_tile(
             Arc::clone(&snap.cache),
             Arc::clone(&snap.assets),
             Arc::clone(&snap.dem_sources),
+            Arc::clone(&snap.raster_sources),
             snap.doc.tile_size,
             snap.doc.pad,
             params,
@@ -220,7 +274,10 @@ async fn get_tile(
     };
     let dem_bindings = fetch_dem_bindings(&dem_sources, tile_id, canvas)
         .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, e))?;
+        .map_err(dem_fetch_status)?;
+    let raster_bindings = fetch_raster_bindings(&raster_sources, tile_id, canvas)
+        .await
+        .map_err(raster_fetch_status)?;
 
     let source_name = s.source_name.as_ref().map(Arc::clone);
     let bytes = tokio::task::spawn_blocking({
@@ -232,6 +289,7 @@ async fn get_tile(
                 fetched,
                 source_name.as_deref(),
                 dem_bindings,
+                raster_bindings,
                 tile,
                 tile_size,
                 pad,
@@ -377,15 +435,13 @@ async fn fetch_dem_bindings(
     registry: &DemSourceRegistry,
     tile: TileId,
     canvas: CanvasInfo,
-) -> Result<Vec<(String, ezu::graph::ScalarField)>, String> {
+) -> Result<Vec<(String, ezu::graph::ScalarField)>, DemFetchError> {
     if registry.is_empty() {
         return Ok(Vec::new());
     }
     let base = BrushBankLoader::empty();
     let mut tmp = TileLoader::new(&base, tile);
-    bind_dem_sources(&mut tmp, registry, tile, canvas)
-        .await
-        .map_err(|e| e.to_string())?;
+    bind_dem_sources(&mut tmp, registry, tile, canvas).await?;
     let mut out = Vec::new();
     for name in registry.names() {
         if let Ok(ezu::graph::Asset::ScalarField(field)) = ezu::graph::AssetLoader::load(&tmp, name)
@@ -396,6 +452,43 @@ async fn fetch_dem_bindings(
     Ok(out)
 }
 
+/// Pre-fetch + stitch every raster source's mosaic for `tile`.
+async fn fetch_raster_bindings(
+    registry: &RasterSourceRegistry,
+    tile: TileId,
+    canvas: CanvasInfo,
+) -> Result<Vec<(String, ezu::graph::RasterBuf)>, RasterFetchError> {
+    if registry.is_empty() {
+        return Ok(Vec::new());
+    }
+    let base = BrushBankLoader::empty();
+    let mut tmp = TileLoader::new(&base, tile);
+    bind_raster_sources(&mut tmp, registry, tile, canvas).await?;
+    let mut out = Vec::new();
+    for name in registry.names() {
+        if let Ok(ezu::graph::Asset::Image(buf)) = ezu::graph::AssetLoader::load(&tmp, name) {
+            out.push((name.to_string(), (*buf).clone()));
+        }
+    }
+    Ok(out)
+}
+
+/// `on-missing: error` misses surface as 404 for the rendered tile;
+/// everything else is an upstream failure.
+fn dem_fetch_status(e: DemFetchError) -> (StatusCode, String) {
+    match &e {
+        DemFetchError::Missing { .. } => (StatusCode::NOT_FOUND, e.to_string()),
+        _ => (StatusCode::BAD_GATEWAY, e.to_string()),
+    }
+}
+
+fn raster_fetch_status(e: RasterFetchError) -> (StatusCode, String) {
+    match &e {
+        RasterFetchError::Missing { .. } => (StatusCode::NOT_FOUND, e.to_string()),
+        _ => (StatusCode::BAD_GATEWAY, e.to_string()),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_tile(
     graph: &ezu::graph::Graph,
@@ -404,6 +497,7 @@ fn render_tile(
     fetched_mvt: Option<(bytes::Bytes, CoreTileId)>,
     source_name: Option<&str>,
     dem_bindings: Vec<(String, ezu::graph::ScalarField)>,
+    raster_bindings: Vec<(String, ezu::graph::RasterBuf)>,
     tile: CoreTileId,
     tile_size: u32,
     pad: u32,
@@ -435,6 +529,9 @@ fn render_tile(
     }
     for (name, field) in dem_bindings {
         tile_loader.bind_scalar_field(name, field);
+    }
+    for (name, buf) in raster_bindings {
+        tile_loader.bind_raster(name, buf);
     }
     let ev = Evaluator::new(graph, cache, &tile_loader);
     let out = ev

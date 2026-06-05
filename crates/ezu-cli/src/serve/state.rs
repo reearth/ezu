@@ -7,7 +7,10 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use ezu::core::TileId;
 use ezu::graph::{build_graph, Cache, Graph};
-use ezu::paint::host::{build_dem_sources, BrushBankLoader, DemSourceRegistry};
+use ezu::paint::host::{
+    build_dem_sources, build_raster_sources, BrushBankLoader, DemSourceRegistry,
+    RasterSourceRegistry,
+};
 use ezu::paint::nodes::default_registry;
 use ezu::style::Document;
 use serde::Serialize;
@@ -61,6 +64,8 @@ pub struct StyleSnapshot {
     /// One fetcher per `dem` entry in the document's `sources` block.
     /// Rebuilt with the snapshot so a style edit picks up new DEM URLs.
     pub dem_sources: Arc<DemSourceRegistry>,
+    /// One fetcher per `raster` entry — RGBA imagery pyramids.
+    pub raster_sources: Arc<RasterSourceRegistry>,
     pub text: String,
     pub version: u64,
 }
@@ -85,12 +90,14 @@ impl StyleSnapshot {
             .await
             .map_err(BuildSnapshotError::Assets)?;
         let dem_sources = Arc::new(build_dem_sources(&doc));
+        let raster_sources = Arc::new(build_raster_sources(&doc, Some(assets_dir.to_path_buf())));
         Ok(Self {
             doc,
             graph: Arc::new(graph),
             cache: Arc::new(Cache::new()),
             assets: Arc::new(loader),
             dem_sources,
+            raster_sources,
             text,
             version,
         })

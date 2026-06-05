@@ -4,11 +4,23 @@
 
 pub mod dem_decode;
 pub use dem_decode::{decode_dem_tile, stitch_padded_field, DemDecodeError, DemTile};
+pub mod raster_decode;
+pub use raster_decode::{
+    decode_raster_tile, stitch_padded_raster, upsample_subregion_raster, RasterTile,
+};
 
 #[cfg(feature = "http")]
 pub mod dem;
 #[cfg(feature = "http")]
 pub use dem::{bind_dem_sources, build_dem_sources, DemFetchError, DemSourceRegistry};
+#[cfg(feature = "http")]
+pub mod raster;
+#[cfg(feature = "http")]
+pub use raster::{
+    bind_raster_sources, build_raster_sources, RasterFetchError, RasterSourceRegistry,
+};
+#[cfg(feature = "http")]
+mod tilejson;
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -300,6 +312,25 @@ impl<'a> TileLoader<'a> {
             name,
             Binding {
                 asset: Asset::Features(opaque),
+                hash,
+            },
+        );
+        self
+    }
+
+    /// Bind a stitched per-tile RGBA raster under `name` (by
+    /// convention the bare `<source>` name matching the style's
+    /// `raster` sources entry). The buffer must be canvas-padded
+    /// (`padded_size × padded_size`, premultiplied RGBA8) — the
+    /// `raster` node passes it straight through as a `Raster` port
+    /// value.
+    pub fn bind_raster(&mut self, name: impl Into<String>, raster: RasterBuf) -> &mut Self {
+        let name = name.into();
+        let hash = self.binding_hash(&name);
+        self.bindings.insert(
+            name,
+            Binding {
+                asset: Asset::Image(Arc::new(raster)),
                 hash,
             },
         );
@@ -633,7 +664,8 @@ pub async fn prefetch_doc_assets(
             // Tile-scoped — handled per-render elsewhere.
             ezu_style::SourceDecl::Mvt(_)
             | ezu_style::SourceDecl::Pmtiles(_)
-            | ezu_style::SourceDecl::Dem(_) => {}
+            | ezu_style::SourceDecl::Dem(_)
+            | ezu_style::SourceDecl::Raster(_) => {}
         }
     }
     Ok(())

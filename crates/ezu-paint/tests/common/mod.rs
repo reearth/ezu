@@ -68,6 +68,36 @@ pub fn render_with_images(
     render_with_assets(json, tile_size, pad, tile, &loader)
 }
 
+/// Render with tile-scoped raster bindings (bare source names), the
+/// way a host binds stitched imagery via `TileLoader::bind_raster`.
+#[allow(dead_code)]
+pub fn render_with_rasters(
+    json: &str,
+    tile_size: u32,
+    pad: u32,
+    tile: TileId,
+    rasters: &[(&str, RasterBuf)],
+) -> std::sync::Arc<ezu_graph::RasterBuf> {
+    use ezu_paint::host::TileLoader;
+    let doc = Document::from_json(json).expect("parse");
+    let registry = default_registry();
+    let graph = build_graph(&doc, &registry).expect("build");
+    let cache = Cache::new();
+    let base = NoAssets;
+    let mut loader = TileLoader::new(&base, tile);
+    for (name, buf) in rasters {
+        loader.bind_raster(name.to_string(), buf.clone());
+    }
+    let ev = Evaluator::new(&graph, &cache, &loader);
+    let out = ev
+        .render(tile, CanvasInfo { tile_size, pad }, &ParamValues::new(), 0)
+        .expect("render");
+    match out {
+        PortValue::Raster(r) => r,
+        other => panic!("expected raster output, got {:?}", other.kind()),
+    }
+}
+
 fn render_with_assets(
     json: &str,
     tile_size: u32,

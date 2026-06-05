@@ -19,8 +19,9 @@ use ezu::graph::{
     build_graph, Cache, CanvasInfo, Evaluator, Graph, ParamValues, PortValue, RasterBuf, TileId,
 };
 use ezu::paint::host::{
-    bind_dem_sources, build_dem_sources, pixmap_to_webp, raster_to_png, raster_to_webp,
-    BrushBankLoader, DemSourceRegistry, TileLoader,
+    bind_dem_sources, bind_raster_sources, build_dem_sources, build_raster_sources, pixmap_to_webp,
+    raster_to_png, raster_to_webp, BrushBankLoader, DemSourceRegistry, RasterSourceRegistry,
+    TileLoader,
 };
 use ezu::paint::nodes::default_registry;
 use ezu::style::{Document, SourceDecl};
@@ -253,6 +254,7 @@ struct Prepared {
     /// the same name the style's `features` nodes reference.
     source_name: Option<Arc<str>>,
     dem_sources: Arc<DemSourceRegistry>,
+    raster_sources: Arc<RasterSourceRegistry>,
     canvas: CanvasInfo,
     overzoom_levels: u8,
     params: Arc<ParamValues>,
@@ -334,6 +336,11 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
         let names: Vec<&str> = dem_sources.names().collect();
         tracing::info!("dem sources: {}", names.join(", "));
     }
+    let raster_sources = Arc::new(build_raster_sources(&doc, Some(assets_dir.clone())));
+    if !raster_sources.is_empty() {
+        let names: Vec<&str> = raster_sources.names().collect();
+        tracing::info!("raster sources: {}", names.join(", "));
+    }
 
     Ok(Prepared {
         graph,
@@ -342,6 +349,7 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
         source,
         source_name,
         dem_sources,
+        raster_sources,
         canvas,
         overzoom_levels: common.overzoom_levels,
         params: Arc::new(parse_cli_params(&common.params, &doc)?),
@@ -371,6 +379,10 @@ async fn run_check(args: CheckCmd) -> Result<(), Box<dyn std::error::Error>> {
     let doc = Document::from_json(&text)?;
     let registry = default_registry();
     let graph = build_graph(&doc, &registry)?;
+    let attributions = doc.attributions();
+    if !attributions.is_empty() {
+        tracing::info!("attribution: {}", attributions.join(" | "));
+    }
 
     let doc_scoped_count = count_doc_scoped_sources(&doc);
     if !args.no_fetch && doc_scoped_count > 0 {
@@ -446,6 +458,7 @@ fn render_mermaid(doc: &ezu::style::Document) -> String {
             SourceDecl::Mvt(_) => "mvt",
             SourceDecl::Pmtiles(_) => "pmtiles",
             SourceDecl::Dem(_) => "dem",
+            SourceDecl::Raster(_) => "raster",
         };
         s.push_str(&format!("  {id}[/\"{id} (source:{kind})\"/]\n"));
         if matches!(decl, SourceDecl::Brush(_) | SourceDecl::Image(_)) {
@@ -535,6 +548,7 @@ async fn run_tile(args: TileCmd) -> Result<(), Box<dyn std::error::Error>> {
         prep.source.as_ref().map(Arc::clone),
         prep.source_name.as_ref().map(Arc::clone),
         Arc::clone(&prep.dem_sources),
+        Arc::clone(&prep.raster_sources),
         prep.canvas,
         args.tile,
         prep.overzoom_levels,
@@ -578,6 +592,7 @@ async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
             let source = prep.source.as_ref().map(Arc::clone);
             let source_name = prep.source_name.as_ref().map(Arc::clone);
             let dem_sources = Arc::clone(&prep.dem_sources);
+            let raster_sources = Arc::clone(&prep.raster_sources);
             let canvas = prep.canvas;
             let overzoom_levels = prep.overzoom_levels;
             let params = Arc::clone(&prep.params);
@@ -589,6 +604,7 @@ async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
                     source,
                     source_name,
                     dem_sources,
+                    raster_sources,
                     canvas,
                     tile,
                     overzoom_levels,
@@ -676,6 +692,7 @@ async fn run_tiles(args: TilesCmd) -> Result<(), Box<dyn std::error::Error>> {
                     prep.source.as_ref().map(Arc::clone),
                     prep.source_name.as_ref().map(Arc::clone),
                     Arc::clone(&prep.dem_sources),
+                    Arc::clone(&prep.raster_sources),
                     prep.canvas,
                     tile,
                     prep.overzoom_levels,
@@ -718,6 +735,7 @@ async fn render_one(
     source: Option<Arc<TileSource>>,
     source_name: Option<Arc<str>>,
     dem_sources: Arc<DemSourceRegistry>,
+    raster_sources: Arc<RasterSourceRegistry>,
     canvas: CanvasInfo,
     tile: CoreTileId,
     overzoom_levels: u8,
@@ -747,6 +765,19 @@ async fn render_one(
             }
         }
     }
+    // Same dance for RGBA raster pyramids: fetch + stitch up front so
+    // the blocking render path receives ready-to-bind buffers.
+    let mut raster_bindings: Vec<(String, RasterBuf)> = Vec::new();
+    if !raster_sources.is_empty() {
+        let base_loader = BrushBankLoader::empty();
+        let mut tmp = TileLoader::new(&base_loader, tile_id);
+        bind_raster_sources(&mut tmp, &raster_sources, tile_id, canvas).await?;
+        for name in raster_sources.names() {
+            if let Ok(ezu::graph::Asset::Image(buf)) = ezu::graph::AssetLoader::load(&tmp, name) {
+                raster_bindings.push((name.to_string(), (*buf).clone()));
+            }
+        }
+    }
     let raster = tokio::task::spawn_blocking(
         move || -> Result<Arc<RasterBuf>, Box<dyn std::error::Error + Send + Sync>> {
             let mut tile_loader = TileLoader::new(loader.as_ref(), tile_id);
@@ -759,6 +790,9 @@ async fn render_one(
             }
             for (name, field) in dem_bindings {
                 tile_loader.bind_scalar_field(name, field);
+            }
+            for (name, buf) in raster_bindings {
+                tile_loader.bind_raster(name, buf);
             }
             let ev = Evaluator::new(&graph, &cache, &tile_loader);
             let out = ev.render_parallel(tile_id, canvas, &params, tile_seed(tile))?;
@@ -830,7 +864,10 @@ pub(crate) fn feature_source_from_doc(doc: &Document) -> Option<FeatureSourcePic
             ),
             // Document-scoped and tile-scoped raster — not feature
             // sources, skip.
-            SourceDecl::Brush(_) | SourceDecl::Image(_) | SourceDecl::Dem(_) => continue,
+            SourceDecl::Brush(_)
+            | SourceDecl::Image(_)
+            | SourceDecl::Dem(_)
+            | SourceDecl::Raster(_) => continue,
         };
         if chosen.is_some() {
             tracing::warn!("multiple feature sources in style; ignoring `{name}`");

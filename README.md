@@ -146,6 +146,16 @@ they accept, so polymorphic ops (e.g. `blur` over `Raster`/`Sprite`)
 pass the input kind straight through. Intermediate buffers are
 cached and reusable across tiles.
 
+Tile-pyramid inputs go beyond vectors: `dem` sources feed elevation
+as a `ScalarField`, and `raster` sources feed RGBA imagery (XYZ /
+TileJSON / PMTiles; satellite photos, pre-rendered basemaps) as a
+seam-free padded `Raster` — so any filter chain can post-process a
+photo basemap (`photo-pop.json` posterizes 国土地理院 aerial
+imagery). Styles and sources declare `attribution`, and sources
+without one inherit upstream TileJSON / PMTiles metadata; the live
+editor's MapLibre attribution control updates from
+`GET /style/attribution` automatically.
+
 External inputs — images, brushes, per-tile MVT/GeoJSON feature
 layers — enter through one uniform `AssetLoader` trait. The style's
 `features` node references its layer by `(source, layer)` pointing

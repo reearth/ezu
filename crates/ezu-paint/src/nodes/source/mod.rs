@@ -7,4 +7,5 @@ mod features;
 mod image;
 mod literal_geometry;
 mod point_grid;
+mod raster;
 mod tile_bounds;

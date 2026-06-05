@@ -31,9 +31,10 @@ default = []
 # Pull-through: enable parallel within-tile evaluation in ezu-graph,
 # and turn on the chunked-MemSurface parallel paint helpers (Rayon).
 parallel = ["ezu-graph/parallel", "dep:rayon"]
-# Enable URL-fetch helpers in `host` (pulls in `reqwest`). Off by
-# default so `wasm32` targets keep depending only on the JS host.
-http = ["dep:reqwest"]
+# Enable URL-fetch helpers in `host` (pulls in `reqwest`, `pmtiles`,
+# `tokio`). Off by default so `wasm32` targets keep depending only on
+# the JS host.
+http = ["dep:reqwest", "dep:pmtiles", "dep:tokio"]
 
 [dependencies.rayon]
 version = "1"
@@ -41,6 +42,15 @@ optional = true
 
 [dependencies.reqwest]
 workspace = true
+optional = true
+
+[dependencies.pmtiles]
+workspace = true
+optional = true
+
+[dependencies.tokio]
+workspace = true
+features = ["sync"]
 optional = true
 
 [dev-dependencies]
