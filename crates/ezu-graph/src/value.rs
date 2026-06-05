@@ -64,7 +64,9 @@ impl PortValue {
 /// A constant value carried on a `Scalar` port.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ScalarValue {
-    /// Linear sRGB RGBA, components in `[0, 1]`.
+    /// Straight (non-premultiplied) sRGB-encoded RGBA, components in
+    /// `[0, 1]` — the same convention as a parsed `#rrggbb[aa]`
+    /// literal. Consumers linearize / premultiply as needed.
     Color([f32; 4]),
     Number(f64),
     Bool(bool),
@@ -84,6 +86,43 @@ impl ScalarValue {
             Some(*n)
         } else {
             None
+        }
+    }
+
+    pub fn as_bool(&self) -> Option<bool> {
+        if let ScalarValue::Bool(b) = self {
+            Some(*b)
+        } else {
+            None
+        }
+    }
+
+    /// Short kind name for error messages (`number` / `color` / `bool`).
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            ScalarValue::Color(_) => "color",
+            ScalarValue::Number(_) => "number",
+            ScalarValue::Bool(_) => "bool",
+        }
+    }
+
+    /// Feed this value into a cache-key hasher. Stable across runs.
+    pub fn hash_into(&self, h: &mut xxhash_rust::xxh3::Xxh3) {
+        match self {
+            ScalarValue::Color(c) => {
+                h.update(b"C");
+                for ch in c {
+                    h.update(&ch.to_le_bytes());
+                }
+            }
+            ScalarValue::Number(n) => {
+                h.update(b"N");
+                h.update(&n.to_le_bytes());
+            }
+            ScalarValue::Bool(b) => {
+                h.update(b"B");
+                h.update(&[*b as u8]);
+            }
         }
     }
 }

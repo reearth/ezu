@@ -76,22 +76,6 @@ pub(super) fn read_color(
     })
 }
 
-pub(super) fn read_color_u8(
-    fields: &serde_json::Map<String, Value>,
-    name: &str,
-    ctx: &FactoryCtx<'_>,
-) -> Result<[u8; 4], FactoryError> {
-    let v = resolve_field(fields, name, ctx)?;
-    let s = v.as_str().ok_or_else(|| FactoryError::BadField {
-        field: name.into(),
-        msg: "expected #rrggbb[aa] string".into(),
-    })?;
-    parse_hex_color_u8(s).ok_or_else(|| FactoryError::BadField {
-        field: name.into(),
-        msg: format!("bad color: {s}"),
-    })
-}
-
 pub(super) fn read_number(
     fields: &serde_json::Map<String, Value>,
     name: &str,
@@ -405,34 +389,16 @@ pub(super) fn read_optional_string(
 // ---------------------------------------------------------------------------
 // Color parsing / conversions
 
-fn parse_hex_color(s: &str) -> Option<[f32; 4]> {
-    let [r, g, b, a] = parse_hex_color_u8(s)?;
-    Some([
-        r as f32 / 255.0,
-        g as f32 / 255.0,
-        b as f32 / 255.0,
-        a as f32 / 255.0,
-    ])
-}
+use ezu_style::parse_hex_color;
 
-fn parse_hex_color_u8(s: &str) -> Option<[u8; 4]> {
-    let s = s.strip_prefix('#')?;
-    let (r, g, b, a) = match s.len() {
-        6 => (
-            u8::from_str_radix(&s[0..2], 16).ok()?,
-            u8::from_str_radix(&s[2..4], 16).ok()?,
-            u8::from_str_radix(&s[4..6], 16).ok()?,
-            255,
-        ),
-        8 => (
-            u8::from_str_radix(&s[0..2], 16).ok()?,
-            u8::from_str_radix(&s[2..4], 16).ok()?,
-            u8::from_str_radix(&s[4..6], 16).ok()?,
-            u8::from_str_radix(&s[6..8], 16).ok()?,
-        ),
-        _ => return None,
-    };
-    Some([r, g, b, a])
+/// Straight (non-premultiplied) `[0, 1]` components → `[0, 255]`.
+pub(super) fn color_f32_to_u8(c: [f32; 4]) -> [u8; 4] {
+    [
+        (c[0].clamp(0.0, 1.0) * 255.0).round() as u8,
+        (c[1].clamp(0.0, 1.0) * 255.0).round() as u8,
+        (c[2].clamp(0.0, 1.0) * 255.0).round() as u8,
+        (c[3].clamp(0.0, 1.0) * 255.0).round() as u8,
+    ]
 }
 
 pub(super) fn srgb_to_linear_rgba(c: [f32; 4]) -> [f32; 4] {

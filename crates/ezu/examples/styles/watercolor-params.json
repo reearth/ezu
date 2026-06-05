@@ -1,0 +1,64 @@
+{
+  "name": "watercolor-params",
+  "version": "1",
+  "tile-size": 512,
+  "pad": 24,
+  "params": {
+    "paper":         { "type": "color",  "default": "#fbf6e6",
+                       "description": "Paper (background) color." },
+    "earth":         { "type": "color",  "default": "#e8d9b0",
+                       "description": "Landmass wash color." },
+    "landuse-alpha": { "type": "number", "default": 0.7, "min": 0, "max": 1,
+                       "description": "Peak landuse wash opacity (scaled by zoom)." },
+    "softness":      { "type": "number", "default": 0, "min": 0, "max": 4,
+                       "description": "Gaussian blur over the finished tile, in px." }
+  },
+  "sources": {
+    "glazing": { "type": "brush", "src": "builtin:watercolor_glazing" },
+    "basemap": { "type": "mvt", "url": "https://papers.reearth.land/protomaps/tilejson.json" }
+  },
+  "nodes": {
+    "bg":              { "op": "solid", "color": "$paper" },
+
+    "earth_feat":      { "op": "features", "layer": "earth" },
+    "earth":           { "op": "fill-solid", "features": "@earth_feat",
+                         "fill": "$earth" },
+
+    "z":               { "op": "zoom" },
+    "zfrac":           { "op": "math", "fn": "div", "a": "@z", "b": 16 },
+    "lu_alpha":        { "op": "math", "fn": "mul", "a": "$landuse-alpha", "b": "@zfrac" },
+
+    "landuse_feat":    { "op": "features", "layer": "landuse" },
+    "landuse":         { "op": "fill-solid", "features": "@landuse_feat",
+                         "fill": "#a6c084", "fill-alpha": "@lu_alpha" },
+
+    "water_feat":      { "op": "features", "layer": "water" },
+    "water":           { "op": "fill-dabs", "features": "@water_feat",
+                         "color": "#5876a0", "opacity": 0.22,
+                         "radius-px": 7.0, "hardness": 0.5, "paint": 1.0,
+                         "spacing-px": 3.0, "position-jitter": 0.9,
+                         "size-jitter": 0.4, "opacity-jitter": 0.3,
+                         "value-jitter": 0.08 },
+
+    "glazing_brush":   { "op": "brush-file", "src": "@glazing" },
+
+    "roads_trunk_f":   { "op": "features", "layer": "roads",
+                         "min-zoom-field": "min_zoom",
+                         "filter": { "kind_detail": ["trunk", "primary", "motorway"] } },
+    "roads_trunk":     { "op": "line", "features": "@roads_trunk_f",
+                         "brush": "@glazing_brush",
+                         "color": "#6a4f3a", "radius-px": 1.6,
+                         "opacity": 0.6, "pressure-base": 0.7,
+                         "pressure-jitter": 0.2, "dtime": 0.05,
+                         "radius-stroke-curve":  [[0.0, -1.4], [0.12, 0.0], [0.88, 0.0], [1.0, -1.8]],
+                         "opacity-stroke-curve": [[0.0, -0.25], [0.1, 0.0], [0.9, 0.0], [1.0, -0.35]],
+                         "dtime-stroke-curve":   [[0.0, 2.5], [0.15, 1.0], [0.85, 1.0], [1.0, 3.0]] },
+
+    "c1":   { "op": "blend", "base": "@bg", "over": "@earth" },
+    "c2":   { "op": "blend", "base": "@c1", "over": "@landuse" },
+    "c3":   { "op": "blend", "base": "@c2", "over": "@water" },
+    "c4":   { "op": "blend", "base": "@c3", "over": "@roads_trunk" },
+    "out":  { "op": "blur", "input": "@c4", "sigma": "$softness" }
+  },
+  "output": "@out"
+}

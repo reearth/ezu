@@ -31,6 +31,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(index))
         .route("/style", get(get_style).put(put_style))
+        .route("/style/params", get(get_params_schema))
         .route("/style/validate", axum::routing::post(post_validate))
         .route("/style/fetch", get(get_style_fetch))
         .route("/style/events", get(get_style_events))
@@ -64,6 +65,14 @@ async fn put_style(
     let version = snap.version;
     *s.style.write().await = snap;
     Ok(Json(json!({ "version": version })))
+}
+
+/// JSON Schema for the current style's parameter values — what the
+/// tile endpoint accepts as query-string overrides. Editor UIs can
+/// build sliders / color pickers / toggles straight off this.
+async fn get_params_schema(State(s): State<AppState>) -> Json<serde_json::Value> {
+    let snap = s.style.read().await;
+    Json(snap.doc.params_schema())
 }
 
 /// Dry-run the parse + graph-build pipeline `PUT /style` would run,
@@ -159,6 +168,7 @@ impl TileFormat {
 async fn get_tile(
     State(s): State<AppState>,
     Path((z, x, y_ext)): Path<(u8, u32, String)>,
+    Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response, (StatusCode, String)> {
     // Sniff the output format off the extension. Default is PNG so the
     // legacy `/tiles/{z}/{x}/{y}` (no suffix) and `.png` keep working.
@@ -176,9 +186,17 @@ async fn get_tile(
 
     let fetched = fetch_mvt(&s, tile).await?;
 
-    // Take only what we need from the snapshot to keep the lock window short.
-    let (graph, cache, assets, dem_sources, tile_size, pad) = {
+    // Take only what we need from the snapshot to keep the lock window
+    // short. Query-string parameter overrides are validated against
+    // the document's `params` declarations while we hold the lock.
+    let (graph, cache, assets, dem_sources, tile_size, pad, params) = {
         let snap = s.style.read().await;
+        let mut params = ParamValues::new();
+        for (name, raw) in &q {
+            let v = ezu::graph::parse_param_value(&snap.doc.params, name, raw)
+                .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+            params.set(name.clone(), v);
+        }
         (
             Arc::clone(&snap.graph),
             Arc::clone(&snap.cache),
@@ -186,6 +204,7 @@ async fn get_tile(
             Arc::clone(&snap.dem_sources),
             snap.doc.tile_size,
             snap.doc.pad,
+            params,
         )
     };
 
@@ -213,6 +232,7 @@ async fn get_tile(
                 tile_size,
                 pad,
                 format,
+                &params,
             )
         }
     })
@@ -384,6 +404,7 @@ fn render_tile(
     tile_size: u32,
     pad: u32,
     format: TileFormat,
+    params: &ParamValues,
 ) -> Result<Vec<u8>, String> {
     let tile_id = TileId {
         z: tile.z,
@@ -416,7 +437,7 @@ fn render_tile(
         .render(
             tile_id,
             CanvasInfo { tile_size, pad },
-            &ParamValues::new(),
+            params,
             tile_seed(tile),
         )
         .map_err(|e| format!("render: {e}"))?;

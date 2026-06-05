@@ -7,7 +7,7 @@ use xxhash_rust::xxh3::Xxh3;
 use crate::cache::{Cache, CacheKey, Hash128};
 use crate::eval::{AssetLoader, CanvasInfo, EvalCtx, EvalError, ParamValues, TileId};
 use crate::graph::{Graph, NodeIx};
-use crate::port::{CoordSpace, PortKind};
+use crate::port::CoordSpace;
 use crate::value::PortValue;
 
 /// Entry point: evaluate a `Graph` for one tile.
@@ -130,6 +130,15 @@ impl<'a> Evaluator<'a> {
             h.update(name.as_bytes());
             h.update(&ctx.assets.hash(&name).to_le_bytes());
         }
+        // Runtime values of `$param` references read at eval time —
+        // overriding a param invalidates exactly the nodes that read it.
+        for name in node.param_refs() {
+            h.update(name.as_bytes());
+            match ctx.params.get(&name) {
+                Some(v) => v.hash_into(&mut h),
+                None => h.update(b"\0default"),
+            }
+        }
         let params_hash: Hash128 = h.digest128();
 
         // Collect input hashes (in port order) and input values.
@@ -201,6 +210,6 @@ fn describe_value(v: &PortValue) -> String {
         ),
         PortValue::Features(_) => "features".to_string(),
         PortValue::Brush(_) => "brush".to_string(),
-        PortValue::Scalar(_) => format!("scalar:{}", PortKind::Scalar),
+        PortValue::Scalar(s) => format!("scalar {}({:?})", s.kind_name(), s),
     }
 }

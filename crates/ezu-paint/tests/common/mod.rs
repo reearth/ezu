@@ -23,6 +23,33 @@ pub fn render_tile(
     render_with_assets(json, tile_size, pad, tile, &NoAssets)
 }
 
+/// Render with caller-supplied runtime parameter values.
+#[allow(dead_code)]
+pub fn render_with_params(
+    json: &str,
+    tile_size: u32,
+    pad: u32,
+    tile: TileId,
+    params: &[(&str, ezu_graph::ScalarValue)],
+) -> std::sync::Arc<ezu_graph::RasterBuf> {
+    let mut pv = ParamValues::new();
+    for (name, value) in params {
+        pv.set(name.to_string(), *value);
+    }
+    let doc = Document::from_json(json).expect("parse");
+    let registry = default_registry();
+    let graph = build_graph(&doc, &registry).expect("build");
+    let cache = Cache::new();
+    let ev = Evaluator::new(&graph, &cache, &NoAssets);
+    let out = ev
+        .render(tile, CanvasInfo { tile_size, pad }, &pv, 0)
+        .expect("render");
+    match out {
+        PortValue::Raster(r) => r,
+        other => panic!("expected raster output, got {:?}", other.kind()),
+    }
+}
+
 /// Render with an in-memory image bank. `images` maps asset name to
 /// the `RasterBuf` returned by the loader for that name. Test-only
 /// helper for `image` / `stamp` / `tiling` / `place` paths.

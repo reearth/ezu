@@ -15,6 +15,8 @@
 //! - [`geometry`] — `Features -> Features` transforms (`centroid`,
 //!   `boundary`, `simplify`, `convex-hull`, `buffer`, `hatch`,
 //!   `dash`, `wave`)
+//! - [`scalar`] — `Scalar` number producers (`math`, `zoom`) consumed
+//!   by other nodes' `In<T>` fields via `@node` references
 //!
 //! The `Sprite` port kind carries a raster at the asset's native
 //! dimensions (rather than canvas-sized) — used by `image` →
@@ -42,6 +44,7 @@ mod common;
 mod geometry;
 mod paint;
 mod raster;
+mod scalar;
 mod source;
 mod util;
 

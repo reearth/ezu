@@ -128,6 +128,63 @@ The editor (MapLibre GL based) supports:
   (drawn per tile via `maplibregl.addProtocol`), and read the live
   zoom value (click to copy `z @ lat,lng`).
 
+## Parametric styles
+
+A style can declare typed parameters in a `params` block and reference
+them anywhere a scalar field lives, with `$name`:
+
+```jsonc
+{
+  "params": {
+    "paper":    { "type": "color",  "default": "#fbf6e6" },
+    "softness": { "type": "number", "default": 0, "min": 0, "max": 4,
+                  "description": "Blur over the finished tile, in px." }
+  },
+  "nodes": {
+    "bg":  { "op": "solid", "color": "$paper" },
+    "out": { "op": "blur", "input": "@c4", "sigma": "$softness" }
+  }
+}
+```
+
+Parameters resolve at render time — the same built graph serves every
+parameter combination, and the intermediate cache keys on the values a
+node actually reads, so flipping one param only re-evaluates the nodes
+that depend on it. Override them per render:
+
+```sh
+# CLI: repeatable --param flags, validated against the declarations.
+ezu tile --style watercolor-params.json --tile 13/7276/3225   --param 'paper=#ffe0f0' --param softness=2 --out tile.png
+
+# Tile server: query-string overrides on the tile endpoint.
+curl 'http://127.0.0.1:8080/tiles/13/7276/3225.png?paper=%23ffe0f0&softness=2'
+
+# JSON Schema for the current style's parameters (defaults, ranges,
+# descriptions) — drive sliders / color pickers off this.
+curl http://127.0.0.1:8080/style/params
+```
+
+For computed values, wire scalars through the graph: `math` does
+arithmetic over numbers (literals, `$param`s, or `@node` scalar ports)
+and `zoom` emits the tile's zoom level, so zoom-dependent styling is a
+two-node chain:
+
+```jsonc
+"z":        { "op": "zoom" },
+"zfrac":    { "op": "math", "fn": "div", "a": "@z", "b": 16 },
+"lu_alpha": { "op": "math", "fn": "mul", "a": "$landuse-alpha", "b": "@zfrac" },
+"landuse":  { "op": "fill-solid", "features": "@landuse_feat",
+              "fill": "#a6c084", "fill-alpha": "@lu_alpha" }
+```
+
+One constraint: fields that decide canvas padding at build time (blur
+sigmas and friends) need a static upper bound — a literal, or a
+`$param` with `max` declared. Wiring those from a `@node` port is a
+build error.
+
+See `crates/ezu/examples/styles/watercolor-params.json` for a complete
+parametric style.
+
 ## How it paints
 
 A style is a **typed node DAG**, not an ordered layer list. Every

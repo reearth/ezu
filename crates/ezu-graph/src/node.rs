@@ -66,4 +66,16 @@ pub trait Node: Send + Sync {
     fn asset_inputs(&self) -> Vec<String> {
         Vec::new()
     }
+
+    /// Named document params this node reads from
+    /// [`EvalCtx::params`](crate::eval::EvalCtx) at eval time (fields
+    /// built from `$param` references). The evaluator folds each
+    /// referenced param's *runtime* value into this node's cache key,
+    /// so overriding a param invalidates exactly the nodes that read
+    /// it — and nothing else.
+    ///
+    /// Default: no param reads.
+    fn param_refs(&self) -> Vec<String> {
+        Vec::new()
+    }
 }

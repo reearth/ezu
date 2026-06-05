@@ -83,6 +83,12 @@ struct CommonArgs {
     /// onto the requested tile (MVT "overzoom"). `0` disables.
     #[arg(long, default_value_t = 4)]
     overzoom_levels: u8,
+    /// Override a document parameter, as `name=value` (repeatable).
+    /// Values are validated against the style's `params` declarations:
+    /// numbers respect `min`/`max`, colors are `#rrggbb[aa]`, bools
+    /// are `true`/`false`.
+    #[arg(long = "param", value_name = "NAME=VALUE")]
+    params: Vec<String>,
 }
 
 /// Output raster format. Pure-Rust pipelines on both sides — WebP is
@@ -249,6 +255,7 @@ struct Prepared {
     dem_sources: Arc<DemSourceRegistry>,
     canvas: CanvasInfo,
     overzoom_levels: u8,
+    params: Arc<ParamValues>,
 }
 
 async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Error>> {
@@ -337,7 +344,26 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
         dem_sources,
         canvas,
         overzoom_levels: common.overzoom_levels,
+        params: Arc::new(parse_cli_params(&common.params, &doc)?),
     })
+}
+
+/// Parse repeated `--param name=value` flags against the document's
+/// `params` declarations. Unknown names, type mismatches, and
+/// out-of-range numbers are hard errors.
+fn parse_cli_params(
+    flags: &[String],
+    doc: &Document,
+) -> Result<ParamValues, Box<dyn std::error::Error>> {
+    let mut values = ParamValues::new();
+    for flag in flags {
+        let (name, raw) = flag
+            .split_once('=')
+            .ok_or_else(|| format!("--param `{flag}`: expected `name=value`"))?;
+        let v = ezu::graph::parse_param_value(&doc.params, name, raw)?;
+        values.set(name.to_string(), v);
+    }
+    Ok(values)
 }
 
 async fn run_check(args: CheckCmd) -> Result<(), Box<dyn std::error::Error>> {
@@ -505,6 +531,7 @@ async fn run_tile(args: TileCmd) -> Result<(), Box<dyn std::error::Error>> {
         prep.canvas,
         args.tile,
         prep.overzoom_levels,
+        Arc::clone(&prep.params),
     )
     .await
     .map_err(|e| e.to_string())?;
@@ -546,6 +573,7 @@ async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
             let dem_sources = Arc::clone(&prep.dem_sources);
             let canvas = prep.canvas;
             let overzoom_levels = prep.overzoom_levels;
+            let params = Arc::clone(&prep.params);
             tasks.push(tokio::spawn(async move {
                 let raster = render_one(
                     graph,
@@ -557,6 +585,7 @@ async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
                     canvas,
                     tile,
                     overzoom_levels,
+                    params,
                 )
                 .await?;
                 Ok::<(CoreTileId, Arc<RasterBuf>), Box<dyn std::error::Error + Send + Sync>>((
@@ -643,6 +672,7 @@ async fn run_tiles(args: TilesCmd) -> Result<(), Box<dyn std::error::Error>> {
                     prep.canvas,
                     tile,
                     prep.overzoom_levels,
+                    Arc::clone(&prep.params),
                 )
                 .await?;
                 let bytes = tokio::task::spawn_blocking({
@@ -684,6 +714,7 @@ async fn render_one(
     canvas: CanvasInfo,
     tile: CoreTileId,
     overzoom_levels: u8,
+    params: Arc<ParamValues>,
 ) -> Result<Arc<RasterBuf>, Box<dyn std::error::Error + Send + Sync>> {
     let fetched = match source {
         Some(s) => s.fetch_with_fallback(tile, overzoom_levels).await?,
@@ -723,7 +754,7 @@ async fn render_one(
                 tile_loader.bind_scalar_field(name, field);
             }
             let ev = Evaluator::new(&graph, &cache, &tile_loader);
-            let out = ev.render_parallel(tile_id, canvas, &ParamValues::new(), tile_seed(tile))?;
+            let out = ev.render_parallel(tile_id, canvas, &params, tile_seed(tile))?;
             match out {
                 PortValue::Raster(r) => Ok(r),
                 other => Err(format!("expected Raster output, got {:?}", other.kind()).into()),

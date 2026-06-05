@@ -6,23 +6,27 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    canvas_into_raster, downcast_features, empty_raster, make_canvas, read_color_u8,
-    read_number_or, rgba8_to_color, tint_alpha_color,
+    canvas_into_raster, color_f32_to_u8, downcast_features, empty_raster, make_canvas,
+    rgba8_to_color, tint_alpha_color,
 };
 use crate::{paint_polygons, WatercolorStyle};
 
 struct FillSolidNode {
-    fill: [u8; 4],
-    fill_alpha: f32,
-    edge: Option<[u8; 4]>,
-    edge_width: f32,
-    blur_sigma: f32,
+    fill: In<[f32; 4]>,
+    fill_alpha: In<f64>,
+    edge: Option<In<[f32; 4]>>,
+    edge_width: In<f64>,
+    blur_sigma: In<f64>,
+    /// Build-time upper bound on `blur-sigma`, for pad propagation.
+    blur_sigma_bound: f32,
+    ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
 
 impl Node for FillSolidNode {
@@ -30,18 +34,13 @@ impl Node for FillSolidNode {
         "fill-solid"
     }
     fn inputs(&self) -> &[PortSpec] {
-        static SPECS: &[PortSpec] = &[PortSpec {
-            name: "features",
-            accepts: &[PortKind::Features],
-            optional: false,
-        }];
-        SPECS
+        &self.ports
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Raster
     }
     fn required_pad(&self, downstream: u32) -> u32 {
-        downstream + (3.0 * self.blur_sigma.max(0.0)).ceil() as u32
+        downstream + (3.0 * self.blur_sigma_bound.max(0.0)).ceil() as u32
     }
     fn eval(
         &self,
@@ -55,28 +54,37 @@ impl Node for FillSolidNode {
         if feats.polygons.is_empty() {
             return Ok(empty_raster(ctx));
         }
+        let fill = color_f32_to_u8(self.fill.get(ctx, inputs)?);
+        let fill_alpha = self.fill_alpha.get(ctx, inputs)? as f32;
+        let edge = match &self.edge {
+            Some(e) => Some(color_f32_to_u8(e.get(ctx, inputs)?)),
+            None => None,
+        };
         let mut canvas = make_canvas(ctx)?;
         let style = WatercolorStyle {
-            fill: tint_alpha_color(self.fill, self.fill_alpha),
-            edge: self.edge.map(rgba8_to_color),
-            edge_width: self.edge_width,
-            blur_sigma: self.blur_sigma,
+            fill: tint_alpha_color(fill, fill_alpha),
+            edge: edge.map(rgba8_to_color),
+            edge_width: self.edge_width.get(ctx, inputs)? as f32,
+            blur_sigma: self.blur_sigma.get(ctx, inputs)? as f32,
         };
         paint_polygons(&mut canvas, &feats.polygons, feats.extent, &style);
         Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"fill-solid");
-        h.update(&self.fill);
-        h.update(&self.fill_alpha.to_le_bytes());
-        if let Some(e) = self.edge {
+        self.fill.param_hash(h);
+        self.fill_alpha.param_hash(h);
+        if let Some(e) = &self.edge {
             h.update(&[1]);
-            h.update(&e);
+            e.param_hash(h);
         } else {
             h.update(&[0]);
         }
-        h.update(&self.edge_width.to_le_bytes());
-        h.update(&self.blur_sigma.to_le_bytes());
+        self.edge_width.param_hash(h);
+        self.blur_sigma.param_hash(h);
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -91,14 +99,34 @@ impl NodeFactory for FillSolidFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let features = take_input_ref(fields, "features")?;
-        let fill = read_color_u8(fields, "fill", ctx)?;
-        let fill_alpha = read_number_or(fields, "fill-alpha", ctx, 1.0)? as f32;
-        let edge = match fields.get("edge") {
-            Some(_) => Some(read_color_u8(fields, "edge", ctx)?),
-            None => None,
-        };
-        let edge_width = read_number_or(fields, "edge-width", ctx, 1.0)? as f32;
-        let blur_sigma = read_number_or(fields, "blur-sigma", ctx, 0.0)? as f32;
+        let mut r = InReader::new(fields, ctx, 1);
+        let fill = r.color("fill")?;
+        let fill_alpha = r.number_or("fill-alpha", 1.0)?;
+        let edge = r.color_opt("edge")?;
+        let edge_width = r.number_or("edge-width", 1.0)?;
+        let blur_sigma = r.number_or("blur-sigma", 0.0)?;
+        let parts = r.finish();
+        let blur_sigma_bound = blur_sigma
+            .static_bound()
+            .ok_or_else(|| FactoryError::BadField {
+                field: "blur-sigma".into(),
+                msg: "pad depends on blur-sigma at build time: use a literal, or a `$param` \
+                          with `max` (a `@node` port has no static bound)"
+                    .into(),
+            })? as f32;
+
+        let mut ports = vec![PortSpec {
+            name: "features",
+            accepts: &[PortKind::Features],
+            optional: false,
+        }];
+        ports.extend(parts.ports);
+        let mut connections = vec![Connection {
+            port: "features".into(),
+            src: features,
+        }];
+        connections.extend(parts.connections);
+
         Ok(BuiltNode {
             node: Box::new(FillSolidNode {
                 fill,
@@ -106,11 +134,11 @@ impl NodeFactory for FillSolidFactory {
                 edge,
                 edge_width,
                 blur_sigma,
+                blur_sigma_bound,
+                ports,
+                param_refs: parts.param_refs,
             }),
-            connections: vec![Connection {
-                port: "features".into(),
-                src: features,
-            }],
+            connections,
         })
     }
     fn schema(&self) -> Value {

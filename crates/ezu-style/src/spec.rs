@@ -47,6 +47,60 @@ impl Document {
     pub fn from_json(s: &str) -> Result<Self, StyleError> {
         Ok(serde_json::from_str(s)?)
     }
+
+    /// JSON Schema describing the *parameter values* object a caller
+    /// may pass when rendering this style (CLI `--param`, server query
+    /// string, library `ParamValues`). Derived from the document's
+    /// `params` declarations: numbers carry `minimum` / `maximum`,
+    /// colors a hex-string pattern, and every entry its declared
+    /// `default` / `description`. Editor UIs can drive sliders and
+    /// color pickers straight off this.
+    pub fn params_schema(&self) -> serde_json::Value {
+        use serde_json::{json, Map, Value};
+        let mut props = Map::new();
+        for (name, decl) in &self.params {
+            let mut p = match decl.kind {
+                ParamKind::Number => {
+                    let mut p = Map::new();
+                    p.insert("type".into(), json!("number"));
+                    if let Some(m) = decl.min {
+                        p.insert("minimum".into(), json!(m));
+                    }
+                    if let Some(m) = decl.max {
+                        p.insert("maximum".into(), json!(m));
+                    }
+                    p
+                }
+                ParamKind::Color => {
+                    let mut p = Map::new();
+                    p.insert("type".into(), json!("string"));
+                    p.insert(
+                        "pattern".into(),
+                        json!("^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$"),
+                    );
+                    p.insert("format".into(), json!("color"));
+                    p
+                }
+                ParamKind::Bool => {
+                    let mut p = Map::new();
+                    p.insert("type".into(), json!("boolean"));
+                    p
+                }
+            };
+            p.insert("default".into(), decl.default.clone());
+            if let Some(d) = &decl.description {
+                p.insert("description".into(), json!(d));
+            }
+            props.insert(name.clone(), Value::Object(p));
+        }
+        json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": format!("{} parameters", self.name),
+            "type": "object",
+            "additionalProperties": false,
+            "properties": props,
+        })
+    }
 }
 
 fn default_version() -> String {
@@ -327,6 +381,31 @@ mod tests {
         assert_eq!(doc.params["k"].kind, ParamKind::Number);
         assert!(matches!(doc.sources["brush"], SourceDecl::Brush(_)));
         assert_eq!(doc.params["k"].max, Some(1.0));
+    }
+
+    #[test]
+    fn params_schema_reflects_declarations() {
+        let json = r##"{
+          "name": "demo",
+          "params": {
+            "ink": { "type": "color", "default": "#000000", "description": "Line color" },
+            "k":   { "type": "number", "default": 0.5, "min": 0, "max": 1 },
+            "on":  { "type": "bool", "default": true }
+          },
+          "nodes": { "out": { "op": "solid", "color": "$ink" } },
+          "output": "@out"
+        }"##;
+        let doc = Document::from_json(json).unwrap();
+        let schema = doc.params_schema();
+        let props = &schema["properties"];
+        assert_eq!(props["ink"]["type"], "string");
+        assert_eq!(props["ink"]["default"], "#000000");
+        assert_eq!(props["ink"]["description"], "Line color");
+        assert_eq!(props["k"]["type"], "number");
+        assert_eq!(props["k"]["minimum"], 0.0);
+        assert_eq!(props["k"]["maximum"], 1.0);
+        assert_eq!(props["on"]["type"], "boolean");
+        assert_eq!(schema["additionalProperties"], false);
     }
 
     #[test]

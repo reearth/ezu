@@ -11,8 +11,10 @@
 //! println!("{} ({} nodes)", doc.name, doc.nodes.len());
 //! ```
 
+mod color;
 mod spec;
 
+pub use color::{parse_hex_color, parse_hex_color_u8};
 pub use spec::*;
 
 #[derive(Debug, thiserror::Error)]

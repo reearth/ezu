@@ -287,23 +287,45 @@ pub mod schema_frag {
         })
     }
 
-    /// `#rrggbb` or `#rrggbbaa` color literal. Also allows `$param`.
+    /// `#rrggbb` or `#rrggbbaa` color literal. Also allows `$param`
+    /// and `@node` (scalar port).
     pub fn color() -> Value {
         json!({
             "type": "string",
-            "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|\\$[A-Za-z_][A-Za-z0-9_-]*)$",
-            "description": "sRGB hex color, or `$param` reference."
+            "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|[$@][A-Za-z_][A-Za-z0-9_-]*)$",
+            "description": "sRGB hex color, `$param` reference, or `@node` scalar port."
         })
     }
 
     /// Number in `[0, 1]` — commonly opacity / fraction parameters.
     pub fn unit_number() -> Value {
-        json!({ "type": "number", "minimum": 0.0, "maximum": 1.0 })
+        in_number(json!({ "type": "number", "minimum": 0.0, "maximum": 1.0 }))
     }
 
     /// Non-negative number in pixels.
     pub fn px_number() -> Value {
-        json!({ "type": "number", "minimum": 0.0 })
+        in_number(json!({ "type": "number", "minimum": 0.0 }))
+    }
+
+    /// Unconstrained number field.
+    pub fn number() -> Value {
+        in_number(json!({ "type": "number" }))
+    }
+
+    /// Wrap a numeric schema so the field also accepts `$param` /
+    /// `@node` reference strings (an [`In<f64>`](crate::input::In)
+    /// field).
+    pub fn in_number(literal: Value) -> Value {
+        json!({
+            "oneOf": [
+                literal,
+                {
+                    "type": "string",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "description": "`$param` reference or `@node` scalar port."
+                }
+            ]
+        })
     }
 }
 
