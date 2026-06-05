@@ -458,16 +458,23 @@ fn render_mermaid(doc: &ezu::style::Document) -> String {
     for (id, spec) in &doc.nodes {
         let is_source = spec.op == "features";
         let suffix = if id == output_id { ":::output" } else { "" };
+        // Function calls label as `func:<name>` so the diagram reads at
+        // the source level (calls stay single nodes, not expansions).
+        let op = if spec.op == "func" {
+            match spec.fields.get("fn").and_then(serde_json::Value::as_str) {
+                Some(f) => format!("func:{f}"),
+                None => spec.op.clone(),
+            }
+        } else {
+            spec.op.clone()
+        };
         // Cylinder shape for data-source nodes (MVT-backed `features`);
         // rectangle for everything else.
         if is_source {
-            s.push_str(&format!(
-                "  {id}[(\"{id} ({op})\")]{suffix}\n",
-                op = spec.op
-            ));
+            s.push_str(&format!("  {id}[(\"{id} ({op})\")]{suffix}\n"));
             source_ids.push(id);
         } else {
-            s.push_str(&format!("  {id}[\"{id} ({op})\"]{suffix}\n", op = spec.op));
+            s.push_str(&format!("  {id}[\"{id} ({op})\"]{suffix}\n"));
         }
     }
     s.push_str("  __output__([\"OUTPUT\"]):::sink\n");

@@ -27,6 +27,11 @@ pub struct Document {
     pub pad: u32,
     #[serde(default)]
     pub params: IndexMap<String, ParamDecl>,
+    /// User-defined functions: reusable node subgraphs called with
+    /// `{ "op": "func", "fn": "<name>", ...args }`. Expanded inline at
+    /// graph-build time — see [`expand_functions`](crate::expand_functions).
+    #[serde(default)]
+    pub functions: IndexMap<String, FuncDecl>,
     /// External data the host provides. Mixes document-scoped resources
     /// (`brush`, `image`) — resolved once per style — and tile-scoped
     /// pyramids (`mvt`, `pmtiles`, `dem`) — fetched per tile. The
@@ -110,9 +115,85 @@ fn default_tile_size() -> u32 {
     512
 }
 
+/// A user-defined function: a reusable node subgraph with declared
+/// input ports and output kind. Shaped like a mini-document — `inputs`
+/// play the role of `params`, `nodes` is the body, `output` names the
+/// body node whose value the call produces.
+///
+/// Inside the body, `@<input-name>` references a function input;
+/// `@<body-node>` references another body node; `@<source-name>`
+/// reaches a document-scoped source. Anything else is an error —
+/// functions are closed over their inputs (no implicit access to
+/// caller nodes).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct FuncDecl {
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub inputs: IndexMap<String, FuncInput>,
+    /// Body node (with or without `@`) whose value the call produces.
+    pub output: NodeRef,
+    /// Declared kind of the output — verified against the body's
+    /// resolved port kind at graph-build time.
+    pub output_kind: FuncKind,
+    pub nodes: IndexMap<String, NodeSpec>,
+}
+
+/// One declared function input.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct FuncInput {
+    pub kind: FuncKind,
+    /// Default argument — allowed for `scalar` inputs only; its
+    /// presence makes the input optional at the call site. A `null`
+    /// default (or argument) makes substituted fields disappear from
+    /// the body node entirely — the way to feed optional op fields
+    /// whose absence means something (e.g. stroke curves).
+    #[serde(default, deserialize_with = "some_value")]
+    pub default: Option<serde_json::Value>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// Deserialize any present JSON value — *including* `null` — as
+/// `Some(value)`, so `"default": null` is distinguishable from an
+/// absent `default`.
+fn some_value<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<serde_json::Value>, D::Error> {
+    serde_json::Value::deserialize(d).map(Some)
+}
+
+/// Port-kind vocabulary for function signatures. Mirrors the graph's
+/// `PortKind` names.
+#[derive(Debug, Deserialize, PartialEq, Eq, Clone, Copy)]
+#[serde(rename_all = "kebab-case")]
+pub enum FuncKind {
+    Features,
+    Raster,
+    Sprite,
+    Brush,
+    Scalar,
+    ScalarField,
+}
+
+impl FuncKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            FuncKind::Features => "features",
+            FuncKind::Raster => "raster",
+            FuncKind::Sprite => "sprite",
+            FuncKind::Brush => "brush",
+            FuncKind::Scalar => "scalar",
+            FuncKind::ScalarField => "scalar-field",
+        }
+    }
+}
+
 /// One node entry. `op` selects the implementation; remaining fields are
 /// op-specific and are validated by the `NodeFactory` registered for `op`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct NodeSpec {
     pub op: String,
     /// All remaining fields. Scalars are literals (color, number, bool);
@@ -123,7 +204,7 @@ pub struct NodeSpec {
 }
 
 /// Declaration of a document-level parameter (overridable at render time).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct ParamDecl {
     #[serde(rename = "type")]

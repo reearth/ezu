@@ -190,6 +190,63 @@ build error.
 See `crates/ezu/examples/styles/watercolor.json` for a complete
 parametric style.
 
+## Functions
+
+Repeated node patterns factor into user-defined functions: a `functions`
+block declares reusable subgraphs with typed input ports and an output
+kind, and `op: "func"` calls them:
+
+```jsonc
+{
+  "functions": {
+    "sketchy-line": {
+      "inputs": {
+        "features": { "kind": "features" },
+        "brush":    { "kind": "brush" },
+        "color":    { "kind": "scalar" },
+        "radius":   { "kind": "scalar", "default": 1.0 }
+      },
+      "output": "@draw",
+      "output-kind": "raster",
+      "nodes": {
+        "wob":  { "op": "wave", "features": "@features", "amplitude-px": 0.8 },
+        "draw": { "op": "line", "features": "@wob", "brush": "@brush",
+                  "color": "@color", "radius-px": "@radius" }
+      }
+    }
+  },
+  "nodes": {
+    "roads": { "op": "func", "fn": "sketchy-line",
+               "features": "@roads_f", "brush": "@pencil", "color": "$ink" }
+  }
+}
+```
+
+Functions expand inline at graph-build time, like hygienic macros:
+
+- Inside a body, `@name` resolves to a function input, another body
+  node, or a document-scoped source — nothing else. Functions are
+  closed over their inputs, so a typo can't silently capture a caller
+  node.
+- Arguments substitute structurally: literals stay literals, `$param`
+  references keep their runtime-override behavior, `@node` arguments
+  become port connections. Scalar arguments substitute verbatim — even
+  into places plain `$param`s can't reach, like gradient stops or
+  stroke-curve arrays. A `null` default (or argument) removes the
+  substituted field entirely, for op fields whose absence is
+  meaningful.
+- Functions may call functions; cyclic calls are a build error reported
+  with the cycle path (`a → b → a`).
+- Expanded body nodes are namespaced `<call>/<node>` (the output node
+  takes the call id), so build errors and `--verbose` logs read
+  naturally. Because the intermediate cache is content-addressed, two
+  calls with identical arguments share cache entries — inlining doesn't
+  duplicate work.
+
+`pencil-sketch.json` is the live demo: its ten wave-then-line stroke
+layers are one `sketchy-line` function, and the water hatching is a
+`water-hatch` function that calls it.
+
 ## How it paints
 
 A style is a **typed node DAG**, not an ordered layer list. Every

@@ -12,9 +12,11 @@
 //! ```
 
 mod color;
+mod expand;
 mod spec;
 
 pub use color::{parse_hex_color, parse_hex_color_u8};
+pub use expand::{expand_functions, ExpandError, Expanded, KindCheck, MAX_EXPANDED_NODES};
 pub use spec::*;
 
 #[derive(Debug, thiserror::Error)]

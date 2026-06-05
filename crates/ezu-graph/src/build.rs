@@ -4,6 +4,7 @@
 use ezu_style as spec;
 
 use crate::graph::{BuildError, Graph, GraphBuilder};
+use crate::port::PortKind;
 use crate::registry::{FactoryCtx, FactoryError, NodeRegistry};
 
 #[derive(Debug, thiserror::Error)]
@@ -19,15 +20,57 @@ pub enum BuildGraphError {
     },
 
     #[error(transparent)]
+    Expand(#[from] spec::ExpandError),
+
+    #[error(
+        "call `{call}` of `{func}`: input `{input}` expects {expected}, but `@{src}` produces {got}"
+    )]
+    FuncInputKind {
+        call: String,
+        func: String,
+        input: String,
+        expected: PortKind,
+        src: String,
+        got: PortKind,
+    },
+
+    #[error("call `{call}` of `{func}`: declared output-kind is {declared}, but the body produces {got}")]
+    FuncOutputKind {
+        call: String,
+        func: String,
+        declared: PortKind,
+        got: PortKind,
+    },
+
+    #[error(transparent)]
     Graph(#[from] BuildError),
 }
 
+fn port_kind(k: spec::FuncKind) -> PortKind {
+    match k {
+        spec::FuncKind::Features => PortKind::Features,
+        spec::FuncKind::Raster => PortKind::Raster,
+        spec::FuncKind::Sprite => PortKind::Sprite,
+        spec::FuncKind::Brush => PortKind::Brush,
+        spec::FuncKind::Scalar => PortKind::Scalar,
+        spec::FuncKind::ScalarField => PortKind::ScalarField,
+    }
+}
+
 /// Build a typed [`Graph`] from a parsed document and a registry of
-/// node factories.
+/// node factories. Documents with a `functions` block are expanded
+/// inline first; declared input/output kinds are verified against the
+/// built graph's resolved port kinds.
 pub fn build_graph(
     doc: &spec::Document,
     registry: &NodeRegistry,
 ) -> Result<Graph, BuildGraphError> {
+    let expanded = spec::expand_functions(doc)?;
+    let (doc, kind_checks) = match &expanded {
+        Some(e) => (&e.doc, e.kind_checks.as_slice()),
+        None => (doc, &[][..]),
+    };
+
     let ctx = FactoryCtx {
         params: &doc.params,
         sources: &doc.sources,
@@ -62,5 +105,37 @@ pub fn build_graph(
     }
 
     gb.set_output(doc.output.as_str().to_string());
-    Ok(gb.build()?)
+    let graph = gb.build()?;
+
+    // Verify each call site's declared kinds against the resolved port
+    // kinds. Argument sources and the call's output node are plain
+    // graph nodes after expansion, so this is a pure lookup.
+    for check in kind_checks {
+        let Some(ix) = graph.index_of(&check.node) else {
+            // The referenced node failed to resolve — the builder has
+            // already reported the real error path; skip.
+            continue;
+        };
+        let got = graph.output_kind(ix);
+        let expected = port_kind(check.declared);
+        if got != expected {
+            return Err(match &check.input {
+                Some(input) => BuildGraphError::FuncInputKind {
+                    call: check.call.clone(),
+                    func: check.func.clone(),
+                    input: input.clone(),
+                    expected,
+                    src: check.node.clone(),
+                    got,
+                },
+                None => BuildGraphError::FuncOutputKind {
+                    call: check.call.clone(),
+                    func: check.func.clone(),
+                    declared: expected,
+                    got,
+                },
+            });
+        }
+    }
+    Ok(graph)
 }

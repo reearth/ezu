@@ -192,6 +192,30 @@ impl NodeRegistry {
             variants.push(schema);
         }
 
+        // Call into a user-defined function from the document's
+        // `functions` block. Arguments are function-specific, so the
+        // variant stays open beyond `op` / `fn`.
+        variants.push(json!({
+            "type": "object",
+            "title": "op: func",
+            "description": "Call a user-defined function declared in the document's `functions` block.",
+            "required": ["op", "fn"],
+            "properties": {
+                "op": { "const": "func" },
+                "fn": { "type": "string", "description": "Name of the function to call." }
+            },
+            "additionalProperties": true
+        }));
+
+        let func_kinds = json!([
+            "features",
+            "raster",
+            "sprite",
+            "brush",
+            "scalar",
+            "scalar-field"
+        ]);
+
         json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "title": "Ezu Style Spec",
@@ -213,6 +237,35 @@ impl NodeRegistry {
                             "min": { "type": "number" },
                             "max": { "type": "number" },
                             "description": { "type": "string" }
+                        }
+                    }
+                },
+                "functions": {
+                    "type": "object",
+                    "description": "User-defined functions: reusable node subgraphs called via `op: func`.",
+                    "additionalProperties": {
+                        "type": "object",
+                        "required": ["output", "output-kind", "nodes"],
+                        "properties": {
+                            "description": { "type": "string" },
+                            "inputs": {
+                                "type": "object",
+                                "additionalProperties": {
+                                    "type": "object",
+                                    "required": ["kind"],
+                                    "properties": {
+                                        "kind": { "enum": func_kinds.clone() },
+                                        "default": {},
+                                        "description": { "type": "string" }
+                                    }
+                                }
+                            },
+                            "output": {
+                                "type": "string",
+                                "description": "Body node (with or without `@`) the call produces."
+                            },
+                            "output-kind": { "enum": func_kinds },
+                            "nodes": { "$ref": "#/properties/nodes" }
                         }
                     }
                 },

@@ -371,6 +371,11 @@ impl Graph {
             .0
     }
 
+    /// Look up a node's index by id.
+    pub fn index_of(&self, id: &str) -> Option<NodeIx> {
+        self.nodes.get_index_of(id)
+    }
+
     /// Upstream nodes feeding `ix`, deduplicated.
     pub fn upstream(&self, ix: NodeIx) -> impl Iterator<Item = NodeIx> + '_ {
         let mut srcs: Vec<NodeIx> = self.incoming[ix].iter().filter_map(|p| *p).collect();
