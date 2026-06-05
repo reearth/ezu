@@ -193,6 +193,10 @@ async fn get_tile(
         let snap = s.style.read().await;
         let mut params = ParamValues::new();
         for (name, raw) in &q {
+            // `v` is reserved as the editor's cache-busting version key.
+            if name == "v" {
+                continue;
+            }
             let v = ezu::graph::parse_param_value(&snap.doc.params, name, raw)
                 .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
             params.set(name.clone(), v);

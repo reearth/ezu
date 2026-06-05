@@ -63,6 +63,23 @@
   .inspect-row .ct { color: #8a7a6a; font-size: 10px; }
   .inspect-empty { padding: 12px; font-size: 11px; color: #8a7a6a; text-align: center; }
 
+  .params-panel { position: absolute; top: 10px; right: 48px; z-index: 5; background: #fdfbf1; border: 1px solid #d8d2bf; border-radius: 4px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); width: 240px; max-height: calc(100vh - 60px); display: none; flex-direction: column; overflow: hidden; }
+  .params-panel.open { display: flex; }
+  .params-panel header { padding: 8px 10px; background: #f5eedc; border-bottom: 1px solid #d8d2bf; font-size: 11px; font-weight: 600; color: #5a4636; display: flex; align-items: center; gap: 6px; }
+  .params-panel header .sp { flex: 1; }
+  .params-panel header .reset { font-size: 10px; padding: 2px 6px; background: #c9bfa8; color: #4a3424; border: 0; border-radius: 3px; cursor: pointer; }
+  .params-list { overflow-y: auto; padding: 8px 10px; display: flex; flex-direction: column; gap: 10px; }
+  .param-row { display: flex; flex-direction: column; gap: 3px; }
+  .param-row .head { display: flex; align-items: center; gap: 6px; }
+  .param-row .pname { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: #382a1f; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .param-row .pname.changed { color: #387a45; font-weight: 600; }
+  .param-row .pval { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; color: #6a5040; }
+  .param-row input[type=range] { width: 100%; accent-color: #5a4636; margin: 0; }
+  .param-row input[type=number] { width: 80px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; padding: 2px 4px; border: 1px solid #d8d2bf; border-radius: 3px; background: #fff; color: #382a1f; }
+  .param-row input[type=color] { width: 36px; height: 22px; padding: 0; border: 1px solid #d8d2bf; border-radius: 3px; background: #fff; cursor: pointer; }
+  .param-row input[type=checkbox] { margin: 0; accent-color: #5a4636; }
+  .params-empty { padding: 12px; font-size: 11px; color: #8a7a6a; text-align: center; }
+
   .feat-popup { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; max-width: 380px; }
   .feat-popup h4 { margin: 0 0 6px 0; font-size: 11px; color: #5a4636; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
   .feat-popup table { border-collapse: collapse; width: 100%; }
@@ -102,6 +119,17 @@
       <button id="grid-toggle" class="off" title="Show XYZ tile boundaries + z/x/y labels">grid: off</button>
       <button id="inspect-toggle" class="off" title="Overlay source MVT features for inspection">inspect: off</button>
       <button id="raster-toggle" title="Toggle the ezu rendered raster output">render: on</button>
+      <button id="params-toggle" class="off" title="Adjust the style's declared params (rendered per tile request)">params: off</button>
+    </div>
+    <div class="params-panel" id="params-panel">
+      <header>
+        <span>Params</span>
+        <span class="sp"></span>
+        <button class="reset" id="params-reset" title="Reset every param to its declared default">reset</button>
+      </header>
+      <div class="params-list" id="params-list">
+        <div class="params-empty">No params declared.</div>
+      </div>
     </div>
     <div class="inspect-panel" id="inspect-panel">
       <header>
@@ -131,6 +159,9 @@
 
   let version = 0;
   let tileSize = 512;
+  // Param overrides for the rendered raster: name -> query value.
+  // Holds only values that differ from the style's declared defaults.
+  const paramOverrides = new Map();
   // Inspect mode discovers layers by hitting /mvt-meta for the tile at
   // the map center. Layer state survives a re-scan so the user's
   // toggle choices stick.
@@ -165,7 +196,13 @@
   map.addControl(new maplibregl.ScaleControl({}), 'bottom-left');
 
   function rasterTilesUrl() {
-    return `${location.origin}/tiles/{z}/{x}/{y}.png?v=${version}`;
+    // Param overrides ride along as query params; the tile endpoint
+    // validates them against the style's declarations.
+    let q = '';
+    for (const [k, v] of paramOverrides) {
+      q += `&${encodeURIComponent(k)}=${encodeURIComponent(v)}`;
+    }
+    return `${location.origin}/tiles/{z}/{x}/{y}.png?v=${version}${q}`;
   }
 
   function ensureRasterLayer() {
@@ -315,6 +352,7 @@
       } else {
         refreshRasterTiles();
       }
+      loadParams(); // declarations may have changed with the style
       setStatus(`applied (v${v})`, 'ok');
     } catch (e) {
       setStatus('error: ' + e, 'error');
@@ -472,6 +510,7 @@
       if (opts.version && opts.version !== version) {
         version = opts.version;
         refreshRasterTiles();
+        loadParams(); // declarations may have changed with the style
       }
     }
     pendingExternal = null;
@@ -841,6 +880,160 @@
     }
   });
 
+  // --- Style params ----------------------------------------------------
+  // Controls are generated from GET /style/params (a JSON Schema derived
+  // from the document's `params` block): sliders for bounded numbers,
+  // color pickers for colors, checkboxes for bools. Only values that
+  // differ from the declared default ride on the tile URL.
+  const $paramsToggle = document.getElementById('params-toggle');
+  const $paramsPanel = document.getElementById('params-panel');
+  const $paramsList = document.getElementById('params-list');
+  const $paramsReset = document.getElementById('params-reset');
+  let paramsOn = false;
+  let paramDecls = {}; // name -> schema property
+
+  let paramTimer = 0;
+  function scheduleParamRefresh() {
+    clearTimeout(paramTimer);
+    paramTimer = setTimeout(refreshRasterTiles, 200);
+  }
+
+  function fmtNum(v) {
+    const n = Number(v);
+    return Number.isInteger(n) ? String(n) : n.toFixed(Math.abs(n) < 1 ? 3 : 2).replace(/0+$/, '').replace(/\.$/, '');
+  }
+
+  // Normalize colors for default-comparison: lowercase, drop an opaque
+  // alpha byte (the <input type=color> picker only speaks #rrggbb).
+  function normColor(s) {
+    let c = String(s || '').toLowerCase();
+    if (c.length === 9 && c.endsWith('ff')) c = c.slice(0, 7);
+    return c;
+  }
+
+  async function loadParams() {
+    let schema;
+    try {
+      const r = await fetch('/style/params');
+      if (!r.ok) return;
+      schema = await r.json();
+    } catch (e) {
+      console.warn('params load failed:', e);
+      return;
+    }
+    paramDecls = (schema && schema.properties) || {};
+    // Drop overrides whose declaration disappeared — the tile endpoint
+    // rejects unknown names.
+    let dropped = false;
+    for (const k of Array.from(paramOverrides.keys())) {
+      if (!paramDecls[k]) { paramOverrides.delete(k); dropped = true; }
+    }
+    renderParams();
+    if (dropped) refreshRasterTiles();
+  }
+
+  function renderParams() {
+    const names = Object.keys(paramDecls);
+    $paramsList.textContent = '';
+    if (!names.length) {
+      const empty = document.createElement('div');
+      empty.className = 'params-empty';
+      empty.textContent = 'No params declared in the current style.';
+      $paramsList.appendChild(empty);
+      return;
+    }
+    for (const name of names) {
+      const decl = paramDecls[name];
+      const row = document.createElement('div');
+      row.className = 'param-row';
+      if (decl.description) row.title = decl.description;
+
+      const head = document.createElement('div');
+      head.className = 'head';
+      const label = document.createElement('span');
+      label.className = 'pname' + (paramOverrides.has(name) ? ' changed' : '');
+      label.textContent = name;
+      head.appendChild(label);
+
+      const setOverride = (raw, isDefault) => {
+        if (isDefault) paramOverrides.delete(name);
+        else paramOverrides.set(name, raw);
+        label.classList.toggle('changed', !isDefault);
+        scheduleParamRefresh();
+      };
+
+      if (decl.type === 'number') {
+        const cur = paramOverrides.has(name) ? Number(paramOverrides.get(name)) : Number(decl.default ?? 0);
+        const val = document.createElement('span');
+        val.className = 'pval';
+        val.textContent = fmtNum(cur);
+        head.appendChild(val);
+        row.appendChild(head);
+        const bounded = typeof decl.minimum === 'number' && typeof decl.maximum === 'number';
+        const input = document.createElement('input');
+        if (bounded) {
+          input.type = 'range';
+          input.min = decl.minimum;
+          input.max = decl.maximum;
+          input.step = (decl.maximum - decl.minimum) / 100;
+        } else {
+          input.type = 'number';
+          if (typeof decl.minimum === 'number') input.min = decl.minimum;
+          if (typeof decl.maximum === 'number') input.max = decl.maximum;
+        }
+        input.value = cur;
+        input.addEventListener('input', () => {
+          const n = Number(input.value);
+          if (!Number.isFinite(n)) return;
+          val.textContent = fmtNum(n);
+          setOverride(String(n), n === Number(decl.default));
+        });
+        row.appendChild(input);
+      } else if (decl.format === 'color') {
+        row.appendChild(head);
+        const input = document.createElement('input');
+        input.type = 'color';
+        input.value = (paramOverrides.has(name)
+          ? paramOverrides.get(name)
+          : normColor(decl.default) || '#000000').slice(0, 7);
+        input.addEventListener('input', () => {
+          setOverride(input.value, normColor(input.value) === normColor(decl.default));
+        });
+        row.appendChild(input);
+      } else if (decl.type === 'boolean') {
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.checked = paramOverrides.has(name)
+          ? paramOverrides.get(name) === 'true'
+          : !!decl.default;
+        input.addEventListener('change', () => {
+          setOverride(String(input.checked), input.checked === !!decl.default);
+        });
+        head.insertBefore(input, label);
+        row.appendChild(head);
+      } else {
+        continue; // unknown kind — skip rather than render junk
+      }
+      $paramsList.appendChild(row);
+    }
+  }
+
+  function setParams(on) {
+    paramsOn = on;
+    $paramsToggle.textContent = `params: ${on ? 'on' : 'off'}`;
+    $paramsToggle.classList.toggle('off', !on);
+    $paramsPanel.classList.toggle('open', on);
+    if (on) loadParams();
+  }
+
+  $paramsToggle.addEventListener('click', () => setParams(!paramsOn));
+  $paramsReset.addEventListener('click', () => {
+    if (!paramOverrides.size) return;
+    paramOverrides.clear();
+    renderParams();
+    refreshRasterTiles();
+  });
+
   // --- Zoom indicator + tile-grid overlay ----------------------------
   const $zoom = document.getElementById('zoom-indicator');
   const $gridToggle = document.getElementById('grid-toggle');
@@ -996,6 +1189,7 @@
     updateZoom();
     await loadSchema();
     await loadStyle();
+    loadParams();
   });
 })();
 </script>

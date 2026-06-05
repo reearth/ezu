@@ -120,6 +120,11 @@ The editor (MapLibre GL based) supports:
   files opened via the in-browser file picker. Opening a different
   file via `Open…` / `URL…` detaches the server watch for that
   session.
+- **Params panel** — controls generated from the style's `params`
+  declarations (sliders for bounded numbers, color pickers, toggles).
+  Adjustments ride the tile requests as query-string overrides and
+  re-render live without touching the style text; `reset` returns to
+  the declared defaults.
 - **Source MVT inspector** — toggle a vector overlay of the underlying
   MVT, with per-layer ON/OFF and click-to-inspect feature properties.
   Layers are discovered from the tile at the map center; pan/zoom
