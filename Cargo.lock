@@ -1201,9 +1201,9 @@ checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
 
 [[package]]
 name = "hokusai"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30aca0071ed384d3fa562a2049bf3d6e56bd1a597626a6cc42b641d4065766fa"
+checksum = "e2a43c466522f5a05c6a09ac6466c4ea6e1f1e3921e62d6add9e29a026ef0357"
 dependencies = [
  "hokusai-brush",
  "hokusai-core",
@@ -1213,9 +1213,9 @@ dependencies = [
 
 [[package]]
 name = "hokusai-brush"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f0698fe1b947623300f83961c79f16d12f1706bb4958a93367741984076fa05"
+checksum = "553185ffcdcf55251cd02a2d0be297cd2ac0bf9f8fae50cffb70ddbadc70fee4"
 dependencies = [
  "hokusai-core",
  "serde",
@@ -1225,27 +1225,27 @@ dependencies = [
 
 [[package]]
 name = "hokusai-core"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f5866a3d3b92af72ddc6efc884cb8fd1d098705d2ab6644d2424fcf907fb2d4"
+checksum = "4d0fdc01003e0256eb9bed701ce25b12f9af19bb33bf2340b77babc56960dce9"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "hokusai-tile-mem"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5f6f74e564181b6594127583b710fb6df629859129db0540fec1a8f5e4b7424"
+checksum = "baaeddb70dce44dad67dccd058b30c5eac889a5a36e5c19f5ac76c7711bf45d0"
 dependencies = [
  "hokusai-core",
 ]
 
 [[package]]
 name = "hokusai-tiny-skia"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3d02a2547298906250c50e947cb578f7450c769e03ed7469f70449ca3cddb27"
+checksum = "94d50cb74c91f47adc33714dbaece53513b650a24b6de549e3c035dacb482167"
 dependencies = [
  "hokusai-core",
  "tiny-skia",
