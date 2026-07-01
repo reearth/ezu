@@ -721,6 +721,7 @@ dependencies = [
 name = "ezu-paint"
 version = "0.3.0"
 dependencies = [
+ "base64",
  "criterion",
  "ezu-core",
  "ezu-features",
@@ -764,6 +765,7 @@ dependencies = [
  "ezu-style",
  "hokusai",
  "js-sys",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
  "wasm-bindgen",
