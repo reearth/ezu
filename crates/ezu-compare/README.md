@@ -43,7 +43,21 @@ Flags: `--style <path|url>`, `--tiles z/x/y,…`, `--out <dir>`,
 `--ref-dir <dir>` (use precomputed references instead of the Node
 renderer), `--refgen-dir <dir>` (default `tools/mlgl-ref`),
 `--threshold <0-255>` (per-channel delta counted as "visibly different",
-default 16).
+default 16), `--stitch` (see below).
+
+### `--stitch` — 3×3 tile neighbourhood
+
+By default ezu-compare binds the single centre MVT tile, while
+maplibre-gl-js renders a viewport that pulls in neighbouring tiles at the
+edges. `--stitch` merges the 3×3 neighbourhood into the centre tile's
+coordinate frame (offsetting each neighbour by `±extent`), so geometry
+just outside the tile fills ezu's pad ring — the same thing the host does
+for DEM/raster sources.
+
+Because the output is cropped to the tile, this only changes **pad-sampling
+ops (`blur` / `warp` / `dab`) near tile edges**; plain `fill`/`line` output
+is unchanged. It also multiplies decode/render cost (~9× geometry), so it's
+opt-in and off by default.
 
 ## Sample output
 
