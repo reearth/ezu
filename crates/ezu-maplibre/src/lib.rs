@@ -99,7 +99,7 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
     let mut report = Report::default();
 
     // --- sources ---------------------------------------------------------
-    let (sources, vector_source) = convert_sources(style, &mut report)?;
+    let (sources, vector_sources) = convert_sources(style, &mut report)?;
 
     // --- layers → paint node chain --------------------------------------
     let layers = style
@@ -145,16 +145,25 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
         let ty = layer.get("type").and_then(Value::as_str).unwrap_or("");
         match ty {
             "background" => convert_background(id, layer, &mut nodes, &mut outputs, opts),
-            "fill" => convert_fill(id, layer, &mut nodes, &mut outputs, opts, &mut report),
-            "line" => convert_line(id, layer, &mut nodes, &mut outputs, opts, &mut report),
-            "raster" => convert_raster(
+            "fill" => convert_fill(
                 id,
                 layer,
-                &vector_source,
                 &mut nodes,
                 &mut outputs,
+                opts,
+                &vector_sources,
                 &mut report,
             ),
+            "line" => convert_line(
+                id,
+                layer,
+                &mut nodes,
+                &mut outputs,
+                opts,
+                &vector_sources,
+                &mut report,
+            ),
+            "raster" => convert_raster(id, layer, &mut nodes, &mut outputs, &mut report),
             "hillshade" => {
                 convert_hillshade(id, layer, &mut nodes, &mut outputs, opts, &mut report)
             }
@@ -197,7 +206,7 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
 fn convert_sources(
     style: &Map<String, Value>,
     report: &mut Report,
-) -> Result<(Map<String, Value>, String), ConvertError> {
+) -> Result<(Map<String, Value>, Vec<String>), ConvertError> {
     let empty = Map::new();
     let src = style
         .get("sources")
@@ -205,7 +214,9 @@ fn convert_sources(
         .unwrap_or(&empty);
 
     let mut out = Map::new();
-    let mut vector_source: Option<String> = None;
+    // Every vector source is emitted; ezu binds each under its own name and
+    // `features` nodes select `(source, layer)`.
+    let mut vector_sources: Vec<String> = Vec::new();
 
     for (name, decl) in src {
         let Some(decl) = decl.as_object() else {
@@ -232,17 +243,11 @@ fn convert_sources(
                     ));
                     continue;
                 };
-                if vector_source.is_some() {
-                    report.warn(format!(
-                        "source `{name}`: ezu supports one vector source per style — ignored (using the first)"
-                    ));
-                    continue;
-                }
                 out.insert(
                     name.clone(),
                     serde_json::json!({ "type": "mvt", "url": url }),
                 );
-                vector_source = Some(name.clone());
+                vector_sources.push(name.clone());
             }
             "raster" => {
                 if let Some(url) = url {
@@ -289,19 +294,12 @@ fn convert_sources(
         }
     }
 
-    let vector_source = vector_source
-        .ok_or(ConvertError::NoVectorSource)
-        .or_else(|e| {
-            // A raster-only style is legal; only error if there are also no
-            // raster/dem sources to render.
-            if out.is_empty() {
-                Err(e)
-            } else {
-                Ok(String::new())
-            }
-        })?;
-
-    Ok((out, vector_source))
+    // A raster-only style is legal (e.g. hillshade over raster-dem); only
+    // error when there's no tiled source at all.
+    if vector_sources.is_empty() && out.is_empty() {
+        return Err(ConvertError::NoVectorSource);
+    }
+    Ok((out, vector_sources))
 }
 
 fn convert_background(
@@ -331,8 +329,12 @@ fn convert_fill(
     nodes: &mut Map<String, Value>,
     outputs: &mut Vec<String>,
     opts: &ConvertOptions,
+    vector_sources: &[String],
     report: &mut Report,
 ) {
+    let Some(source) = layer_source(id, layer, vector_sources, report) else {
+        return;
+    };
     let Some(source_layer) = layer.get("source-layer").and_then(Value::as_str) else {
         report.warn(format!("layer `{id}`: fill without source-layer — skipped"));
         return;
@@ -353,7 +355,7 @@ fn convert_fill(
         let mut emit = |suffix: &str, filt: Option<Map<String, Value>>, hex: String| {
             let feat_id = format!("{id}__{suffix}_feat");
             let fill_id = format!("{id}__{suffix}_fill");
-            nodes.insert(feat_id.clone(), features_node(source_layer, filt));
+            nodes.insert(feat_id.clone(), features_node(source, source_layer, filt));
             let mut spec = serde_json::json!({ "op": "fill-solid", "features": format!("@{feat_id}"), "fill": hex });
             if let Some(a) = opacity {
                 spec["fill-alpha"] = Value::from(a);
@@ -387,7 +389,10 @@ fn convert_fill(
         });
     let feat_id = format!("{id}__feat");
     let fill_id = format!("{id}__fill");
-    nodes.insert(feat_id.clone(), features_node(source_layer, base_filter));
+    nodes.insert(
+        feat_id.clone(),
+        features_node(source, source_layer, base_filter),
+    );
     let mut spec =
         serde_json::json!({ "op": "fill-solid", "features": format!("@{feat_id}"), "fill": hex });
     if let Some(a) = opacity {
@@ -403,8 +408,12 @@ fn convert_line(
     nodes: &mut Map<String, Value>,
     outputs: &mut Vec<String>,
     opts: &ConvertOptions,
+    vector_sources: &[String],
     report: &mut Report,
 ) {
+    let Some(source) = layer_source(id, layer, vector_sources, report) else {
+        return;
+    };
     let Some(source_layer) = layer.get("source-layer").and_then(Value::as_str) else {
         report.warn(format!("layer `{id}`: line without source-layer — skipped"));
         return;
@@ -437,7 +446,10 @@ fn convert_line(
     let feat_id = format!("{id}__feat");
     let brush_id = format!("{id}__brush");
     let line_id = format!("{id}__line");
-    nodes.insert(feat_id.clone(), features_node(source_layer, base_filter));
+    nodes.insert(
+        feat_id.clone(),
+        features_node(source, source_layer, base_filter),
+    );
     nodes.insert(
         brush_id.clone(),
         serde_json::json!({ "op": "brush-solid", "width-px": width, "hardness": opts.line_hardness, "color": hex }),
@@ -458,16 +470,14 @@ fn convert_line(
 
 fn convert_raster(
     id: &str,
-    _layer: &Map<String, Value>,
-    _vector_source: &str,
+    layer: &Map<String, Value>,
     nodes: &mut Map<String, Value>,
     outputs: &mut Vec<String>,
     report: &mut Report,
 ) {
     // A raster layer references a raster source by name; ezu's `raster`
     // node picks it up by source name. We already emitted the source.
-    let src = _layer.get("source").and_then(Value::as_str);
-    let Some(src) = src else {
+    let Some(src) = layer.get("source").and_then(Value::as_str) else {
         report.warn(format!("layer `{id}`: raster without source — skipped"));
         return;
     };
@@ -529,11 +539,37 @@ fn convert_hillshade(
     outputs.push(hs_id);
 }
 
-/// A `features` source node selecting `source-layer`, with an optional
-/// (already-converted) filter.
-fn features_node(source_layer: &str, filter: Option<Map<String, Value>>) -> Value {
+/// Resolve a data layer's `source` to a converted vector-source key,
+/// warning + returning `None` if it names a source that wasn't emitted
+/// (e.g. an inline-GeoJSON or unknown source).
+fn layer_source<'a>(
+    id: &str,
+    layer: &'a Map<String, Value>,
+    vector_sources: &[String],
+    report: &mut Report,
+) -> Option<&'a str> {
+    match layer.get("source").and_then(Value::as_str) {
+        Some(s) if vector_sources.iter().any(|v| v == s) => Some(s),
+        Some(s) => {
+            report.warn(format!(
+                "layer `{id}`: source `{s}` is not a converted vector source — skipped"
+            ));
+            None
+        }
+        None => {
+            report.warn(format!("layer `{id}`: no source — skipped"));
+            None
+        }
+    }
+}
+
+/// A `features` source node selecting `(source, source-layer)`, with an
+/// optional (already-converted) filter. `source` is the ezu vector-source
+/// key (= the MapLibre source name), so multiple vector sources coexist.
+fn features_node(source: &str, source_layer: &str, filter: Option<Map<String, Value>>) -> Value {
     let mut m = Map::new();
     m.insert("op".into(), Value::String("features".into()));
+    m.insert("source".into(), Value::String(source.to_string()));
     m.insert("layer".into(), Value::String(source_layer.to_string()));
     if let Some(f) = filter {
         if !f.is_empty() {

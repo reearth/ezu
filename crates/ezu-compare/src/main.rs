@@ -210,7 +210,7 @@ fn render_ezu(
     // only affects pad-sampling ops (blur / warp / dab) at tile edges, since
     // the output is cropped to the tile; it multiplies decode/render cost, so
     // it's opt-in. Plain fill/line output is unchanged.
-    if let Some((src_name, url)) = mvt_source(recipe) {
+    for (src_name, url) in mvt_sources(recipe) {
         let template = resolve_tile_template(client, &url)?;
         let decoded = if stitch {
             stitch_mvt(client, &template, z, x, y)?
@@ -253,16 +253,21 @@ fn render_ezu(
 }
 
 /// Find the first MVT source `(name, url)` in a recipe's `sources` block.
-fn mvt_source(recipe: &serde_json::Value) -> Option<(String, String)> {
-    let sources = recipe.get("sources")?.as_object()?;
-    for (name, decl) in sources {
-        if decl.get("type").and_then(|v| v.as_str()) == Some("mvt") {
-            if let Some(url) = decl.get("url").and_then(|v| v.as_str()) {
-                return Some((name.clone(), url.to_string()));
-            }
-        }
-    }
-    None
+/// All MVT sources in a recipe as `(name, url)`, so every vector source is
+/// fetched and bound (ezu namespaces layers as `<source>.<layer>`).
+fn mvt_sources(recipe: &serde_json::Value) -> Vec<(String, String)> {
+    recipe
+        .get("sources")
+        .and_then(|s| s.as_object())
+        .into_iter()
+        .flatten()
+        .filter(|(_, decl)| decl.get("type").and_then(|v| v.as_str()) == Some("mvt"))
+        .filter_map(|(name, decl)| {
+            decl.get("url")
+                .and_then(|v| v.as_str())
+                .map(|url| (name.clone(), url.to_string()))
+        })
+        .collect()
 }
 
 /// Turn a source url into an `{z}/{x}/{y}` template. If it's a TileJSON
