@@ -186,6 +186,15 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
             "hillshade" => {
                 convert_hillshade(id, layer, &mut nodes, &mut outputs, opts, &mut report)
             }
+            "fill-extrusion" => convert_fill_extrusion(
+                id,
+                layer,
+                &mut nodes,
+                &mut outputs,
+                opts,
+                &sources,
+                &mut report,
+            ),
             "symbol" => convert_symbol(
                 id,
                 layer,
@@ -542,6 +551,72 @@ fn convert_fill(
     }
     nodes.insert(fill_id.clone(), spec);
     outputs.push(fill_id);
+}
+
+/// `fill-extrusion` → a plain 2-D footprint fill. ezu is a top-down CPU
+/// raster renderer with no 3-D camera, so the extrusion (height / base) is
+/// dropped; the polygons are filled with `fill-extrusion-color`. Any
+/// stylized fake-3-D (height shading, offset shadows) is left to ezu-side
+/// node composition rather than baked into the converter.
+fn convert_fill_extrusion(
+    id: &str,
+    layer: &Map<String, Value>,
+    nodes: &mut Map<String, Value>,
+    outputs: &mut Vec<String>,
+    opts: &ConvertOptions,
+    sources: &Sources,
+    report: &mut Report,
+) {
+    let Some((source, source_layer)) = resolve_layer_source(id, layer, sources, report) else {
+        return;
+    };
+    let base_filter = layer
+        .get("filter")
+        .and_then(|f| filter::convert(f, report, id));
+    let paint = paint_of(layer);
+    let color = paint.get("fill-extrusion-color");
+    let opacity = paint
+        .get("fill-extrusion-opacity")
+        .and_then(|v| zoom::number_at(v, opts.zoom));
+
+    let mut emit = |suffix: &str, filt: Option<Map<String, Value>>, hex: String| {
+        let feat_id = format!("{id}__{suffix}_feat");
+        let fill_id = format!("{id}__{suffix}_fill");
+        nodes.insert(feat_id.clone(), features_node(&source, &source_layer, filt));
+        let mut spec = serde_json::json!({ "op": "fill-solid", "features": format!("@{feat_id}"), "fill": hex });
+        if let Some(a) = opacity {
+            spec["fill-alpha"] = Value::from(a);
+        }
+        nodes.insert(fill_id.clone(), spec);
+        outputs.push(fill_id);
+    };
+
+    // `fill-extrusion-color` may be a `match` on a property, like fill-color.
+    if let Some(buckets) = color.and_then(color::match_buckets) {
+        if let Some((hex, _)) = parse_color(&buckets.fallback) {
+            emit("fallback", base_filter.clone(), hex);
+        }
+        for (i, (values, col)) in buckets.arms.iter().enumerate() {
+            let Some((hex, _)) = parse_color(col) else {
+                continue;
+            };
+            let mut filt = base_filter.clone().unwrap_or_default();
+            filt.insert(buckets.key.clone(), values.clone());
+            emit(&format!("b{i}"), Some(filt), hex);
+        }
+        return;
+    }
+
+    let (hex, _a) = color
+        .and_then(|v| zoom::color_at(v, opts.zoom))
+        .and_then(|v| parse_color(&v))
+        .unwrap_or_else(|| {
+            report.warn(format!(
+                "layer `{id}`: fill-extrusion-color is data-driven/unsupported — using grey fallback"
+            ));
+            ("#808080".to_string(), 1.0)
+        });
+    emit("ext", base_filter, hex);
 }
 
 fn convert_line(
