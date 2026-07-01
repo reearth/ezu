@@ -3,7 +3,7 @@
 //! **CIELAB** (ΔE, the default) or in plain RGB. Source coverage (alpha) is
 //! preserved. Great for limited-palette / poster / pixel-art looks — where
 //! `posterize` (independent per-channel quantization) can't snap to a
-//! chosen set of colours.
+//! chosen set of colours. See `dither` for the error-diffused variant.
 
 use std::sync::Arc;
 
@@ -14,40 +14,13 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::color_interp::rgb_to_lab;
 use crate::nodes::common::{
-    raster_or_sprite_output, read_string_or, unwrap_raster_or_sprite, wrap_raster_like,
-    ACCEPTS_RASTER_OR_SPRITE,
+    raster_or_sprite_output, unwrap_raster_or_sprite, wrap_raster_like, ACCEPTS_RASTER_OR_SPRITE,
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Metric {
-    Rgb,
-    Lab,
-}
+use crate::nodes::raster::palette::Palette;
 
 struct QuantizeNode {
-    /// Straight (non-premultiplied) RGB of each palette entry, 0..1.
-    palette: Vec<[f32; 3]>,
-    /// Same entries projected into the distance metric's space.
-    coords: Vec<[f32; 3]>,
-    metric: Metric,
-}
-
-impl QuantizeNode {
-    fn nearest(&self, rgb: [f32; 3]) -> [f32; 3] {
-        let p = project(rgb, self.metric);
-        let mut best = 0usize;
-        let mut best_d = f32::INFINITY;
-        for (i, c) in self.coords.iter().enumerate() {
-            let d = (p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2);
-            if d < best_d {
-                best_d = d;
-                best = i;
-            }
-        }
-        self.palette[best]
-    }
+    palette: Palette,
 }
 
 impl Node for QuantizeNode {
@@ -85,7 +58,7 @@ impl Node for QuantizeNode {
                 (src.pixels[i + 1] as f32 / 255.0 / a).min(1.0),
                 (src.pixels[i + 2] as f32 / 255.0 / a).min(1.0),
             ];
-            let q = self.nearest(rgb);
+            let q = self.palette.nearest(rgb);
             // Re-premultiply with the source alpha (preserve coverage).
             out.pixels[i] = (q[0] * a * 255.0).round() as u8;
             out.pixels[i + 1] = (q[1] * a * 255.0).round() as u8;
@@ -96,26 +69,7 @@ impl Node for QuantizeNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"quantize");
-        h.update(&[match self.metric {
-            Metric::Rgb => 0,
-            Metric::Lab => 1,
-        }]);
-        for c in &self.palette {
-            for v in c {
-                h.update(&v.to_le_bytes());
-            }
-        }
-    }
-}
-
-/// Project a straight RGB (0..1) into the distance metric's space.
-fn project(rgb: [f32; 3], metric: Metric) -> [f32; 3] {
-    match metric {
-        Metric::Rgb => rgb,
-        Metric::Lab => {
-            let lab = rgb_to_lab([rgb[0], rgb[1], rgb[2], 1.0]);
-            [lab[0], lab[1], lab[2]]
-        }
+        self.palette.hash(h);
     }
 }
 
@@ -130,48 +84,9 @@ impl NodeFactory for QuantizeFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let input = take_input_ref(fields, "input")?;
-        let raw = fields
-            .get("palette")
-            .ok_or_else(|| FactoryError::MissingField("palette".into()))?;
-        let arr = raw.as_array().ok_or_else(|| FactoryError::BadField {
-            field: "palette".into(),
-            msg: "expected an array of `#rrggbb` colour strings".into(),
-        })?;
-        if arr.is_empty() {
-            return Err(FactoryError::BadField {
-                field: "palette".into(),
-                msg: "at least one colour required".into(),
-            });
-        }
-        let mut palette = Vec::with_capacity(arr.len());
-        for (i, v) in arr.iter().enumerate() {
-            let s = v.as_str().ok_or_else(|| FactoryError::BadField {
-                field: format!("palette[{i}]"),
-                msg: "expected `#rrggbb[aa]` string".into(),
-            })?;
-            palette.push(parse_hex_rgb(s).ok_or_else(|| FactoryError::BadField {
-                field: format!("palette[{i}]"),
-                msg: format!("bad colour: {s}"),
-            })?);
-        }
-        let metric_str = read_string_or(fields, "space", ctx, "lab")?;
-        let metric = match metric_str.as_str() {
-            "lab" => Metric::Lab,
-            "rgb" => Metric::Rgb,
-            other => {
-                return Err(FactoryError::BadField {
-                    field: "space".into(),
-                    msg: format!("distance space must be `lab` or `rgb`, got `{other}`"),
-                })
-            }
-        };
-        let coords = palette.iter().map(|&c| project(c, metric)).collect();
+        let palette = Palette::from_fields(fields, ctx)?;
         Ok(BuiltNode {
-            node: Box::new(QuantizeNode {
-                palette,
-                coords,
-                metric,
-            }),
+            node: Box::new(QuantizeNode { palette }),
             connections: vec![Connection {
                 port: "input".into(),
                 src: input,
@@ -180,7 +95,7 @@ impl NodeFactory for QuantizeFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Snap each pixel to the nearest colour in `palette`, measuring distance in `space` (`lab` = perceptual ΔE, default; or `rgb`). Alpha is preserved. Use for limited-palette / poster / pixel-art looks.",
+            "description": "Snap each pixel to the nearest colour in `palette`, measuring distance in `space` (`lab` = perceptual ΔE, default; or `rgb`). Alpha is preserved. Use for limited-palette / poster / pixel-art looks; see `dither` for the error-diffused variant.",
             "properties": {
                 "input": schema_frag::node_ref(),
                 "palette": {
@@ -193,19 +108,6 @@ impl NodeFactory for QuantizeFactory {
             "required": ["input", "palette"],
         })
     }
-}
-
-fn parse_hex_rgb(s: &str) -> Option<[f32; 3]> {
-    let s = s.strip_prefix('#')?;
-    let hex = match s.len() {
-        3 => s.chars().flat_map(|c| [c, c]).collect::<String>(),
-        6 | 8 => s[..6].to_string(),
-        _ => return None,
-    };
-    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-    Some([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0])
 }
 
 ezu_graph::submit_node!(QuantizeFactory);

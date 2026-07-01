@@ -267,7 +267,9 @@ pub fn rgb_to_lab([r, g, b, alpha]: [f32; 4]) -> [f32; 4] {
     ]
 }
 
-fn lab_to_rgb([l, a, b, alpha]: [f32; 4]) -> [f32; 4] {
+/// CIELAB `[l, a, b, alpha]` → `[r, g, b, alpha]` (0..1). Public so chroma
+/// adjustments (saturate / vibrance) can round-trip through LAB.
+pub fn lab_to_rgb([l, a, b, alpha]: [f32; 4]) -> [f32; 4] {
     let mut y = (l + 16.0) / 116.0;
     let mut x = if a.is_nan() { y } else { y + a / 500.0 };
     let mut z = if b.is_nan() { y } else { y - b / 200.0 };

@@ -198,14 +198,18 @@ The minimum op set ships in [`ezu-paint`](https://github.com/reearth/ezu/tree/ma
   `mirror` boundary modes
 - **Adjustment** — `brightness-contrast`, `levels` (Photoshop-style
   in/out black/white + gamma), `hsl` (hue rotation +
-  saturation/lightness shift), `invert`, `color-to-alpha` (chroma key)
+  saturation/lightness shift), `saturate` / `vibrance` (scale CIELAB
+  chroma — uniform, or adaptively boosting low-chroma pixels — preserving
+  hue + lightness), `invert`, `color-to-alpha` (chroma key)
 - **Morphology / edges** — `erode` / `dilate` (per-channel min/max box
   filter, for mask cleanup), `edge-detect` (Sobel gradient magnitude),
   `sharpen` (4-neighbour Laplacian)
 - **Channel ops** — `channel-shuffle` (rearrange RGBA, or stamp
   constants `0` / `1` into channels), `posterize` (per-channel
   quantisation), `quantize` (snap to a fixed palette by nearest colour in
-  perceptual CIELAB or RGB — limited-palette / poster / pixel-art looks)
+  perceptual CIELAB or RGB — limited-palette / poster / pixel-art looks),
+  `dither` (palette reduction with Floyd–Steinberg error diffusion or an
+  ordered Bayer matrix — retro / print looks)
 - **Geometry (Voronoi family)** — `voronoi` (point set → diagram
   edges), `voronoi-fracture` (split polygons into Voronoi sub-cells
   via seed points), `medial-axis` (polygon → skeleton polylines for
