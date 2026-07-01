@@ -34,8 +34,8 @@ pub use strokes::{paint_lines, LineStrokeStyle};
 
 use ezu_features::Polygon;
 use tiny_skia::{
-    Color, FillRule, Paint, PathBuilder, Pixmap, PixmapPaint, PremultipliedColorU8, Stroke,
-    Transform,
+    Color, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, PixmapPaint,
+    PremultipliedColorU8, Stroke, StrokeDash, Transform,
 };
 
 /// A raster canvas backed by a premultiplied RGBA `Pixmap`.
@@ -196,6 +196,83 @@ pub fn paint_polygons(
 
     if style.blur_sigma > 0.0 {
         blur_pixmap(&mut layer, style.blur_sigma);
+    }
+
+    canvas.pixmap.draw_pixmap(
+        0,
+        0,
+        layer.as_ref(),
+        &PixmapPaint::default(),
+        Transform::identity(),
+        None,
+    );
+}
+
+/// Style for a crisp vector stroke (contrast with `paint_lines`, which is a
+/// painterly hokusai brush).
+#[derive(Debug, Clone)]
+pub struct StrokeStyle {
+    pub color: Color,
+    pub width: f32,
+    pub cap: LineCap,
+    pub join: LineJoin,
+    /// On/off dash lengths in pixels (empty / `None` = solid).
+    pub dash: Option<Vec<f32>>,
+}
+
+/// Stroke MVT polylines with a crisp, constant-width `tiny-skia` line onto a
+/// fresh layer, then composite over `canvas`. Coordinates are MVT tile-local
+/// (`[0, extent]`, y-down), scaled to tile size and offset by the pad.
+pub fn paint_strokes(
+    canvas: &mut Canvas,
+    lines: &[Vec<(i32, i32)>],
+    extent: u32,
+    style: &StrokeStyle,
+) {
+    if lines.is_empty() || style.width <= 0.0 {
+        return;
+    }
+    let w = canvas.width();
+    let h = canvas.height();
+    let mut layer = Pixmap::new(w, h).expect("non-zero layer");
+    let sx = canvas.tile_w as f32 / extent as f32;
+    let sy = canvas.tile_h as f32 / extent as f32;
+    let ox = canvas.pad as f32;
+    let oy = canvas.pad as f32;
+
+    let mut paint = Paint::default();
+    paint.set_color(style.color);
+    paint.anti_alias = true;
+
+    let mut stroke = Stroke {
+        width: style.width,
+        line_cap: style.cap,
+        line_join: style.join,
+        ..Stroke::default()
+    };
+    if let Some(pattern) = &style.dash {
+        // tiny-skia needs an even, non-empty pattern with positive total.
+        if pattern.len() >= 2 && pattern.iter().sum::<f32>() > 0.0 {
+            let mut p = pattern.clone();
+            if p.len() % 2 == 1 {
+                p.extend_from_within(..); // repeat to make it even
+            }
+            stroke.dash = StrokeDash::new(p, 0.0);
+        }
+    }
+
+    for line in lines {
+        if line.len() < 2 {
+            continue;
+        }
+        let mut pb = PathBuilder::new();
+        pb.move_to(line[0].0 as f32 * sx + ox, line[0].1 as f32 * sy + oy);
+        for &(x, y) in &line[1..] {
+            pb.line_to(x as f32 * sx + ox, y as f32 * sy + oy);
+        }
+        if let Some(path) = pb.finish() {
+            layer.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+        }
     }
 
     canvas.pixmap.draw_pixmap(

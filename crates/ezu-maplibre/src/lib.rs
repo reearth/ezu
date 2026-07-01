@@ -21,8 +21,7 @@
 //! What is *not* handled yet is reported in [`Report::warnings`] rather
 //! than failing the conversion: `symbol` (text) layers, per-feature
 //! data-driven paint (other than the `match`-bucket case), inline GeoJSON
-//! sources, `line-dasharray`, and expression operators outside the set
-//! above.
+//! sources, and expression operators outside the set above.
 //!
 //! [MapLibre GL styles]: https://maplibre.org/maplibre-style-spec/
 //! [`Document`]: https://docs.rs/ezu-style
@@ -48,9 +47,6 @@ pub struct ConvertOptions {
     /// Emitted `pad` — the buffer around the tile where blurs and
     /// overflowing geometry land before the crop.
     pub pad: u32,
-    /// Brush hardness for `line` layers (0..1). 1.0 is crispest; MapLibre
-    /// lines are hard vector strokes, so default high.
-    pub line_hardness: f64,
     /// How to treat `layout.visibility: "none"` layers. `false` (default)
     /// drops them. `true` keeps their nodes in the recipe but gates each
     /// behind a `switch` that defaults to a transparent branch — so the
@@ -65,7 +61,6 @@ impl Default for ConvertOptions {
             zoom: None,
             tile_size: 512,
             pad: 64,
-            line_hardness: 0.9,
             keep_hidden: false,
         }
     }
@@ -360,6 +355,12 @@ fn convert_fill(
     let opacity = paint
         .get("fill-opacity")
         .and_then(|v| zoom::number_at(v, opts.zoom));
+    // `fill-outline-color` → a 1px outline (ezu `fill-solid` `edge`).
+    let outline: Option<String> = paint
+        .get("fill-outline-color")
+        .and_then(|v| zoom::color_at(v, opts.zoom))
+        .and_then(|v| parse_color(&v))
+        .map(|(hex, _)| hex);
 
     // `fill-color: ["match", ["get", prop], vals, color, ..., fallback]`
     // → one filtered fill-solid per bucket, plus a fallback underneath.
@@ -372,6 +373,10 @@ fn convert_fill(
             let mut spec = serde_json::json!({ "op": "fill-solid", "features": format!("@{feat_id}"), "fill": hex });
             if let Some(a) = opacity {
                 spec["fill-alpha"] = Value::from(a);
+            }
+            if let Some(edge) = &outline {
+                spec["edge"] = Value::from(edge.clone());
+                spec["edge-width"] = Value::from(1.0);
             }
             nodes.insert(fill_id.clone(), spec);
             outputs.push(fill_id);
@@ -410,6 +415,10 @@ fn convert_fill(
         serde_json::json!({ "op": "fill-solid", "features": format!("@{feat_id}"), "fill": hex });
     if let Some(a) = opacity {
         spec["fill-alpha"] = Value::from(a);
+    }
+    if let Some(edge) = &outline {
+        spec["edge"] = Value::from(edge.clone());
+        spec["edge-width"] = Value::from(1.0);
     }
     nodes.insert(fill_id.clone(), spec);
     outputs.push(fill_id);
@@ -450,35 +459,49 @@ fn convert_line(
         .get("line-opacity")
         .and_then(|v| zoom::number_at(v, opts.zoom));
 
-    if paint.contains_key("line-dasharray") {
-        report.warn(format!(
-            "layer `{id}`: line-dasharray not supported — drawn solid"
-        ));
-    }
+    // `layout.line-cap` / `-join` (MapLibre defaults: butt / miter).
+    let layout = layer.get("layout").and_then(Value::as_object);
+    let cap = layout
+        .and_then(|l| l.get("line-cap"))
+        .and_then(Value::as_str)
+        .unwrap_or("butt");
+    let join = layout
+        .and_then(|l| l.get("line-join"))
+        .and_then(Value::as_str)
+        .unwrap_or("miter");
 
     let feat_id = format!("{id}__feat");
-    let brush_id = format!("{id}__brush");
-    let line_id = format!("{id}__line");
+    let stroke_id = format!("{id}__stroke");
     nodes.insert(
         feat_id.clone(),
         features_node(source, source_layer, base_filter),
     );
-    nodes.insert(
-        brush_id.clone(),
-        serde_json::json!({ "op": "brush-solid", "width-px": width, "hardness": opts.line_hardness, "color": hex }),
-    );
+    // Crisp `stroke` (tiny-skia) rather than a painterly brush, to match
+    // MapLibre's clean vector lines.
     let mut spec = serde_json::json!({
-        "op": "line",
+        "op": "stroke",
         "features": format!("@{feat_id}"),
-        "brush": format!("@{brush_id}"),
         "color": hex,
-        "radius-px": width * 0.5,
+        "width-px": width,
+        "cap": cap,
+        "join": join,
     });
     if let Some(a) = opacity {
         spec["opacity"] = Value::from(a);
     }
-    nodes.insert(line_id.clone(), spec);
-    outputs.push(line_id);
+    // MapLibre `line-dasharray` is in units of line width → convert to px.
+    if let Some(arr) = paint.get("line-dasharray").and_then(Value::as_array) {
+        let dash: Vec<Value> = arr
+            .iter()
+            .filter_map(Value::as_f64)
+            .map(|d| Value::from(d * width))
+            .collect();
+        if !dash.is_empty() {
+            spec["dasharray"] = Value::Array(dash);
+        }
+    }
+    nodes.insert(stroke_id.clone(), spec);
+    outputs.push(stroke_id);
 }
 
 fn convert_raster(
