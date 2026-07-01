@@ -2,11 +2,12 @@
 //!
 //! Parses a GeoJSON [`FeatureCollection`], single [`Feature`], or bare
 //! geometry into the crate-root [`Feature`] / [`Geometry`] / [`Value`]
-//! types. The geometry coordinates are truncated to `i32` so they
-//! match MVT's integer tile-local coordinate space — the caller is
-//! responsible for any projection or quantization the input needs
-//! *before* parsing (e.g. multiplying by an extent or projecting from
-//! lon/lat to a pixel grid).
+//! types, with coordinates in MVT's integer tile-local space.
+//!
+//! [`decode_str`] takes coordinates *as-is* (rounded to `i32`) — the
+//! caller pre-projects. [`decode_projected`] takes WGS84 lon/lat and
+//! Web-Mercator-projects it into a given tile `(z, x, y)` at `extent`,
+//! for binding an inline `geojson` source per tile like a decoded MVT.
 
 use std::collections::HashMap;
 
@@ -34,7 +35,7 @@ impl From<geojson::Error> for GeoJsonError {
 /// (bare geometries become a single feature with no properties).
 pub fn decode_str(s: &str) -> Result<Vec<Feature>, GeoJsonError> {
     let parsed: GeoJson = s.parse()?;
-    Ok(convert_root(parsed))
+    Ok(convert_root(parsed, &pos_to_xy))
 }
 
 /// Decode GeoJSON from raw bytes. Convenience wrapper around
@@ -43,23 +44,55 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Feature>, GeoJsonError> {
     decode_str(std::str::from_utf8(bytes)?)
 }
 
-fn convert_root(root: GeoJson) -> Vec<Feature> {
+/// Decode GeoJSON in **WGS84 lon/lat** and project it into tile `(z, x, y)`'s
+/// local integer coordinate frame (`[0, extent]`, y-down, Web-Mercator) —
+/// so an inline `geojson` source can be bound per tile like a decoded MVT.
+/// Coordinates outside the tile are kept (the renderer clips them).
+pub fn decode_projected(
+    data: &serde_json::Value,
+    z: u8,
+    x: u32,
+    y: u32,
+    extent: u32,
+) -> Result<Vec<Feature>, GeoJsonError> {
+    let root: GeoJson = data.to_string().parse()?;
+    let n = (1u64 << z) as f64;
+    let e = extent as f64;
+    let proj = move |pos: &[f64]| -> (i32, i32) {
+        let lon = pos.first().copied().unwrap_or(0.0);
+        let lat = pos.get(1).copied().unwrap_or(0.0);
+        let mx = (lon + 180.0) / 360.0;
+        let s = lat.to_radians().sin().clamp(-0.999_999, 0.999_999);
+        let my = 0.5 - ((1.0 + s) / (1.0 - s)).ln() / (4.0 * std::f64::consts::PI);
+        (
+            ((mx * n - x as f64) * e).round() as i32,
+            ((my * n - y as f64) * e).round() as i32,
+        )
+    };
+    Ok(convert_root(root, &proj))
+}
+
+fn convert_root<P: Fn(&[f64]) -> (i32, i32)>(root: GeoJson, proj: &P) -> Vec<Feature> {
     match root {
-        GeoJson::FeatureCollection(fc) => fc.features.into_iter().map(convert_feature).collect(),
-        GeoJson::Feature(f) => vec![convert_feature(f)],
+        GeoJson::FeatureCollection(fc) => fc
+            .features
+            .into_iter()
+            .map(|f| convert_feature(f, proj))
+            .collect(),
+        GeoJson::Feature(f) => vec![convert_feature(f, proj)],
         GeoJson::Geometry(g) => vec![Feature {
             id: None,
-            geometry: convert_geometry(&g.value),
+            geometry: convert_geometry(&g.value, proj),
             properties: HashMap::new(),
         }],
     }
 }
 
-fn convert_feature(f: geojson::Feature) -> Feature {
+fn convert_feature<P: Fn(&[f64]) -> (i32, i32)>(f: geojson::Feature, proj: &P) -> Feature {
     let geometry = f
         .geometry
         .as_ref()
-        .map(|g| convert_geometry(&g.value))
+        .map(|g| convert_geometry(&g.value, proj))
         .unwrap_or_default();
     let properties = f
         .properties
@@ -104,40 +137,40 @@ fn convert_value(v: serde_json::Value) -> Value {
     }
 }
 
-fn convert_geometry(v: &GeoVal) -> Geometry {
+fn convert_geometry<P: Fn(&[f64]) -> (i32, i32)>(v: &GeoVal, proj: &P) -> Geometry {
     let mut g = Geometry::default();
-    accumulate(v, &mut g);
+    accumulate(v, &mut g, proj);
     g
 }
 
-fn accumulate(v: &GeoVal, out: &mut Geometry) {
+fn accumulate<P: Fn(&[f64]) -> (i32, i32)>(v: &GeoVal, out: &mut Geometry, proj: &P) {
     match v {
-        GeoVal::Point(p) => out.points.push(pos_to_xy(p)),
-        GeoVal::MultiPoint(ps) => out.points.extend(ps.iter().map(|p| pos_to_xy(p))),
+        GeoVal::Point(p) => out.points.push(proj(p)),
+        GeoVal::MultiPoint(ps) => out.points.extend(ps.iter().map(|p| proj(p))),
         GeoVal::LineString(line) => {
-            out.lines.push(line.iter().map(|p| pos_to_xy(p)).collect());
+            out.lines.push(line.iter().map(|p| proj(p)).collect());
         }
         GeoVal::MultiLineString(lines) => {
             for l in lines {
-                out.lines.push(l.iter().map(|p| pos_to_xy(p)).collect());
+                out.lines.push(l.iter().map(|p| proj(p)).collect());
             }
         }
-        GeoVal::Polygon(rings) => out.polygons.push(ring_set_to_polygon(rings)),
+        GeoVal::Polygon(rings) => out.polygons.push(ring_set_to_polygon(rings, proj)),
         GeoVal::MultiPolygon(polys) => {
             for p in polys {
-                out.polygons.push(ring_set_to_polygon(p));
+                out.polygons.push(ring_set_to_polygon(p, proj));
             }
         }
         GeoVal::GeometryCollection(gs) => {
             for g in gs {
-                accumulate(&g.value, out);
+                accumulate(&g.value, out, proj);
             }
         }
     }
 }
 
-fn ring_set_to_polygon(rings: &[Vec<Vec<f64>>]) -> Polygon {
-    let mut iter = rings.iter().map(|r| ring_to_xy(r));
+fn ring_set_to_polygon<P: Fn(&[f64]) -> (i32, i32)>(rings: &[Vec<Vec<f64>>], proj: &P) -> Polygon {
+    let mut iter = rings.iter().map(|r| ring_to_xy(r, proj));
     let exterior = iter.next().unwrap_or_default();
     let holes = iter.collect();
     Polygon { exterior, holes }
@@ -145,8 +178,8 @@ fn ring_set_to_polygon(rings: &[Vec<Vec<f64>>]) -> Polygon {
 
 /// GeoJSON polygon rings have a duplicated closing vertex (first ==
 /// last); MVT and the rest of ezu's pipeline don't, so drop it.
-fn ring_to_xy(ring: &[Vec<f64>]) -> Vec<(i32, i32)> {
-    let mut out: Vec<(i32, i32)> = ring.iter().map(|p| pos_to_xy(p)).collect();
+fn ring_to_xy<P: Fn(&[f64]) -> (i32, i32)>(ring: &[Vec<f64>], proj: &P) -> Vec<(i32, i32)> {
+    let mut out: Vec<(i32, i32)> = ring.iter().map(|p| proj(p)).collect();
     if out.len() >= 2 && out.first() == out.last() {
         out.pop();
     }
@@ -221,6 +254,29 @@ mod tests {
         // Point → points vec with one vertex.
         assert_eq!(feats[2].geometry.points, vec![(3, 4)]);
         assert!(feats[2].geometry.lines.is_empty());
+    }
+
+    #[test]
+    fn projects_lonlat_into_tile_frame() {
+        // Null Island at z0 lands at the tile centre; the antimeridian /
+        // north-west corner lands at the origin.
+        let data = serde_json::json!({
+            "type": "Feature", "properties": {},
+            "geometry": { "type": "MultiPoint",
+                "coordinates": [[0.0, 0.0], [-180.0, 85.051_128_78]] }
+        });
+        let feats = decode_projected(&data, 0, 0, 0, 4096).expect("project");
+        let pts = &feats[0].geometry.points;
+        assert_eq!(pts[0], (2048, 2048));
+        // 85.0511° is the Web-Mercator top edge → y ≈ 0.
+        assert_eq!(pts[1].0, 0);
+        assert!(pts[1].1.abs() <= 1, "top edge y ≈ 0, got {}", pts[1].1);
+
+        // The same point resolves relative to its tile at higher zoom: at z1
+        // Null Island is the shared corner of all four tiles → (0,0) of the
+        // bottom-right tile (1,1).
+        let feats = decode_projected(&data, 1, 1, 1, 4096).unwrap();
+        assert_eq!(feats[0].geometry.points[0], (0, 0));
     }
 
     #[test]

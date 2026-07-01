@@ -242,7 +242,7 @@ async fn get_tile(
     // Take only what we need from the snapshot to keep the lock window
     // short. Query-string parameter overrides are validated against
     // the document's `params` declarations while we hold the lock.
-    let (graph, cache, assets, dem_sources, raster_sources, tile_size, pad, params) = {
+    let (graph, cache, assets, dem_sources, raster_sources, geojson_inline, tile_size, pad, params) = {
         let snap = s.style.read().await;
         let mut params = ParamValues::new();
         for (name, raw) in &q {
@@ -254,12 +254,27 @@ async fn get_tile(
                 .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
             params.set(name.clone(), v);
         }
+        // Inline GeoJSON sources are carried in the doc; project them per
+        // tile in the render task. Remote-URL geojson is not fetched here.
+        let geojson_inline: Vec<(String, serde_json::Value)> = snap
+            .doc
+            .sources
+            .iter()
+            .filter_map(|(name, decl)| match decl {
+                ezu::style::SourceDecl::GeoJson(g) => match &g.data {
+                    Some(d) if d.is_object() || d.is_array() => Some((name.clone(), d.clone())),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
         (
             Arc::clone(&snap.graph),
             Arc::clone(&snap.cache),
             Arc::clone(&snap.assets),
             Arc::clone(&snap.dem_sources),
             Arc::clone(&snap.raster_sources),
+            geojson_inline,
             snap.doc.tile_size,
             snap.doc.pad,
             params,
@@ -290,6 +305,7 @@ async fn get_tile(
                 source_name.as_deref(),
                 dem_bindings,
                 raster_bindings,
+                geojson_inline,
                 tile,
                 tile_size,
                 pad,
@@ -498,6 +514,7 @@ fn render_tile(
     source_name: Option<&str>,
     dem_bindings: Vec<(String, ezu::graph::ScalarField)>,
     raster_bindings: Vec<(String, ezu::graph::RasterBuf)>,
+    geojson_inline: Vec<(String, serde_json::Value)>,
     tile: CoreTileId,
     tile_size: u32,
     pad: u32,
@@ -532,6 +549,21 @@ fn render_tile(
     }
     for (name, buf) in raster_bindings {
         tile_loader.bind_raster(name, buf);
+    }
+    // Project inline GeoJSON (WGS84) into this tile's frame and bind it as a
+    // single feature layer under `<source>.<source>`.
+    for (name, data) in geojson_inline {
+        match ezu::features::geojson::decode_projected(&data, tile.z, tile.x, tile.y, 4096) {
+            Ok(features) => {
+                let layer = ezu::features::FeatureLayer {
+                    name: name.clone(),
+                    extent: 4096,
+                    features,
+                };
+                tile_loader.bind_features(format!("{name}.{name}"), layer);
+            }
+            Err(e) => tracing::warn!("geojson source `{name}`: {e}"),
+        }
     }
     let ev = Evaluator::new(graph, cache, &tile_loader);
     let out = ev

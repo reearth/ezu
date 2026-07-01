@@ -14,22 +14,23 @@ fn converts_and_parses_as_ezu_document() {
     };
     let (recipe, report) = convert(&style, &opts).expect("conversion");
 
-    // The two symbol layers and the inline-geojson crimea layer/source
-    // should be reported as skipped, not silently dropped.
+    // The two symbol layers should be reported as skipped, not silently
+    // dropped.
     let joined = report.warnings.join("\n");
     assert!(
         joined.contains("symbol"),
         "expected symbol warning:\n{joined}"
     );
-    assert!(
-        joined.to_lowercase().contains("geojson"),
-        "expected geojson warning:\n{joined}"
-    );
 
     // Recipe shape.
     let obj = recipe.as_object().unwrap();
     assert_eq!(obj["tile-size"], 512);
-    assert!(obj["sources"].as_object().unwrap().contains_key("maplibre"));
+    let sources = obj["sources"].as_object().unwrap();
+    assert!(sources.contains_key("maplibre"));
+    // The inline-geojson `crimea` source now converts (was previously
+    // skipped); its fill layer targets `(crimea, crimea)`.
+    assert_eq!(sources["crimea"]["type"], "geojson");
+    assert!(sources["crimea"]["data"].is_object());
     let nodes = obj["nodes"].as_object().unwrap();
     // background + fill buckets + lines + blend chain → plenty of nodes.
     assert!(nodes.len() > 10, "unexpectedly few nodes: {}", nodes.len());
@@ -44,6 +45,17 @@ fn converts_and_parses_as_ezu_document() {
                 .unwrap_or(false)
     });
     assert!(has_bucket, "expected ADM0_A3 membership-filter buckets");
+
+    // The crimea geojson layer resolved to a `(crimea, crimea)` features node.
+    let has_geojson_layer = nodes.values().any(|n| {
+        n.get("op").and_then(|v| v.as_str()) == Some("features")
+            && n.get("source").and_then(|v| v.as_str()) == Some("crimea")
+            && n.get("layer").and_then(|v| v.as_str()) == Some("crimea")
+    });
+    assert!(
+        has_geojson_layer,
+        "expected crimea (crimea, crimea) features node"
+    );
 
     // Must parse + build as a real ezu Document/graph.
     let text = serde_json::to_string(&recipe).unwrap();

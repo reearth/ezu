@@ -661,10 +661,12 @@ pub async fn prefetch_doc_assets(
                     .map_err(|e| format!("image `{name}` decode: {e}"))?;
                 loader.insert_image(file.src.clone(), raster);
             }
-            // Tile-scoped — handled per-render elsewhere.
+            // Tile-scoped — handled per-render elsewhere. GeoJSON is
+            // projected + bound per tile by the host driver, not here.
             ezu_style::SourceDecl::Mvt(_)
             | ezu_style::SourceDecl::Pmtiles(_)
             | ezu_style::SourceDecl::Dem(_)
+            | ezu_style::SourceDecl::GeoJson(_)
             | ezu_style::SourceDecl::Raster(_) => {}
         }
     }

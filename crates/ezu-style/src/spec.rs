@@ -301,6 +301,8 @@ pub enum SourceDecl {
     Pmtiles(PmtilesSource),
     Dem(DemSource),
     Raster(RasterSource),
+    #[serde(rename = "geojson")]
+    GeoJson(GeoJsonSource),
 }
 
 impl SourceDecl {
@@ -312,8 +314,25 @@ impl SourceDecl {
             SourceDecl::Pmtiles(s) => &s.attribution,
             SourceDecl::Dem(s) => &s.attribution,
             SourceDecl::Raster(s) => &s.attribution,
+            SourceDecl::GeoJson(s) => &s.attribution,
         }
     }
+}
+
+/// Inline (or URL) GeoJSON in WGS84 lon/lat. The host projects it into each
+/// tile's local coordinate frame and binds it under `<source>.<source>`.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct GeoJsonSource {
+    /// Inline GeoJSON (a `FeatureCollection`, `Feature`, or `Geometry`).
+    #[serde(default)]
+    pub data: Option<serde_json::Value>,
+    /// URL to a `.geojson` document (fetched by the host) — alternative to
+    /// inline `data`.
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub attribution: Option<String>,
 }
 
 /// A document-scoped, file-based source. `src` is a path the host
