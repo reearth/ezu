@@ -7,11 +7,13 @@
 //!
 //! - `shade` (default) — grayscale RGBA (`(g, g, g, 1)`), suitable as a
 //!   standalone layer or to be tinted via `hsl`.
-//! - `relief` — transparent black **normalised against flat ground**: flat
-//!   terrain is fully transparent and only slopes facing away from the
-//!   light darken (up to opaque black in full shadow). Designed for
+//! - `relief` — transparent overlay **normalised against flat ground**:
+//!   flat terrain is fully transparent, slopes facing away from the light
+//!   take the `shadow-color` (default opaque black), and slopes facing the
+//!   light take the optional `highlight-color` (default none). Designed for
 //!   compositing over a base map with `blend`'s `source-over` / `multiply`,
-//!   matching a shaded-relief overlay (and MapLibre's `hillshade`).
+//!   matching a shaded-relief overlay (and MapLibre's `hillshade`, whose
+//!   `hillshade-shadow-color` / `-highlight-color` map straight onto these).
 
 use std::sync::Arc;
 
@@ -39,8 +41,22 @@ struct HillshadeNode {
     exaggeration: In<f64>,
     multidirectional: In<bool>,
     mode: OutputMode,
+    /// `relief` shadow colour (default opaque black). Slopes darker than
+    /// flat ground are tinted with this.
+    shadow_color: Option<In<[f32; 4]>>,
+    /// `relief` highlight colour for slopes *facing* the light (default
+    /// none → no highlight, matching a plain shadow overlay). Set it (e.g.
+    /// white) to add MapLibre-style highlights.
+    highlight_color: Option<In<[f32; 4]>>,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
+}
+
+/// Resolved `relief` colours for one render.
+#[derive(Clone, Copy)]
+struct ReliefStyle {
+    shadow: [f32; 4],
+    highlight: Option<[f32; 4]>,
 }
 
 impl Node for HillshadeNode {
@@ -66,8 +82,25 @@ impl Node for HillshadeNode {
         let altitude_deg = self.altitude_deg.get(ctx, inputs)? as f32;
         let z_factor = self.z_factor.get(ctx, inputs)? as f32;
         let exaggeration = self.exaggeration.get(ctx, inputs)? as f32;
+        let relief = ReliefStyle {
+            shadow: match &self.shadow_color {
+                Some(c) => c.get(ctx, inputs)?,
+                None => [0.0, 0.0, 0.0, 1.0],
+            },
+            highlight: match &self.highlight_color {
+                Some(c) => Some(c.get(ctx, inputs)?),
+                None => None,
+            },
+        };
         let out = if self.multidirectional.get(ctx, inputs)? {
-            render_multidirectional(field, altitude_deg, z_factor, exaggeration, self.mode)
+            render_multidirectional(
+                field,
+                altitude_deg,
+                z_factor,
+                exaggeration,
+                self.mode,
+                relief,
+            )
         } else {
             render_single(
                 field,
@@ -76,6 +109,7 @@ impl Node for HillshadeNode {
                 z_factor,
                 exaggeration,
                 self.mode,
+                relief,
             )
         };
         Ok(PortValue::Raster(Arc::new(out)))
@@ -91,6 +125,18 @@ impl Node for HillshadeNode {
             OutputMode::Shade => b"sh",
             OutputMode::Relief => b"rl",
         });
+        if let Some(c) = &self.shadow_color {
+            h.update(&[1]);
+            c.param_hash(h);
+        } else {
+            h.update(&[0]);
+        }
+        if let Some(c) = &self.highlight_color {
+            h.update(&[1]);
+            c.param_hash(h);
+        } else {
+            h.update(&[0]);
+        }
     }
     fn param_refs(&self) -> Vec<String> {
         self.param_refs.clone()
@@ -104,13 +150,14 @@ fn render_single(
     z_factor: f32,
     exaggeration: f32,
     mode: OutputMode,
+    relief: ReliefStyle,
 ) -> RasterBuf {
     let azimuth_rad = (450.0 - azimuth_deg).to_radians();
     let altitude_rad = altitude_deg.to_radians();
     let cos_zenith = (std::f32::consts::FRAC_PI_2 - altitude_rad).cos();
     let sin_zenith = (std::f32::consts::FRAC_PI_2 - altitude_rad).sin();
     let scale = z_factor * exaggeration;
-    render_with(field, mode, |dx, dy| {
+    render_with(field, mode, relief, |dx, dy| {
         shade_sample(dx, dy, scale, cos_zenith, sin_zenith, azimuth_rad)
     })
 }
@@ -121,6 +168,7 @@ fn render_multidirectional(
     z_factor: f32,
     exaggeration: f32,
     mode: OutputMode,
+    relief: ReliefStyle,
 ) -> RasterBuf {
     // ESRI-style weighted sum over four light directions
     // (225°, 270°, 315°, 360°). Weights from the published recipe.
@@ -134,7 +182,7 @@ fn render_multidirectional(
         .iter()
         .map(|(az, w)| ((450.0 - az).to_radians(), w / weight_sum))
         .collect();
-    render_with(field, mode, |dx, dy| {
+    render_with(field, mode, relief, |dx, dy| {
         azimuths
             .iter()
             .map(|(az, w)| w * shade_sample(dx, dy, scale, cos_zenith, sin_zenith, *az))
@@ -145,6 +193,7 @@ fn render_multidirectional(
 fn render_with(
     field: &ScalarField,
     mode: OutputMode,
+    relief: ReliefStyle,
     sample: impl Fn(f32, f32) -> f32,
 ) -> RasterBuf {
     let w = field.width;
@@ -171,21 +220,34 @@ fn render_with(
                     out.pixels[i + 3] = 255;
                 }
                 OutputMode::Relief => {
-                    // Premultiplied transparent black. Only slopes darker
-                    // than flat ground contribute; flat terrain (shade ==
-                    // flat) is transparent, fully-shadowed is opaque black.
-                    // This matches a shaded-relief overlay / MapLibre's
-                    // hillshade, rather than dimming the whole tile.
-                    let rel = if flat > 1e-6 {
-                        ((flat - shade) / flat).clamp(0.0, 1.0)
+                    // Normalised against flat ground: slopes darker than flat
+                    // get the shadow colour, slopes facing the light get the
+                    // (optional) highlight colour, flat terrain is transparent.
+                    // Matches a shaded-relief overlay / MapLibre's hillshade.
+                    let (color, coverage) = if shade < flat {
+                        let amt = if flat > 1e-6 {
+                            (flat - shade) / flat
+                        } else {
+                            0.0
+                        };
+                        (relief.shadow, amt)
+                    } else if let Some(hi) = relief.highlight {
+                        let amt = if flat < 1.0 {
+                            (shade - flat) / (1.0 - flat)
+                        } else {
+                            0.0
+                        };
+                        (hi, amt)
                     } else {
-                        0.0
+                        ([0.0; 4], 0.0)
                     };
-                    let a = (rel * 255.0).round() as u8;
-                    out.pixels[i] = 0;
-                    out.pixels[i + 1] = 0;
-                    out.pixels[i + 2] = 0;
-                    out.pixels[i + 3] = a;
+                    // Effective alpha folds the colour's own alpha in, then
+                    // premultiply the RGB (pipeline is premultiplied sRGB8).
+                    let a = (coverage.clamp(0.0, 1.0) * color[3]).clamp(0.0, 1.0);
+                    out.pixels[i] = (color[0] * a * 255.0).round() as u8;
+                    out.pixels[i + 1] = (color[1] * a * 255.0).round() as u8;
+                    out.pixels[i + 2] = (color[2] * a * 255.0).round() as u8;
+                    out.pixels[i + 3] = (a * 255.0).round() as u8;
                 }
             }
         }
@@ -239,6 +301,8 @@ impl NodeFactory for HillshadeFactory {
         let z_factor = r.number_or("z-factor", 1.0)?;
         let exaggeration = r.number_or("exaggeration", 1.0)?;
         let multidirectional = r.bool_or("multidirectional", false)?;
+        let shadow_color = r.color_opt("shadow-color")?;
+        let highlight_color = r.color_opt("highlight-color")?;
         let parts = r.finish();
 
         let mut ports = vec![PortSpec {
@@ -261,6 +325,8 @@ impl NodeFactory for HillshadeFactory {
                 exaggeration,
                 multidirectional,
                 mode,
+                shadow_color,
+                highlight_color,
                 ports,
                 param_refs: parts.param_refs,
             }),
@@ -283,6 +349,8 @@ impl NodeFactory for HillshadeFactory {
                 "multidirectional": { "oneOf": [{"type": "boolean"}, {"type": "string", "pattern": "^[$@].+"}], "default": false,
                                        "description": "ESRI-style 4-direction weighted hillshade — softer, more legible at small zooms." },
                 "mode": { "type": "string", "enum": ["shade", "relief"], "default": "shade" },
+                "shadow-color": schema_frag::color(),
+                "highlight-color": schema_frag::color(),
             },
             "required": ["field"],
         })
