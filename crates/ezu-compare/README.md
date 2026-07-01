@@ -20,8 +20,9 @@ For each requested tile `z/x/y`:
    the [`tools/mlgl-ref`](../../tools/mlgl-ref) Node renderer
    (maplibre-gl-js in headless Chromium, software WebGL — no GPU).
 4. Compare → RMSE, mean-abs-error, "visibly different" pixel fraction, max
-   channel delta, and a 0–100 closeness score; write `ezu` / `ref` / `diff`
-   PNGs and the converted recipe.
+   channel delta, **SSIM** (structural similarity over 8×8 luma windows —
+   less dominated by antialiasing/label noise than RMSE), and a 0–100
+   closeness score; write `ezu` / `ref` / `diff` PNGs and the recipe.
 
 The reference is treated as an opaque PNG source, so a maplibre-**native**
 generator can be swapped in later without touching the comparison code.
@@ -62,10 +63,10 @@ opt-in and off by default.
 ## Sample output
 
 ```
-tile        score     rmse   diff%  maxΔ   ezu(ms)
-----------------------------------------------------
-14/14550/6452  93.42   16.777  22.69%    88     283.8
-15/29101/12904  94.37   14.363  17.71%    90     187.9
+tile        score   ssim     rmse   diff%  maxΔ   ezu(ms)
+------------------------------------------------------------
+14/14550/6452  93.42  0.798   16.777  22.69%    88     262.9
+15/29101/12904  94.37  0.890   14.363  17.71%    90     138.7
 ```
 
 The `diff` PNG (bright = disagreement) makes the residual obvious: at high

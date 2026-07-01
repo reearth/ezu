@@ -101,19 +101,20 @@ fn main() -> R<()> {
         .build()?;
 
     println!(
-        "{:<10} {:>6} {:>8} {:>7} {:>5} {:>9}",
-        "tile", "score", "rmse", "diff%", "maxΔ", "ezu(ms)"
+        "{:<10} {:>6} {:>6} {:>8} {:>7} {:>5} {:>9}",
+        "tile", "score", "ssim", "rmse", "diff%", "maxΔ", "ezu(ms)"
     );
-    println!("{}", "-".repeat(52));
+    println!("{}", "-".repeat(60));
 
     let mut rows = Vec::new();
     for &(z, x, y) in &args.tiles {
         match run_tile(&args, &client, &style_json, &style_path, z, x, y) {
             Ok((m, ezu_ms)) => {
                 println!(
-                    "{:<10} {:>6.2} {:>8.3} {:>6.2}% {:>5} {:>9.1}",
+                    "{:<10} {:>6.2} {:>6.3} {:>8.3} {:>6.2}% {:>5} {:>9.1}",
                     format!("{z}/{x}/{y}"),
                     m.score(),
+                    m.ssim,
                     m.rmse,
                     m.diff_fraction * 100.0,
                     m.max_diff,
@@ -128,11 +129,12 @@ fn main() -> R<()> {
     if !rows.is_empty() {
         let n = rows.len() as f64;
         let avg_score = rows.iter().map(|r| r.3.score()).sum::<f64>() / n;
+        let avg_ssim = rows.iter().map(|r| r.3.ssim).sum::<f64>() / n;
         let avg_ms = rows.iter().map(|r| r.4).sum::<f64>() / n;
-        println!("{}", "-".repeat(52));
+        println!("{}", "-".repeat(60));
         println!(
-            "{:<10} {:>6.2} {:>8} {:>7} {:>5} {:>9.1}",
-            "avg", avg_score, "", "", "", avg_ms
+            "{:<10} {:>6.2} {:>6.3} {:>8} {:>7} {:>5} {:>9.1}",
+            "avg", avg_score, avg_ssim, "", "", "", avg_ms
         );
         println!(
             "\nOutputs (ezu / ref / diff PNGs + recipe) in {}",
@@ -416,6 +418,9 @@ fn run_refgen(
         .arg(y.to_string())
         .arg(&out_abs)
         .arg(size.to_string())
+        // Keep the renderer's per-tile "OK …" chatter out of the table;
+        // stderr (real errors) still surfaces.
+        .stdout(std::process::Stdio::null())
         .status()
         .map_err(|e| format!("failed to run node reference renderer: {e} (is Node installed + `npm install` run in {}?)", refgen_dir.display()))?;
     if !status.success() {
