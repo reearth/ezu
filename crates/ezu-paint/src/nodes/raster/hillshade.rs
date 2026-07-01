@@ -7,9 +7,11 @@
 //!
 //! - `shade` (default) — grayscale RGBA (`(g, g, g, 1)`), suitable as a
 //!   standalone layer or to be tinted via `hsl`.
-//! - `relief` — transparent black scaled by `1 - shade`, designed for
-//!   compositing over a base map with `blend`'s `multiply` /
-//!   `source-over`.
+//! - `relief` — transparent black **normalised against flat ground**: flat
+//!   terrain is fully transparent and only slopes facing away from the
+//!   light darken (up to opaque black in full shadow). Designed for
+//!   compositing over a base map with `blend`'s `source-over` / `multiply`,
+//!   matching a shaded-relief overlay (and MapLibre's `hillshade`).
 
 use std::sync::Arc;
 
@@ -152,6 +154,9 @@ fn render_with(
     // differences below; bake it in once.
     let inv_x = 1.0 / (8.0 * field.metres_per_pixel_x().max(1e-6));
     let inv_y = 1.0 / (8.0 * field.metres_per_pixel_y().max(1e-6));
+    // Shade of flat ground (zero gradient) — the illumination baseline.
+    // `relief` normalises against it so flat terrain is fully transparent.
+    let flat = sample(0.0, 0.0).clamp(0.0, 1.0);
     for y in 0..h {
         for x in 0..w {
             let (dz_dx, dz_dy) = horn_gradient(field, x, y, inv_x, inv_y);
@@ -166,8 +171,17 @@ fn render_with(
                     out.pixels[i + 3] = 255;
                 }
                 OutputMode::Relief => {
-                    // Premultiplied transparent black at alpha = 1 - shade.
-                    let a = ((1.0 - shade) * 255.0).round() as u8;
+                    // Premultiplied transparent black. Only slopes darker
+                    // than flat ground contribute; flat terrain (shade ==
+                    // flat) is transparent, fully-shadowed is opaque black.
+                    // This matches a shaded-relief overlay / MapLibre's
+                    // hillshade, rather than dimming the whole tile.
+                    let rel = if flat > 1e-6 {
+                        ((flat - shade) / flat).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let a = (rel * 255.0).round() as u8;
                     out.pixels[i] = 0;
                     out.pixels[i + 1] = 0;
                     out.pixels[i + 2] = 0;
