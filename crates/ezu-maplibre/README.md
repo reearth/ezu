@@ -31,9 +31,9 @@ cargo run -p ezu-maplibre --example convert -- style.json 14 > recipe.json
 |---|---|
 | ordered layer list | `blend` chain (painter's algorithm) |
 | `background` | `solid` |
-| `fill` (solid colour) | `features` + `fill-solid` |
+| `fill` (solid colour, `fill-outline-color`) | `features` + `fill-solid` (outline → `edge`) |
 | `fill-color: ["match", ["get", k], …]` | one filtered `fill-solid` per colour bucket (membership filters) |
-| `line` | `features` + `brush-solid` + `line` |
+| `line` (+ `line-dasharray`, `line-cap`/`join`) | `features` + crisp `stroke` (dash in px) |
 | `raster` | `raster` |
 | `hillshade` (over `raster-dem`) | `dem` + `hillshade` (tone calibration still approximate) |
 | filters `all` / `!` / `==` / `!=` / `in` / `!in` (legacy **and** expression form, e.g. `["in", ["get", k], ["literal", […]]]`) | ezu feature filter map |
@@ -53,7 +53,7 @@ the tile's zoom reproduces MapLibre's value exactly for that tile.
 - **Per-feature data-driven paint** other than the `match`-bucket case
   (e.g. `["interpolate", …, ["get", "height"], …]`).
 - **Inline / remote GeoJSON sources**, **`fill-extrusion`**, **`heatmap`**.
-- **`line-dasharray`**, line caps/joins, road casing.
+- Road **casing** (the darker under-stroke MapLibre draws beneath a line).
 - Filter operators ezu's flat filter can't represent: `any` (OR),
   `has` / `!has` (field existence), comparisons (`<` / `>`), `geometry-type`.
 
