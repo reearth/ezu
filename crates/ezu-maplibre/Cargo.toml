@@ -8,6 +8,8 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
+# Not published yet — kept private while the converter matures.
+publish = false
 
 [dependencies]
 serde = { workspace = true }
