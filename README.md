@@ -179,8 +179,10 @@ The minimum op set ships in [`ezu-paint`](https://github.com/reearth/ezu/tree/ma
   placement / tiling ops)
 - **Rasterization** — `fill-solid` (tiny-skia + libblur), `fill-dabs`
   (hokusai scatter-dab fill, **world-deterministic** so dabs stay
-  seamless across tile boundaries), `line` (hokusai stroke along
-  polylines), `stamp` (paint an image per feature point — accepts a
+  seamless across tile boundaries), `line` (hokusai brush stroke along
+  polylines), `stroke` (crisp constant-width tiny-skia vector stroke with
+  cap/join + optional `dasharray` — clean cartographic lines), `stamp`
+  (paint an image per feature point — accepts a
   `Sprite` or canvas-sized `Raster`), `place` (composite one image at
   fixed canvas coordinates with `fit: none/cover/contain/stretch`),
   `tiling` (repeat an image across the canvas, world-anchored for
