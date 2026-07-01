@@ -221,6 +221,15 @@ impl Renderer {
                     ));
                 }
             }
+            // Inline GeoJSON carries its data in the document, not via a tiled
+            // fetch, so the wasm host has nothing to `bind` here yet. Layers on
+            // an unbound geojson source render empty rather than failing.
+            SourceDecl::GeoJson(_) => {
+                return Err(named_err(
+                    ERR_SOURCE,
+                    format!("source `{name}`: geojson binding not supported in the wasm host yet"),
+                ));
+            }
         }
         Ok(())
     }

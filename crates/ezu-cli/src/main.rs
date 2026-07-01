@@ -459,6 +459,7 @@ fn render_mermaid(doc: &ezu::style::Document) -> String {
             SourceDecl::Pmtiles(_) => "pmtiles",
             SourceDecl::Dem(_) => "dem",
             SourceDecl::Raster(_) => "raster",
+            SourceDecl::GeoJson(_) => "geojson",
         };
         s.push_str(&format!("  {id}[/\"{id} (source:{kind})\"/]\n"));
         if matches!(decl, SourceDecl::Brush(_) | SourceDecl::Image(_)) {
@@ -867,6 +868,7 @@ pub(crate) fn feature_source_from_doc(doc: &Document) -> Option<FeatureSourcePic
             SourceDecl::Brush(_)
             | SourceDecl::Image(_)
             | SourceDecl::Dem(_)
+            | SourceDecl::GeoJson(_)
             | SourceDecl::Raster(_) => continue,
         };
         if chosen.is_some() {

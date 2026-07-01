@@ -42,6 +42,7 @@ cargo run -p ezu-maplibre --example convert -- style.json 14 > recipe.json
 | CSS named colours (`steelblue`, `white`, `transparent`, …) | resolved to hex |
 | `layout.visibility: "none"` | layer dropped (default), or — with `ConvertOptions::keep_hidden` — kept but gated off behind a `switch` (flip its `select` to `b` to enable) |
 | multiple `vector` sources | all emitted; each `features` node targets its `(source, layer)` |
+| inline / remote `geojson` source (WGS84 lon/lat) | `geojson` source; the host projects it into each tile and binds it as one feature layer (`features` targets `(source, source)`) |
 | layer `minzoom` / `maxzoom` | layer dropped when the baked zoom is out of range |
 
 Because ezu renders one integer zoom per tile, baking a zoom function at
@@ -53,7 +54,9 @@ the tile's zoom reproduces MapLibre's value exactly for that tile.
   and cross-tile collision. The single largest fidelity gap.
 - **Per-feature data-driven paint** other than the `match`-bucket case
   (e.g. `["interpolate", …, ["get", "height"], …]`).
-- **Inline / remote GeoJSON sources**, **`fill-extrusion`**, **`heatmap`**.
+- **`fill-extrusion`**, **`heatmap`**.
+- Remote GeoJSON in the **wasm** host (native + `ezu-compare` fetch it;
+  the browser host only binds inline `data` today).
 - Road **casing** (the darker under-stroke MapLibre draws beneath a line).
 - Filter operators ezu's flat filter can't represent: `any` (OR),
   `has` / `!has` (field existence), comparisons (`<` / `>`), `geometry-type`.

@@ -224,6 +224,24 @@ fn render_ezu(
         }
     }
 
+    // Fetch/parse + bind GeoJSON sources. The data is WGS84 lon/lat, so it's
+    // projected into this tile's local frame (extent 4096) and bound as a
+    // single feature layer under `<source>.<source>` — matching the recipe's
+    // `features` node, which targets `(source, source)` for geojson layers.
+    for (src_name, data) in geojson_sources(client, recipe)? {
+        match ezu::features::geojson::decode_projected(&data, z, x, y, 4096) {
+            Ok(features) => {
+                let layer = ezu::features::FeatureLayer {
+                    name: src_name.clone(),
+                    extent: 4096,
+                    features,
+                };
+                tile_loader.bind_features(format!("{src_name}.{src_name}"), layer);
+            }
+            Err(e) => eprintln!("geojson source `{src_name}`: {e}"),
+        }
+    }
+
     // Fetch + bind DEM sources (for hillshade/terrain). The binder is async
     // (stitches the 3×3 neighbourhood over HTTP); run it on a scratch
     // runtime — this is data prep, outside the timed render below.
@@ -270,6 +288,42 @@ fn mvt_sources(recipe: &serde_json::Value) -> Vec<(String, String)> {
                 .map(|url| (name.clone(), url.to_string()))
         })
         .collect()
+}
+
+/// All GeoJSON sources in a recipe as `(name, data)`, resolving each to its
+/// GeoJSON document: inline `data` objects are used directly; a `url` (or a
+/// string `data`) is fetched over HTTP.
+fn geojson_sources(
+    client: &reqwest::blocking::Client,
+    recipe: &serde_json::Value,
+) -> R<Vec<(String, serde_json::Value)>> {
+    let mut out = Vec::new();
+    let Some(srcs) = recipe.get("sources").and_then(|s| s.as_object()) else {
+        return Ok(out);
+    };
+    for (name, decl) in srcs {
+        if decl.get("type").and_then(|v| v.as_str()) != Some("geojson") {
+            continue;
+        }
+        // Inline object/array `data` is the document itself; a string `data`
+        // or a `url` points at a remote document to fetch.
+        let data = match decl.get("data") {
+            Some(d) if d.is_object() || d.is_array() => d.clone(),
+            other => {
+                let url = other
+                    .and_then(|v| v.as_str())
+                    .or_else(|| decl.get("url").and_then(|v| v.as_str()));
+                let Some(url) = url else {
+                    eprintln!("geojson source `{name}`: no `data`/`url` — skipped");
+                    continue;
+                };
+                let body = client.get(url).send()?.error_for_status()?.text()?;
+                serde_json::from_str(&body)?
+            }
+        };
+        out.push((name.clone(), data));
+    }
+    Ok(out)
 }
 
 /// Turn a source url into an `{z}/{x}/{y}` template. If it's a TileJSON
