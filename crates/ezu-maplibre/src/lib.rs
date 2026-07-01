@@ -117,6 +117,31 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
             continue;
         };
         let id = layer.get("id").and_then(Value::as_str).unwrap_or("layer");
+        // Honour `layout.visibility: "none"`.
+        if layer
+            .get("layout")
+            .and_then(|l| l.get("visibility"))
+            .and_then(Value::as_str)
+            == Some("none")
+        {
+            continue;
+        }
+        // Honour the layer's zoom range at the baked zoom (MapLibre shows a
+        // layer for `minzoom <= z < maxzoom`). ezu renders one zoom per
+        // tile, so a layer outside the range simply isn't emitted.
+        if let Some(z) = opts.zoom {
+            let below = layer
+                .get("minzoom")
+                .and_then(Value::as_f64)
+                .is_some_and(|mz| z < mz);
+            let above = layer
+                .get("maxzoom")
+                .and_then(Value::as_f64)
+                .is_some_and(|mz| z >= mz);
+            if below || above {
+                continue;
+            }
+        }
         let ty = layer.get("type").and_then(Value::as_str).unwrap_or("");
         match ty {
             "background" => convert_background(id, layer, &mut nodes, &mut outputs, opts),

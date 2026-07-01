@@ -38,6 +38,9 @@ cargo run -p ezu-maplibre --example convert -- style.json 14 > recipe.json
 | `hillshade` (over `raster-dem`) | `dem` + `hillshade` (tone calibration still approximate) |
 | filters `all` / `!` / `==` / `!=` / `in` / `!in` (legacy **and** expression form, e.g. `["in", ["get", k], ["literal", […]]]`) | ezu feature filter map |
 | zoom functions (`stops`, `interpolate`, `step`) | baked to a constant at [`ConvertOptions::zoom`] |
+| CSS named colours (`steelblue`, `white`, `transparent`, …) | resolved to hex |
+| `layout.visibility: "none"` | layer dropped |
+| layer `minzoom` / `maxzoom` | layer dropped when the baked zoom is out of range |
 
 Because ezu renders one integer zoom per tile, baking a zoom function at
 the tile's zoom reproduces MapLibre's value exactly for that tile.
