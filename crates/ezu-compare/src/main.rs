@@ -17,7 +17,9 @@ use std::time::Instant;
 
 use ezu::features::mvt;
 use ezu::graph::{build_graph, Cache, CanvasInfo, Evaluator, ParamValues, PortValue, TileId};
-use ezu::paint::host::{raster_to_rgba8, BrushBankLoader, TileLoader};
+use ezu::paint::host::{
+    bind_dem_sources, build_dem_sources, raster_to_rgba8, BrushBankLoader, TileLoader,
+};
 use ezu::paint::nodes::default_registry;
 use ezu::style::Document;
 use ezu_compare::{compare_rgba8, diff_image, Metrics};
@@ -196,7 +198,7 @@ fn render_ezu(
 
     let mut tile_loader = TileLoader::new(&loader, tile_id);
 
-    // Fetch + bind the vector source (v1 handles MVT-only styles).
+    // Fetch + bind the vector source (MVT).
     if let Some((src_name, url)) = mvt_source(recipe) {
         let template = resolve_tile_template(client, &url)?;
         let bytes = fetch_tile(client, &template, z, x, y)?;
@@ -204,15 +206,27 @@ fn render_ezu(
         tile_loader.bind_mvt(&src_name, decoded);
     }
 
+    // Fetch + bind DEM sources (for hillshade/terrain). The binder is async
+    // (stitches the 3×3 neighbourhood over HTTP); run it on a scratch
+    // runtime — this is data prep, outside the timed render below.
+    let canvas = CanvasInfo { tile_size, pad };
+    let dem_sources = build_dem_sources(&doc);
+    if !dem_sources.is_empty() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        rt.block_on(bind_dem_sources(
+            &mut tile_loader,
+            &dem_sources,
+            tile_id,
+            canvas,
+        ))?;
+    }
+
     let params = ParamValues::new();
     let ev = Evaluator::new(&graph, &cache, &tile_loader);
     let start = Instant::now();
-    let out = ev.render(
-        tile_id,
-        CanvasInfo { tile_size, pad },
-        &params,
-        tile_seed(z, x, y),
-    )?;
+    let out = ev.render(tile_id, canvas, &params, tile_seed(z, x, y))?;
     let ezu_ms = start.elapsed().as_secs_f64() * 1000.0;
 
     let raster = match out {

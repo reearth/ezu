@@ -35,6 +35,7 @@ cargo run -p ezu-maplibre --example convert -- style.json 14 > recipe.json
 | `fill-color: ["match", ["get", k], …]` | one filtered `fill-solid` per colour bucket (membership filters) |
 | `line` | `features` + `brush-solid` + `line` |
 | `raster` | `raster` |
+| `hillshade` (over `raster-dem`) | `dem` + `hillshade` (tone calibration still approximate) |
 | filters `all` / `==` / `!=` / `in` / `!in` | ezu feature filter map |
 | zoom functions (`stops`, `interpolate`, `step`) | baked to a constant at [`ConvertOptions::zoom`] |
 
@@ -47,8 +48,7 @@ the tile's zoom reproduces MapLibre's value exactly for that tile.
   and cross-tile collision. The single largest fidelity gap.
 - **Per-feature data-driven paint** other than the `match`-bucket case
   (e.g. `["interpolate", …, ["get", "height"], …]`).
-- **Inline / remote GeoJSON sources**, **`fill-extrusion`**, **`heatmap`**,
-  **`hillshade`** layers.
+- **Inline / remote GeoJSON sources**, **`fill-extrusion`**, **`heatmap`**.
 - **`line-dasharray`**, line caps/joins, road casing.
 - Expression operators outside `all` / `==` / `!=` / `in` / `!in`.
 

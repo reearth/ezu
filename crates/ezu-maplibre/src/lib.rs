@@ -130,6 +130,9 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
                 &mut outputs,
                 &mut report,
             ),
+            "hillshade" => {
+                convert_hillshade(id, layer, &mut nodes, &mut outputs, opts, &mut report)
+            }
             "symbol" => report.warn(format!(
                 "layer `{id}`: `symbol` (text/icon labels) not supported yet — skipped"
             )),
@@ -238,10 +241,17 @@ fn convert_sources(
                         .get("encoding")
                         .and_then(Value::as_str)
                         .unwrap_or("mapbox");
-                    out.insert(
-                        name.clone(),
-                        serde_json::json!({ "type": "dem", "url": url, "encoding": enc }),
-                    );
+                    let tile_size = decl.get("tileSize").and_then(Value::as_u64).unwrap_or(512);
+                    // `neighbor-fetch` stitches the 3×3 tile neighbourhood so
+                    // hillshade slopes stay correct up to the tile edge.
+                    let mut dem = serde_json::json!({
+                        "type": "dem", "url": url, "encoding": enc,
+                        "tile-size": tile_size, "neighbor-fetch": true
+                    });
+                    if let Some(mz) = decl.get("maxzoom").and_then(Value::as_u64) {
+                        dem["max-zoom"] = Value::from(mz);
+                    }
+                    out.insert(name.clone(), dem);
                 } else {
                     report.warn(format!(
                         "source `{name}`: raster-dem has no url/tiles — skipped"
@@ -442,6 +452,56 @@ fn convert_raster(
         serde_json::json!({ "op": "raster", "source": src }),
     );
     outputs.push(nid);
+}
+
+/// A `hillshade` layer over a `raster-dem` source → an ezu `dem` node
+/// feeding a `hillshade` node. ezu already has the whole terrain stack
+/// (`dem` / `hillshade` / `slope` / `color-ramp`); this just wires the
+/// MapLibre paint props onto it.
+fn convert_hillshade(
+    id: &str,
+    layer: &Map<String, Value>,
+    nodes: &mut Map<String, Value>,
+    outputs: &mut Vec<String>,
+    opts: &ConvertOptions,
+    report: &mut Report,
+) {
+    let Some(src) = layer.get("source").and_then(Value::as_str) else {
+        report.warn(format!("layer `{id}`: hillshade without source — skipped"));
+        return;
+    };
+    let paint = paint_of(layer);
+    // MapLibre defaults: illumination-direction 335°, exaggeration 0.5.
+    let azimuth = paint
+        .get("hillshade-illumination-direction")
+        .and_then(|v| zoom::number_at(v, opts.zoom))
+        .unwrap_or(335.0);
+    let exaggeration = paint
+        .get("hillshade-exaggeration")
+        .and_then(|v| zoom::number_at(v, opts.zoom))
+        .unwrap_or(0.5);
+
+    let dem_id = format!("{id}__dem");
+    let hs_id = format!("{id}__hillshade");
+    nodes.insert(
+        dem_id.clone(),
+        serde_json::json!({ "op": "dem", "source": src }),
+    );
+    nodes.insert(
+        hs_id.clone(),
+        serde_json::json!({
+            "op": "hillshade",
+            "field": format!("@{dem_id}"),
+            "azimuth-deg": azimuth,
+            "altitude-deg": 45,
+            "exaggeration": exaggeration,
+            // `relief` leaves flat ground white and only darkens slopes,
+            // matching MapLibre's hillshade look over a light background
+            // (vs `shade`, which greys flat ground too).
+            "mode": "relief"
+        }),
+    );
+    outputs.push(hs_id);
 }
 
 /// A `features` source node selecting `source-layer`, with an optional
