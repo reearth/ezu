@@ -18,8 +18,12 @@
 //!   constant at [`ConvertOptions::zoom`] when supplied — ezu renders one
 //!   integer zoom per tile, so a per-zoom bake is exact for that tile.
 //!
+//! - **sprites**: a top-level `sprite` (single URL or `[{id, url}]`
+//!   sheets) becomes `sprite` source(s); `symbol` **icons** and
+//!   `fill-pattern` wire through `icon` (crop) + `stamp` / `tiling`.
+//!
 //! What is *not* handled yet is reported in [`Report::warnings`] rather
-//! than failing the conversion: `symbol` (text) layers, per-feature
+//! than failing the conversion: `symbol` **text** labels, per-feature
 //! data-driven paint (other than the `match`-bucket case), and expression
 //! operators outside the set above. Inline/remote `geojson` sources *are*
 //! converted (the host projects them into each tile).
@@ -181,9 +185,15 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
             "hillshade" => {
                 convert_hillshade(id, layer, &mut nodes, &mut outputs, opts, &mut report)
             }
-            "symbol" => report.warn(format!(
-                "layer `{id}`: `symbol` (text/icon labels) not supported yet — skipped"
-            )),
+            "symbol" => convert_symbol(
+                id,
+                layer,
+                &mut nodes,
+                &mut outputs,
+                opts,
+                &sources,
+                &mut report,
+            ),
             other => report.warn(format!(
                 "layer `{id}`: type `{other}` not supported — skipped"
             )),
@@ -228,6 +238,30 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
 struct Sources {
     vector: Vec<String>,
     geojson: Vec<String>,
+    /// Emitted `sprite` source keys, one per sprite sheet. A style's
+    /// top-level `sprite` may be a single URL (→ one `default` sheet) or an
+    /// array of `{id, url}` (→ one sheet per id, with `id:icon` names). The
+    /// first entry is the default for unprefixed icon names.
+    sprites: Vec<String>,
+}
+
+impl Sources {
+    /// Resolve an icon/pattern reference to `(sprite source key, icon name)`.
+    /// A `sheet:icon` name selects that sheet; an unprefixed name (or an
+    /// unknown prefix) falls back to the `default`/first sheet.
+    fn resolve_icon<'a>(&self, name: &'a str) -> Option<(&str, &'a str)> {
+        if let Some((sheet, icon)) = name.split_once(':') {
+            if let Some(key) = self.sprites.iter().find(|s| *s == sheet) {
+                return Some((key, icon));
+            }
+        }
+        let key = self
+            .sprites
+            .iter()
+            .find(|s| *s == "default")
+            .or_else(|| self.sprites.first())?;
+        Some((key, name))
+    }
 }
 
 fn convert_sources(
@@ -342,6 +376,37 @@ fn convert_sources(
         }
     }
 
+    // Top-level `sprite` is a base URL (atlas `<base>.png`, index
+    // `<base>.json`) or an array of `{id, url}` sheets. Emit one ezu `sprite`
+    // source per sheet, keyed by its id (`default` for the single-URL form),
+    // that icon / pattern layers resolve against.
+    let mut emit_sprite = |key: &str, base: &str, out: &mut Map<String, Value>| {
+        out.insert(
+            key.to_string(),
+            serde_json::json!({
+                "type": "sprite",
+                "image": format!("{base}.png"),
+                "index": format!("{base}.json"),
+            }),
+        );
+        sources.sprites.push(key.to_string());
+    };
+    match style.get("sprite") {
+        Some(Value::String(base)) => emit_sprite("default", base, &mut out),
+        Some(Value::Array(sheets)) => {
+            for sheet in sheets {
+                let id = sheet.get("id").and_then(Value::as_str);
+                let url = sheet.get("url").and_then(Value::as_str);
+                if let (Some(id), Some(url)) = (id, url) {
+                    emit_sprite(id, url, &mut out);
+                } else {
+                    report.warn("sprite sheet entry missing `id`/`url` — skipped".to_string());
+                }
+            }
+        }
+        _ => {}
+    }
+
     // A raster-only style is legal (e.g. hillshade over raster-dem); only
     // error when there's no tiled source at all.
     if sources.vector.is_empty() && sources.geojson.is_empty() && out.is_empty() {
@@ -387,6 +452,24 @@ fn convert_fill(
         .get("filter")
         .and_then(|f| filter::convert(f, report, id));
     let paint = paint_of(layer);
+
+    // `fill-pattern` takes precedence over `fill-color`: tile the named
+    // sprite icon across the canvas and clip it to the polygon shape.
+    if let Some(pattern) = paint.get("fill-pattern") {
+        convert_fill_pattern(
+            id,
+            pattern,
+            &source,
+            &source_layer,
+            base_filter,
+            sources,
+            nodes,
+            outputs,
+            report,
+        );
+        return;
+    }
+
     let fill_color = paint.get("fill-color");
     let opacity = paint
         .get("fill-opacity")
@@ -650,6 +733,158 @@ fn emit_disk(
     let mut spec = serde_json::json!({
         "op": "stamp", "features": format!("@{feat_id}"), "image": format!("@{circle_id}")
     });
+    if let Some(a) = opacity {
+        spec["opacity"] = Value::from(a);
+    }
+    nodes.insert(stamp_id.clone(), spec);
+    outputs.push(stamp_id);
+}
+
+/// `fill-pattern` → tile the named sprite icon across the canvas and clip it
+/// to the polygon coverage: `fill-solid` (opaque shape) as the clip base,
+/// `icon` → `tiling` as the pattern, composed with `blend { clip: true }`
+/// (source-atop keeps the pattern only inside the polygons).
+#[allow(clippy::too_many_arguments)]
+fn convert_fill_pattern(
+    id: &str,
+    pattern: &Value,
+    source: &str,
+    source_layer: &str,
+    base_filter: Option<Map<String, Value>>,
+    sources: &Sources,
+    nodes: &mut Map<String, Value>,
+    outputs: &mut Vec<String>,
+    report: &mut Report,
+) {
+    let Some(name) = pattern.as_str() else {
+        report.warn(format!(
+            "layer `{id}`: data-driven `fill-pattern` not supported — skipped"
+        ));
+        return;
+    };
+    let Some((sprite_src, icon_name)) = sources.resolve_icon(name) else {
+        report.warn(format!(
+            "layer `{id}`: fill-pattern `{name}` needs a `sprite`, but the style declares none — skipped"
+        ));
+        return;
+    };
+    let feat_id = format!("{id}__feat");
+    nodes.insert(
+        feat_id.clone(),
+        features_node(source, source_layer, base_filter),
+    );
+    let shape_id = format!("{id}__shape");
+    nodes.insert(
+        shape_id.clone(),
+        serde_json::json!({ "op": "fill-solid", "features": format!("@{feat_id}"), "fill": "#ffffff" }),
+    );
+    let icon_id = format!("{id}__icon");
+    nodes.insert(
+        icon_id.clone(),
+        serde_json::json!({ "op": "icon", "sprite": format!("@{sprite_src}"), "name": icon_name }),
+    );
+    let tile_id = format!("{id}__pattern");
+    nodes.insert(
+        tile_id.clone(),
+        serde_json::json!({ "op": "tiling", "input": format!("@{icon_id}"), "anchor": "world" }),
+    );
+    let out_id = format!("{id}__patfill");
+    nodes.insert(
+        out_id.clone(),
+        serde_json::json!({
+            "op": "blend", "base": format!("@{shape_id}"),
+            "over": format!("@{tile_id}"), "clip": true
+        }),
+    );
+    outputs.push(out_id);
+}
+
+/// A `symbol` layer's **icon** (`layout.icon-image`): place the named sprite
+/// at each point feature (`features` → `icon` → `stamp`). Text labels
+/// (`text-field`) are not supported yet — an icon+text layer draws the icon
+/// and warns about the dropped text.
+fn convert_symbol(
+    id: &str,
+    layer: &Map<String, Value>,
+    nodes: &mut Map<String, Value>,
+    outputs: &mut Vec<String>,
+    opts: &ConvertOptions,
+    sources: &Sources,
+    report: &mut Report,
+) {
+    let Some((source, source_layer)) = resolve_layer_source(id, layer, sources, report) else {
+        return;
+    };
+    let layout = layer.get("layout").and_then(Value::as_object);
+    let icon_image = layout.and_then(|l| l.get("icon-image"));
+    let has_text = layout
+        .and_then(|l| l.get("text-field"))
+        .is_some_and(|v| !v.is_null());
+
+    let Some(icon_name) = icon_image.and_then(Value::as_str) else {
+        if icon_image.is_some() {
+            report.warn(format!(
+                "layer `{id}`: data-driven `icon-image` not supported — skipped"
+            ));
+        } else if has_text {
+            report.warn(format!(
+                "layer `{id}`: text-only `symbol` (labels) not supported yet — skipped"
+            ));
+        } else {
+            report.warn(format!(
+                "layer `{id}`: `symbol` without a constant `icon-image` — skipped"
+            ));
+        }
+        return;
+    };
+    let Some((sprite_src, sprite_icon)) = sources.resolve_icon(icon_name) else {
+        report.warn(format!(
+            "layer `{id}`: icon `{icon_name}` needs a `sprite`, but the style declares none — skipped"
+        ));
+        return;
+    };
+    if has_text {
+        report.warn(format!(
+            "layer `{id}`: drawing icon only — `text-field` labels not supported yet"
+        ));
+    }
+
+    let base_filter = layer
+        .get("filter")
+        .and_then(|f| filter::convert(f, report, id));
+    let feat_id = format!("{id}__feat");
+    nodes.insert(
+        feat_id.clone(),
+        features_node(&source, &source_layer, base_filter),
+    );
+    let icon_id = format!("{id}__icon");
+    nodes.insert(
+        icon_id.clone(),
+        serde_json::json!({ "op": "icon", "sprite": format!("@{sprite_src}"), "name": sprite_icon }),
+    );
+
+    let size = layout
+        .and_then(|l| l.get("icon-size"))
+        .and_then(|v| zoom::number_at(v, opts.zoom))
+        .unwrap_or(1.0);
+    let rotate = layout
+        .and_then(|l| l.get("icon-rotate"))
+        .and_then(|v| zoom::number_at(v, opts.zoom))
+        .unwrap_or(0.0);
+    let opacity = paint_of(layer)
+        .get("icon-opacity")
+        .and_then(|v| zoom::number_at(v, opts.zoom));
+
+    let stamp_id = format!("{id}__stamp");
+    let mut spec = serde_json::json!({
+        "op": "stamp", "features": format!("@{feat_id}"), "image": format!("@{icon_id}")
+    });
+    if size != 1.0 {
+        spec["scale"] = Value::from(size);
+    }
+    if rotate != 0.0 {
+        spec["rotation-deg"] = Value::from(rotate);
+    }
     if let Some(a) = opacity {
         spec["opacity"] = Value::from(a);
     }

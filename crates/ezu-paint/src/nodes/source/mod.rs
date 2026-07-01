@@ -4,6 +4,7 @@
 
 mod dem;
 mod features;
+mod icon;
 mod image;
 mod literal_geometry;
 mod point_grid;

@@ -27,10 +27,16 @@
 //!   brush bank under the source's `src` (no `clearSources` effect)
 //! - `image` → decode PNG/WebP and register in the persistent image
 //!   bank (same persistence)
+//! - `sprite` → decode the atlas PNG (`bytes`) + resolve the index
+//!   (inline in the style, or `opts.index` = the fetched sprite `.json`
+//!   text) into the persistent sprite bank (same persistence)
 //! - `mvt` / `pmtiles` → MVT decode + bind as `tile.<layer>` at render
 //!   time (cleared by `clearSources`)
 //! - `dem` → decode + 3×3 stitch + bind as `tile.<source-name>` at
 //!   render time (cleared by `clearSources`)
+//! - `geojson` → *remote* GeoJSON only: bind the fetched document
+//!   `bytes`; projected per tile at render (cleared by `clearSources`).
+//!   Inline `data` needs no bind — it's read from the style directly.
 //!
 //! ## Output
 //!
@@ -44,8 +50,9 @@
 //!
 //! All fallible methods throw a JavaScript `Error` whose `.name`
 //! discriminates the failure kind: `InvalidStyle`, `BrushParse`,
-//! `MvtDecode`, `DemDecode`, `RenderFailed`, `PngEncode`,
-//! `WebpEncode`, `UnknownSource`.
+//! `MvtDecode`, `DemDecode`, `RasterDecode`, `GeoJsonDecode`,
+//! `SpriteDecode`, `RenderFailed`, `PngEncode`, `WebpEncode`,
+//! `UnknownSource`.
 
 mod log;
 
@@ -54,11 +61,14 @@ pub use log::LogSink;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use ezu_graph::{build_graph, Cache, CanvasInfo, Evaluator, Graph, ParamValues, PortValue, TileId};
+use ezu_features::FeatureLayer;
+use ezu_graph::{
+    build_graph, Cache, CanvasInfo, Evaluator, Graph, ParamValues, PortValue, SpriteSheet, TileId,
+};
 use ezu_paint::host::{
-    decode_dem_tile, decode_raster_tile, raster_to_png_with, raster_to_rgba8, raster_to_webp,
-    stitch_padded_field, stitch_padded_raster, BrushBankLoader, DemTile, PngCompression,
-    RasterTile, TileLoader,
+    build_sprite_icons, decode_dem_tile, decode_raster_tile, raster_to_png_with, raster_to_rgba8,
+    raster_to_webp, stitch_padded_field, stitch_padded_raster, BrushBankLoader, DemTile,
+    PngCompression, RasterTile, TileLoader,
 };
 use ezu_paint::nodes::default_registry;
 use ezu_style::{Document, SourceDecl};
@@ -74,6 +84,8 @@ const ERR_RENDER: &str = "RenderFailed";
 const ERR_PNG: &str = "PngEncode";
 const ERR_WEBP: &str = "WebpEncode";
 const ERR_SOURCE: &str = "UnknownSource";
+const ERR_GEOJSON: &str = "GeoJsonDecode";
+const ERR_SPRITE: &str = "SpriteDecode";
 
 /// Pending tile bytes for a single named source. MVT bytes are
 /// validated at bind time (we attempt a decode and discard the
@@ -87,6 +99,10 @@ enum SourceBinding {
     /// RGBA imagery tiles per `(dx, dy)` neighbour offset, decoded +
     /// stitched at render time like DEM.
     Raster(HashMap<(i32, i32), Vec<u8>>),
+    /// Raw GeoJSON bytes (WGS84 lon/lat), projected into the tile frame at
+    /// render time. Only needed for *remote* geojson; inline `data` is read
+    /// straight from the document.
+    GeoJson(Vec<u8>),
 }
 
 /// Stateful WASM renderer.
@@ -221,14 +237,29 @@ impl Renderer {
                     ));
                 }
             }
-            // Inline GeoJSON carries its data in the document, not via a tiled
-            // fetch, so the wasm host has nothing to `bind` here yet. Layers on
-            // an unbound geojson source render empty rather than failing.
+            // Remote GeoJSON: the JS host fetched the document and hands the
+            // raw bytes here. (Inline `data` needs no bind — it's read from
+            // the document at render time.) Stored tile-scoped; projected per
+            // tile when `render_tile` runs.
             SourceDecl::GeoJson(_) => {
-                return Err(named_err(
-                    ERR_SOURCE,
-                    format!("source `{name}`: geojson binding not supported in the wasm host yet"),
-                ));
+                // Validate now so malformed bytes throw at bind time.
+                serde_json::from_slice::<serde_json::Value>(&bytes)
+                    .map_err(|e| named_err(ERR_GEOJSON, e))?;
+                self.bindings
+                    .insert(name.to_string(), SourceBinding::GeoJson(bytes));
+            }
+            // Sprite: the JS host provides the atlas PNG as `bytes`. The index
+            // is either inline in the document or supplied as `opts.index` (the
+            // fetched sprite `.json` text). Built once into the persistent
+            // bank, like brushes/images (unaffected by `clearSources`).
+            SourceDecl::Sprite(sprite) => {
+                let atlas = ezu_paint::host::decode_image_bytes(&bytes)
+                    .map_err(|e| named_err(ERR_SPRITE, format!("atlas decode: {e}")))?;
+                let index_json = parse_index_opt(opts.as_ref());
+                let icons = build_sprite_icons(&sprite.index, index_json.as_deref())
+                    .map_err(|e| named_err(ERR_SPRITE, e))?;
+                self.assets
+                    .insert_sprite(sprite.image.clone(), SpriteSheet { atlas, icons });
             }
         }
         Ok(())
@@ -377,6 +408,24 @@ impl Renderer {
                     })?;
                     tile_loader.bind_raster(name.clone(), buf);
                 }
+                SourceBinding::GeoJson(bytes) => {
+                    let data: serde_json::Value =
+                        serde_json::from_slice(bytes).map_err(|e| named_err(ERR_GEOJSON, e))?;
+                    bind_geojson(&mut tile_loader, name, &data, tile_id)?;
+                }
+            }
+        }
+
+        // Inline GeoJSON needs no `bindSource` — project the document's `data`
+        // straight into this tile. Skip any that were bound remotely above.
+        for (name, decl) in &self.doc.sources {
+            if let SourceDecl::GeoJson(g) = decl {
+                if self.bindings.contains_key(name) {
+                    continue;
+                }
+                if let Some(data) = g.data.as_ref().filter(|d| d.is_object() || d.is_array()) {
+                    bind_geojson(&mut tile_loader, name, data, tile_id)?;
+                }
             }
         }
 
@@ -495,6 +544,36 @@ fn parse_render_options(obj: Option<&js_sys::Object>) -> RenderOptions {
         }
     }
     out
+}
+
+/// Project WGS84 GeoJSON `data` into `tile`'s local frame (extent 4096) and
+/// bind it as one feature layer under `<name>.<name>` — matching a
+/// converter-emitted `features` node's `(source, source)` target.
+fn bind_geojson(
+    tile_loader: &mut TileLoader<'_>,
+    name: &str,
+    data: &serde_json::Value,
+    tile: TileId,
+) -> Result<(), JsValue> {
+    let features = ezu_features::geojson::decode_projected(data, tile.z, tile.x, tile.y, 4096)
+        .map_err(|e| named_err(ERR_GEOJSON, e))?;
+    tile_loader.bind_features(
+        format!("{name}.{name}"),
+        FeatureLayer {
+            name: name.to_string(),
+            extent: 4096,
+            features,
+        },
+    );
+    Ok(())
+}
+
+/// Parse the optional `{ index: "<sprite-json text>" }` payload to
+/// `bindSource` for a sprite (the fetched index when it's a URL, not inline).
+fn parse_index_opt(obj: Option<&js_sys::Object>) -> Option<String> {
+    js_sys::Reflect::get(obj?, &"index".into())
+        .ok()
+        .and_then(|v| v.as_string())
 }
 
 /// Parse the optional `{ coord: [dx, dy] }` payload to `bindSource`.

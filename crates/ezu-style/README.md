@@ -77,6 +77,18 @@ Tile-scoped source kinds:
   stitches the 3×3 neighbourhood onto the padded canvas and binds it
   under the source name for the `raster` node, which emits a
   canvas-sized `Raster` ready for any downstream filter.
+- `geojson` — inline (`data`) or remote (`url`) GeoJSON in WGS84
+  lon/lat. The host projects it into each tile's local frame and
+  binds it as one feature layer under `<source>.<source>`.
+
+Document-scoped, besides `brush` / `image`:
+
+- `sprite` — a sprite sheet: an atlas `image` (`file:` / `http(s)://`)
+  plus an `index` mapping icon names to atlas sub-rects. The `index`
+  is a URL/path to a sprite `.json`, or an inline map (same field
+  shape). The host decodes the sheet up front; an `icon` node crops a
+  named rect into a `Sprite` for `stamp` (symbol icons) or `tiling`
+  (`fill-pattern`).
 
 Tile pyramids (`raster`, `dem`) take an `on-missing` policy deciding
 what an in-range 404 means: `empty` (default — transparent pixels /

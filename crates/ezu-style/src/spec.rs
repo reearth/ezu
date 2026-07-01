@@ -303,6 +303,7 @@ pub enum SourceDecl {
     Raster(RasterSource),
     #[serde(rename = "geojson")]
     GeoJson(GeoJsonSource),
+    Sprite(SpriteSource),
 }
 
 impl SourceDecl {
@@ -315,8 +316,54 @@ impl SourceDecl {
             SourceDecl::Dem(s) => &s.attribution,
             SourceDecl::Raster(s) => &s.attribution,
             SourceDecl::GeoJson(s) => &s.attribution,
+            SourceDecl::Sprite(s) => &s.attribution,
         }
     }
+}
+
+/// A sprite sheet: one atlas image plus a name → sub-rect index, so
+/// `icon` nodes can crop named icons out of it (icons, `fill-pattern`).
+/// The runtime shape is [`ezu_graph::SpriteSheet`]; the host builds it.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct SpriteSource {
+    /// Atlas image `src` — a path (resolved against `--assets-dir`) or an
+    /// `http(s)://` URL, like [`FileSource::src`]. This doubles as the
+    /// sheet's asset key, so `icon { sprite: "@name" }` resolves here.
+    pub image: String,
+    /// The name → rect index: either a URL/path to a sprite `.json`, or an
+    /// inline map. Inline uses the same field names as a fetched index.
+    pub index: SpriteIndex,
+    #[serde(default)]
+    pub attribution: Option<String>,
+}
+
+/// A sprite index, inline or by reference.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum SpriteIndex {
+    /// URL/path to a sprite index JSON (fetched/read by the host).
+    Url(String),
+    /// Inline `name → rect` map written straight into the recipe.
+    Inline(std::collections::HashMap<String, IconRect>),
+}
+
+/// One entry of a sprite index — a sub-rectangle of the atlas. Mirrors the
+/// MapLibre sprite-JSON entry shape (extra keys like `sdf`/`content` are
+/// ignored) so a fetched index deserializes into the same type.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct IconRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    #[serde(default = "one_f32")]
+    pub pixel_ratio: f32,
+}
+
+fn one_f32() -> f32 {
+    1.0
 }
 
 /// Inline (or URL) GeoJSON in WGS84 lon/lat. The host projects it into each

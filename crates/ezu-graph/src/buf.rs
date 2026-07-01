@@ -6,6 +6,7 @@
 //! that wrap those engines do conversions at their boundaries.
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// RGBA8 raster, sRGB color space, premultiplied alpha. Layout is
@@ -42,6 +43,54 @@ impl RasterBuf {
             self.pixels[i + 2],
             self.pixels[i + 3],
         ]
+    }
+}
+
+/// A sub-rectangle of a sprite atlas: one named icon.
+#[derive(Debug, Clone, Copy)]
+pub struct SpriteRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    /// Device pixels per logical pixel the icon was authored at (a `@2x`
+    /// sprite has `pixel_ratio == 2.0`). Consumers divide by it to get the
+    /// icon's intended display size.
+    pub pixel_ratio: f32,
+}
+
+/// A decoded sprite sheet: one atlas image plus a name → sub-rect index.
+/// The runtime counterpart of a `sprite` source — the host builds it from
+/// the atlas PNG and the (inline or fetched) index, and the `icon` node
+/// crops named rects out of it.
+#[derive(Debug)]
+pub struct SpriteSheet {
+    pub atlas: RasterBuf,
+    pub icons: HashMap<String, SpriteRect>,
+}
+
+impl SpriteSheet {
+    /// Crop a named icon out of the atlas into a standalone `RasterBuf`.
+    /// Returns `None` if the name is unknown or its rect falls outside the
+    /// atlas bounds.
+    pub fn crop(&self, name: &str) -> Option<RasterBuf> {
+        let r = self.icons.get(name)?;
+        if r.width == 0
+            || r.height == 0
+            || r.x + r.width > self.atlas.width
+            || r.y + r.height > self.atlas.height
+        {
+            return None;
+        }
+        let mut out = RasterBuf::new(r.width, r.height);
+        let aw = self.atlas.width as usize;
+        for row in 0..r.height {
+            let src = (((r.y + row) as usize * aw) + r.x as usize) * 4;
+            let dst = (row as usize * r.width as usize) * 4;
+            let n = r.width as usize * 4;
+            out.pixels[dst..dst + n].copy_from_slice(&self.atlas.pixels[src..src + n]);
+        }
+        Some(out)
     }
 }
 
@@ -104,5 +153,70 @@ impl ScalarField {
 
     pub fn metres_per_pixel_y(&self) -> f32 {
         self.geo_scale.map(|g| g.metres_per_pixel_y).unwrap_or(1.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sprite_crop_extracts_named_rect() {
+        // 4×2 atlas: left half red, right half green (premultiplied, opaque).
+        let mut atlas = RasterBuf::new(4, 2);
+        for y in 0..2 {
+            for x in 0..4 {
+                let i = ((y * 4 + x) * 4) as usize;
+                let c = if x < 2 {
+                    [255, 0, 0, 255]
+                } else {
+                    [0, 255, 0, 255]
+                };
+                atlas.pixels[i..i + 4].copy_from_slice(&c);
+            }
+        }
+        let mut icons = HashMap::new();
+        icons.insert(
+            "left".to_string(),
+            SpriteRect {
+                x: 0,
+                y: 0,
+                width: 2,
+                height: 2,
+                pixel_ratio: 1.0,
+            },
+        );
+        icons.insert(
+            "right".to_string(),
+            SpriteRect {
+                x: 2,
+                y: 0,
+                width: 2,
+                height: 2,
+                pixel_ratio: 1.0,
+            },
+        );
+        icons.insert(
+            "oob".to_string(),
+            SpriteRect {
+                x: 3,
+                y: 0,
+                width: 2,
+                height: 2,
+                pixel_ratio: 1.0,
+            },
+        );
+        let sheet = SpriteSheet { atlas, icons };
+
+        let right = sheet.crop("right").expect("named icon");
+        assert_eq!((right.width, right.height), (2, 2));
+        assert!(right.pixels.chunks_exact(4).all(|p| p == [0, 255, 0, 255]));
+
+        let left = sheet.crop("left").unwrap();
+        assert!(left.pixels.chunks_exact(4).all(|p| p == [255, 0, 0, 255]));
+
+        // Unknown name / out-of-bounds rect → None.
+        assert!(sheet.crop("missing").is_none());
+        assert!(sheet.crop("oob").is_none());
     }
 }
