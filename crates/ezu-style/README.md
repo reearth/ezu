@@ -58,6 +58,10 @@ carry a `src` URI, tile-scoped variants a `url` template.
   the source `type` if omitted.
 - `http(s)://...` — fetched by the host (CLI native, `prefetch_doc_assets`)
   before the first render, then cached in the in-memory bank.
+- `data:[<mediatype>][;base64],<payload>` — a self-contained inline
+  asset (e.g. a small `image` PNG or `.myb` brush), decoded in-process
+  with no I/O, so it works in every host including wasm. `image/*` media
+  types load as images; others are tried as a brush.
 
 Tile-scoped source kinds:
 
