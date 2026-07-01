@@ -62,8 +62,6 @@ the tile's zoom reproduces MapLibre's value exactly for that tile.
   converts) and **per-feature data-driven paint** other than the
   `match`-bucket case (e.g. `["interpolate", …, ["get", "height"], …]`).
 - **`fill-extrusion`**, **`heatmap`**, **`line-pattern`**.
-- Remote GeoJSON and `sprite` binding in the **wasm** host (native +
-  `ezu-compare` fetch them; the browser host binds inline data only).
 - Road **casing** (the darker under-stroke MapLibre draws beneath a line).
 - Filter operators ezu's flat filter can't represent: `any` (OR),
   `has` / `!has` (field existence), comparisons (`<` / `>`), `geometry-type`.
