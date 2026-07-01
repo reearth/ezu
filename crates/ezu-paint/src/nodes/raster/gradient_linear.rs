@@ -10,7 +10,8 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{read_anchor, read_stops, read_xy, sample_stops, Anchor};
+use crate::color_interp::InterpSpace;
+use crate::nodes::common::{read_anchor, read_space, read_stops, read_xy, sample_stops, Anchor};
 use crate::nodes::raster::generator_kind::{parse_generator_kind, GeneratorKind};
 use crate::nodes::raster::gradient_common::render_gradient;
 
@@ -18,6 +19,7 @@ struct GradientLinearNode {
     start: [f32; 2],
     end: [f32; 2],
     stops: Vec<(f32, [f32; 4])>,
+    space: InterpSpace,
     anchor: Anchor,
     out_kind: GeneratorKind,
 }
@@ -50,12 +52,13 @@ impl Node for GradientLinearNode {
         let len2 = dx * dx + dy * dy;
         let start = self.start;
         let stops = &self.stops;
+        let space = self.space;
         let sample = |ux: f32, uy: f32| -> [f32; 4] {
             if len2 < 1e-12 {
                 return stops.first().map(|s| s.1).unwrap_or([0.0; 4]);
             }
             let t = ((ux - start[0]) * dx + (uy - start[1]) * dy) / len2;
-            sample_stops(stops, t)
+            sample_stops(stops, t, space)
         };
         Ok(render_gradient(ctx, self.out_kind, self.anchor, sample))
     }
@@ -66,6 +69,7 @@ impl Node for GradientLinearNode {
         h.update(&self.end[0].to_le_bytes());
         h.update(&self.end[1].to_le_bytes());
         h.update(&[self.anchor as u8]);
+        h.update(&[self.space.hash_tag()]);
         for (t, c) in &self.stops {
             h.update(&t.to_le_bytes());
             for v in c {
@@ -94,6 +98,7 @@ impl NodeFactory for GradientLinearFactory {
         let start = read_xy(fields, "start", ctx, [0.0, 0.0])?;
         let end = read_xy(fields, "end", ctx, [1.0, 0.0])?;
         let stops = read_stops(fields, "stops", ctx)?;
+        let space = read_space(fields)?;
         let anchor = read_anchor(fields, "anchor", ctx)?;
         let out_kind = parse_generator_kind(fields, ctx)?;
         Ok(BuiltNode {
@@ -101,6 +106,7 @@ impl NodeFactory for GradientLinearFactory {
                 start,
                 end,
                 stops,
+                space,
                 anchor,
                 out_kind,
             }),
@@ -115,6 +121,7 @@ impl NodeFactory for GradientLinearFactory {
                 "end":   { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "default": [1.0, 0.0] },
                 "stops": { "type": "array", "items": { "type": "array", "minItems": 2, "maxItems": 2 }, "minItems": 2 },
                 "anchor": { "type": "string", "enum": ["tile", "world"], "default": "tile" },
+                "space": { "type": "string", "enum": ["rgb", "hsl", "hsv", "hcl", "lab"], "default": "rgb", "description": "Colour space the stops interpolate in; hue-based spaces take the shortest path." },
                 "kind": { "type": "string", "enum": ["raster", "sprite"], "default": "raster" },
                 "width-px": { "type": "integer", "minimum": 1 },
                 "height-px": { "type": "integer", "minimum": 1 },

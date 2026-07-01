@@ -3,8 +3,10 @@
 //! - Tile / world coordinate conversions
 //! - Deterministic seeding from world coordinates (for seamless tile rendering)
 
+pub mod color;
 pub mod coord;
 pub mod seed;
 
+pub use color::{interpolate as interpolate_color, InterpSpace};
 pub use coord::{TileId, WorldPos};
 pub use seed::world_seed;

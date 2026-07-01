@@ -9,7 +9,8 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{read_anchor, read_stops, read_xy, sample_stops, Anchor};
+use crate::color_interp::InterpSpace;
+use crate::nodes::common::{read_anchor, read_space, read_stops, read_xy, sample_stops, Anchor};
 use crate::nodes::raster::generator_kind::{parse_generator_kind, GeneratorKind};
 use crate::nodes::raster::gradient_common::render_gradient;
 
@@ -17,6 +18,7 @@ struct GradientConicNode {
     center: [f32; 2],
     start_angle: In<f64>, // degrees
     stops: Vec<(f32, [f32; 4])>,
+    space: InterpSpace,
     anchor: Anchor,
     out_kind: GeneratorKind,
     ports: Vec<PortSpec>,
@@ -51,12 +53,13 @@ impl Node for GradientConicNode {
         let start_rad = (self.start_angle.get(ctx, inputs)? as f32).to_radians();
         let center = self.center;
         let stops = &self.stops;
+        let space = self.space;
         let sample = |ux: f32, uy: f32| -> [f32; 4] {
             let dx = ux - center[0];
             let dy = uy - center[1];
             let ang = dy.atan2(dx) - start_rad;
             let t = ang.rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU;
-            sample_stops(stops, t)
+            sample_stops(stops, t, space)
         };
         Ok(render_gradient(ctx, self.out_kind, self.anchor, sample))
     }
@@ -66,6 +69,7 @@ impl Node for GradientConicNode {
         h.update(&self.center[1].to_le_bytes());
         self.start_angle.param_hash(h);
         h.update(&[self.anchor as u8]);
+        h.update(&[self.space.hash_tag()]);
         for (t, c) in &self.stops {
             h.update(&t.to_le_bytes());
             for v in c {
@@ -96,6 +100,7 @@ impl NodeFactory for GradientConicFactory {
     ) -> Result<BuiltNode, FactoryError> {
         let center = read_xy(fields, "center", ctx, [0.5, 0.5])?;
         let stops = read_stops(fields, "stops", ctx)?;
+        let space = read_space(fields)?;
         let anchor = read_anchor(fields, "anchor", ctx)?;
         let mut r = InReader::new(fields, ctx, 0);
         let start_angle = r.number_or("start-angle", 0.0)?;
@@ -106,6 +111,7 @@ impl NodeFactory for GradientConicFactory {
                 center,
                 start_angle,
                 stops,
+                space,
                 anchor,
                 out_kind,
                 ports: parts.ports,
@@ -122,6 +128,7 @@ impl NodeFactory for GradientConicFactory {
                 "start-angle": schema_frag::number(),
                 "stops": { "type": "array", "items": { "type": "array", "minItems": 2, "maxItems": 2 }, "minItems": 2 },
                 "anchor": { "type": "string", "enum": ["tile", "world"], "default": "tile" },
+                "space": { "type": "string", "enum": ["rgb", "hsl", "hsv", "hcl", "lab"], "default": "rgb", "description": "Colour space the stops interpolate in; hue-based spaces take the shortest path." },
                 "kind": { "type": "string", "enum": ["raster", "sprite"], "default": "raster" },
                 "width-px": { "type": "integer", "minimum": 1 },
                 "height-px": { "type": "integer", "minimum": 1 },

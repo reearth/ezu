@@ -189,7 +189,8 @@ The minimum op set ships in [`ezu-paint`](https://github.com/reearth/ezu/tree/ma
   modes — multiply / screen / overlay / soft-light / hue / luminosity
   etc., plus `composite` operators (`destination-out` for brush-style
   eraser), `clip` for Photoshop-style clipping masks, and an optional
-  alpha-`mask` input)
+  alpha-`mask` input), `mix` (tween two rasters by a scalar `t` in a
+  selectable colour `space` — a straight colour blend, not a composite)
 - **Warp** — `displace` (Photoshop-style displacement map: R/G channels
   of a second raster drive per-pixel offsets), `warp` (domain warp via
   built-in noise; world-anchored for seamless tile borders). Both grow
@@ -197,13 +198,18 @@ The minimum op set ships in [`ezu-paint`](https://github.com/reearth/ezu/tree/ma
   `mirror` boundary modes
 - **Adjustment** — `brightness-contrast`, `levels` (Photoshop-style
   in/out black/white + gamma), `hsl` (hue rotation +
-  saturation/lightness shift), `invert`, `color-to-alpha` (chroma key)
+  saturation/lightness shift), `saturate` / `vibrance` (scale CIELAB
+  chroma — uniform, or adaptively boosting low-chroma pixels — preserving
+  hue + lightness), `invert`, `color-to-alpha` (chroma key)
 - **Morphology / edges** — `erode` / `dilate` (per-channel min/max box
   filter, for mask cleanup), `edge-detect` (Sobel gradient magnitude),
   `sharpen` (4-neighbour Laplacian)
 - **Channel ops** — `channel-shuffle` (rearrange RGBA, or stamp
   constants `0` / `1` into channels), `posterize` (per-channel
-  quantisation)
+  quantisation), `quantize` (snap to a fixed palette by nearest colour in
+  perceptual CIELAB or RGB — limited-palette / poster / pixel-art looks),
+  `dither` (palette reduction with Floyd–Steinberg error diffusion or an
+  ordered Bayer matrix — retro / print looks)
 - **Geometry (Voronoi family)** — `voronoi` (point set → diagram
   edges), `voronoi-fracture` (split polygons into Voronoi sub-cells
   via seed points), `medial-axis` (polygon → skeleton polylines for
@@ -221,15 +227,18 @@ The minimum op set ships in [`ezu-paint`](https://github.com/reearth/ezu/tree/ma
 - **Gradients** — `gradient-linear`, `gradient-radial` (elliptical via
   `aspect`), `gradient-conic`, `gradient-diamond`. All take color stops
   and an `anchor: "tile" | "world"` for tile-local or world-anchored
-  (seamless across tiles) patterns.
+  (seamless across tiles) patterns. Stops interpolate in a selectable
+  `space` (`rgb` default, plus `hsl` / `hsv` / `hcl` / `lab`; hue-based
+  spaces take the shortest path around the wheel).
 - **Terrain** — `dem` (sample a host-bound raster-DEM mosaic as a
   `ScalarField` with `geo_scale` populated; the host declares the tile pyramid in `sources` and
   handles fetch / decode / 3×3 stitch / overzoom upsampling for
   terrarium and mapbox-rgb encodings), `hillshade` (Horn-method
   analytical shade with `shade` or multiply-friendly `relief` mode,
   optional ESRI multidirectional), `slope`, `color-ramp` (any scalar
-  field → colour via a stops table; canonical use is hypsometric
-  tinting of a DEM).
+  field → colour via a stops table, with a selectable interpolation
+  `space` — `rgb` / `hsl` / `hsv` / `hcl` / `lab`; canonical use is
+  hypsometric tinting of a DEM).
 
 Example: a watercolor water layer with a brushed road on top of an
 earth-tone background.

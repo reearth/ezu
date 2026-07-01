@@ -710,6 +710,7 @@ dependencies = [
 name = "ezu-maplibre"
 version = "0.3.0"
 dependencies = [
+ "ezu-core",
  "ezu-style",
  "serde",
  "serde_json",
