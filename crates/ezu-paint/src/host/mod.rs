@@ -183,6 +183,18 @@ impl AssetLoader for BrushBankLoader {
                 }
                 Err(AssetError::NotFound(src.to_string()))
             }
+            SrcScheme::Data(_) => {
+                // Decoded up front by `prefetch_doc_assets` into the bank; fall
+                // back to decoding inline (no I/O) for hosts that don't prefetch
+                // (wasm). Small inline assets, so a per-call decode is fine.
+                if let Some(b) = self.bank.get(src) {
+                    return Ok(Asset::Brush(b.clone()));
+                }
+                if let Some(img) = self.images.get(src) {
+                    return Ok(Asset::Image(img.clone()));
+                }
+                load_data_url(src)
+            }
         }
     }
 }
@@ -202,6 +214,10 @@ enum SrcScheme<'a> {
     /// the other variants for symmetry; the lookup uses the full
     /// `src` (matched against `bank` / `images` by the URL key).
     Http(#[allow(dead_code)] &'a str),
+    /// `data:[<mediatype>][;base64],<payload>` — a self-contained inline
+    /// asset. Decoded in-process (no I/O), so it works in every host
+    /// including wasm.
+    Data(#[allow(dead_code)] &'a str),
 }
 
 fn parse_src_scheme(src: &str) -> Result<SrcScheme<'_>, AssetError> {
@@ -211,11 +227,97 @@ fn parse_src_scheme(src: &str) -> Result<SrcScheme<'_>, AssetError> {
         Ok(SrcScheme::File(rest))
     } else if src.starts_with("http://") || src.starts_with("https://") {
         Ok(SrcScheme::Http(src))
+    } else if src.starts_with("data:") {
+        Ok(SrcScheme::Data(src))
     } else {
         Err(AssetError::Other(format!(
-            "src `{src}` is missing a scheme — use `builtin:NAME`, `file:PATH`, or `http(s)://URL`"
+            "src `{src}` is missing a scheme — use `builtin:NAME`, `file:PATH`, `http(s)://URL`, or `data:`"
         )))
     }
+}
+
+/// A decoded `data:` URL — its media type (lowercased, e.g. `image/png`;
+/// empty if unspecified) and raw payload bytes.
+struct DataUrl {
+    media_type: String,
+    bytes: Vec<u8>,
+}
+
+/// Parse a `data:[<mediatype>][;base64],<payload>` URL into its media type
+/// and decoded bytes. `;base64` payloads are base64-decoded; otherwise the
+/// payload is percent-decoded (UTF-8 text — e.g. an inline `.myb` brush).
+fn decode_data_url(src: &str) -> Result<DataUrl, AssetError> {
+    let body = src
+        .strip_prefix("data:")
+        .ok_or_else(|| AssetError::Decode {
+            src: src.to_string(),
+            msg: "not a data URL".into(),
+        })?;
+    let (meta, payload) = body.split_once(',').ok_or_else(|| AssetError::Decode {
+        src: src.to_string(),
+        msg: "malformed data URL (missing `,`)".into(),
+    })?;
+    let is_base64 = meta.split(';').any(|s| s.eq_ignore_ascii_case("base64"));
+    let media_type = meta.split(';').next().unwrap_or("").to_ascii_lowercase();
+    let bytes = if is_base64 {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD
+            .decode(payload.trim())
+            .map_err(|e| AssetError::Decode {
+                src: src.to_string(),
+                msg: format!("base64: {e}"),
+            })?
+    } else {
+        percent_decode(payload)
+    };
+    Ok(DataUrl { media_type, bytes })
+}
+
+/// Minimal `%XX` percent-decoding for non-base64 `data:` payloads. Invalid
+/// escapes are passed through byte-for-byte.
+fn percent_decode(s: &str) -> Vec<u8> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            let hi = (b[i + 1] as char).to_digit(16);
+            let lo = (b[i + 2] as char).to_digit(16);
+            if let (Some(hi), Some(lo)) = (hi, lo) {
+                out.push((hi * 16 + lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    out
+}
+
+/// Decode a `data:` URL into an [`Asset`]: `image/*` → an image; anything
+/// else is tried as a `.myb` brush, then (as a fallback for
+/// octet-stream/unspecified types) as a sniffed image.
+fn load_data_url(src: &str) -> Result<Asset, AssetError> {
+    let data = decode_data_url(src)?;
+    let as_image = |bytes: &[u8]| {
+        decode_image_bytes(bytes)
+            .map(|r| Asset::Image(Arc::new(r)))
+            .map_err(|e| AssetError::Decode {
+                src: src.to_string(),
+                msg: e,
+            })
+    };
+    if data.media_type.starts_with("image/") {
+        return as_image(&data.bytes);
+    }
+    // Non-image media type: prefer a brush, else sniff as an image.
+    if let Ok(text) = std::str::from_utf8(&data.bytes) {
+        if let Ok(brush) = hokusai::myb::from_str(text) {
+            return Ok(Asset::Brush(Arc::new(brush)));
+        }
+    }
+    as_image(&data.bytes)
 }
 
 fn load_brush_file(
@@ -758,11 +860,15 @@ pub async fn prefetch_doc_assets(
 async fn read_asset_bytes(src: &str, base_dir: &std::path::Path) -> Result<Vec<u8>, String> {
     if is_http_url(src) {
         http_bytes(src).await
+    } else if src.starts_with("data:") {
+        decode_data_url(src)
+            .map(|d| d.bytes)
+            .map_err(|e| e.to_string())
     } else if let Some(path) = src.strip_prefix("file:") {
         std::fs::read(resolve_file(path, base_dir)).map_err(|e| e.to_string())
     } else {
         Err(format!(
-            "unsupported src `{src}` — use `http(s)://URL` or `file:PATH`"
+            "unsupported src `{src}` — use `http(s)://URL`, `file:PATH`, or `data:`"
         ))
     }
 }
@@ -772,11 +878,14 @@ async fn read_asset_bytes(src: &str, base_dir: &std::path::Path) -> Result<Vec<u
 async fn read_asset_text(src: &str, base_dir: &std::path::Path) -> Result<String, String> {
     if is_http_url(src) {
         http_text(src).await
+    } else if src.starts_with("data:") {
+        let d = decode_data_url(src).map_err(|e| e.to_string())?;
+        String::from_utf8(d.bytes).map_err(|e| e.to_string())
     } else if let Some(path) = src.strip_prefix("file:") {
         std::fs::read_to_string(resolve_file(path, base_dir)).map_err(|e| e.to_string())
     } else {
         Err(format!(
-            "unsupported src `{src}` — use `http(s)://URL` or `file:PATH`"
+            "unsupported src `{src}` — use `http(s)://URL`, `file:PATH`, or `data:`"
         ))
     }
 }
@@ -819,4 +928,54 @@ async fn http_bytes(url: &str) -> Result<Vec<u8>, String> {
 #[cfg(feature = "http")]
 fn is_http_url(s: &str) -> bool {
     s.starts_with("http://") || s.starts_with("https://")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::Engine;
+
+    /// Encode a 2×1 red/green PNG and wrap it as a base64 `data:` URL.
+    fn red_green_png_data_url() -> String {
+        let mut img = image::RgbaImage::new(2, 1);
+        img.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
+        img.put_pixel(1, 0, image::Rgba([0, 255, 0, 255]));
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(png.into_inner());
+        format!("data:image/png;base64,{b64}")
+    }
+
+    #[test]
+    fn data_url_image_loads_through_the_asset_loader() {
+        let src = red_green_png_data_url();
+        let loader = BrushBankLoader::empty();
+        match loader.load(&src).expect("data url loads") {
+            Asset::Image(img) => {
+                assert_eq!((img.width, img.height), (2, 1));
+                // Red then green, premultiplied-opaque round-trips unchanged.
+                assert_eq!(img.pixel(0, 0), [255, 0, 0, 255]);
+                assert_eq!(img.pixel(1, 0), [0, 255, 0, 255]);
+            }
+            _ => panic!("expected an Image asset from a data:image/png URL"),
+        }
+    }
+
+    #[test]
+    fn data_url_percent_decoding_and_media_type() {
+        // Non-base64, percent-encoded text payload.
+        let d = decode_data_url("data:text/plain,a%20b%2Fc").unwrap();
+        assert_eq!(d.media_type, "text/plain");
+        assert_eq!(d.bytes, b"a b/c");
+
+        // Media type is lowercased; `;base64` is detected case-insensitively.
+        let d = decode_data_url("data:image/PNG;Base64,QUJD").unwrap();
+        assert_eq!(d.media_type, "image/png");
+        assert_eq!(d.bytes, b"ABC");
+
+        // Malformed (no comma) is rejected.
+        assert!(decode_data_url("data:image/png;base64").is_err());
+    }
 }
