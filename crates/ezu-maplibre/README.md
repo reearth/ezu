@@ -36,7 +36,7 @@ cargo run -p ezu-maplibre --example convert -- style.json 14 > recipe.json
 | `line` | `features` + `brush-solid` + `line` |
 | `raster` | `raster` |
 | `hillshade` (over `raster-dem`) | `dem` + `hillshade` (tone calibration still approximate) |
-| filters `all` / `==` / `!=` / `in` / `!in` | ezu feature filter map |
+| filters `all` / `!` / `==` / `!=` / `in` / `!in` (legacy **and** expression form, e.g. `["in", ["get", k], ["literal", […]]]`) | ezu feature filter map |
 | zoom functions (`stops`, `interpolate`, `step`) | baked to a constant at [`ConvertOptions::zoom`] |
 
 Because ezu renders one integer zoom per tile, baking a zoom function at
@@ -50,7 +50,8 @@ the tile's zoom reproduces MapLibre's value exactly for that tile.
   (e.g. `["interpolate", …, ["get", "height"], …]`).
 - **Inline / remote GeoJSON sources**, **`fill-extrusion`**, **`heatmap`**.
 - **`line-dasharray`**, line caps/joins, road casing.
-- Expression operators outside `all` / `==` / `!=` / `in` / `!in`.
+- Filter operators ezu's flat filter can't represent: `any` (OR),
+  `has` / `!has` (field existence), comparisons (`<` / `>`), `geometry-type`.
 
 See [`ezu-compare`](../ezu-compare) to measure how close a converted recipe
 lands against a MapLibre reference render.
