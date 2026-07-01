@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::buf::{OpaqueValue, RasterBuf, ScalarField};
+use crate::buf::{OpaqueValue, RasterBuf, ScalarField, SpriteSheet};
 use crate::value::ScalarValue;
 
 /// Tile coordinate (z/x/y in TMS-ish form; the meaning is up to the host).
@@ -43,6 +43,8 @@ pub enum Asset {
     Brush(OpaqueValue),
     Features(OpaqueValue),
     ScalarField(Arc<ScalarField>),
+    /// A sprite atlas + name→rect index; the `icon` node crops named rects.
+    Sprite(Arc<SpriteSheet>),
 }
 
 #[derive(Debug, thiserror::Error)]

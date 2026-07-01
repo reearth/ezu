@@ -28,7 +28,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use ezu_features::{mvt::DecodedTile, FeatureLayer};
-use ezu_graph::{Asset, AssetError, AssetLoader, OpaqueValue, RasterBuf, ScalarField, TileId};
+use ezu_graph::{
+    Asset, AssetError, AssetLoader, OpaqueValue, RasterBuf, ScalarField, SpriteRect, SpriteSheet,
+    TileId,
+};
 use hokusai::Brush;
 use tiny_skia::{Pixmap, PixmapPaint, Transform};
 use xxhash_rust::xxh3::Xxh3;
@@ -52,6 +55,9 @@ pub struct BrushBankLoader {
     pub brushes_dir: Option<PathBuf>,
     pub images: HashMap<String, Arc<RasterBuf>>,
     pub images_dir: Option<PathBuf>,
+    /// Sprite sheets keyed by their atlas `image` src (the same string an
+    /// `icon` node's `sprite: "@name"` ref resolves to).
+    pub sprites: HashMap<String, Arc<SpriteSheet>>,
 }
 
 impl BrushBankLoader {
@@ -69,6 +75,7 @@ impl BrushBankLoader {
             brushes_dir: None,
             images: HashMap::new(),
             images_dir: None,
+            sprites: HashMap::new(),
         }
     }
 
@@ -102,6 +109,11 @@ impl BrushBankLoader {
     pub fn insert_image(&mut self, name: impl Into<String>, image: RasterBuf) {
         self.images.insert(name.into(), Arc::new(image));
     }
+
+    /// Register a decoded sprite sheet under its atlas image `src` key.
+    pub fn insert_sprite(&mut self, image_src: impl Into<String>, sheet: SpriteSheet) {
+        self.sprites.insert(image_src.into(), Arc::new(sheet));
+    }
 }
 
 impl Default for BrushBankLoader {
@@ -124,6 +136,9 @@ impl AssetLoader for BrushBankLoader {
                 if let Some(b) = self.bank.get(src) {
                     return Ok(Asset::Brush(b.clone()));
                 }
+                if let Some(s) = self.sprites.get(key).or_else(|| self.sprites.get(src)) {
+                    return Ok(Asset::Sprite(s.clone()));
+                }
                 if let Some(img) = self.images.get(key) {
                     return Ok(Asset::Image(img.clone()));
                 }
@@ -138,6 +153,9 @@ impl AssetLoader for BrushBankLoader {
                 // so wasm hosts work without disk.
                 if let Some(b) = self.bank.get(src) {
                     return Ok(Asset::Brush(b.clone()));
+                }
+                if let Some(s) = self.sprites.get(src) {
+                    return Ok(Asset::Sprite(s.clone()));
                 }
                 if let Some(img) = self.images.get(src) {
                     return Ok(Asset::Image(img.clone()));
@@ -156,6 +174,9 @@ impl AssetLoader for BrushBankLoader {
                 // the full URL string.
                 if let Some(b) = self.bank.get(src) {
                     return Ok(Asset::Brush(b.clone()));
+                }
+                if let Some(s) = self.sprites.get(src) {
+                    return Ok(Asset::Sprite(s.clone()));
                 }
                 if let Some(img) = self.images.get(src) {
                     return Ok(Asset::Image(img.clone()));
@@ -431,6 +452,41 @@ pub fn decode_image_bytes(bytes: &[u8]) -> Result<RasterBuf, String> {
     Ok(rgba_to_premul_raster(img))
 }
 
+/// Resolve a sprite source's `index` into a `name → rect` map.
+///
+/// An [`ezu_style::SpriteIndex::Inline`] map is converted directly; a
+/// [`ezu_style::SpriteIndex::Url`] needs its already-fetched JSON text in
+/// `fetched_json` (the host performs the I/O, keeping this pure). The JSON
+/// uses the MapLibre sprite-index shape, so a fetched `sprite.json` and an
+/// inline index deserialize identically.
+pub fn build_sprite_icons(
+    index: &ezu_style::SpriteIndex,
+    fetched_json: Option<&str>,
+) -> Result<HashMap<String, SpriteRect>, String> {
+    let entries: HashMap<String, ezu_style::IconRect> = match index {
+        ezu_style::SpriteIndex::Inline(map) => map.clone(),
+        ezu_style::SpriteIndex::Url(_) => {
+            let text = fetched_json.ok_or("sprite index URL was not fetched")?;
+            serde_json::from_str(text).map_err(|e| format!("sprite index parse: {e}"))?
+        }
+    };
+    Ok(entries
+        .into_iter()
+        .map(|(name, r)| {
+            (
+                name,
+                SpriteRect {
+                    x: r.x,
+                    y: r.y,
+                    width: r.width,
+                    height: r.height,
+                    pixel_ratio: r.pixel_ratio,
+                },
+            )
+        })
+        .collect())
+}
+
 fn rgba_to_premul_raster(img: image::RgbaImage) -> RasterBuf {
     let (w, h) = img.dimensions();
     let mut pixels = Vec::with_capacity((w * h * 4) as usize);
@@ -661,6 +717,29 @@ pub async fn prefetch_doc_assets(
                     .map_err(|e| format!("image `{name}` decode: {e}"))?;
                 loader.insert_image(file.src.clone(), raster);
             }
+            ezu_style::SourceDecl::Sprite(sprite) => {
+                // Sprites have no lazy eval-time path (the loader can't fetch),
+                // so build the whole sheet up front for both http and file.
+                if loader.sprites.contains_key(&sprite.image) {
+                    continue;
+                }
+                let atlas_bytes = read_asset_bytes(&sprite.image, base_dir)
+                    .await
+                    .map_err(|e| format!("sprite `{name}` atlas: {e}"))?;
+                let atlas = decode_image_bytes(&atlas_bytes)
+                    .map_err(|e| format!("sprite `{name}` atlas decode: {e}"))?;
+                let fetched = match &sprite.index {
+                    ezu_style::SpriteIndex::Url(u) => Some(
+                        read_asset_text(u, base_dir)
+                            .await
+                            .map_err(|e| format!("sprite `{name}` index: {e}"))?,
+                    ),
+                    ezu_style::SpriteIndex::Inline(_) => None,
+                };
+                let icons = build_sprite_icons(&sprite.index, fetched.as_deref())
+                    .map_err(|e| format!("sprite `{name}`: {e}"))?;
+                loader.insert_sprite(sprite.image.clone(), SpriteSheet { atlas, icons });
+            }
             // Tile-scoped — handled per-render elsewhere. GeoJSON is
             // projected + bound per tile by the host driver, not here.
             ezu_style::SourceDecl::Mvt(_)
@@ -671,6 +750,45 @@ pub async fn prefetch_doc_assets(
         }
     }
     Ok(())
+}
+
+/// Read an asset src (`http(s)://` or `file:PATH`, the latter resolved
+/// against `base_dir`) into bytes.
+#[cfg(feature = "http")]
+async fn read_asset_bytes(src: &str, base_dir: &std::path::Path) -> Result<Vec<u8>, String> {
+    if is_http_url(src) {
+        http_bytes(src).await
+    } else if let Some(path) = src.strip_prefix("file:") {
+        std::fs::read(resolve_file(path, base_dir)).map_err(|e| e.to_string())
+    } else {
+        Err(format!(
+            "unsupported src `{src}` — use `http(s)://URL` or `file:PATH`"
+        ))
+    }
+}
+
+/// Text counterpart of [`read_asset_bytes`].
+#[cfg(feature = "http")]
+async fn read_asset_text(src: &str, base_dir: &std::path::Path) -> Result<String, String> {
+    if is_http_url(src) {
+        http_text(src).await
+    } else if let Some(path) = src.strip_prefix("file:") {
+        std::fs::read_to_string(resolve_file(path, base_dir)).map_err(|e| e.to_string())
+    } else {
+        Err(format!(
+            "unsupported src `{src}` — use `http(s)://URL` or `file:PATH`"
+        ))
+    }
+}
+
+#[cfg(feature = "http")]
+fn resolve_file(path: &str, base_dir: &std::path::Path) -> std::path::PathBuf {
+    let p = std::path::Path::new(path);
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        base_dir.join(p)
+    }
 }
 
 #[cfg(feature = "http")]

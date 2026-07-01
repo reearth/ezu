@@ -200,6 +200,16 @@ fn render_ezu(
     let graph = build_graph(&doc, &registry)?;
     let mut loader = BrushBankLoader::new();
     loader.register_builtins();
+    // Sprite sources: fetch the atlas PNG + index JSON and register the sheet
+    // so `icon` nodes can crop named icons for symbol / fill-pattern layers.
+    for (name, decl) in &doc.sources {
+        if let ezu::style::SourceDecl::Sprite(sprite) = decl {
+            match load_sprite_sheet(client, sprite) {
+                Ok(sheet) => loader.insert_sprite(sprite.image.clone(), sheet),
+                Err(e) => eprintln!("sprite source `{name}`: {e}"),
+            }
+        }
+    }
     let cache = Cache::new();
     let tile_id = TileId { z, x, y };
 
@@ -288,6 +298,26 @@ fn mvt_sources(recipe: &serde_json::Value) -> Vec<(String, String)> {
                 .map(|url| (name.clone(), url.to_string()))
         })
         .collect()
+}
+
+/// Fetch a sprite source's atlas PNG + index JSON (HTTP) and build the sheet.
+fn load_sprite_sheet(
+    client: &reqwest::blocking::Client,
+    sprite: &ezu::style::SpriteSource,
+) -> R<ezu::graph::SpriteSheet> {
+    let atlas_bytes = client
+        .get(&sprite.image)
+        .send()?
+        .error_for_status()?
+        .bytes()?;
+    let atlas = ezu::paint::host::decode_image_bytes(&atlas_bytes)
+        .map_err(|e| format!("atlas decode: {e}"))?;
+    let fetched = match &sprite.index {
+        ezu::style::SpriteIndex::Url(u) => Some(client.get(u).send()?.error_for_status()?.text()?),
+        ezu::style::SpriteIndex::Inline(_) => None,
+    };
+    let icons = ezu::paint::host::build_sprite_icons(&sprite.index, fetched.as_deref())?;
+    Ok(ezu::graph::SpriteSheet { atlas, icons })
 }
 
 /// All GeoJSON sources in a recipe as `(name, data)`, resolving each to its

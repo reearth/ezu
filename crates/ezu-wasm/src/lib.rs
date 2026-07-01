@@ -230,6 +230,14 @@ impl Renderer {
                     format!("source `{name}`: geojson binding not supported in the wasm host yet"),
                 ));
             }
+            // A sprite needs both an atlas image and an index; the single-blob
+            // `bindSource` shape can't carry both yet.
+            SourceDecl::Sprite(_) => {
+                return Err(named_err(
+                    ERR_SOURCE,
+                    format!("source `{name}`: sprite binding not supported in the wasm host yet"),
+                ));
+            }
         }
         Ok(())
     }
