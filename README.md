@@ -234,8 +234,9 @@ The minimum op set ships in [`ezu-paint`](https://github.com/reearth/ezu/tree/ma
   `ScalarField` with `geo_scale` populated; the host declares the tile pyramid in `sources` and
   handles fetch / decode / 3×3 stitch / overzoom upsampling for
   terrarium and mapbox-rgb encodings), `hillshade` (Horn-method
-  analytical shade with `shade` or multiply-friendly `relief` mode,
-  optional ESRI multidirectional), `slope`, `color-ramp` (any scalar
+  analytical shade with `shade` or multiply-friendly `relief` mode —
+  `relief` takes an optional `shadow-color` / `highlight-color` (à la
+  MapLibre) — optional ESRI multidirectional), `slope`, `color-ramp` (any scalar
   field → colour via a stops table, with a selectable interpolation
   `space` — `rgb` / `hsl` / `hsv` / `hcl` / `lab`; canonical use is
   hypsometric tinting of a DEM).
