@@ -1,7 +1,8 @@
-//! `color-ramp` — `ScalarField -> Raster`. Map per-pixel scalar
-//! values to colour via a user-supplied stop table. Linear
-//! interpolation between stops; samples outside the range clamp to
-//! the end colours.
+//! `color-ramp` — `ScalarField | Raster -> Raster`. Map per-pixel scalar
+//! values to colour via a user-supplied stop table, interpolating between
+//! stops in a selectable colour `space`; samples outside the range clamp
+//! to the end colours. A `Raster` input is recoloured by its luminance
+//! (Rec. 601) — a **gradient map** — preserving source coverage.
 //!
 //! The canonical cartographic use case is **hypsometric tinting** —
 //! map an elevation `ScalarField` (from `dem`) to a green→brown→white
@@ -40,7 +41,7 @@ impl Node for ColorRampNode {
     fn inputs(&self) -> &[PortSpec] {
         static SPECS: &[PortSpec] = &[PortSpec {
             name: "field",
-            accepts: &[PortKind::ScalarField],
+            accepts: &[PortKind::ScalarField, PortKind::Raster],
             optional: false,
         }];
         SPECS
@@ -53,24 +54,53 @@ impl Node for ColorRampNode {
         _ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
-        let field = inputs[0]
+        let input = inputs[0]
             .as_ref()
-            .and_then(PortValue::as_scalar_field)
             .ok_or_else(|| EvalError::MissingInput("field".into()))?;
-        let w = field.width;
-        let h = field.height;
-        let mut out = RasterBuf::new(w, h);
-        for (i, &v) in field.values.iter().enumerate() {
-            let rgba = sample_stops(&self.stops, v, self.space);
-            let off = i * 4;
-            // Premultiply alpha to match the rest of the pipeline.
-            let af = rgba[3] as f32 / 255.0;
-            out.pixels[off] = (rgba[0] as f32 * af).round() as u8;
-            out.pixels[off + 1] = (rgba[1] as f32 * af).round() as u8;
-            out.pixels[off + 2] = (rgba[2] as f32 * af).round() as u8;
-            out.pixels[off + 3] = rgba[3];
+        // ScalarField: map each value through the stops (hypsometric tint).
+        if let Some(field) = input.as_scalar_field() {
+            let mut out = RasterBuf::new(field.width, field.height);
+            for (i, &v) in field.values.iter().enumerate() {
+                let rgba = sample_stops(&self.stops, v, self.space);
+                let off = i * 4;
+                // Premultiply alpha to match the rest of the pipeline.
+                let af = rgba[3] as f32 / 255.0;
+                out.pixels[off] = (rgba[0] as f32 * af).round() as u8;
+                out.pixels[off + 1] = (rgba[1] as f32 * af).round() as u8;
+                out.pixels[off + 2] = (rgba[2] as f32 * af).round() as u8;
+                out.pixels[off + 3] = rgba[3];
+            }
+            return Ok(PortValue::Raster(Arc::new(out)));
         }
-        Ok(PortValue::Raster(Arc::new(out)))
+        // Raster: gradient-map — recolour by per-pixel luminance (Rec. 601)
+        // through the stops, preserving source coverage (alpha).
+        if let Some(src) = input.as_raster() {
+            let mut out = RasterBuf::new(src.width, src.height);
+            for i in (0..src.pixels.len()).step_by(4) {
+                let a = src.pixels[i + 3] as f32 / 255.0;
+                let (r, g, b) = if a > 0.0 {
+                    (
+                        src.pixels[i] as f32 / 255.0 / a,
+                        src.pixels[i + 1] as f32 / 255.0 / a,
+                        src.pixels[i + 2] as f32 / 255.0 / a,
+                    )
+                } else {
+                    (0.0, 0.0, 0.0)
+                };
+                let luma = (0.299 * r + 0.587 * g + 0.114 * b).clamp(0.0, 1.0);
+                let rgba = sample_stops(&self.stops, luma, self.space);
+                let oa = a * (rgba[3] as f32 / 255.0);
+                out.pixels[i] = (rgba[0] as f32 / 255.0 * oa * 255.0).round() as u8;
+                out.pixels[i + 1] = (rgba[1] as f32 / 255.0 * oa * 255.0).round() as u8;
+                out.pixels[i + 2] = (rgba[2] as f32 / 255.0 * oa * 255.0).round() as u8;
+                out.pixels[i + 3] = (oa * 255.0).round() as u8;
+            }
+            return Ok(PortValue::Raster(Arc::new(out)));
+        }
+        Err(EvalError::Other(format!(
+            "color-ramp: expected ScalarField or Raster, got {:?}",
+            input.kind()
+        )))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"color-ramp");
@@ -186,7 +216,7 @@ impl NodeFactory for ColorRampFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Map scalar field values to colour through a stop table. Linear interpolation between stops; samples outside `[stops[0].value, stops[-1].value]` clamp to the end colours. Canonical use case is hypsometric tinting over a DEM (`stops[i].value` = elevation in metres); the same op handles any scalar field.",
+            "description": "Map a `ScalarField` (or a `Raster`, by its luminance — a gradient map) to colour through a stop table, interpolating between stops in `space`. Samples outside `[stops[0].value, stops[-1].value]` clamp to the end colours. Canonical use case is hypsometric tinting over a DEM (`stops[i].value` = elevation in metres).",
             "properties": {
                 "field": schema_frag::node_ref(),
                 "stops": {

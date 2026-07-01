@@ -189,7 +189,8 @@ The minimum op set ships in [`ezu-paint`](https://github.com/reearth/ezu/tree/ma
   modes — multiply / screen / overlay / soft-light / hue / luminosity
   etc., plus `composite` operators (`destination-out` for brush-style
   eraser), `clip` for Photoshop-style clipping masks, and an optional
-  alpha-`mask` input)
+  alpha-`mask` input), `mix` (tween two rasters by a scalar `t` in a
+  selectable colour `space` — a straight colour blend, not a composite)
 - **Warp** — `displace` (Photoshop-style displacement map: R/G channels
   of a second raster drive per-pixel offsets), `warp` (domain warp via
   built-in noise; world-anchored for seamless tile borders). Both grow
@@ -203,7 +204,8 @@ The minimum op set ships in [`ezu-paint`](https://github.com/reearth/ezu/tree/ma
   `sharpen` (4-neighbour Laplacian)
 - **Channel ops** — `channel-shuffle` (rearrange RGBA, or stamp
   constants `0` / `1` into channels), `posterize` (per-channel
-  quantisation)
+  quantisation), `quantize` (snap to a fixed palette by nearest colour in
+  perceptual CIELAB or RGB — limited-palette / poster / pixel-art looks)
 - **Geometry (Voronoi family)** — `voronoi` (point set → diagram
   edges), `voronoi-fracture` (split polygons into Voronoi sub-cells
   via seed points), `medial-axis` (polygon → skeleton polylines for

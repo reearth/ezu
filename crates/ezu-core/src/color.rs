@@ -242,7 +242,10 @@ fn xyz2rgb(x: f32) -> f32 {
     x.clamp(0.0, 1.0)
 }
 
-fn rgb_to_lab([r, g, b, alpha]: [f32; 4]) -> [f32; 4] {
+/// `[r, g, b, alpha]` (0..1) → CIELAB `[l, a, b, alpha]` (L 0..100).
+/// Public so perceptual-distance consumers (e.g. palette quantization) can
+/// measure ΔE without re-deriving the conversion.
+pub fn rgb_to_lab([r, g, b, alpha]: [f32; 4]) -> [f32; 4] {
     let r = rgb2xyz(r);
     let g = rgb2xyz(g);
     let bb = rgb2xyz(b);

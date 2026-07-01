@@ -17,7 +17,9 @@
 
 pub mod brush;
 pub mod builtin;
-pub mod color_interp;
+/// Colour-space stop interpolation (re-exported from `ezu-core` so the
+/// paint nodes and the MapLibre converter share one implementation).
+pub use ezu_core::color as color_interp;
 pub mod dabs;
 pub mod render;
 pub mod strokes;

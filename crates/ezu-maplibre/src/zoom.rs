@@ -9,7 +9,10 @@
 //!
 //! When no target zoom is given, the base value (first stop) is used.
 
+use ezu_core::color::{interpolate, InterpSpace};
 use serde_json::Value;
+
+use crate::color::{parse_rgba, rgba_to_hex};
 
 /// Resolve a numeric property to `f64` at `zoom`.
 pub fn number_at(v: &Value, zoom: Option<f64>) -> Option<f64> {
@@ -21,15 +24,50 @@ pub fn number_at(v: &Value, zoom: Option<f64>) -> Option<f64> {
     }
 }
 
-/// Resolve a colour property to a colour string at `zoom`. Colour
-/// interpolation between stops is approximated by the lower stop (step),
-/// avoiding colour-space blending in v1.
+/// Resolve a colour property to a colour string at `zoom`. Colours are
+/// interpolated between the enclosing stops in the space the MapLibre
+/// operator selects: `interpolate` (and legacy stops) → RGB,
+/// `interpolate-hcl` → HCL, `interpolate-lab` → LAB. `step` picks the lower
+/// stop. Matches MapLibre's colour maths (shared `ezu-core` implementation).
 pub fn color_at(v: &Value, zoom: Option<f64>) -> Option<String> {
     match v {
         Value::String(s) => Some(s.clone()),
-        Value::Object(_) => stops_at(v, zoom, |a, _b, _t| a.clone()).and_then(as_color_string),
-        Value::Array(_) => expr_at(v, zoom, |a, _b, _t| a.clone()).and_then(as_color_string),
+        Value::Object(_) => {
+            stops_at(v, zoom, color_interp(InterpSpace::Rgb)).and_then(as_color_string)
+        }
+        Value::Array(_) => {
+            let space = color_space_of(v);
+            expr_at(v, zoom, color_interp(space)).and_then(as_color_string)
+        }
         _ => None,
+    }
+}
+
+/// The colour space a MapLibre interpolation expression selects.
+fn color_space_of(v: &Value) -> InterpSpace {
+    match v
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(|x| x.as_str())
+    {
+        Some("interpolate-hcl") => InterpSpace::Hcl,
+        Some("interpolate-lab") => InterpSpace::Lab,
+        _ => InterpSpace::Rgb,
+    }
+}
+
+/// Build a stop interpolator that blends two colour-string `Value`s in
+/// `space` and returns the baked `#hex`. Falls back to the lower stop if a
+/// colour doesn't parse (e.g. a data-driven sub-expression).
+fn color_interp(space: InterpSpace) -> impl Fn(&Value, &Value, f64) -> Value {
+    move |a, b, t| match (
+        a.as_str().and_then(parse_rgba),
+        b.as_str().and_then(parse_rgba),
+    ) {
+        (Some(from), Some(to)) => {
+            Value::String(rgba_to_hex(interpolate(from, to, t as f32, space)))
+        }
+        _ => a.clone(),
     }
 }
 
@@ -53,7 +91,7 @@ fn interp_num(a: &Value, b: &Value, t: f64) -> Value {
 fn stops_at(
     v: &Value,
     zoom: Option<f64>,
-    interp: fn(&Value, &Value, f64) -> Value,
+    interp: impl Fn(&Value, &Value, f64) -> Value,
 ) -> Option<Value> {
     let obj = v.as_object()?;
     let stops = obj.get("stops")?.as_array()?;
@@ -76,7 +114,7 @@ fn stops_at(
 fn expr_at(
     v: &Value,
     zoom: Option<f64>,
-    interp: fn(&Value, &Value, f64) -> Value,
+    interp: impl Fn(&Value, &Value, f64) -> Value,
 ) -> Option<Value> {
     let arr = v.as_array()?;
     match arr.first()?.as_str()? {
@@ -133,7 +171,7 @@ fn sample(
     pairs: &[(f64, &Value)],
     zoom: Option<f64>,
     base: f64,
-    interp: fn(&Value, &Value, f64) -> Value,
+    interp: impl Fn(&Value, &Value, f64) -> Value,
 ) -> Value {
     if pairs.is_empty() {
         return Value::Null;
@@ -163,4 +201,35 @@ fn sample(
         }
     }
     pairs[0].1.clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ramp(op: &str, zoom: f64) -> Option<String> {
+        // A two-stop zoom colour ramp red@0 -> blue@10.
+        let v = serde_json::json!([op, ["linear"], ["zoom"], 0, "#ff0000", 10, "#0000ff"]);
+        color_at(&v, Some(zoom))
+    }
+
+    #[test]
+    fn colours_interpolate_and_space_matters() {
+        assert_eq!(ramp("interpolate", 0.0).as_deref(), Some("#ff0000"));
+        assert_eq!(ramp("interpolate", 10.0).as_deref(), Some("#0000ff"));
+        let rgb_mid = ramp("interpolate", 5.0).unwrap();
+        // RGB midpoint of #ff0000..#0000ff is #800080 — a real blend, not a step.
+        assert_eq!(rgb_mid, "#800080");
+        let hcl_mid = ramp("interpolate-hcl", 5.0).unwrap();
+        let lab_mid = ramp("interpolate-lab", 5.0).unwrap();
+        assert_ne!(rgb_mid, hcl_mid, "hcl should differ from rgb");
+        assert_ne!(rgb_mid, lab_mid, "lab should differ from rgb");
+    }
+
+    #[test]
+    fn step_picks_the_lower_stop() {
+        let v = serde_json::json!(["step", ["zoom"], "#ff0000", 5, "#00ff00"]);
+        assert_eq!(color_at(&v, Some(3.0)).as_deref(), Some("#ff0000"));
+        assert_eq!(color_at(&v, Some(7.0)).as_deref(), Some("#00ff00"));
+    }
 }

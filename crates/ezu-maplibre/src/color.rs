@@ -28,6 +28,29 @@ pub fn parse_color(s: &str) -> Option<(String, f32)> {
     None
 }
 
+/// Parse a MapLibre colour into non-premultiplied RGBA floats (0..1), for
+/// colour-space interpolation of zoom ramps.
+pub fn parse_rgba(s: &str) -> Option<[f32; 4]> {
+    let (hex, a) = parse_color(s)?;
+    let bytes = hex.strip_prefix('#')?;
+    let r = u8::from_str_radix(bytes.get(0..2)?, 16).ok()? as f32 / 255.0;
+    let g = u8::from_str_radix(bytes.get(2..4)?, 16).ok()? as f32 / 255.0;
+    let b = u8::from_str_radix(bytes.get(4..6)?, 16).ok()? as f32 / 255.0;
+    Some([r, g, b, a])
+}
+
+/// Format non-premultiplied RGBA floats as `#rrggbb` (or `#rrggbbaa` when
+/// alpha < 1) — the inverse of [`parse_rgba`] for emitting baked colours.
+pub fn rgba_to_hex(c: [f32; 4]) -> String {
+    let to = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let (r, g, b) = (to(c[0]), to(c[1]), to(c[2]));
+    if c[3] >= 1.0 {
+        format!("#{r:02x}{g:02x}{b:02x}")
+    } else {
+        format!("#{r:02x}{g:02x}{b:02x}{:02x}", to(c[3]))
+    }
+}
+
 fn parse_hex(hex: &str) -> Option<(String, f32)> {
     let bytes: Vec<u8> = match hex.len() {
         3 => hex
