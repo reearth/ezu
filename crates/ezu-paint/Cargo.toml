@@ -19,6 +19,7 @@ ezu-features = { workspace = true }
 ezu-style = { workspace = true }
 serde_json = { workspace = true }
 base64 = { workspace = true }
+maplibre-expr = { workspace = true }
 xxhash-rust = { workspace = true }
 hokusai = { workspace = true, features = ["myb-json", "tile-mem", "tiny-skia"] }
 tiny-skia = { workspace = true }
