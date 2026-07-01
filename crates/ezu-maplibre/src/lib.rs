@@ -51,6 +51,12 @@ pub struct ConvertOptions {
     /// Brush hardness for `line` layers (0..1). 1.0 is crispest; MapLibre
     /// lines are hard vector strokes, so default high.
     pub line_hardness: f64,
+    /// How to treat `layout.visibility: "none"` layers. `false` (default)
+    /// drops them. `true` keeps their nodes in the recipe but gates each
+    /// behind a `switch` that defaults to a transparent branch — so the
+    /// layer is off yet present, and flipping the switch's `select` to `b`
+    /// turns it on (a build-time toggle, since `switch` resolves at build).
+    pub keep_hidden: bool,
 }
 
 impl Default for ConvertOptions {
@@ -60,6 +66,7 @@ impl Default for ConvertOptions {
             tile_size: 512,
             pad: 64,
             line_hardness: 0.9,
+            keep_hidden: false,
         }
     }
 }
@@ -117,13 +124,14 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
             continue;
         };
         let id = layer.get("id").and_then(Value::as_str).unwrap_or("layer");
-        // Honour `layout.visibility: "none"`.
-        if layer
+        // `layout.visibility: "none"`: drop by default, or (with
+        // `keep_hidden`) keep the nodes but gate them off via `switch`.
+        let hidden = layer
             .get("layout")
             .and_then(|l| l.get("visibility"))
             .and_then(Value::as_str)
-            == Some("none")
-        {
+            == Some("none");
+        if hidden && !opts.keep_hidden {
             continue;
         }
         // Honour the layer's zoom range at the baked zoom (MapLibre shows a
@@ -143,6 +151,7 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
             }
         }
         let ty = layer.get("type").and_then(Value::as_str).unwrap_or("");
+        let out_start = outputs.len();
         match ty {
             "background" => convert_background(id, layer, &mut nodes, &mut outputs, opts),
             "fill" => convert_fill(
@@ -173,6 +182,10 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
             other => report.warn(format!(
                 "layer `{id}`: type `{other}` not supported — skipped"
             )),
+        }
+        // Gate a kept-hidden layer's contributions off via `switch`.
+        if hidden {
+            gate_hidden(id, &mut nodes, &mut outputs, out_start);
         }
     }
 
@@ -581,6 +594,37 @@ fn features_node(source: &str, source_layer: &str, filter: Option<Map<String, Va
 
 /// Fold the ordered output node ids into a `blend` chain (painter's
 /// algorithm) and return the id of the final node.
+/// Gate the outputs a hidden layer pushed (`outputs[from..]`) behind a
+/// `switch` whose default `select: "a"` picks a shared transparent branch,
+/// so the layer is off but present. Set the switch's `select` to `"b"` to
+/// turn the layer on.
+fn gate_hidden(id: &str, nodes: &mut Map<String, Value>, outputs: &mut [String], from: usize) {
+    if from >= outputs.len() {
+        return;
+    }
+    // One shared transparent (fully-clear) solid as the "off" branch.
+    const OFF: &str = "__hidden_off";
+    if !nodes.contains_key(OFF) {
+        nodes.insert(
+            OFF.into(),
+            serde_json::json!({ "op": "solid", "color": "#00000000" }),
+        );
+    }
+    for (i, slot) in outputs.iter_mut().enumerate().skip(from) {
+        let sw = format!("{id}__vis{i}");
+        nodes.insert(
+            sw.clone(),
+            serde_json::json!({
+                "op": "switch",
+                "a": format!("@{OFF}"),
+                "b": format!("@{slot}"),
+                "select": "a"
+            }),
+        );
+        *slot = sw;
+    }
+}
+
 fn fold_blend(nodes: &mut Map<String, Value>, outputs: &[String]) -> String {
     match outputs.split_first() {
         None => {
