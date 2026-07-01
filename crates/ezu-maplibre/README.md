@@ -39,7 +39,8 @@ cargo run -p ezu-maplibre --example convert -- style.json 14 > recipe.json
 | filters `all` / `!` / `==` / `!=` / `in` / `!in` (legacy **and** expression form, e.g. `["in", ["get", k], ["literal", […]]]`) | ezu feature filter map |
 | zoom functions (`stops`, `interpolate`, `step`) | baked to a constant at [`ConvertOptions::zoom`] |
 | CSS named colours (`steelblue`, `white`, `transparent`, …) | resolved to hex |
-| `layout.visibility: "none"` | layer dropped |
+| `layout.visibility: "none"` | layer dropped (default), or — with `ConvertOptions::keep_hidden` — kept but gated off behind a `switch` (flip its `select` to `b` to enable) |
+| multiple `vector` sources | all emitted; each `features` node targets its `(source, layer)` |
 | layer `minzoom` / `maxzoom` | layer dropped when the baked zoom is out of range |
 
 Because ezu renders one integer zoom per tile, baking a zoom function at
