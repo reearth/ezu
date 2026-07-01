@@ -3,9 +3,11 @@ resolver = "2"
 members = [
     "crates/ezu",
     "crates/ezu-cli",
+    "crates/ezu-compare",
     "crates/ezu-core",
     "crates/ezu-graph",
     "crates/ezu-features",
+    "crates/ezu-maplibre",
     "crates/ezu-paint",
     "crates/ezu-style",
     "crates/ezu-wasm",
@@ -25,6 +27,7 @@ authors = ["Eukarya Inc."]
 ezu-core = { version = "0.3.0", path = "crates/ezu-core" }
 ezu-graph = { version = "0.3.0", path = "crates/ezu-graph" }
 ezu-features = { version = "0.3.0", path = "crates/ezu-features" }
+ezu-maplibre = { version = "0.3.0", path = "crates/ezu-maplibre" }
 ezu-paint = { version = "0.3.0", path = "crates/ezu-paint" }
 ezu-style = { version = "0.3.0", path = "crates/ezu-style" }
 ezu = { version = "0.3.0", path = "crates/ezu" }

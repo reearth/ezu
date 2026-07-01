@@ -1,0 +1,28 @@
+[package]
+name = "ezu-compare"
+description = "Dev tool: convert a MapLibre style, render it with ezu (CPU) and compare pixels + timing against a MapLibre reference"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+ezu = { workspace = true, features = ["features", "paint", "style-json", "parallel", "http"] }
+ezu-maplibre = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+image = { workspace = true }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "blocking"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
+
+[lib]
+name = "ezu_compare"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ezu-compare"
+path = "src/main.rs"
