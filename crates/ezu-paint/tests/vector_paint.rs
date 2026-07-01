@@ -145,3 +145,42 @@ fn stamp_places_image_at_each_point() {
     let between = r.pixel(16, 16);
     assert_eq!(between[3], 0, "no stamp at (16,16): {between:?}");
 }
+
+#[test]
+fn line_stamp_repeats_a_sprite_along_the_line() {
+    // A green disk sprite repeated along a horizontal line at extent y=2048
+    // (canvas y=16) spanning the whole tile. width-px=8 fits the 8×8 sprite
+    // 1:1; spacing-px=8 places centers at canvas x = 4, 12, 20, 28 (first
+    // stamp half a spacing in).
+    let sprite = disk_sprite(8, 8, 3.0, [0, 255, 0, 255]);
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 32,
+      "sources": { "icon": { "type": "image", "src": "builtin:icon" } },
+      "nodes": {
+        "feats": { "op": "literal-geometry", "extent": 4096,
+                   "lines": [ [ [0, 2048], [4096, 2048] ] ] },
+        "img":   { "op": "image", "src": "@icon" },
+        "out":   { "op": "line-stamp", "features": "@feats", "image": "@img",
+                   "width-px": 8, "spacing-px": 8 }
+      },
+      "output": "@out"
+    }"##;
+    let r = render_with_images(
+        json,
+        32,
+        0,
+        TileId { z: 0, x: 0, y: 0 },
+        &[("icon", sprite)],
+    );
+    // A stamp center at each 8px interval along the line.
+    for x in [4u32, 12, 20, 28] {
+        let p = r.pixel(x, 16);
+        assert!(
+            p[1] > 200 && p[3] > 200,
+            "line-stamp center ({x},16) should be green: {p:?}"
+        );
+    }
+    // Well away from the line is untouched.
+    assert_eq!(r.pixel(16, 3)[3], 0, "no paint far from the line");
+}

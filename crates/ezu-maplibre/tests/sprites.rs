@@ -14,6 +14,8 @@ const STYLE: &str = r##"{
       "layout": { "icon-image": "airport-15", "icon-size": 1.5 } },
     { "id": "hatch", "type": "fill", "source": "s", "source-layer": "landuse",
       "paint": { "fill-pattern": "hatch-16" } },
+    { "id": "dashes", "type": "line", "source": "s", "source-layer": "roads",
+      "paint": { "line-pattern": "dash-8", "line-width": 6 } },
     { "id": "labels", "type": "symbol", "source": "s", "source-layer": "place",
       "layout": { "text-field": "{name}" } }
   ]
@@ -56,6 +58,13 @@ fn sprite_source_icons_and_pattern_convert() {
         .any(|n| n["input"].as_str().unwrap().contains("__icon")));
     let blends = by_op("blend");
     assert!(blends.iter().any(|n| n["clip"] == true));
+
+    // line-pattern → icon + line-stamp fit to the stroke width.
+    assert!(icons.iter().any(|n| n["name"] == "dash-8"));
+    let line_stamps = by_op("line-stamp");
+    assert_eq!(line_stamps.len(), 1);
+    assert_eq!(line_stamps[0]["width-px"], 6.0);
+    assert!(line_stamps[0]["image"].as_str().unwrap().contains("__icon"));
 
     // The text-only symbol layer is reported, not silently dropped.
     assert!(

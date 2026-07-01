@@ -19,8 +19,9 @@
 //!   integer zoom per tile, so a per-zoom bake is exact for that tile.
 //!
 //! - **sprites**: a top-level `sprite` (single URL or `[{id, url}]`
-//!   sheets) becomes `sprite` source(s); `symbol` **icons** and
-//!   `fill-pattern` wire through `icon` (crop) + `stamp` / `tiling`.
+//!   sheets) becomes `sprite` source(s); `symbol` **icons**,
+//!   `fill-pattern`, and `line-pattern` wire through `icon` (crop) +
+//!   `stamp` / `tiling` / `line-stamp`.
 //!
 //! What is *not* handled yet is reported in [`Report::warnings`] rather
 //! than failing the conversion: `symbol` **text** labels, per-feature
@@ -565,6 +566,29 @@ fn convert_line(
         .and_then(|v| zoom::number_at(v, opts.zoom))
         .unwrap_or(1.0)
         .max(0.1);
+
+    // `line-pattern` replaces the solid stroke: repeat the named sprite icon
+    // along each line, scaled to the stroke width (`line-stamp`).
+    if let Some(pattern) = paint.get("line-pattern") {
+        let opacity = paint
+            .get("line-opacity")
+            .and_then(|v| zoom::number_at(v, opts.zoom));
+        convert_line_pattern(
+            id,
+            pattern,
+            &source,
+            &source_layer,
+            base_filter,
+            width,
+            opacity,
+            sources,
+            nodes,
+            outputs,
+            report,
+        );
+        return;
+    }
+
     let (hex, _a) = paint
         .get("line-color")
         .and_then(|v| zoom::color_at(v, opts.zoom))
@@ -796,6 +820,56 @@ fn convert_fill_pattern(
             "over": format!("@{tile_id}"), "clip": true
         }),
     );
+    outputs.push(out_id);
+}
+
+/// `line-pattern` → repeat the named sprite icon along each line, fit to the
+/// stroke width: `features` → `icon` → `line-stamp`.
+#[allow(clippy::too_many_arguments)]
+fn convert_line_pattern(
+    id: &str,
+    pattern: &Value,
+    source: &str,
+    source_layer: &str,
+    base_filter: Option<Map<String, Value>>,
+    width: f64,
+    opacity: Option<f64>,
+    sources: &Sources,
+    nodes: &mut Map<String, Value>,
+    outputs: &mut Vec<String>,
+    report: &mut Report,
+) {
+    let Some(name) = pattern.as_str() else {
+        report.warn(format!(
+            "layer `{id}`: data-driven `line-pattern` not supported — skipped"
+        ));
+        return;
+    };
+    let Some((sprite_src, icon_name)) = sources.resolve_icon(name) else {
+        report.warn(format!(
+            "layer `{id}`: line-pattern `{name}` needs a `sprite`, but the style declares none — skipped"
+        ));
+        return;
+    };
+    let feat_id = format!("{id}__feat");
+    nodes.insert(
+        feat_id.clone(),
+        features_node(source, source_layer, base_filter),
+    );
+    let icon_id = format!("{id}__icon");
+    nodes.insert(
+        icon_id.clone(),
+        serde_json::json!({ "op": "icon", "sprite": format!("@{sprite_src}"), "name": icon_name }),
+    );
+    let out_id = format!("{id}__linepat");
+    let mut spec = serde_json::json!({
+        "op": "line-stamp", "features": format!("@{feat_id}"),
+        "image": format!("@{icon_id}"), "width-px": width
+    });
+    if let Some(a) = opacity {
+        spec["opacity"] = Value::from(a);
+    }
+    nodes.insert(out_id.clone(), spec);
     outputs.push(out_id);
 }
 

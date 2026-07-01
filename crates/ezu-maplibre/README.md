@@ -38,6 +38,7 @@ cargo run -p ezu-maplibre --example convert -- style.json 14 > recipe.json
 | `circle` (+ `circle-stroke-*`) | a `circle` sprite `stamp`ed at each point (stroke = a larger ring stamped underneath) |
 | `symbol` **icons** (constant `icon-image`, `icon-size`/`-rotate`/`-opacity`) | `sprite` source → `icon` (crop) → `stamp` at each point (text labels still skipped) |
 | `fill-pattern` (constant) | `icon` → `tiling`, clipped to the fill shape via `blend { clip: true }` |
+| `line-pattern` (constant) | `icon` → `line-stamp` (repeat along the line, fit to `line-width`) |
 | top-level `sprite` (single URL or `[{id, url}]` sheets; `sheet:icon` names) | one `sprite` source per sheet (atlas `<url>.png` + index `<url>.json`, or inline index) |
 | `hillshade` (over `raster-dem`) | `dem` + `hillshade` (tone calibration still approximate) |
 | filters `all` / `!` / `==` / `!=` / `in` / `!in` (legacy **and** expression form, e.g. `["in", ["get", k], ["literal", […]]]`) | ezu feature filter map |
@@ -58,10 +59,10 @@ the tile's zoom reproduces MapLibre's value exactly for that tile.
   Icons on the same layer *are* drawn.
 - **SDF (recolourable) icons** — an `sdf: true` sprite entry is drawn as
   its raw RGBA; `icon-color` tinting isn't applied.
-- **Data-driven `icon-image` / `fill-pattern`** (only a constant name
-  converts) and **per-feature data-driven paint** other than the
-  `match`-bucket case (e.g. `["interpolate", …, ["get", "height"], …]`).
-- **`fill-extrusion`**, **`heatmap`**, **`line-pattern`**.
+- **Data-driven `icon-image` / `fill-pattern` / `line-pattern`** (only a
+  constant name converts) and **per-feature data-driven paint** other than
+  the `match`-bucket case (e.g. `["interpolate", …, ["get", "height"], …]`).
+- **`fill-extrusion`**, **`heatmap`**.
 - Road **casing** (the darker under-stroke MapLibre draws beneath a line).
 - Filter operators ezu's flat filter can't represent: `any` (OR),
   `has` / `!has` (field existence), comparisons (`<` / `>`), `geometry-type`.
