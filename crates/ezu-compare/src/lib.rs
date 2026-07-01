@@ -21,6 +21,10 @@ pub struct Metrics {
     pub max_diff: u8,
     /// Threshold used for `diff_fraction`.
     pub threshold: u8,
+    /// Mean structural similarity (SSIM) over 8×8 luma windows, `-1..=1`
+    /// (1 = identical). Structural rather than per-pixel, so it isn't
+    /// dominated by antialiasing / label differences the way RMSE is.
+    pub ssim: f64,
 }
 
 impl Metrics {
@@ -77,7 +81,55 @@ pub fn compare_rgba8(
         diff_fraction: diff_pixels as f64 / px as f64,
         max_diff,
         threshold,
+        ssim: ssim_gray(a, b, width, height),
     })
+}
+
+/// Mean SSIM over non-overlapping 8×8 luma windows. Returns `1.0` for
+/// identical inputs; degrades gracefully at edge windows smaller than 8×8.
+pub fn ssim_gray(a: &[u8], b: &[u8], width: u32, height: u32) -> f64 {
+    const WIN: usize = 8;
+    // ITU-R BT.601 luma, matching `pick-channel`'s convention.
+    let luma = |px: &[u8]| 0.299 * px[0] as f64 + 0.587 * px[1] as f64 + 0.114 * px[2] as f64;
+    let (w, h) = (width as usize, height as usize);
+    let c1 = (0.01 * 255.0f64).powi(2);
+    let c2 = (0.03 * 255.0f64).powi(2);
+
+    let mut sum = 0.0;
+    let mut windows = 0.0;
+    let mut wy = 0;
+    while wy < h {
+        let mut wx = 0;
+        while wx < w {
+            let (mut sa, mut sb, mut saa, mut sbb, mut sab, mut n) = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+            for y in wy..(wy + WIN).min(h) {
+                for x in wx..(wx + WIN).min(w) {
+                    let o = (y * w + x) * 4;
+                    let (va, vb) = (luma(&a[o..o + 4]), luma(&b[o..o + 4]));
+                    sa += va;
+                    sb += vb;
+                    saa += va * va;
+                    sbb += vb * vb;
+                    sab += va * vb;
+                    n += 1.0;
+                }
+            }
+            let (ma, mb) = (sa / n, sb / n);
+            let va = saa / n - ma * ma;
+            let vb = sbb / n - mb * mb;
+            let cov = sab / n - ma * mb;
+            sum += ((2.0 * ma * mb + c1) * (2.0 * cov + c2))
+                / ((ma * ma + mb * mb + c1) * (va + vb + c2));
+            windows += 1.0;
+            wx += WIN;
+        }
+        wy += WIN;
+    }
+    if windows == 0.0 {
+        1.0
+    } else {
+        sum / windows
+    }
 }
 
 /// Build an RGBA8 diff image: each pixel is the absolute per-channel RGB
@@ -127,5 +179,25 @@ mod tests {
     #[test]
     fn rejects_size_mismatch() {
         assert!(compare_rgba8(&[0; 4], &[0; 8], 1, 1, 8).is_none());
+    }
+
+    #[test]
+    fn ssim_identical_is_one_and_differs_when_different() {
+        // 8×8 mid-grey vs itself → SSIM 1.0.
+        let a = vec![128u8; 8 * 8 * 4];
+        let m = compare_rgba8(&a, &a, 8, 8, 8).unwrap();
+        assert!((m.ssim - 1.0).abs() < 1e-9, "ssim {}", m.ssim);
+
+        // Half black / half white → structurally very different from grey.
+        let mut b = vec![0u8; 8 * 8 * 4];
+        for i in 0..64 {
+            let v = if i % 8 < 4 { 0 } else { 255 };
+            b[i * 4] = v;
+            b[i * 4 + 1] = v;
+            b[i * 4 + 2] = v;
+            b[i * 4 + 3] = 255;
+        }
+        let m2 = compare_rgba8(&a, &b, 8, 8, 8).unwrap();
+        assert!(m2.ssim < 0.5, "expected low ssim, got {}", m2.ssim);
     }
 }
