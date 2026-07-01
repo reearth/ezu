@@ -17,6 +17,7 @@
 
 pub mod brush;
 pub mod builtin;
+pub mod color_interp;
 pub mod dabs;
 pub mod render;
 pub mod strokes;

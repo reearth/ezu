@@ -324,10 +324,35 @@ pub(super) fn read_stops(
     Ok(out)
 }
 
-/// Linearly interpolate gradient stops at parameter `t`. Stops must
-/// be non-empty and sorted by ascending `t`. Out-of-range `t` clamps
-/// to the endpoint colors.
-pub(super) fn sample_stops(stops: &[(f32, [f32; 4])], t: f32) -> [f32; 4] {
+/// Read an optional colour-interpolation `space` field (`"rgb"` default,
+/// plus `"hsl"` / `"hsv"` / `"hcl"` / `"lab"`). Used by `color-ramp` and the
+/// gradient ops so a stop table can interpolate hue on the shortest path.
+pub(super) fn read_space(
+    fields: &serde_json::Map<String, Value>,
+) -> Result<crate::color_interp::InterpSpace, FactoryError> {
+    match fields.get("space") {
+        None | Some(Value::Null) => Ok(crate::color_interp::InterpSpace::default()),
+        Some(v) => {
+            let s = v.as_str().ok_or_else(|| FactoryError::BadField {
+                field: "space".into(),
+                msg: "expected a string".into(),
+            })?;
+            crate::color_interp::InterpSpace::parse(s).ok_or_else(|| FactoryError::BadField {
+                field: "space".into(),
+                msg: format!("unknown colour space `{s}` (rgb|hsl|hsv|hcl|lab)"),
+            })
+        }
+    }
+}
+
+/// Linearly interpolate gradient stops at parameter `t`, in colour `space`.
+/// Stops must be non-empty and sorted by ascending `t`. Out-of-range `t`
+/// clamps to the endpoint colors.
+pub(super) fn sample_stops(
+    stops: &[(f32, [f32; 4])],
+    t: f32,
+    space: crate::color_interp::InterpSpace,
+) -> [f32; 4] {
     if stops.is_empty() {
         return [0.0; 4];
     }
@@ -345,12 +370,7 @@ pub(super) fn sample_stops(stops: &[(f32, [f32; 4])], t: f32) -> [f32; 4] {
                 return w[1].1;
             }
             let f = (t - w[0].0) / d;
-            return [
-                w[0].1[0] + (w[1].1[0] - w[0].1[0]) * f,
-                w[0].1[1] + (w[1].1[1] - w[0].1[1]) * f,
-                w[0].1[2] + (w[1].1[2] - w[0].1[2]) * f,
-                w[0].1[3] + (w[1].1[3] - w[0].1[3]) * f,
-            ];
+            return crate::color_interp::interpolate(w[0].1, w[1].1, f, space);
         }
     }
     last.1
