@@ -657,6 +657,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ezu-compare"
+version = "0.3.0"
+dependencies = [
+ "ezu",
+ "ezu-maplibre",
+ "image",
+ "reqwest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ezu-core"
 version = "0.3.0"
 dependencies = [
@@ -691,6 +703,16 @@ dependencies = [
  "thiserror",
  "tracing",
  "xxhash-rust",
+]
+
+[[package]]
+name = "ezu-maplibre"
+version = "0.3.0"
+dependencies = [
+ "ezu-style",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -2413,7 +2435,9 @@ checksum = "62e0021ea2c22aed41653bc7e1419abb2c97e038ff2c33d0e1309e49a97deec0"
 dependencies = [
  "base64",
  "bytes",
+ "futures-channel",
  "futures-core",
+ "futures-util",
  "http",
  "http-body",
  "http-body-util",

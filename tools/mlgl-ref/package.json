@@ -1,0 +1,14 @@
+{
+  "name": "mlgl-ref",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Reference tile renderer: rasterize a MapLibre style with maplibre-gl-js in headless Chromium (SwiftShader software WebGL — no GPU). Ground truth for ezu-compare.",
+  "scripts": {
+    "render": "node render.mjs"
+  },
+  "dependencies": {
+    "maplibre-gl": "^5",
+    "playwright": "^1"
+  }
+}

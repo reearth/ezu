@@ -1,0 +1,34 @@
+{
+  "version": 8,
+  "name": "Protomaps basemap (sample)",
+  "sources": {
+    "pm": { "type": "vector", "url": "https://papers.reearth.land/protomaps/tilejson.json" }
+  },
+  "layers": [
+    { "id": "bg", "type": "background", "paint": { "background-color": "#f7f4ee" } },
+    { "id": "earth", "type": "fill", "source": "pm", "source-layer": "earth",
+      "paint": { "fill-color": "#f2efe9" } },
+    { "id": "landcover", "type": "fill", "source": "pm", "source-layer": "landcover",
+      "paint": { "fill-color": "#e6ecd8", "fill-opacity": 0.6 } },
+    { "id": "landuse", "type": "fill", "source": "pm", "source-layer": "landuse",
+      "paint": {
+        "fill-color": ["match", ["get", "kind"],
+          ["park", "garden", "recreation_ground", "forest", "wood", "nature_reserve", "grass", "pitch"], "#cfe4c0",
+          ["hospital", "school", "university", "college"], "#efe6df",
+          ["industrial", "commercial", "retail"], "#eae3d9",
+          "#ece9e2"] } },
+    { "id": "water", "type": "fill", "source": "pm", "source-layer": "water",
+      "paint": { "fill-color": "#a5cdea" } },
+    { "id": "buildings", "type": "fill", "source": "pm", "source-layer": "buildings",
+      "paint": { "fill-color": "#e2dacd" } },
+    { "id": "roads_minor", "type": "line", "source": "pm", "source-layer": "roads",
+      "filter": ["in", "kind", "minor_road", "other", "path", "service"],
+      "paint": { "line-color": "#ffffff", "line-width": { "stops": [[13, 0.8], [15, 2.5], [17, 6]] } } },
+    { "id": "roads_major", "type": "line", "source": "pm", "source-layer": "roads",
+      "filter": ["in", "kind", "major_road", "medium_road", "highway", "motorway", "trunk", "primary", "secondary"],
+      "paint": { "line-color": "#f4c26b", "line-width": { "stops": [[10, 1], [13, 3], [16, 9]] } } },
+    { "id": "roads_rail", "type": "line", "source": "pm", "source-layer": "roads",
+      "filter": ["==", "kind", "rail"],
+      "paint": { "line-color": "#c2b8ac", "line-width": { "stops": [[13, 0.5], [16, 2]] } } }
+  ]
+}
