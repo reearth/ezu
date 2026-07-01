@@ -9,6 +9,7 @@ members = [
     "crates/ezu-paint",
     "crates/ezu-style",
     "crates/ezu-wasm",
+    "crates/maplibre_expr",
 ]
 
 [workspace.package]

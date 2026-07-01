@@ -1,0 +1,106 @@
+{
+  "expression": [
+    "slice",
+    [
+      "get",
+      "val"
+    ],
+    [
+      "get",
+      "i1"
+    ],
+    [
+      "get",
+      "i2"
+    ]
+  ],
+  "inputs": [
+    [
+      {},
+      {
+        "properties": {
+          "val": "012345",
+          "i1": 1,
+          "i2": 1
+        }
+      }
+    ],
+    [
+      {},
+      {
+        "properties": {
+          "val": "012345",
+          "i1": 1,
+          "i2": 4
+        }
+      }
+    ],
+    [
+      {},
+      {
+        "properties": {
+          "val": "012345",
+          "i1": 3,
+          "i2": 1
+        }
+      }
+    ],
+    [
+      {},
+      {
+        "properties": {
+          "val": "012345",
+          "i1": 3,
+          "i2": -1
+        }
+      }
+    ],
+    [
+      {},
+      {
+        "properties": {
+          "val": "012345",
+          "i1": -3,
+          "i2": -1
+        }
+      }
+    ],
+    [
+      {},
+      {
+        "properties": {
+          "val": "012345",
+          "i1": -3,
+          "i2": 5
+        }
+      }
+    ],
+    [
+      {},
+      {
+        "properties": {
+          "val": "012345",
+          "i1": 0,
+          "i2": 99
+        }
+      }
+    ]
+  ],
+  "expected": {
+    "compiled": {
+      "result": "success",
+      "isFeatureConstant": false,
+      "isZoomConstant": true,
+      "type": "value"
+    },
+    "outputs": [
+      "",
+      "123",
+      "",
+      "34",
+      "34",
+      "34",
+      "012345"
+    ]
+  }
+}

@@ -1,0 +1,94 @@
+{
+  "expression": [
+    "format",
+    "a",
+    {},
+    "b",
+    {
+      "font-scale": 2
+    },
+    "c",
+    {
+      "text-font": [
+        "literal",
+        [
+          "a",
+          "b"
+        ]
+      ]
+    },
+    "d",
+    {
+      "text-color": "rgb(0, 255, 0)"
+    },
+    "e",
+    {
+      "vertical-align": "center"
+    }
+  ],
+  "inputs": [
+    [
+      {},
+      {}
+    ]
+  ],
+  "expected": {
+    "compiled": {
+      "result": "success",
+      "isFeatureConstant": true,
+      "isZoomConstant": true,
+      "type": "formatted"
+    },
+    "outputs": [
+      {
+        "sections": [
+          {
+            "text": "a",
+            "image": null,
+            "scale": null,
+            "fontStack": null,
+            "textColor": null,
+            "verticalAlign": null
+          },
+          {
+            "text": "b",
+            "image": null,
+            "scale": 2,
+            "fontStack": null,
+            "textColor": null,
+            "verticalAlign": null
+          },
+          {
+            "text": "c",
+            "image": null,
+            "scale": null,
+            "fontStack": "a,b",
+            "textColor": null,
+            "verticalAlign": null
+          },
+          {
+            "text": "d",
+            "image": null,
+            "scale": null,
+            "fontStack": null,
+            "textColor": {
+              "r": 0,
+              "g": 1,
+              "b": 0,
+              "a": 1
+            },
+            "verticalAlign": null
+          },
+          {
+            "text": "e",
+            "image": null,
+            "scale": null,
+            "fontStack": null,
+            "textColor": null,
+            "verticalAlign": "center"
+          }
+        ]
+      }
+    ]
+  }
+}

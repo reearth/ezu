@@ -1,0 +1,136 @@
+{
+  "expression": [
+    "slice",
+    [
+      "get",
+      "val"
+    ],
+    [
+      "get",
+      "index"
+    ]
+  ],
+  "inputs": [
+    [
+      {},
+      {
+        "properties": {
+          "val": [],
+          "index": 0
+        }
+      }
+    ],
+    [
+      {},
+      {
+        "properties": {
+          "val": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "index": -1
+        }
+      }
+    ],
+    [
+      {},
+      {
+        "properties": {
+          "val": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "index": 0
+        }
+      }
+    ],
+    [
+      {},
+      {
+        "properties": {
+          "val": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "index": 2
+        }
+      }
+    ],
+    [
+      {},
+      {
+        "properties": {
+          "val": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "index": 5
+        }
+      }
+    ],
+    [
+      {},
+      {
+        "properties": {
+          "val": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "index": 6
+        }
+      }
+    ]
+  ],
+  "expected": {
+    "compiled": {
+      "result": "success",
+      "isFeatureConstant": false,
+      "isZoomConstant": true,
+      "type": "value"
+    },
+    "outputs": [
+      [],
+      [
+        5
+      ],
+      [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      [
+        2,
+        3,
+        4,
+        5
+      ],
+      [
+        5
+      ],
+      []
+    ]
+  }
+}

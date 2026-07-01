@@ -1,0 +1,20 @@
+[package]
+name = "maplibre_expr"
+description = "Pure-Rust parser and evaluator for MapLibre GL style expressions"
+version = "0.0.0"
+edition = "2021"
+rust-version.workspace = true
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+libtest-mimic = "0.8"
+
+[[test]]
+name = "spec"
+harness = false
