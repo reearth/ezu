@@ -27,6 +27,16 @@ struct StrokeNode {
     join: LineJoin,
     /// On/off dash pattern in pixels (`None` = solid).
     dash: Option<Vec<f32>>,
+    /// Optional data-driven stroke color: a MapLibre color expression
+    /// evaluated per feature group. When set, it overrides the constant
+    /// `color` for groups whose expression resolves to a color.
+    color_expr: Option<maplibre_expr::Expr>,
+    /// Optional data-driven stroke width (px): a MapLibre number expression
+    /// evaluated per feature group. When set, it overrides `width-px`.
+    width_expr: Option<maplibre_expr::Expr>,
+    /// Raw `color-expr` / `width-expr` JSON text, kept for a stable hash.
+    color_expr_src: Option<String>,
+    width_expr_src: Option<String>,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
 }
@@ -56,15 +66,74 @@ impl Node for StrokeNode {
         }
         let rgba8 = color_f32_to_u8(self.color.get(ctx, inputs)?);
         let opacity = self.opacity.get(ctx, inputs)? as f32;
-        let color = tint_alpha_color(rgba8, opacity);
+        let const_color = tint_alpha_color(rgba8, opacity);
+        let const_width = (self.width_px.get(ctx, inputs)? as f32).max(0.0);
+        let mut canvas = make_canvas(ctx)?;
+
+        if self.color_expr.is_some() || self.width_expr.is_some() {
+            // Data-driven stroke: resolve color and/or width per feature group
+            // and accumulate each group's lines onto the same canvas. Whichever
+            // expression is absent (or errors for a group) falls back to the
+            // constant `color` / `width-px`.
+            //
+            // Synthetic geometry (e.g. `literal-geometry`) carries no groups;
+            // fall back to a single empty-property group over the flat lines.
+            let z = ctx.tile.z;
+            let paint_group = |canvas: &mut _, group: &crate::nodes::common::FeatureGroup| {
+                let ectx = crate::render::group_expr_context(group, z);
+                let color = match &self.color_expr {
+                    Some(expr) => match maplibre_expr::evaluate(expr, &ectx) {
+                        Ok(maplibre_expr::Value::Color(c)) => tint_alpha_color(
+                            // maplibre-expr `Color` stores straight channels in
+                            // `0..=1`, exactly like a parsed hex literal — so an
+                            // opaque data-driven color paints the same pixels as
+                            // the constant `color` path.
+                            color_f32_to_u8([c.r as f32, c.g as f32, c.b as f32, c.a as f32]),
+                            opacity,
+                        ),
+                        _ => const_color,
+                    },
+                    None => const_color,
+                };
+                let width = match &self.width_expr {
+                    Some(expr) => match maplibre_expr::evaluate(expr, &ectx) {
+                        Ok(maplibre_expr::Value::Number(n)) => (n as f32).max(0.0),
+                        _ => const_width,
+                    },
+                    None => const_width,
+                };
+                let style = StrokeStyle {
+                    color,
+                    width,
+                    cap: self.cap,
+                    join: self.join,
+                    dash: self.dash.clone(),
+                };
+                paint_strokes(canvas, &group.lines, feats.extent, &style);
+            };
+            if feats.groups.is_empty() {
+                let synthetic = crate::nodes::common::FeatureGroup {
+                    properties: std::collections::HashMap::new(),
+                    polygons: Vec::new(),
+                    lines: feats.lines.clone(),
+                    points: Vec::new(),
+                };
+                paint_group(&mut canvas, &synthetic);
+            } else {
+                for group in &feats.groups {
+                    paint_group(&mut canvas, group);
+                }
+            }
+            return Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))));
+        }
+
         let style = StrokeStyle {
-            color,
-            width: (self.width_px.get(ctx, inputs)? as f32).max(0.0),
+            color: const_color,
+            width: const_width,
             cap: self.cap,
             join: self.join,
             dash: self.dash.clone(),
         };
-        let mut canvas = make_canvas(ctx)?;
         paint_strokes(&mut canvas, &feats.lines, feats.extent, &style);
         Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))))
     }
@@ -81,6 +150,14 @@ impl Node for StrokeNode {
             }
         } else {
             h.update(&[0]);
+        }
+        if let Some(s) = &self.color_expr_src {
+            h.update(b"colorexpr");
+            h.update(s.as_bytes());
+        }
+        if let Some(s) = &self.width_expr_src {
+            h.update(b"widthexpr");
+            h.update(s.as_bytes());
         }
     }
     fn param_refs(&self) -> Vec<String> {
@@ -164,6 +241,46 @@ impl NodeFactory for StrokeFactory {
         let opacity = r.number_or("opacity", 1.0)?;
         let parts = r.finish();
 
+        // `color-expr`: a raw MapLibre color expression, compiled once and
+        // evaluated per feature group at paint time. Overrides `color`.
+        let (color_expr, color_expr_src) = match fields.get("color-expr") {
+            Some(v) => {
+                let expr = maplibre_expr::parse(v).map_err(|e| FactoryError::BadField {
+                    field: "color-expr".into(),
+                    msg: e.to_string(),
+                })?;
+                // Type-check against `Color` so string branches coerce to
+                // color values, matching how MapLibre resolves a color-typed
+                // paint property.
+                let expr =
+                    maplibre_expr::typecheck(&expr, Some(&maplibre_expr::Type::Color), false)
+                        .map_err(|e| FactoryError::BadField {
+                            field: "color-expr".into(),
+                            msg: e.to_string(),
+                        })?;
+                (Some(expr), Some(v.to_string()))
+            }
+            None => (None, None),
+        };
+        // `width-expr`: a raw MapLibre number expression (px), evaluated per
+        // feature group at paint time. Overrides `width-px`.
+        let (width_expr, width_expr_src) = match fields.get("width-expr") {
+            Some(v) => {
+                let expr = maplibre_expr::parse(v).map_err(|e| FactoryError::BadField {
+                    field: "width-expr".into(),
+                    msg: e.to_string(),
+                })?;
+                let expr =
+                    maplibre_expr::typecheck(&expr, Some(&maplibre_expr::Type::Number), false)
+                        .map_err(|e| FactoryError::BadField {
+                            field: "width-expr".into(),
+                            msg: e.to_string(),
+                        })?;
+                (Some(expr), Some(v.to_string()))
+            }
+            None => (None, None),
+        };
+
         let mut ports = vec![PortSpec {
             name: "features",
             accepts: &[PortKind::Features],
@@ -184,6 +301,10 @@ impl NodeFactory for StrokeFactory {
                 cap,
                 join,
                 dash,
+                color_expr,
+                width_expr,
+                color_expr_src,
+                width_expr_src,
                 ports,
                 param_refs: parts.param_refs,
             }),
@@ -196,7 +317,13 @@ impl NodeFactory for StrokeFactory {
             "properties": {
                 "features": schema_frag::node_ref(),
                 "color": schema_frag::color(),
+                "color-expr": {
+                    "description": "A MapLibre color expression (JSON array, e.g. [\"match\", [\"get\", \"class\"], \"river\", \"#48b\", \"#888\"]), evaluated per feature group at paint time. When present it overrides the constant `color`; a group whose expression doesn't resolve to a color falls back to `color`. Unlocks data-driven stroke colors.",
+                },
                 "width-px": schema_frag::px_number(),
+                "width-expr": {
+                    "description": "A MapLibre number expression (JSON array, e.g. [\"interpolate\", [\"linear\"], [\"zoom\"], 10, 1, 16, 4]) giving stroke width in pixels, evaluated per feature group at paint time. When present it overrides the constant `width-px`; a group whose expression doesn't resolve to a number falls back to `width-px`.",
+                },
                 "opacity": schema_frag::unit_number(),
                 "cap": { "type": "string", "enum": ["butt", "round", "square"], "default": "butt" },
                 "join": { "type": "string", "enum": ["miter", "round", "bevel"], "default": "miter" },
