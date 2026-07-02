@@ -1,21 +1,91 @@
-//! MapLibre filter expressions → ezu feature filter objects.
+//! MapLibre layer filters → ezu.
 //!
-//! ezu filters are an AND-map: `{ key: value }`, `{ key: [v1, v2] }`
-//! (membership), or `{ key: { "not": value|array } }`. We convert the
-//! comparison/membership operators in both spellings MapLibre uses:
+//! A layer's `filter` is routed by [`layer_filters`]:
+//!
+//! - **expression-form** filters (per [`is_expression_filter`]) pass through
+//!   verbatim as a raw `filter-expr`, which ezu-paint evaluates via the
+//!   `maplibre-expr` crate — full fidelity, including operators the
+//!   structured form can't represent (`any`, `has`/`!has`, `<`/`>`,
+//!   `geometry-type`/`$type`).
+//! - **legacy-form** filters (and the bucket-membership filters synthesized
+//!   for `match` fill colours) use the structured [`convert`] path below.
+//!
+//! The structured ezu filter is an AND-map: `{ key: value }`,
+//! `{ key: [v1, v2] }` (membership), or `{ key: { "not": value|array } }`.
+//! [`convert`] handles the comparison/membership operators in both spellings
+//! MapLibre uses:
 //!
 //! - **legacy**: `["==", "kind", "park"]`, `["in", "kind", "a", "b"]`
 //! - **expression**: `["==", ["get", "kind"], "park"]`,
 //!   `["in", ["get", "kind"], ["literal", ["a", "b"]]]`
 //!
 //! plus `all` (AND) and `!` (negation of a single comparison). Operators
-//! ezu's flat filter can't represent — `any` (OR), `has`/`!has` (field
-//! existence), `<`/`>`, `geometry-type`/`$type` — are reported and dropped
-//! rather than silently mis-translated.
+//! ezu's flat filter can't represent are reported and dropped rather than
+//! silently mis-translated — but a genuine expression-form filter never
+//! reaches [`convert`], so in practice these warnings are limited to the
+//! legacy leftovers.
 
 use serde_json::{Map, Value};
 
 use crate::Report;
+
+/// Route a layer's own `filter` to the right representation:
+///
+/// - **expression-form** (per [`is_expression_filter`]) → passed through
+///   verbatim as a raw `filter-expr` (ezu-paint evaluates it via
+///   `maplibre-expr` with full fidelity — no lossy structured translation,
+///   no warning).
+/// - **legacy-form** (or anything not recognized as an expression) → the
+///   existing structured [`convert`] path.
+///
+/// Returns `(structured, expr)`; at most one is `Some`.
+pub(crate) fn layer_filters(
+    layer: &Map<String, Value>,
+    report: &mut Report,
+    id: &str,
+) -> (Option<Map<String, Value>>, Option<Value>) {
+    match layer.get("filter") {
+        None => (None, None),
+        Some(f) if is_expression_filter(f) => (None, Some(f.clone())),
+        Some(f) => (convert(f, report, id), None),
+    }
+}
+
+/// Whether a MapLibre `filter` is an *expression*, as opposed to a *legacy*
+/// filter. Ported faithfully from MapLibre's `isExpressionFilter`: this is
+/// exactly how MapLibre decides whether to feed a filter to the expression
+/// evaluator or the legacy filter compiler.
+pub(crate) fn is_expression_filter(f: &Value) -> bool {
+    // booleans are valid expressions
+    if f.is_boolean() {
+        return true;
+    }
+    let Some(arr) = f.as_array() else {
+        return false;
+    };
+    if arr.is_empty() {
+        return false;
+    }
+    let op = arr[0].as_str().unwrap_or("");
+    match op {
+        "has" => {
+            arr.len() >= 2
+                && arr
+                    .get(1)
+                    .and_then(|v| v.as_str())
+                    .is_none_or(|s| s != "$id" && s != "$type")
+        }
+        "in" => arr.len() >= 3 && (!arr[1].is_string() || arr.get(2).is_some_and(|v| v.is_array())),
+        "!in" | "!has" | "none" => false, // legacy-only
+        "==" | "!=" | ">" | ">=" | "<" | "<=" => {
+            arr.len() != 3 || arr[1].is_array() || arr[2].is_array()
+        }
+        "any" | "all" => arr[1..]
+            .iter()
+            .all(|sub| sub.is_boolean() || is_expression_filter(sub)),
+        _ => true, // any other first element ⇒ an expression
+    }
+}
 
 /// Convert a MapLibre `filter` value into an ezu filter map. Unsupported
 /// clauses are warned about (via `report`, tagged with `layer_id`) and

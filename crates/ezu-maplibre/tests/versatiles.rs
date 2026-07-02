@@ -24,19 +24,21 @@ fn converts_full_osm_style_to_valid_document() {
         doc.nodes.len()
     );
 
-    // Expression-form filters must convert (not be silently dropped): the
-    // style uses `["in", ["get", "kind"], ["literal", [...]]]` heavily, so
-    // membership-array filters should appear on features nodes.
+    // Expression-form filters must survive conversion (not be silently
+    // dropped): the style uses `["in", ["get", "kind"], ["literal", [...]]]`
+    // and other expression filters heavily. These now pass through verbatim
+    // as raw `filter-expr` (evaluated by ezu-paint via `maplibre-expr` with
+    // full fidelity) rather than the lossy structured translation, so many
+    // features nodes should carry a `filter-expr`.
     let nodes = recipe["nodes"].as_object().unwrap();
-    let membership_filters = nodes
+    let expr_filters = nodes
         .values()
         .filter(|n| n["op"] == "features")
-        .filter_map(|n| n.get("filter").and_then(|f| f.as_object()))
-        .filter(|f| f.values().any(|v| v.is_array()))
+        .filter(|n| n.get("filter-expr").map(|e| e.is_array()).unwrap_or(false))
         .count();
     assert!(
-        membership_filters > 5,
-        "expected expression-form `in` filters to convert to membership arrays, got {membership_filters}"
+        expr_filters > 5,
+        "expected expression-form filters to pass through as `filter-expr`, got {expr_filters}"
     );
 
     // The residual should be the known-unsupported set only.

@@ -24,9 +24,7 @@ pub(crate) fn convert_circle(
     let Some((source, source_layer)) = resolve_layer_source(id, layer, sources, report) else {
         return;
     };
-    let base_filter = layer
-        .get("filter")
-        .and_then(|f| filter::convert(f, report, id));
+    let (base_filter, base_filter_expr) = filter::layer_filters(layer, report, id);
     let paint = paint_of(layer);
 
     let num = |key: &str, default: f64| {
@@ -54,7 +52,7 @@ pub(crate) fn convert_circle(
     let feat_id = format!("{id}__feat");
     nodes.insert(
         feat_id.clone(),
-        features_node(&source, &source_layer, base_filter),
+        features_node(&source, &source_layer, base_filter, base_filter_expr),
     );
 
     // Stroke ring first (drawn under), then the fill disk on top.
