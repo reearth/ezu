@@ -24,7 +24,7 @@ pub mod ops;
 /// `[0, extent]` with y-down before constructing this. Consumers in
 /// `ezu-paint` read it via the unified `AssetLoader` under
 /// `tile.<name>` bindings.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FeatureLayer {
     pub name: String,
     /// Tile coordinate extent (typically 4096 for MVT). GeoJSON
@@ -34,7 +34,7 @@ pub struct FeatureLayer {
 }
 
 /// One decoded feature: geometry plus a properties bag.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Feature {
     pub id: Option<u64>,
     pub geometry: Geometry,

@@ -98,6 +98,37 @@ pub fn render_with_rasters(
     }
 }
 
+/// Render with tile-scoped feature-layer bindings, the way a host binds
+/// per-tile MVT layers via `TileLoader::bind_features`. `features` maps a
+/// bare `<source>.<layer>` name to the layer a `features` node resolves.
+#[allow(dead_code)]
+pub fn render_with_features(
+    json: &str,
+    tile_size: u32,
+    pad: u32,
+    tile: TileId,
+    features: &[(&str, ezu_features::FeatureLayer)],
+) -> std::sync::Arc<ezu_graph::RasterBuf> {
+    use ezu_paint::host::TileLoader;
+    let doc = Document::from_json(json).expect("parse");
+    let registry = default_registry();
+    let graph = build_graph(&doc, &registry).expect("build");
+    let cache = Cache::new();
+    let base = NoAssets;
+    let mut loader = TileLoader::new(&base, tile);
+    for (name, layer) in features {
+        loader.bind_features(name.to_string(), layer.clone());
+    }
+    let ev = Evaluator::new(&graph, &cache, &loader);
+    let out = ev
+        .render(tile, CanvasInfo { tile_size, pad }, &ParamValues::new(), 0)
+        .expect("render");
+    match out {
+        PortValue::Raster(r) => r,
+        other => panic!("expected raster output, got {:?}", other.kind()),
+    }
+}
+
 fn render_with_assets(
     json: &str,
     tile_size: u32,

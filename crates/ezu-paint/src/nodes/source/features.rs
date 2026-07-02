@@ -18,8 +18,8 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{features_value, read_optional_string};
-use crate::render::{collect_lines, collect_points, collect_polygons};
+use crate::nodes::common::{features_value, features_value_grouped, read_optional_string};
+use crate::render::collect_groups;
 
 struct FeaturesNode {
     name: String,
@@ -78,10 +78,8 @@ impl Node for FeaturesNode {
             EvalError::Other(format!("`{}` payload is not FeatureLayer", self.name))
         })?;
         let fe = self.filter_expr.as_ref();
-        let polys = collect_polygons(&layer.features, &self.filter, fe, &self.min_zoom_field, z);
-        let lns = collect_lines(&layer.features, &self.filter, fe, &self.min_zoom_field, z);
-        let pts = collect_points(&layer.features, &self.filter, fe, &self.min_zoom_field, z);
-        Ok(features_value(layer.extent, polys, lns, pts))
+        let groups = collect_groups(&layer.features, &self.filter, fe, &self.min_zoom_field, z);
+        Ok(features_value_grouped(layer.extent, groups))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"features");
