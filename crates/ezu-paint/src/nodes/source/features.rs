@@ -24,6 +24,11 @@ use crate::render::{collect_lines, collect_points, collect_polygons};
 struct FeaturesNode {
     name: String,
     filter: Option<ezu_style::FeatureFilter>,
+    /// A MapLibre-expression filter, compiled once. Evaluated per feature
+    /// (AND-combined with the structured `filter` when both are present).
+    filter_expr: Option<maplibre_expr::Expr>,
+    /// The raw `filter-expr` JSON text, kept only for a stable cache hash.
+    filter_expr_src: Option<String>,
     min_zoom_field: Option<String>,
     min_zoom: Option<u8>,
     max_zoom: Option<u8>,
@@ -72,9 +77,10 @@ impl Node for FeaturesNode {
         let layer = opq.downcast::<FeatureLayer>().map_err(|_| {
             EvalError::Other(format!("`{}` payload is not FeatureLayer", self.name))
         })?;
-        let polys = collect_polygons(&layer.features, &self.filter, &self.min_zoom_field, z);
-        let lns = collect_lines(&layer.features, &self.filter, &self.min_zoom_field, z);
-        let pts = collect_points(&layer.features, &self.filter, &self.min_zoom_field, z);
+        let fe = self.filter_expr.as_ref();
+        let polys = collect_polygons(&layer.features, &self.filter, fe, &self.min_zoom_field, z);
+        let lns = collect_lines(&layer.features, &self.filter, fe, &self.min_zoom_field, z);
+        let pts = collect_points(&layer.features, &self.filter, fe, &self.min_zoom_field, z);
         Ok(features_value(layer.extent, polys, lns, pts))
     }
     fn param_hash(&self, h: &mut Xxh3) {
@@ -89,6 +95,10 @@ impl Node for FeaturesNode {
                 // beautiful but stable enough for cache invalidation.
                 h.update(format!("{:?}", f[k]).as_bytes());
             }
+        }
+        if let Some(s) = &self.filter_expr_src {
+            h.update(b"fexpr");
+            h.update(s.as_bytes());
         }
         if let Some(s) = &self.min_zoom_field {
             h.update(s.as_bytes());
@@ -132,6 +142,17 @@ impl NodeFactory for FeaturesFactory {
             ),
             None => None,
         };
+        // `filter-expr`: a raw MapLibre filter expression, compiled once.
+        let (filter_expr, filter_expr_src) = match fields.get("filter-expr") {
+            Some(v) => {
+                let expr = maplibre_expr::parse(v).map_err(|e| FactoryError::BadField {
+                    field: "filter-expr".into(),
+                    msg: e.to_string(),
+                })?;
+                (Some(expr), Some(v.to_string()))
+            }
+            None => (None, None),
+        };
         let min_zoom_field = read_optional_string(fields, "min-zoom-field")?;
         let min_zoom = read_optional_zoom(fields, "min-zoom")?;
         let max_zoom = read_optional_zoom(fields, "max-zoom")?;
@@ -139,6 +160,8 @@ impl NodeFactory for FeaturesFactory {
             node: Box::new(FeaturesNode {
                 name,
                 filter,
+                filter_expr,
+                filter_expr_src,
                 min_zoom_field,
                 min_zoom,
                 max_zoom,
@@ -158,6 +181,9 @@ impl NodeFactory for FeaturesFactory {
                     "type": "object",
                     "additionalProperties": true,
                     "description": "Property-value filter; entries are AND-combined."
+                },
+                "filter-expr": {
+                    "description": "A MapLibre filter expression (JSON array, e.g. [\"all\", [\"==\", [\"get\", \"class\"], \"primary\"], [\"has\", \"name\"]]), evaluated per feature. AND-combined with `filter` if both are given. Supports the full expression language (any/has/comparisons/geometry-type)."
                 },
                 "min-zoom-field": { "type": "string",
                                     "description": "Per-feature property name carrying its data-side `min_zoom`. Features with `<field> > z` are dropped." },
