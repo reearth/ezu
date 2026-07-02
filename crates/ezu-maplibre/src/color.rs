@@ -3,8 +3,6 @@
 //! ezu paint fields take a `#hex` colour and carry opacity in a sibling
 //! field (`fill-alpha`, `opacity`), so we split alpha out here.
 
-use serde_json::Value;
-
 /// Parse a MapLibre colour into `(#rrggbb, alpha)`. Accepts `#rgb`,
 /// `#rrggbb`, `#rrggbbaa`, `rgb(...)`, `rgba(...)`, and `hsl(a)(...)`.
 /// Returns `None` for anything unrecognised (e.g. a bare expression).
@@ -285,54 +283,4 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
     let m = l - c / 2.0;
     let to = |v: f32| ((v + m) * 255.0).round().clamp(0.0, 255.0) as u8;
     (to(r1), to(g1), to(b1))
-}
-
-/// A `["match", ["get", key], v_or_arr, color, ..., fallback]` expression
-/// decomposed into filter buckets. Each arm's `values` is an ezu filter
-/// match value (a single literal or a membership array).
-pub struct MatchBuckets {
-    pub key: String,
-    pub arms: Vec<(Value, String)>,
-    pub fallback: String,
-}
-
-/// Recognise `["match", ["get", <key>], label, out, ..., fallback]` where
-/// every `out` is a colour literal. Returns `None` for any other shape
-/// (e.g. `match` on a non-`get` input, or non-colour outputs).
-pub fn match_buckets(expr: &Value) -> Option<MatchBuckets> {
-    let arr = expr.as_array()?;
-    if arr.first()?.as_str()? != "match" {
-        return None;
-    }
-    // input must be ["get", "<key>"]
-    let input = arr.get(1)?.as_array()?;
-    if input.first()?.as_str()? != "get" {
-        return None;
-    }
-    let key = input.get(1)?.as_str()?.to_string();
-
-    // arms are (label, output) pairs between index 2 and the last element;
-    // the final element is the fallback output.
-    let body = &arr[2..];
-    if body.len() < 3 || body.len() % 2 == 0 {
-        // Need an odd count: N pairs + 1 fallback.
-        return None;
-    }
-    let fallback = body.last()?.as_str()?.to_string();
-    let mut arms = Vec::new();
-    let mut i = 0;
-    while i + 1 < body.len() - 1 {
-        let label = &body[i];
-        let out = body[i + 1].as_str()?.to_string();
-        // A label may be a single value or an array of values → ezu
-        // membership. Normalise both to the ezu filter match value.
-        let values = label.clone();
-        arms.push((values, out));
-        i += 2;
-    }
-    Some(MatchBuckets {
-        key,
-        arms,
-        fallback,
-    })
 }

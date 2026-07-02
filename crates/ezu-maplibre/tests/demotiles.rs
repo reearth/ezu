@@ -32,19 +32,22 @@ fn converts_and_parses_as_ezu_document() {
     assert_eq!(sources["crimea"]["type"], "geojson");
     assert!(sources["crimea"]["data"].is_object());
     let nodes = obj["nodes"].as_object().unwrap();
-    // background + fill buckets + lines + blend chain → plenty of nodes.
+    // background + fills + lines + blend chain → plenty of nodes.
     assert!(nodes.len() > 10, "unexpectedly few nodes: {}", nodes.len());
 
-    // The `match` on ADM0_A3 should have expanded into bucketed fills with
-    // membership filters.
-    let has_bucket = nodes.values().any(|n| {
-        n.get("op").and_then(|v| v.as_str()) == Some("features")
-            && n.get("filter")
-                .and_then(|f| f.get("ADM0_A3"))
-                .map(|v| v.is_array())
+    // The `match` on ADM0_A3 should convert to a single `fill-solid` carrying
+    // a data-driven `fill-expr` that references the driving property (rather
+    // than expanding into N membership-filtered buckets).
+    let has_fill_expr = nodes.values().any(|n| {
+        n.get("op").and_then(|v| v.as_str()) == Some("fill-solid")
+            && n.get("fill-expr")
+                .map(|e| serde_json::to_string(e).unwrap().contains("ADM0_A3"))
                 .unwrap_or(false)
     });
-    assert!(has_bucket, "expected ADM0_A3 membership-filter buckets");
+    assert!(
+        has_fill_expr,
+        "expected a fill-solid with a fill-expr referencing ADM0_A3"
+    );
 
     // The crimea geojson layer resolved to a `(crimea, crimea)` features node.
     let has_geojson_layer = nodes.values().any(|n| {

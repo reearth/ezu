@@ -93,10 +93,11 @@ fn legacy_filter_emits_structured_filter_no_filter_expr() {
 }
 
 #[test]
-fn bucket_fill_with_expression_filter_carries_both() {
-    // A `fill-color` `match` expands into per-bucket membership `filter`s;
-    // the layer's own expression filter still rides along as `filter-expr`.
-    // ezu-paint ANDs the two.
+fn data_driven_fill_with_expression_filter_carries_both() {
+    // A data-driven `fill-color` `match` becomes a single `fill-solid` with a
+    // `fill-expr`; the layer's own expression filter still rides along on the
+    // `features` node as `filter-expr`. Both survive together (feature
+    // selection via the filter, per-feature color via the expression).
     let (recipe, _warnings) = convert_one(json!({
         "id": "areas",
         "type": "fill",
@@ -114,15 +115,24 @@ fn bucket_fill_with_expression_filter_carries_both() {
     }));
 
     let nodes = recipe["nodes"].as_object().unwrap();
-    // A bucket features node carries BOTH the membership `filter` (structured)
-    // and the layer's expression `filter-expr`.
-    let bucket = nodes
-        .values()
-        .find(|n| n["op"] == "features" && n.get("filter").and_then(|f| f.get("kind")).is_some());
-    let bucket = bucket.expect("a bucket features node with a `kind` membership filter");
+    // The single features node carries the layer's expression `filter-expr`.
+    let feat = features_node(&recipe);
     assert_eq!(
-        bucket.get("filter-expr"),
+        feat.get("filter-expr"),
         Some(&json!(["all", ["==", ["get", "class"], "park"]])),
-        "bucket node should also carry the layer's expression filter: {bucket}"
+        "features node should carry the layer's expression filter: {feat}"
+    );
+    // The fill-solid carries the data-driven color as `fill-expr` (referencing
+    // the driving property `kind`), not expanded into membership buckets.
+    let fill = nodes
+        .values()
+        .find(|n| n["op"] == "fill-solid")
+        .expect("a fill-solid node");
+    let fill_expr = fill
+        .get("fill-expr")
+        .expect("fill-solid should carry a fill-expr");
+    assert!(
+        serde_json::to_string(fill_expr).unwrap().contains("kind"),
+        "fill-expr should reference the driving property `kind`: {fill}"
     );
 }

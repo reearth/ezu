@@ -3,7 +3,6 @@
 
 use serde_json::{Map, Value};
 
-use crate::color::parse_color;
 use crate::filter;
 use crate::layers::paint_of;
 use crate::sources::{features_node, resolve_layer_source, Sources};
@@ -25,8 +24,15 @@ pub(crate) fn convert_line(
     let (base_filter, base_filter_expr) = filter::layer_filters(layer, report, id);
     let paint = paint_of(layer);
 
-    let width = paint
-        .get("line-width")
+    // `line-width` → a constant `width-px` when zoom-bakeable, else a raw
+    // data-driven expression emitted as `width-expr`. The pattern path and
+    // dasharray scaling need a concrete width, so keep a constant fallback.
+    let line_width = paint.get("line-width");
+    let width_expr: Option<Value> = match line_width {
+        Some(v) if zoom::number_at(v, opts.zoom).is_none() && v.is_array() => Some(v.clone()),
+        _ => None,
+    };
+    let width = line_width
         .and_then(|v| zoom::number_at(v, opts.zoom))
         .unwrap_or(1.0)
         .max(0.1);
@@ -54,11 +60,12 @@ pub(crate) fn convert_line(
         return;
     }
 
-    let (hex, _a) = paint
-        .get("line-color")
-        .and_then(|v| zoom::color_at(v, opts.zoom))
-        .and_then(|v| parse_color(&v))
-        .unwrap_or_else(|| ("#000000".to_string(), 1.0));
+    // `line-color` → constant `color` if zoom-bakeable, else a raw data-driven
+    // expression emitted as `color-expr` (with `#000000` as the constant
+    // fallback the `stroke` node always needs).
+    let (color_hex, color_expr) =
+        crate::layers::fill::resolve_paint_color(paint.get("line-color"), opts.zoom);
+    let hex = color_hex.unwrap_or_else(|| "#000000".to_string());
     let opacity = paint
         .get("line-opacity")
         .and_then(|v| zoom::number_at(v, opts.zoom));
@@ -90,6 +97,12 @@ pub(crate) fn convert_line(
         "cap": cap,
         "join": join,
     });
+    if let Some(expr) = color_expr {
+        spec["color-expr"] = expr;
+    }
+    if let Some(expr) = width_expr {
+        spec["width-expr"] = expr;
+    }
     if let Some(a) = opacity {
         spec["opacity"] = Value::from(a);
     }
