@@ -22,9 +22,7 @@ pub(crate) fn convert_fill(
     let Some((source, source_layer)) = resolve_layer_source(id, layer, sources, report) else {
         return;
     };
-    let base_filter = layer
-        .get("filter")
-        .and_then(|f| filter::convert(f, report, id));
+    let (base_filter, base_filter_expr) = filter::layer_filters(layer, report, id);
     let paint = paint_of(layer);
 
     // `fill-pattern` takes precedence over `fill-color`: tile the named
@@ -36,6 +34,7 @@ pub(crate) fn convert_fill(
             &source,
             &source_layer,
             base_filter,
+            base_filter_expr,
             sources,
             nodes,
             outputs,
@@ -62,7 +61,10 @@ pub(crate) fn convert_fill(
         let mut emit = |suffix: &str, filt: Option<Map<String, Value>>, hex: String| {
             let feat_id = format!("{id}__{suffix}_feat");
             let fill_id = format!("{id}__{suffix}_fill");
-            nodes.insert(feat_id.clone(), features_node(&source, &source_layer, filt));
+            nodes.insert(
+                feat_id.clone(),
+                features_node(&source, &source_layer, filt, base_filter_expr.clone()),
+            );
             let mut spec = serde_json::json!({ "op": "fill-solid", "features": format!("@{feat_id}"), "fill": hex });
             if let Some(a) = opacity {
                 spec["fill-alpha"] = Value::from(a);
@@ -102,7 +104,7 @@ pub(crate) fn convert_fill(
     let fill_id = format!("{id}__fill");
     nodes.insert(
         feat_id.clone(),
-        features_node(&source, &source_layer, base_filter),
+        features_node(&source, &source_layer, base_filter, base_filter_expr),
     );
     let mut spec =
         serde_json::json!({ "op": "fill-solid", "features": format!("@{feat_id}"), "fill": hex });
@@ -134,9 +136,7 @@ pub(crate) fn convert_fill_extrusion(
     let Some((source, source_layer)) = resolve_layer_source(id, layer, sources, report) else {
         return;
     };
-    let base_filter = layer
-        .get("filter")
-        .and_then(|f| filter::convert(f, report, id));
+    let (base_filter, base_filter_expr) = filter::layer_filters(layer, report, id);
     let paint = paint_of(layer);
     let color = paint.get("fill-extrusion-color");
     let opacity = paint
@@ -146,7 +146,10 @@ pub(crate) fn convert_fill_extrusion(
     let mut emit = |suffix: &str, filt: Option<Map<String, Value>>, hex: String| {
         let feat_id = format!("{id}__{suffix}_feat");
         let fill_id = format!("{id}__{suffix}_fill");
-        nodes.insert(feat_id.clone(), features_node(&source, &source_layer, filt));
+        nodes.insert(
+            feat_id.clone(),
+            features_node(&source, &source_layer, filt, base_filter_expr.clone()),
+        );
         let mut spec = serde_json::json!({ "op": "fill-solid", "features": format!("@{feat_id}"), "fill": hex });
         if let Some(a) = opacity {
             spec["fill-alpha"] = Value::from(a);
@@ -194,6 +197,7 @@ pub(crate) fn convert_fill_pattern(
     source: &str,
     source_layer: &str,
     base_filter: Option<Map<String, Value>>,
+    base_filter_expr: Option<Value>,
     sources: &Sources,
     nodes: &mut Map<String, Value>,
     outputs: &mut Vec<String>,
@@ -214,7 +218,7 @@ pub(crate) fn convert_fill_pattern(
     let feat_id = format!("{id}__feat");
     nodes.insert(
         feat_id.clone(),
-        features_node(source, source_layer, base_filter),
+        features_node(source, source_layer, base_filter, base_filter_expr),
     );
     let shape_id = format!("{id}__shape");
     nodes.insert(

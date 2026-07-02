@@ -59,13 +59,11 @@ pub(crate) fn convert_symbol(
         ));
     }
 
-    let base_filter = layer
-        .get("filter")
-        .and_then(|f| filter::convert(f, report, id));
+    let (base_filter, base_filter_expr) = filter::layer_filters(layer, report, id);
     let feat_id = format!("{id}__feat");
     nodes.insert(
         feat_id.clone(),
-        features_node(&source, &source_layer, base_filter),
+        features_node(&source, &source_layer, base_filter, base_filter_expr),
     );
     let icon_id = format!("{id}__icon");
     nodes.insert(
