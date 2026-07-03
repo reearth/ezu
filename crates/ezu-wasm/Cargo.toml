@@ -14,7 +14,7 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-ezu-core = { workspace = true }
+ezu-core = { workspace = true, features = ["text"] }
 ezu-graph = { workspace = true }
 ezu-features = { workspace = true }
 ezu-paint = { workspace = true }

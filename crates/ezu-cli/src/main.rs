@@ -163,6 +163,13 @@ struct TranslateCmd {
     /// `switch` (instead of dropping them).
     #[arg(long)]
     keep_hidden: bool,
+    /// Map a MapLibre fontstack entry to a font file URL, as
+    /// `NAME=URL` (repeatable) — e.g.
+    /// `--font "Noto Sans Regular=https://example.com/NotoSans-Regular.ttf"`.
+    /// `symbol` text lowers only for layers whose `text-font` has a
+    /// mapped entry.
+    #[arg(long = "font", value_name = "NAME=URL")]
+    fonts: Vec<String>,
     /// Pretty-print the emitted JSON.
     #[arg(long)]
     pretty: bool,
@@ -443,12 +450,17 @@ async fn run_check(args: CheckCmd) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Number of document-scoped sources (brush / image) — the ones
+/// Number of document-scoped sources (brush / image / font) — the ones
 /// `prefetch_doc_assets` will fetch on style load.
 fn count_doc_scoped_sources(doc: &Document) -> usize {
     doc.sources
         .values()
-        .filter(|d| matches!(d, SourceDecl::Brush(_) | SourceDecl::Image(_)))
+        .filter(|d| {
+            matches!(
+                d,
+                SourceDecl::Brush(_) | SourceDecl::Image(_) | SourceDecl::Font(_)
+            )
+        })
         .count()
 }
 
@@ -469,10 +481,18 @@ async fn run_graph(args: GraphCmd) -> Result<(), Box<dyn std::error::Error>> {
 async fn run_translate(args: TranslateCmd) -> Result<(), Box<dyn std::error::Error>> {
     let text = fetch_text(&args.style).await?;
     let style: serde_json::Value = serde_json::from_str(&text)?;
+    let mut fonts = std::collections::HashMap::new();
+    for entry in &args.fonts {
+        let Some((name, url)) = entry.split_once('=') else {
+            return Err(format!("--font `{entry}`: expected NAME=URL").into());
+        };
+        fonts.insert(name.trim().to_string(), url.trim().to_string());
+    }
     let opts = ezu::translate::maplibre::ConvertOptions {
         tile_size: args.tile_size,
         pad: args.pad,
         keep_hidden: args.keep_hidden,
+        fonts,
     };
     let (recipe, report) = ezu::translate::maplibre::convert(&style, &opts)?;
 
@@ -523,6 +543,7 @@ fn render_mermaid(doc: &ezu::style::Document) -> String {
             SourceDecl::Raster(_) => "raster",
             SourceDecl::GeoJson(_) => "geojson",
             SourceDecl::Sprite(_) => "sprite",
+            SourceDecl::Font(_) => "font",
         };
         s.push_str(&format!("  {id}[/\"{id} (source:{kind})\"/]\n"));
         if matches!(decl, SourceDecl::Brush(_) | SourceDecl::Image(_)) {
@@ -933,6 +954,7 @@ pub(crate) fn feature_source_from_doc(doc: &Document) -> Option<FeatureSourcePic
             | SourceDecl::Dem(_)
             | SourceDecl::GeoJson(_)
             | SourceDecl::Sprite(_)
+            | SourceDecl::Font(_)
             | SourceDecl::Raster(_) => continue,
         };
         if chosen.is_some() {

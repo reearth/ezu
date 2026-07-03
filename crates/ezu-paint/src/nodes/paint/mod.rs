@@ -8,3 +8,4 @@ mod line;
 mod line_stamp;
 mod stamp;
 mod stroke;
+mod text;

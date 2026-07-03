@@ -58,6 +58,9 @@ pub struct BrushBankLoader {
     /// Sprite sheets keyed by their atlas `image` src (the same string an
     /// `icon` node's `sprite: "@name"` ref resolves to).
     pub sprites: HashMap<String, Arc<SpriteSheet>>,
+    /// Fonts keyed by their source's `url` (the string a `text` node's
+    /// `font` stack resolves to).
+    pub fonts: HashMap<String, Arc<ezu_core::text::Font>>,
 }
 
 impl BrushBankLoader {
@@ -76,6 +79,7 @@ impl BrushBankLoader {
             images: HashMap::new(),
             images_dir: None,
             sprites: HashMap::new(),
+            fonts: HashMap::new(),
         }
     }
 
@@ -114,6 +118,11 @@ impl BrushBankLoader {
     pub fn insert_sprite(&mut self, image_src: impl Into<String>, sheet: SpriteSheet) {
         self.sprites.insert(image_src.into(), Arc::new(sheet));
     }
+
+    /// Register a loaded font under its source `url` key.
+    pub fn insert_font(&mut self, url: impl Into<String>, font: ezu_core::text::Font) {
+        self.fonts.insert(url.into(), Arc::new(font));
+    }
 }
 
 impl Default for BrushBankLoader {
@@ -139,6 +148,9 @@ impl AssetLoader for BrushBankLoader {
                 if let Some(s) = self.sprites.get(key).or_else(|| self.sprites.get(src)) {
                     return Ok(Asset::Sprite(s.clone()));
                 }
+                if let Some(f) = self.fonts.get(key).or_else(|| self.fonts.get(src)) {
+                    return Ok(font_asset(f));
+                }
                 if let Some(img) = self.images.get(key) {
                     return Ok(Asset::Image(img.clone()));
                 }
@@ -157,10 +169,16 @@ impl AssetLoader for BrushBankLoader {
                 if let Some(s) = self.sprites.get(src) {
                     return Ok(Asset::Sprite(s.clone()));
                 }
+                if let Some(f) = self.fonts.get(src) {
+                    return Ok(font_asset(f));
+                }
                 if let Some(img) = self.images.get(src) {
                     return Ok(Asset::Image(img.clone()));
                 }
                 if let Some(asset) = load_brush_file(self.brushes_dir.as_deref(), path, src)? {
+                    return Ok(asset);
+                }
+                if let Some(asset) = load_font_file(path, src)? {
                     return Ok(asset);
                 }
                 if let Some(asset) = load_image_file(self.images_dir.as_deref(), path, src)? {
@@ -178,6 +196,9 @@ impl AssetLoader for BrushBankLoader {
                 if let Some(s) = self.sprites.get(src) {
                     return Ok(Asset::Sprite(s.clone()));
                 }
+                if let Some(f) = self.fonts.get(src) {
+                    return Ok(font_asset(f));
+                }
                 if let Some(img) = self.images.get(src) {
                     return Ok(Asset::Image(img.clone()));
                 }
@@ -189,6 +210,9 @@ impl AssetLoader for BrushBankLoader {
                 // (wasm). Small inline assets, so a per-call decode is fine.
                 if let Some(b) = self.bank.get(src) {
                     return Ok(Asset::Brush(b.clone()));
+                }
+                if let Some(f) = self.fonts.get(src) {
+                    return Ok(font_asset(f));
                 }
                 if let Some(img) = self.images.get(src) {
                     return Ok(Asset::Image(img.clone()));
@@ -295,9 +319,10 @@ fn percent_decode(s: &str) -> Vec<u8> {
     out
 }
 
-/// Decode a `data:` URL into an [`Asset`]: `image/*` → an image; anything
-/// else is tried as a `.myb` brush, then (as a fallback for
-/// octet-stream/unspecified types) as a sniffed image.
+/// Decode a `data:` URL into an [`Asset`]: `image/*` → an image, `font/*`
+/// (or sniffed sfnt magic) → a font; anything else is tried as a `.myb`
+/// brush, then (as a fallback for octet-stream/unspecified types) as a
+/// sniffed image.
 fn load_data_url(src: &str) -> Result<Asset, AssetError> {
     let data = decode_data_url(src)?;
     let as_image = |bytes: &[u8]| {
@@ -311,6 +336,15 @@ fn load_data_url(src: &str) -> Result<Asset, AssetError> {
     if data.media_type.starts_with("image/") {
         return as_image(&data.bytes);
     }
+    if data.media_type.starts_with("font/") || is_font_magic(&data.bytes) {
+        let font = ezu_core::text::Font::from_bytes(Arc::from(data.bytes), 0).map_err(|e| {
+            AssetError::Decode {
+                src: src.to_string(),
+                msg: e.to_string(),
+            }
+        })?;
+        return Ok(Asset::Font(Arc::new(font) as OpaqueValue));
+    }
     // Non-image media type: prefer a brush, else sniff as an image.
     if let Ok(text) = std::str::from_utf8(&data.bytes) {
         if let Ok(brush) = hokusai::myb::from_str(text) {
@@ -318,6 +352,19 @@ fn load_data_url(src: &str) -> Result<Asset, AssetError> {
         }
     }
     as_image(&data.bytes)
+}
+
+/// Wrap a bank font into its type-erased [`Asset`] form.
+fn font_asset(font: &Arc<ezu_core::text::Font>) -> Asset {
+    Asset::Font(font.clone() as OpaqueValue)
+}
+
+/// Whether `bytes` start with an sfnt font magic (TTF / OTF / TTC).
+fn is_font_magic(bytes: &[u8]) -> bool {
+    matches!(
+        bytes.get(..4),
+        Some([0x00, 0x01, 0x00, 0x00] | b"OTTO" | b"ttcf" | b"true")
+    )
 }
 
 fn load_brush_file(
@@ -391,6 +438,31 @@ fn load_image_file(
 
 fn is_brush_extension(path: &std::path::Path) -> bool {
     matches!(path.extension().and_then(|s| s.to_str()), Some("myb"))
+}
+
+/// Read a `file:` font at eval time. Only absolute paths resolve here
+/// (there is no configured fonts dir); relative `file:` fonts are staged
+/// up front by `prefetch_doc_assets`, which also honours a source's TTC
+/// `index` — this lazy path always loads face 0.
+fn load_font_file(path: &str, src: &str) -> Result<Option<Asset>, AssetError> {
+    let path = std::path::Path::new(path);
+    let is_font = matches!(
+        path.extension().and_then(|s| s.to_str()),
+        Some("ttf" | "otf" | "ttc")
+    );
+    if !is_font || !path.is_absolute() || !path.exists() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(path).map_err(|e| AssetError::Decode {
+        src: src.to_string(),
+        msg: e.to_string(),
+    })?;
+    let font =
+        ezu_core::text::Font::from_bytes(Arc::from(bytes), 0).map_err(|e| AssetError::Decode {
+            src: src.to_string(),
+            msg: e.to_string(),
+        })?;
+    Ok(Some(Asset::Font(Arc::new(font) as OpaqueValue)))
 }
 
 /// Per-render loader that overlays tile-scoped bindings on top of a
@@ -842,6 +914,20 @@ pub async fn prefetch_doc_assets(
                     .map_err(|e| format!("sprite `{name}`: {e}"))?;
                 loader.insert_sprite(sprite.image.clone(), SpriteSheet { atlas, icons });
             }
+            ezu_style::SourceDecl::Font(font) => {
+                // Staged up front for every scheme so a TTC `index` is
+                // honoured and relative `file:` paths resolve against
+                // `base_dir` (the lazy eval-time path handles neither).
+                if loader.fonts.contains_key(&font.url) {
+                    continue;
+                }
+                let bytes = read_asset_bytes(&font.url, base_dir)
+                    .await
+                    .map_err(|e| format!("font `{name}`: {e}"))?;
+                let face = ezu_core::text::Font::from_bytes(Arc::from(bytes), font.index)
+                    .map_err(|e| format!("font `{name}`: {e}"))?;
+                loader.fonts.insert(font.url.clone(), Arc::new(face));
+            }
             // Tile-scoped — handled per-render elsewhere. GeoJSON is
             // projected + bound per tile by the host driver, not here.
             ezu_style::SourceDecl::Mvt(_)
@@ -961,6 +1047,35 @@ mod tests {
             }
             _ => panic!("expected an Image asset from a data:image/png URL"),
         }
+    }
+
+    #[test]
+    fn file_scheme_font_loads_through_the_asset_loader() {
+        // Absolute `file:` path to the ezu-core test font (a Noto Sans
+        // subset vendored for the `text` feature tests).
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../ezu-core/tests/fonts/NotoSans-Regular.latin.ttf");
+        let src = format!("file:{}", path.display());
+        let loader = BrushBankLoader::empty();
+        match loader.load(&src).expect("font loads") {
+            Asset::Font(opq) => {
+                let font = opq
+                    .downcast::<ezu_core::text::Font>()
+                    .expect("payload is ezu_core::text::Font");
+                assert!(font.covers('A'));
+                assert!(!font.covers('0')); // digits live in the other subset
+            }
+            other => panic!("expected a Font asset, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn font_magic_is_sniffed_for_data_urls() {
+        assert!(is_font_magic(&[0x00, 0x01, 0x00, 0x00, 0xff]));
+        assert!(is_font_magic(b"OTTO...."));
+        assert!(is_font_magic(b"ttcf...."));
+        assert!(!is_font_magic(b"\x89PNG\r\n"));
+        assert!(!is_font_magic(b"{}"));
     }
 
     #[test]
