@@ -303,7 +303,12 @@ fn convert_text(
             }
             None => v.clone(),
         },
-        Some(v @ Value::Object(_)) => v.clone(), // legacy {stops} function
+        // Legacy `{stops}` function: its output strings may carry
+        // `{token}`s that the raw passthrough would render literally.
+        Some(v @ Value::Object(_)) => match rewrite_legacy_stops_tokens(v) {
+            Some(expr) => expr,
+            None => v.clone(),
+        },
         _ => return,
     };
 
@@ -536,6 +541,47 @@ fn rewrite_field_tokens(s: &str) -> Option<Value> {
     let mut concat = vec![Value::String("concat".into())];
     concat.extend(parts);
     Some(Value::Array(concat))
+}
+
+/// Rewrite a legacy zoom-interval `{stops}` `text-field` whose output
+/// strings carry `{token}`s into a `["step", ["zoom"], …]` expression
+/// with each output token-expanded (legacy interval semantics — the
+/// first output also covers zooms below the first stop — match `step`).
+/// Returns `None` when nothing needs rewriting or the function isn't a
+/// plain zoom-interval string function (data-driven `property`,
+/// `categorical`, non-string outputs): those pass through raw as before.
+fn rewrite_legacy_stops_tokens(v: &Value) -> Option<Value> {
+    let obj = v.as_object()?;
+    if obj.contains_key("property") {
+        return None;
+    }
+    match obj.get("type").and_then(Value::as_str) {
+        None | Some("interval") => {}
+        Some(_) => return None,
+    }
+    let stops = obj.get("stops")?.as_array()?;
+    let mut pairs: Vec<(f64, &str)> = Vec::with_capacity(stops.len());
+    for stop in stops {
+        let pair = stop.as_array()?;
+        pairs.push((pair.first()?.as_f64()?, pair.get(1)?.as_str()?));
+    }
+    if pairs.is_empty() || !pairs.iter().any(|(_, s)| s.contains('{')) {
+        return None;
+    }
+    let expand = |s: &str| rewrite_field_tokens(s).unwrap_or_else(|| Value::String(s.into()));
+    if pairs.len() == 1 {
+        return Some(expand(pairs[0].1));
+    }
+    let mut step = vec![
+        Value::String("step".into()),
+        serde_json::json!(["zoom"]),
+        expand(pairs[0].1),
+    ];
+    for (input, output) in &pairs[1..] {
+        step.push(Value::from(*input));
+        step.push(expand(output));
+    }
+    Some(Value::Array(step))
 }
 
 /// Rewrite a `["format", …]` expression into the concatenation of its
