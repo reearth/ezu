@@ -18,7 +18,9 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value, read_number, read_number_or};
+use crate::nodes::common::{
+    downcast_features, features_value, read_number, read_number_or, FeatureGroup,
+};
 
 #[derive(Debug, Clone, Copy)]
 enum Mode {
@@ -90,25 +92,28 @@ impl Node for ResampleNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
-        let lines: Vec<Vec<(i32, i32)>> = feats
-            .lines
-            .iter()
-            .map(|l| self.mode.apply_open(l))
-            .collect();
-        let polygons: Vec<Polygon> = feats
-            .polygons
-            .iter()
-            .map(|p| Polygon {
-                exterior: self.mode.apply_closed(&p.exterior),
-                holes: p.holes.iter().map(|h| self.mode.apply_closed(h)).collect(),
-            })
-            .collect();
-        Ok(features_value(
-            feats.extent,
-            polygons,
-            lines,
-            feats.points.clone(),
-        ))
+        // Per group: adjust polyline / polygon-ring density (points pass
+        // through), carrying properties.
+        let mut out_groups = Vec::with_capacity(feats.groups.len());
+        for g in &feats.groups {
+            let lines: Vec<Vec<(i32, i32)>> =
+                g.lines.iter().map(|l| self.mode.apply_open(l)).collect();
+            let polygons: Vec<Polygon> = g
+                .polygons
+                .iter()
+                .map(|p| Polygon {
+                    exterior: self.mode.apply_closed(&p.exterior),
+                    holes: p.holes.iter().map(|h| self.mode.apply_closed(h)).collect(),
+                })
+                .collect();
+            out_groups.push(FeatureGroup {
+                properties: g.properties.clone(),
+                polygons,
+                lines,
+                points: g.points.clone(),
+            });
+        }
+        Ok(features_value(feats.extent, out_groups))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(self.mode.tag());

@@ -15,7 +15,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value, read_optional_string};
+use crate::nodes::common::{downcast_features, features_value, read_optional_string, FeatureGroup};
 
 struct BufferNode {
     distance: In<f64>,
@@ -51,10 +51,21 @@ impl Node for BufferNode {
             distance: self.distance.get(ctx, inputs)?,
             join: self.join,
         };
-        let mut polygons = buffer_polygons(&feats.polygons, &opts);
-        polygons.extend(buffer_lines(&feats.lines, &opts));
-        polygons.extend(buffer_points(&feats.points, &opts));
-        Ok(features_value(feats.extent, polygons, vec![], vec![]))
+        // Per group: buffer each feature's geometry into polygons, carrying
+        // properties.
+        let mut out_groups = Vec::with_capacity(feats.groups.len());
+        for g in &feats.groups {
+            let mut polygons = buffer_polygons(&g.polygons, &opts);
+            polygons.extend(buffer_lines(&g.lines, &opts));
+            polygons.extend(buffer_points(&g.points, &opts));
+            out_groups.push(FeatureGroup {
+                properties: g.properties.clone(),
+                polygons,
+                lines: vec![],
+                points: vec![],
+            });
+        }
+        Ok(features_value(feats.extent, out_groups))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"buffer");

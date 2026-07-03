@@ -3,6 +3,9 @@
 //! Polygons and lines in the input are ignored — pipe a `centroid`
 //! upstream to derive seed points from them. Useful for stylised
 //! "shattered glass" / "fence line" effects.
+//!
+//! Because it diagrams the pooled point set across every input feature, the
+//! output is a single group with no per-feature properties.
 
 use ezu_features::ops::voronoi::voronoi_edges;
 use ezu_graph::{
@@ -12,7 +15,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value};
+use crate::nodes::common::{downcast_features, features_value, FeatureGroup};
 
 struct VoronoiNode;
 
@@ -44,8 +47,15 @@ impl Node for VoronoiNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
-        let lines = voronoi_edges(&feats.points, None);
-        Ok(features_value(feats.extent, vec![], lines, vec![]))
+        let points: Vec<(i32, i32)> = feats.points().collect();
+        let lines = voronoi_edges(&points, None);
+        if lines.is_empty() {
+            return Ok(features_value(feats.extent, vec![]));
+        }
+        Ok(features_value(
+            feats.extent,
+            vec![FeatureGroup::synthetic(vec![], lines, vec![])],
+        ))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"voronoi");

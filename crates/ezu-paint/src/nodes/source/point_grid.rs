@@ -18,7 +18,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{features_value, read_number, read_optional_string};
+use crate::nodes::common::{features_value, read_number, read_optional_string, FeatureGroup};
 
 const DEFAULT_EXTENT: u32 = 4096;
 
@@ -65,7 +65,7 @@ impl Node for PointGridNode {
         // A non-positive spacing has no lattice; emit nothing rather
         // than diverge.
         if spacing_x <= 0.0 || spacing_y <= 0.0 {
-            return Ok(features_value(self.extent, vec![], vec![], vec![]));
+            return Ok(features_value(self.extent, vec![]));
         }
         // World origin in tile-local coords: subtract the tile's world
         // offset so a single global grid lines up across neighbours.
@@ -95,7 +95,10 @@ impl Node for PointGridNode {
             }
             j += 1;
         }
-        Ok(features_value(self.extent, vec![], vec![], points))
+        Ok(features_value(
+            self.extent,
+            vec![FeatureGroup::synthetic(vec![], vec![], points)],
+        ))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"point-grid");

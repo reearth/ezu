@@ -19,7 +19,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{features_value, features_value_grouped, read_optional_string};
+use crate::nodes::common::{features_value, read_optional_string};
 use crate::render::collect_groups;
 
 struct FeaturesNode {
@@ -59,12 +59,12 @@ impl Node for FeaturesNode {
         // Style-level zoom gate: outside the [min_zoom, max_zoom] band,
         // skip the asset lookup entirely and emit an empty layer.
         if self.min_zoom.is_some_and(|mn| z < mn) || self.max_zoom.is_some_and(|mx| z > mx) {
-            return Ok(features_value(0, vec![], vec![], vec![]));
+            return Ok(features_value(0, vec![]));
         }
         let asset = match ctx.assets.load(&self.name) {
             Ok(a) => a,
             // No binding for this tile -> emit an empty layer.
-            Err(AssetError::NotFound(_)) => return Ok(features_value(0, vec![], vec![], vec![])),
+            Err(AssetError::NotFound(_)) => return Ok(features_value(0, vec![])),
             Err(e) => return Err(EvalError::Asset(e)),
         };
         let Asset::Features(opq) = asset else {
@@ -78,7 +78,7 @@ impl Node for FeaturesNode {
         })?;
         let fe = self.filter_expr.as_ref();
         let groups = collect_groups(&layer.features, fe, &self.min_zoom_field, z);
-        Ok(features_value_grouped(layer.extent, groups))
+        Ok(features_value(layer.extent, groups))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"features");

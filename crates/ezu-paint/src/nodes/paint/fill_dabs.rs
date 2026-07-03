@@ -56,7 +56,7 @@ impl Node for FillDabsNode {
             .as_ref()
             .ok_or_else(|| EvalError::MissingInput("features".into()))?;
         let feats = downcast_features(feats)?;
-        if feats.polygons.is_empty() {
+        if !feats.has_polygons() {
             return Ok(empty_raster(ctx));
         }
         let color = srgb_to_linear_rgba(self.color.get(ctx, inputs)?);
@@ -73,13 +73,8 @@ impl Node for FillDabsNode {
             opacity_jitter: self.opacity_jitter.get(ctx, inputs)? as f32,
             value_jitter: self.value_jitter.get(ctx, inputs)? as f32,
         };
-        paint_polygons_dabs(
-            &mut canvas,
-            &feats.polygons,
-            feats.extent,
-            core_tile(ctx),
-            &style,
-        );
+        let polygons: Vec<_> = feats.polygons().cloned().collect();
+        paint_polygons_dabs(&mut canvas, &polygons, feats.extent, core_tile(ctx), &style);
         Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))))
     }
     fn param_hash(&self, h: &mut Xxh3) {

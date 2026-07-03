@@ -14,7 +14,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::features_value;
+use crate::nodes::common::{features_value, FeatureGroup};
 
 const DEFAULT_EXTENT: u32 = 4096;
 
@@ -43,11 +43,15 @@ impl Node for LiteralGeometryNode {
         _ctx: &EvalCtx<'_>,
         _inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
+        // A synthetic source emits a single group with no per-feature
+        // properties (any data-driven paint downstream just sees no props).
         Ok(features_value(
             self.extent,
-            self.polygons.clone(),
-            self.lines.clone(),
-            self.points.clone(),
+            vec![FeatureGroup::synthetic(
+                self.polygons.clone(),
+                self.lines.clone(),
+                self.points.clone(),
+            )],
         ))
     }
     fn param_hash(&self, h: &mut Xxh3) {

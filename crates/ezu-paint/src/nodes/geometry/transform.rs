@@ -11,7 +11,9 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value, read_number_or, read_xy};
+use crate::nodes::common::{
+    downcast_features, features_value, read_number_or, read_xy, FeatureGroup,
+};
 
 struct TransformNode {
     translate: (f64, f64),
@@ -48,19 +50,30 @@ impl Node for TransformNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
-        let mut points = feats.points.clone();
-        let mut lines = feats.lines.clone();
-        let mut polygons = feats.polygons.clone();
-        transform(
-            &mut points,
-            &mut lines,
-            &mut polygons,
-            self.scale,
-            self.rotation_rad,
-            self.pivot,
-            self.translate,
-        );
-        Ok(features_value(feats.extent, polygons, lines, points))
+        // Per group: apply the affine to each feature's vertices, carrying
+        // properties.
+        let mut out_groups = Vec::with_capacity(feats.groups.len());
+        for g in &feats.groups {
+            let mut points = g.points.clone();
+            let mut lines = g.lines.clone();
+            let mut polygons = g.polygons.clone();
+            transform(
+                &mut points,
+                &mut lines,
+                &mut polygons,
+                self.scale,
+                self.rotation_rad,
+                self.pivot,
+                self.translate,
+            );
+            out_groups.push(FeatureGroup {
+                properties: g.properties.clone(),
+                polygons,
+                lines,
+                points,
+            });
+        }
+        Ok(features_value(feats.extent, out_groups))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"transform");

@@ -9,7 +9,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value};
+use crate::nodes::common::{downcast_features, features_value, FeatureGroup};
 
 struct SimplifyNode {
     epsilon: In<f64>,
@@ -41,22 +41,28 @@ impl Node for SimplifyNode {
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
         let epsilon = self.epsilon.get(ctx, inputs)?;
-        let lines: Vec<_> = feats
-            .lines
-            .iter()
-            .filter_map(|l| simplify_line(l, epsilon))
-            .collect();
-        let polygons: Vec<_> = feats
-            .polygons
-            .iter()
-            .filter_map(|p| simplify_polygon(p, epsilon))
-            .collect();
-        Ok(features_value(
-            feats.extent,
-            polygons,
-            lines,
-            feats.points.clone(),
-        ))
+        // Per group: simplify each feature's lines and polygon rings (points
+        // pass through), carrying properties.
+        let mut out_groups = Vec::with_capacity(feats.groups.len());
+        for g in &feats.groups {
+            let lines: Vec<_> = g
+                .lines
+                .iter()
+                .filter_map(|l| simplify_line(l, epsilon))
+                .collect();
+            let polygons: Vec<_> = g
+                .polygons
+                .iter()
+                .filter_map(|p| simplify_polygon(p, epsilon))
+                .collect();
+            out_groups.push(FeatureGroup {
+                properties: g.properties.clone(),
+                polygons,
+                lines,
+                points: g.points.clone(),
+            });
+        }
+        Ok(features_value(feats.extent, out_groups))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"simplify");

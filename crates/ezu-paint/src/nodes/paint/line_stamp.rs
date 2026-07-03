@@ -68,7 +68,7 @@ impl Node for LineStampNode {
             .as_ref()
             .ok_or_else(|| EvalError::MissingInput("image".into()))?;
         let (image, _) = unwrap_raster_or_sprite(image_in, "image")?;
-        if feats.lines.is_empty() || image.width == 0 || image.height == 0 {
+        if !feats.has_lines() || image.width == 0 || image.height == 0 {
             return Ok(empty_raster(ctx));
         }
 
@@ -107,7 +107,7 @@ impl Node for LineStampNode {
         let sy = tile_h / extent;
         let pm = canvas.pixmap_mut();
 
-        for line in &feats.lines {
+        for line in feats.lines() {
             if line.len() < 2 {
                 continue;
             }

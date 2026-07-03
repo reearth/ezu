@@ -13,7 +13,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value};
+use crate::nodes::common::{downcast_features, features_value, FeatureGroup};
 
 struct DashNode {
     dash_px: In<f64>,
@@ -51,16 +51,22 @@ impl Node for DashNode {
         let gap = self.gap_px.get(ctx, inputs)? * scale;
         let phase = self.phase_px.get(ctx, inputs)? * scale;
 
-        let mut out_lines: Vec<Vec<(i32, i32)>> = Vec::new();
-        for line in &feats.lines {
-            dash_polyline(line, dash, gap, phase, &mut out_lines);
+        // Per group: cut each feature's polylines into dashes (polygons and
+        // points pass through), carrying properties.
+        let mut out_groups = Vec::with_capacity(feats.groups.len());
+        for g in &feats.groups {
+            let mut out_lines: Vec<Vec<(i32, i32)>> = Vec::new();
+            for line in &g.lines {
+                dash_polyline(line, dash, gap, phase, &mut out_lines);
+            }
+            out_groups.push(FeatureGroup {
+                properties: g.properties.clone(),
+                polygons: g.polygons.clone(),
+                lines: out_lines,
+                points: g.points.clone(),
+            });
         }
-        Ok(features_value(
-            feats.extent,
-            feats.polygons.clone(),
-            out_lines,
-            feats.points.clone(),
-        ))
+        Ok(features_value(feats.extent, out_groups))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"dash");

@@ -67,7 +67,7 @@ impl Node for LineNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("brush".into()))?,
         )?;
-        if feats.lines.is_empty() {
+        if !feats.has_lines() {
             return Ok(empty_raster(ctx));
         }
         let mut canvas = make_canvas(ctx)?;
@@ -92,9 +92,10 @@ impl Node for LineNode {
             hardness_stroke_curve: self.hardness_stroke_curve.clone(),
             dtime_stroke_curve: self.dtime_stroke_curve.clone(),
         };
+        let lines: Vec<_> = feats.lines().cloned().collect();
         paint_lines(
             &mut canvas,
-            &feats.lines,
+            &lines,
             feats.extent,
             core_tile(ctx),
             &brush,

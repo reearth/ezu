@@ -11,7 +11,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::features_value;
+use crate::nodes::common::{features_value, FeatureGroup};
 
 const DEFAULT_EXTENT: u32 = 4096;
 
@@ -42,7 +42,10 @@ impl Node for TileBoundsNode {
             exterior: vec![(0, 0), (e, 0), (e, e), (0, e), (0, 0)],
             holes: vec![],
         };
-        Ok(features_value(self.extent, vec![poly], vec![], vec![]))
+        Ok(features_value(
+            self.extent,
+            vec![FeatureGroup::synthetic(vec![poly], vec![], vec![])],
+        ))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"tile-bounds");

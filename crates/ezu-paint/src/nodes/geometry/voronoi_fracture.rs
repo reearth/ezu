@@ -14,7 +14,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value};
+use crate::nodes::common::{downcast_features, features_value, FeatureGroup};
 
 struct VoronoiFractureNode;
 
@@ -58,11 +58,24 @@ impl Node for VoronoiFractureNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("seeds".into()))?,
         )?;
-        let mut out_polys = Vec::new();
-        for polygon in &polys.polygons {
-            out_polys.extend(voronoi_fracture(polygon, &seeds.points));
+        // Seeds are pooled across all seed features (the Voronoi sites are
+        // global); fracture is applied per `features` group so each source
+        // polygon's cells carry that feature's properties through.
+        let seed_points: Vec<(i32, i32)> = seeds.points().collect();
+        let mut out_groups = Vec::with_capacity(polys.groups.len());
+        for g in &polys.groups {
+            let mut out_polys = Vec::new();
+            for polygon in &g.polygons {
+                out_polys.extend(voronoi_fracture(polygon, &seed_points));
+            }
+            out_groups.push(FeatureGroup {
+                properties: g.properties.clone(),
+                polygons: out_polys,
+                lines: vec![],
+                points: vec![],
+            });
         }
-        Ok(features_value(polys.extent, out_polys, vec![], vec![]))
+        Ok(features_value(polys.extent, out_groups))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"voronoi-fracture");

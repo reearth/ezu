@@ -66,7 +66,7 @@ impl Node for StrokeNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
-        if feats.lines.is_empty() {
+        if !feats.has_lines() {
             return Ok(empty_raster(ctx));
         }
         let rgba8 = color_f32_to_u8(self.color.get(ctx, inputs)?);
@@ -80,11 +80,8 @@ impl Node for StrokeNode {
             // feature group and accumulate each group's lines onto the same
             // canvas. Whichever expression is absent (or errors for a group)
             // falls back to the constant `color` / `width-px` / `opacity`.
-            //
-            // Synthetic geometry (e.g. `literal-geometry`) carries no groups;
-            // fall back to a single empty-property group over the flat lines.
             let z = ctx.tile.z;
-            let paint_group = |canvas: &mut _, group: &crate::nodes::common::FeatureGroup| {
+            for group in &feats.groups {
                 let ectx = crate::render::group_expr_context(group, z);
                 let alpha = match &self.opacity_expr {
                     Some(expr) => match maplibre_expr::evaluate(expr, &ectx) {
@@ -121,20 +118,7 @@ impl Node for StrokeNode {
                     join: self.join,
                     dash: self.dash.clone(),
                 };
-                paint_strokes(canvas, &group.lines, feats.extent, &style);
-            };
-            if feats.groups.is_empty() {
-                let synthetic = crate::nodes::common::FeatureGroup {
-                    properties: std::collections::HashMap::new(),
-                    polygons: Vec::new(),
-                    lines: feats.lines.clone(),
-                    points: Vec::new(),
-                };
-                paint_group(&mut canvas, &synthetic);
-            } else {
-                for group in &feats.groups {
-                    paint_group(&mut canvas, group);
-                }
+                paint_strokes(&mut canvas, &group.lines, feats.extent, &style);
             }
             return Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))));
         }
@@ -146,7 +130,8 @@ impl Node for StrokeNode {
             join: self.join,
             dash: self.dash.clone(),
         };
-        paint_strokes(&mut canvas, &feats.lines, feats.extent, &style);
+        let lines: Vec<_> = feats.lines().cloned().collect();
+        paint_strokes(&mut canvas, &lines, feats.extent, &style);
         Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))))
     }
     fn param_hash(&self, h: &mut Xxh3) {

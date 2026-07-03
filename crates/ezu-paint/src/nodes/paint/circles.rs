@@ -127,7 +127,7 @@ impl Node for CirclesNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
-        if feats.points.is_empty() {
+        if !feats.has_points() {
             return Ok(empty_raster(ctx));
         }
 
@@ -201,20 +201,8 @@ impl Node for CirclesNode {
             }
         };
 
-        // Synthetic geometry (e.g. `literal-geometry`) carries no groups;
-        // fall back to a single empty-property group over the flat points.
-        if feats.groups.is_empty() {
-            let synthetic = crate::nodes::common::FeatureGroup {
-                properties: std::collections::HashMap::new(),
-                polygons: Vec::new(),
-                lines: Vec::new(),
-                points: feats.points.clone(),
-            };
-            paint_group(&mut canvas, &synthetic);
-        } else {
-            for group in &feats.groups {
-                paint_group(&mut canvas, group);
-            }
+        for group in &feats.groups {
+            paint_group(&mut canvas, group);
         }
 
         Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))))

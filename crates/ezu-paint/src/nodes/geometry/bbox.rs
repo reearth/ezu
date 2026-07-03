@@ -2,6 +2,9 @@
 //! points, lines, and polygons) and emit a single axis-aligned
 //! bounding-box polygon. Useful as a clipping or placement reference
 //! for downstream ops. Empty input yields empty output.
+//!
+//! Because it merges geometry across every input feature, the output is a
+//! single group with no per-feature properties.
 
 use ezu_features::ops::bbox::bbox_polygon;
 use ezu_graph::{
@@ -11,7 +14,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value};
+use crate::nodes::common::{downcast_features, features_value, FeatureGroup};
 
 struct BBoxNode;
 
@@ -43,10 +46,19 @@ impl Node for BBoxNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
-        let polys = bbox_polygon(&feats.points, &feats.lines, &feats.polygons)
+        let points: Vec<(i32, i32)> = feats.points().collect();
+        let lines: Vec<Vec<(i32, i32)>> = feats.lines().cloned().collect();
+        let polygons: Vec<_> = feats.polygons().cloned().collect();
+        let polys = bbox_polygon(&points, &lines, &polygons)
             .map(|p| vec![p])
             .unwrap_or_default();
-        Ok(features_value(feats.extent, polys, vec![], vec![]))
+        if polys.is_empty() {
+            return Ok(features_value(feats.extent, vec![]));
+        }
+        Ok(features_value(
+            feats.extent,
+            vec![FeatureGroup::synthetic(polys, vec![], vec![])],
+        ))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"bbox");

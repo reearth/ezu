@@ -24,7 +24,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value, read_number_or};
+use crate::nodes::common::{downcast_features, features_value, read_number_or, FeatureGroup};
 
 struct WaveNode {
     amplitude_px: In<f64>,
@@ -90,28 +90,34 @@ impl Node for WaveNode {
         let origin_x = ctx.tile.x as f64 * extent;
         let origin_y = ctx.tile.y as f64 * extent;
 
-        let mut out_lines: Vec<Vec<(i32, i32)>> = Vec::with_capacity(feats.lines.len());
-        for line in feats.lines.iter() {
-            if let Some(displaced) = wave_polyline(
-                line,
-                amp,
-                wavelen,
-                phase,
-                self.samples_per_wavelength,
-                noise_amp,
-                noise_scale,
-                seed,
-                (origin_x, origin_y),
-            ) {
-                out_lines.push(displaced);
+        // Per group: displace each feature's polylines (polygons and points
+        // pass through), carrying properties.
+        let mut out_groups = Vec::with_capacity(feats.groups.len());
+        for g in &feats.groups {
+            let mut out_lines: Vec<Vec<(i32, i32)>> = Vec::with_capacity(g.lines.len());
+            for line in g.lines.iter() {
+                if let Some(displaced) = wave_polyline(
+                    line,
+                    amp,
+                    wavelen,
+                    phase,
+                    self.samples_per_wavelength,
+                    noise_amp,
+                    noise_scale,
+                    seed,
+                    (origin_x, origin_y),
+                ) {
+                    out_lines.push(displaced);
+                }
             }
+            out_groups.push(FeatureGroup {
+                properties: g.properties.clone(),
+                polygons: g.polygons.clone(),
+                lines: out_lines,
+                points: g.points.clone(),
+            });
         }
-        Ok(features_value(
-            feats.extent,
-            feats.polygons.clone(),
-            out_lines,
-            feats.points.clone(),
-        ))
+        Ok(features_value(feats.extent, out_groups))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"wave");

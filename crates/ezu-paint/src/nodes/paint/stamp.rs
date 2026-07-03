@@ -62,7 +62,7 @@ impl Node for StampNode {
             .as_ref()
             .ok_or_else(|| EvalError::MissingInput("image".into()))?;
         let (image, _) = unwrap_raster_or_sprite(image_in, "image")?;
-        if feats.points.is_empty() || image.width == 0 || image.height == 0 {
+        if !feats.has_points() || image.width == 0 || image.height == 0 {
             return Ok(empty_raster(ctx));
         }
 
@@ -98,7 +98,7 @@ impl Node for StampNode {
         let world_per_px = 1.0 / (axis_tiles * tile_w as f64);
 
         let pm = canvas.pixmap_mut();
-        for &(x, y) in &feats.points {
+        for (x, y) in feats.points() {
             let px = x as f32 * sx + pad;
             let py = y as f32 * sy + pad;
             let wx = world_origin_x + (px as f64 - pad as f64) * world_per_px;
