@@ -25,7 +25,7 @@ mod tilejson;
 use std::any::Any;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use ezu_features::{mvt::DecodedTile, FeatureLayer};
 use ezu_graph::{
@@ -61,6 +61,14 @@ pub struct BrushBankLoader {
     /// Fonts keyed by their source's `url` (the string a `text` node's
     /// `font` stack resolves to).
     pub fonts: HashMap<String, Arc<ezu_core::text::Font>>,
+    /// SDF glyph stacks keyed by their `glyphs` source's
+    /// [`asset_key`](ezu_style::GlyphsSource::asset_key) (the URL
+    /// template with `{fontstack}` substituted, `{range}` kept).
+    /// Interior-mutable so [`AssetLoader::load`] can create a stack
+    /// lazily on first use; each stack's *ranges* then grow lazily as
+    /// tiles demand codepoints (see [`AssetLoader::hash`] below for how
+    /// caches stay correct while they grow).
+    pub glyphs: RwLock<HashMap<String, Arc<ezu_core::text::SdfFontStack>>>,
 }
 
 impl BrushBankLoader {
@@ -80,6 +88,7 @@ impl BrushBankLoader {
             images_dir: None,
             sprites: HashMap::new(),
             fonts: HashMap::new(),
+            glyphs: RwLock::new(HashMap::new()),
         }
     }
 
@@ -123,6 +132,45 @@ impl BrushBankLoader {
     pub fn insert_font(&mut self, url: impl Into<String>, font: ezu_core::text::Font) {
         self.fonts.insert(url.into(), Arc::new(font));
     }
+
+    /// Register an SDF glyph stack under its source's asset key
+    /// ([`ezu_style::GlyphsSource::asset_key`]).
+    pub fn insert_glyphs(&self, key: impl Into<String>, stack: Arc<ezu_core::text::SdfFontStack>) {
+        self.glyphs
+            .write()
+            .expect("glyphs bank poisoned")
+            .insert(key.into(), stack);
+    }
+
+    /// The stack registered under `key`, creating one lazily when the
+    /// key is a glyphs URL template: `file:` templates read ranges from
+    /// disk on demand (absolute paths — relative ones are staged by
+    /// `prefetch_doc_assets`), `http(s)://` templates fetch blocking
+    /// (feature `http`). Without any fetch path (a wasm host) the stack
+    /// starts empty and every needed range must have been pushed via
+    /// [`insert_glyphs`](Self::insert_glyphs) + `SdfFontStack::insert_range`
+    /// up front; a warning is logged so nothing goes missing silently.
+    pub fn glyphs_stack(&self, key: &str) -> Arc<ezu_core::text::SdfFontStack> {
+        if let Some(stack) = self.glyphs.read().expect("glyphs bank poisoned").get(key) {
+            return stack.clone();
+        }
+        let stack = Arc::new(match make_range_fetcher(key, None) {
+            Some(fetcher) => ezu_core::text::SdfFontStack::with_fetcher(fetcher),
+            None => {
+                tracing::warn!(
+                    "glyphs source `{key}`: this host cannot fetch ranges — bind every \
+                     needed range up front or labels will drop their glyphs"
+                );
+                ezu_core::text::SdfFontStack::new()
+            }
+        });
+        self.glyphs
+            .write()
+            .expect("glyphs bank poisoned")
+            .entry(key.to_string())
+            .or_insert(stack)
+            .clone()
+    }
 }
 
 impl Default for BrushBankLoader {
@@ -134,6 +182,13 @@ impl Default for BrushBankLoader {
 impl AssetLoader for BrushBankLoader {
     fn load(&self, name: &str) -> Result<Asset, AssetError> {
         let src = name;
+        // A `{range}` placeholder marks a glyphs URL template (a
+        // `glyphs` source's asset key) — ranges resolve lazily inside
+        // the stack, so the template itself is the loadable asset.
+        if src.contains("{range}") {
+            parse_src_scheme(src)?; // reject scheme-less templates
+            return Ok(Asset::Glyphs(self.glyphs_stack(src) as OpaqueValue));
+        }
         match parse_src_scheme(src)? {
             SrcScheme::Builtin(key) => {
                 // Two-step lookup: bundled brushes register under bare
@@ -221,6 +276,81 @@ impl AssetLoader for BrushBankLoader {
             }
         }
     }
+
+    /// Glyph stacks are the one lazily *growing* asset: ranges accrete
+    /// as tiles demand codepoints. Digest the loaded/failed range set
+    /// so consumers' cache keys track exactly what affects output.
+    ///
+    /// The evaluator samples this hash *before* eval, so an eval that
+    /// pulls a new range mid-flight stores its result under the
+    /// pre-fetch key. That entry is stale but unreachable: ranges only
+    /// grow (failures are remembered per range), so the digest never
+    /// returns to a previous value — the next render keys on the grown
+    /// set, misses, and re-evaluates. No stale hit is possible.
+    fn hash(&self, name: &str) -> u128 {
+        self.glyphs
+            .read()
+            .expect("glyphs bank poisoned")
+            .get(name)
+            .map(|stack| stack.ranges_hash())
+            .unwrap_or(0)
+    }
+}
+
+/// Build the lazy range fetcher for a glyphs URL template, if this host
+/// can fetch at all: `file:` reads from disk (relative paths resolve
+/// against `base_dir` when given, else must be absolute), `http(s)://`
+/// fetches blocking (feature `http`). `None` → the host must push
+/// ranges up front.
+fn make_range_fetcher(
+    template: &str,
+    base_dir: Option<PathBuf>,
+) -> Option<ezu_core::text::RangeFetcher> {
+    if let Some(path_template) = template.strip_prefix("file:") {
+        let path_template = path_template.to_string();
+        return Some(Box::new(move |start, end| {
+            let raw = path_template.replace("{range}", &format!("{start}-{end}"));
+            let p = std::path::Path::new(&raw);
+            let path = if p.is_absolute() {
+                p.to_path_buf()
+            } else if let Some(dir) = &base_dir {
+                dir.join(p)
+            } else {
+                return Err(format!(
+                    "relative glyphs path `{raw}` resolves only through prefetch (no base dir)"
+                ));
+            };
+            std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))
+        }));
+    }
+    #[cfg(feature = "http")]
+    if template.starts_with("http://") || template.starts_with("https://") {
+        let template = template.to_string();
+        return Some(Box::new(move |start, end| {
+            http_bytes_blocking(template.replace("{range}", &format!("{start}-{end}")))
+        }));
+    }
+    None
+}
+
+/// Fetch `url` synchronously on a throwaway thread. Range fetches run
+/// inside `Node::eval`, which the CLI/server drive from a tokio
+/// runtime; `reqwest::blocking` must not run on a runtime worker, so
+/// isolate it. Ranges are small and cached forever in the stack, so
+/// the per-fetch thread cost is negligible.
+#[cfg(feature = "http")]
+fn http_bytes_blocking(url: String) -> Result<Vec<u8>, String> {
+    std::thread::spawn(move || -> Result<Vec<u8>, String> {
+        Ok(reqwest::blocking::get(&url)
+            .map_err(|e| e.to_string())?
+            .error_for_status()
+            .map_err(|e| e.to_string())?
+            .bytes()
+            .map_err(|e| e.to_string())?
+            .to_vec())
+    })
+    .join()
+    .map_err(|_| "glyph fetch thread panicked".to_string())?
 }
 
 /// Parsed `src` URI scheme. Style `src` fields are required to carry an
@@ -928,6 +1058,32 @@ pub async fn prefetch_doc_assets(
                     .map_err(|e| format!("font `{name}`: {e}"))?;
                 loader.fonts.insert(font.url.clone(), Arc::new(face));
             }
+            ezu_style::SourceDecl::Glyphs(glyphs) => {
+                // Nothing to fetch up front — ranges are text-driven and
+                // pull lazily at eval time. Register the stack now so
+                // relative `file:` templates resolve against `base_dir`
+                // (the lazy path only handles absolute paths).
+                let key = glyphs.asset_key();
+                if loader
+                    .glyphs
+                    .read()
+                    .expect("glyphs bank poisoned")
+                    .contains_key(&key)
+                {
+                    continue;
+                }
+                let stack = match make_range_fetcher(&key, Some(base_dir.to_path_buf())) {
+                    Some(fetcher) => ezu_core::text::SdfFontStack::with_fetcher(fetcher),
+                    None => {
+                        return Err(format!(
+                            "glyphs `{name}`: unsupported url template `{}` — use \
+                             `http(s)://…{{range}}.pbf` or `file:…{{range}}.pbf`",
+                            glyphs.url
+                        ))
+                    }
+                };
+                loader.insert_glyphs(key, Arc::new(stack));
+            }
             // Tile-scoped — handled per-render elsewhere. GeoJSON is
             // projected + bound per tile by the host driver, not here.
             ezu_style::SourceDecl::Mvt(_)
@@ -1067,6 +1223,39 @@ mod tests {
             }
             other => panic!("expected a Font asset, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn glyphs_template_loads_lazily_and_hashes_its_ranges() {
+        // A `file:` glyphs URL template over the vendored ezu-core test
+        // range (see ../ezu-core/tests/glyphs/README.md).
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../ezu-core/tests/glyphs");
+        let src = format!("file:{}/{{range}}.pbf", dir.display()).replace('\\', "/");
+        let loader = BrushBankLoader::empty();
+
+        let Asset::Glyphs(opq) = loader.load(&src).expect("template loads") else {
+            panic!("expected a Glyphs asset from a {{range}} template");
+        };
+        let stack = opq
+            .downcast::<ezu_core::text::SdfFontStack>()
+            .expect("payload is an SdfFontStack");
+
+        // Ranges pull lazily from disk on first use, and the loader's
+        // hash tracks the grown range set (the eval-cache key input).
+        let before = loader.hash(&src);
+        assert!(!stack.is_loaded(0));
+        assert!(stack.glyph('A').is_some(), "0-255.pbf fetches on demand");
+        assert!(stack.is_loaded(0));
+        assert_ne!(loader.hash(&src), before, "hash must follow the ranges");
+
+        // The same key resolves to the same stack (ranges are shared).
+        let Asset::Glyphs(again) = loader.load(&src).expect("reload") else {
+            panic!("expected a Glyphs asset");
+        };
+        let again = again
+            .downcast::<ezu_core::text::SdfFontStack>()
+            .expect("payload is an SdfFontStack");
+        assert!(Arc::ptr_eq(&stack, &again));
     }
 
     #[test]

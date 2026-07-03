@@ -450,15 +450,18 @@ async fn run_check(args: CheckCmd) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Number of document-scoped sources (brush / image / font) — the ones
-/// `prefetch_doc_assets` will fetch on style load.
+/// Number of document-scoped sources (brush / image / font / glyphs) —
+/// the ones `prefetch_doc_assets` stages on style load.
 fn count_doc_scoped_sources(doc: &Document) -> usize {
     doc.sources
         .values()
         .filter(|d| {
             matches!(
                 d,
-                SourceDecl::Brush(_) | SourceDecl::Image(_) | SourceDecl::Font(_)
+                SourceDecl::Brush(_)
+                    | SourceDecl::Image(_)
+                    | SourceDecl::Font(_)
+                    | SourceDecl::Glyphs(_)
             )
         })
         .count()
@@ -544,6 +547,7 @@ fn render_mermaid(doc: &ezu::style::Document) -> String {
             SourceDecl::GeoJson(_) => "geojson",
             SourceDecl::Sprite(_) => "sprite",
             SourceDecl::Font(_) => "font",
+            SourceDecl::Glyphs(_) => "glyphs",
         };
         s.push_str(&format!("  {id}[/\"{id} (source:{kind})\"/]\n"));
         if matches!(decl, SourceDecl::Brush(_) | SourceDecl::Image(_)) {
@@ -955,6 +959,7 @@ pub(crate) fn feature_source_from_doc(doc: &Document) -> Option<FeatureSourcePic
             | SourceDecl::GeoJson(_)
             | SourceDecl::Sprite(_)
             | SourceDecl::Font(_)
+            | SourceDecl::Glyphs(_)
             | SourceDecl::Raster(_) => continue,
         };
         if chosen.is_some() {

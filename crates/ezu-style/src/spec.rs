@@ -305,6 +305,7 @@ pub enum SourceDecl {
     GeoJson(GeoJsonSource),
     Sprite(SpriteSource),
     Font(FontSource),
+    Glyphs(GlyphsSource),
 }
 
 impl SourceDecl {
@@ -319,6 +320,7 @@ impl SourceDecl {
             SourceDecl::GeoJson(s) => &s.attribution,
             SourceDecl::Sprite(s) => &s.attribution,
             SourceDecl::Font(s) => &s.attribution,
+            SourceDecl::Glyphs(s) => &s.attribution,
         }
     }
 }
@@ -338,6 +340,53 @@ pub struct FontSource {
     pub index: u32,
     #[serde(default)]
     pub attribution: Option<String>,
+}
+
+/// A MapLibre-compatible glyph endpoint: pre-rendered SDF glyphs served
+/// in 256-codepoint ranges from a URL template. The `text` node's
+/// `font` stack may name a `glyphs` source wherever it may name a
+/// `font` source — lower fidelity (fixed 24 px SDF bitmaps) but zero
+/// font files, matching what MapLibre GL itself renders from.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct GlyphsSource {
+    /// URL template containing `{fontstack}` and `{range}` placeholders
+    /// (the MapLibre `glyphs` shape, e.g.
+    /// `https://example.com/fonts/{fontstack}/{range}.pbf`), with
+    /// `http(s)://` or `file:` scheme. `{range}` stays in the resolved
+    /// asset key — ranges are fetched lazily per 256-codepoint block.
+    pub url: String,
+    /// The fontstack string requested from the endpoint. MapLibre joins
+    /// a `text-font` array with `", "`; fallback across the stack's
+    /// entries happens server-side.
+    pub fontstack: String,
+    #[serde(default)]
+    pub attribution: Option<String>,
+}
+
+impl GlyphsSource {
+    /// The asset key this source resolves to: the URL template with
+    /// `{fontstack}` substituted (percent-encoded, as MapLibre does)
+    /// and `{range}` left in place for per-range fetching. Hosts
+    /// register the source's glyph stack under this key.
+    pub fn asset_key(&self) -> String {
+        self.url
+            .replace("{fontstack}", &percent_encode(&self.fontstack))
+    }
+}
+
+/// `encodeURIComponent`-style percent-encoding (unreserved chars and
+/// the `!'()*-._~` marks pass through), for `{fontstack}` URL slots.
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for byte in s.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' => out.push(byte as char),
+            b'!' | b'\'' | b'(' | b')' | b'*' | b'-' | b'.' | b'_' | b'~' => out.push(byte as char),
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }
 
 /// A sprite sheet: one atlas image plus a name → sub-rect index, so
@@ -694,6 +743,32 @@ mod tests {
         };
         assert_eq!(f.index, 2);
         assert_eq!(doc.attributions(), ["© Font Foundry"]);
+    }
+
+    #[test]
+    fn parses_glyphs_source() {
+        let json = r##"{
+          "name": "demo",
+          "sources": {
+            "labels": { "type": "glyphs",
+                        "url": "https://example.com/fonts/{fontstack}/{range}.pbf",
+                        "fontstack": "Noto Sans Regular, Arial Unicode MS Regular",
+                        "attribution": "© Glyph Server" }
+          },
+          "nodes": { "out": { "op": "solid", "color": "#000000" } },
+          "output": "@out"
+        }"##;
+        let doc = Document::from_json(json).unwrap();
+        let SourceDecl::Glyphs(g) = &doc.sources["labels"] else {
+            panic!("expected glyphs source");
+        };
+        assert_eq!(g.fontstack, "Noto Sans Regular, Arial Unicode MS Regular");
+        // `{fontstack}` is substituted percent-encoded; `{range}` stays.
+        assert_eq!(
+            g.asset_key(),
+            "https://example.com/fonts/Noto%20Sans%20Regular%2C%20Arial%20Unicode%20MS%20Regular/{range}.pbf"
+        );
+        assert_eq!(doc.attributions(), ["© Glyph Server"]);
     }
 
     #[test]
