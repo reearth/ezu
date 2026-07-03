@@ -11,7 +11,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value};
+use crate::nodes::common::{downcast_features, features_value, FeatureGroup};
 
 struct BoundaryNode;
 
@@ -43,16 +43,22 @@ impl Node for BoundaryNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
-        let mut lines = feats.lines.clone();
-        for p in &feats.polygons {
-            lines.extend(polygon_boundary(p));
+        // Per group: convert each feature's polygons to boundary polylines
+        // (existing lines and points pass through), carrying properties.
+        let mut out_groups = Vec::with_capacity(feats.groups.len());
+        for g in &feats.groups {
+            let mut lines = g.lines.clone();
+            for p in &g.polygons {
+                lines.extend(polygon_boundary(p));
+            }
+            out_groups.push(FeatureGroup {
+                properties: g.properties.clone(),
+                polygons: vec![],
+                lines,
+                points: g.points.clone(),
+            });
         }
-        Ok(features_value(
-            feats.extent,
-            vec![],
-            lines,
-            feats.points.clone(),
-        ))
+        Ok(features_value(feats.extent, out_groups))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"boundary");

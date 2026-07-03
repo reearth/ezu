@@ -1,6 +1,9 @@
 //! `feature-boolean` — `(Features, Features) -> Features`. Polygon
 //! set operations between two Features inputs. Lines and points are
 //! dropped — booleans are defined on polygons.
+//!
+//! Because it merges polygons across both inputs, the output is a single
+//! group with no per-feature properties.
 
 use ezu_features::ops::boolean::{polygon_boolean, BoolOp};
 use ezu_graph::{
@@ -10,7 +13,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value, read_optional_string};
+use crate::nodes::common::{downcast_features, features_value, read_optional_string, FeatureGroup};
 
 struct FeatureBooleanNode {
     op: BoolOp,
@@ -56,8 +59,16 @@ impl Node for FeatureBooleanNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("b".into()))?,
         )?;
-        let polygons = polygon_boolean(&a.polygons, &b.polygons, self.op);
-        Ok(features_value(a.extent, polygons, vec![], vec![]))
+        let a_polys: Vec<_> = a.polygons().cloned().collect();
+        let b_polys: Vec<_> = b.polygons().cloned().collect();
+        let polygons = polygon_boolean(&a_polys, &b_polys, self.op);
+        if polygons.is_empty() {
+            return Ok(features_value(a.extent, vec![]));
+        }
+        Ok(features_value(
+            a.extent,
+            vec![FeatureGroup::synthetic(polygons, vec![], vec![])],
+        ))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"feature-boolean");

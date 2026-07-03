@@ -11,7 +11,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value};
+use crate::nodes::common::{downcast_features, features_value, FeatureGroup};
 
 struct CentroidNode {
     include_polygons: bool,
@@ -46,14 +46,25 @@ impl Node for CentroidNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
-        let mut points = Vec::new();
-        if self.include_polygons {
-            points.extend(feats.polygons.iter().filter_map(polygon_centroid));
+        // Per group: replace each feature's polygons/lines with their
+        // centroids, carrying the feature's properties through.
+        let mut out_groups = Vec::with_capacity(feats.groups.len());
+        for g in &feats.groups {
+            let mut points = Vec::new();
+            if self.include_polygons {
+                points.extend(g.polygons.iter().filter_map(polygon_centroid));
+            }
+            if self.include_lines {
+                points.extend(g.lines.iter().filter_map(|l| linestring_centroid(l)));
+            }
+            out_groups.push(FeatureGroup {
+                properties: g.properties.clone(),
+                polygons: vec![],
+                lines: vec![],
+                points,
+            });
         }
-        if self.include_lines {
-            points.extend(feats.lines.iter().filter_map(|l| linestring_centroid(l)));
-        }
-        Ok(features_value(feats.extent, vec![], vec![], points))
+        Ok(features_value(feats.extent, out_groups))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"centroid");

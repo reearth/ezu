@@ -2,6 +2,9 @@
 //! the input's point set. Each triangle is emitted as a closed
 //! polygon. Polygons and lines in the input are ignored — feed
 //! through `centroid` or `point-grid` upstream to derive points.
+//!
+//! Because it triangulates the pooled point set across every input feature,
+//! the output is a single group with no per-feature properties.
 
 use ezu_features::ops::triangulate::triangulate;
 use ezu_graph::{
@@ -11,7 +14,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value};
+use crate::nodes::common::{downcast_features, features_value, FeatureGroup};
 
 struct TriangulateNode;
 
@@ -43,8 +46,15 @@ impl Node for TriangulateNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
-        let polys = triangulate(&feats.points);
-        Ok(features_value(feats.extent, polys, vec![], vec![]))
+        let points: Vec<(i32, i32)> = feats.points().collect();
+        let polys = triangulate(&points);
+        if polys.is_empty() {
+            return Ok(features_value(feats.extent, vec![]));
+        }
+        Ok(features_value(
+            feats.extent,
+            vec![FeatureGroup::synthetic(polys, vec![], vec![])],
+        ))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"triangulate");

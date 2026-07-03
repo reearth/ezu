@@ -2,68 +2,19 @@
 //! nodes (`features`).
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
-use ezu_features::{Feature, Polygon, Value};
+use ezu_features::{Feature, Value};
 use maplibre_expr::{EvaluationContext, Expr, Feature as ExprFeature, Value as ExprValue};
 
-/// Walk a layer's features and return every polygon ring that passes
-/// the filter. Polygons are cloned out so callers own contiguous data.
-pub fn collect_polygons(
-    features: &[Feature],
-    filter_expr: Option<&Expr>,
-    min_zoom_field: &Option<String>,
-    z: u8,
-) -> Vec<Polygon> {
-    let mut out = Vec::new();
-    for f in features {
-        if !feature_passes(f, filter_expr, min_zoom_field, z) {
-            continue;
-        }
-        out.extend(f.geometry.polygons.iter().cloned());
-    }
-    out
-}
-
-/// Walk a layer's features and return every point that passes the
-/// filter.
-pub fn collect_points(
-    features: &[Feature],
-    filter_expr: Option<&Expr>,
-    min_zoom_field: &Option<String>,
-    z: u8,
-) -> Vec<(i32, i32)> {
-    let mut out = Vec::new();
-    for f in features {
-        if !feature_passes(f, filter_expr, min_zoom_field, z) {
-            continue;
-        }
-        out.extend(f.geometry.points.iter().copied());
-    }
-    out
-}
-
-/// Walk a layer's features and return every polyline that passes the
-/// filter.
-pub fn collect_lines(
-    features: &[Feature],
-    filter_expr: Option<&Expr>,
-    min_zoom_field: &Option<String>,
-    z: u8,
-) -> Vec<Vec<(i32, i32)>> {
-    let mut out = Vec::new();
-    for f in features {
-        if !feature_passes(f, filter_expr, min_zoom_field, z) {
-            continue;
-        }
-        out.extend(f.geometry.lines.iter().cloned());
-    }
-    out
-}
-
 /// Walk a layer's features and return one [`FeatureGroup`] per surviving
-/// feature, preserving its properties alongside its own geometry. Used by
-/// data-driven paint, which evaluates a per-feature expression. Features
-/// that contribute no geometry at all are skipped (they'd paint nothing).
+/// feature, preserving its properties alongside its own geometry. This is the
+/// only representation of a `Features` payload; consumers that want the flat
+/// geometry view walk the groups. Each feature's properties are converted
+/// into the `maplibre-expr` value form exactly once here and shared via `Arc`,
+/// so downstream data-driven paint pays no per-evaluation conversion cost.
+/// Features that contribute no geometry at all are skipped (they'd paint
+/// nothing).
 pub fn collect_groups(
     features: &[Feature],
     filter_expr: Option<&Expr>,
@@ -81,8 +32,13 @@ pub fn collect_groups(
         {
             continue;
         }
+        let properties: BTreeMap<String, ExprValue> = f
+            .properties
+            .iter()
+            .map(|(k, v)| (k.clone(), value_to_expr(v)))
+            .collect();
         out.push(crate::nodes::common::FeatureGroup {
-            properties: f.properties.clone(),
+            properties: Arc::new(properties),
             polygons: f.geometry.polygons.clone(),
             lines: f.geometry.lines.clone(),
             points: f.geometry.points.clone(),
@@ -143,15 +99,15 @@ pub(crate) fn expr_context(f: &Feature, z: u8) -> EvaluationContext {
 /// Build a maplibre-expr evaluation context for a [`FeatureGroup`]: its
 /// properties, geometry type (highest dimension present), and the tile zoom.
 /// The group's own `properties`/geometry drive a per-feature paint expression.
+///
+/// The group's properties are already in `maplibre-expr` value form (converted
+/// once in [`collect_groups`]); the clone here is bounded by the maplibre-expr
+/// API — `ExprFeature` owns its `properties` map — so it is one owned map per
+/// group per node evaluation, not a re-conversion.
 pub(crate) fn group_expr_context(
     g: &crate::nodes::common::FeatureGroup,
     z: u8,
 ) -> EvaluationContext {
-    let properties: BTreeMap<String, ExprValue> = g
-        .properties
-        .iter()
-        .map(|(k, v)| (k.clone(), value_to_expr(v)))
-        .collect();
     let geometry_type = if !g.polygons.is_empty() {
         "Polygon"
     } else if !g.lines.is_empty() {
@@ -162,7 +118,7 @@ pub(crate) fn group_expr_context(
     EvaluationContext::new()
         .with_zoom(z as f64)
         .with_feature(ExprFeature {
-            properties,
+            properties: (*g.properties).clone(),
             geometry_type: Some(geometry_type.to_string()),
             ..Default::default()
         })

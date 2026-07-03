@@ -17,7 +17,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value};
+use crate::nodes::common::{downcast_features, features_value, FeatureGroup};
 
 struct MedialAxisNode {
     densify_px: In<f64>,
@@ -51,11 +51,22 @@ impl Node for MedialAxisNode {
         )?;
         let densify_px = self.densify_px.get(ctx, inputs)?;
         let min_branch_px = self.min_branch_px.get(ctx, inputs)?;
-        let mut lines = Vec::new();
-        for polygon in &feats.polygons {
-            lines.extend(medial_axis(polygon, densify_px, min_branch_px));
+        // Per group: skeletonise each feature's polygons into polylines,
+        // carrying properties.
+        let mut out_groups = Vec::with_capacity(feats.groups.len());
+        for g in &feats.groups {
+            let mut lines = Vec::new();
+            for polygon in &g.polygons {
+                lines.extend(medial_axis(polygon, densify_px, min_branch_px));
+            }
+            out_groups.push(FeatureGroup {
+                properties: g.properties.clone(),
+                polygons: vec![],
+                lines,
+                points: vec![],
+            });
         }
-        Ok(features_value(feats.extent, vec![], lines, vec![]))
+        Ok(features_value(feats.extent, out_groups))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"medial-axis");

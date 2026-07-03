@@ -82,6 +82,49 @@ fn sprite_source_icons_and_pattern_convert() {
 }
 
 #[test]
+fn data_driven_icon_size_becomes_scale_expr() {
+    // An expression-valued `icon-size` routes to the `stamp` node's
+    // `scale-expr` sibling instead of being dropped with a warning.
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "dd-icon",
+      "sprite": "https://example.com/sprites/basemap",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "pois", "type": "symbol", "source": "s", "source-layer": "poi",
+          "layout": {
+            "icon-image": "airport-15",
+            "icon-size": ["interpolate", ["linear"], ["zoom"], 10, 0.5, 16, 2]
+          } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let (recipe, report) = convert(&style, &ConvertOptions::default()).unwrap();
+
+    let nodes = recipe["nodes"].as_object().unwrap();
+    let stamp = nodes
+        .values()
+        .find(|n| n["op"] == "stamp")
+        .expect("a stamp node");
+    // The raw expression carries over verbatim; no constant `scale`.
+    assert_eq!(
+        stamp["scale-expr"],
+        serde_json::json!(["interpolate", ["linear"], ["zoom"], 10, 0.5, 16, 2])
+    );
+    assert!(stamp.get("scale").is_none(), "no constant scale: {stamp}");
+    // No "not supported" warning about a dropped data-driven size.
+    assert!(
+        !report.warnings.iter().any(|w| w.contains("icon-size")),
+        "data-driven icon-size should not warn: {:?}",
+        report.warnings
+    );
+
+    // Valid ezu Document.
+    let text = serde_json::to_string(&recipe).unwrap();
+    ezu_style::Document::from_json(&text).expect("recipe parses as ezu Document");
+}
+
+#[test]
 fn inline_sprite_index_parses() {
     // A recipe author can inline the index instead of a URL.
     let recipe = serde_json::json!({

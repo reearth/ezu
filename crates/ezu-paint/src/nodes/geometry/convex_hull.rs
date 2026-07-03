@@ -2,6 +2,9 @@
 //! every input vertex (points + lines + polygons pooled) and emit a
 //! single polygon. Empty when there are fewer than 3 distinct
 //! vertices.
+//!
+//! Because it merges geometry across every input feature, the output is a
+//! single group with no per-feature properties.
 
 use ezu_features::ops::convex_hull::convex_hull;
 use ezu_graph::{
@@ -11,7 +14,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value};
+use crate::nodes::common::{downcast_features, features_value, FeatureGroup};
 
 struct ConvexHullNode;
 
@@ -43,10 +46,19 @@ impl Node for ConvexHullNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
-        let polygons = convex_hull(&feats.points, &feats.lines, &feats.polygons)
+        let points: Vec<(i32, i32)> = feats.points().collect();
+        let lines: Vec<Vec<(i32, i32)>> = feats.lines().cloned().collect();
+        let polys: Vec<_> = feats.polygons().cloned().collect();
+        let polygons = convex_hull(&points, &lines, &polys)
             .map(|p| vec![p])
             .unwrap_or_default();
-        Ok(features_value(feats.extent, polygons, vec![], vec![]))
+        if polygons.is_empty() {
+            return Ok(features_value(feats.extent, vec![]));
+        }
+        Ok(features_value(
+            feats.extent,
+            vec![FeatureGroup::synthetic(polygons, vec![], vec![])],
+        ))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"convex-hull");

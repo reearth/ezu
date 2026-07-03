@@ -10,7 +10,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value};
+use crate::nodes::common::{downcast_features, features_value, FeatureGroup};
 
 struct HatchNode {
     angle_deg: In<f64>,
@@ -48,16 +48,25 @@ impl Node for HatchNode {
         // agree at the seam.
         let extent = feats.extent as f64;
         let origin = (ctx.tile.x as f64 * extent, ctx.tile.y as f64 * extent);
-        let lines = hatch_polygons(
-            &feats.polygons,
-            &HatchOpts {
-                angle_deg: self.angle_deg.get(ctx, inputs)?,
-                spacing: self.spacing.get(ctx, inputs)?,
-                phase: self.phase.get(ctx, inputs)?,
-                origin,
-            },
-        );
-        Ok(features_value(feats.extent, vec![], lines, vec![]))
+        let opts = HatchOpts {
+            angle_deg: self.angle_deg.get(ctx, inputs)?,
+            spacing: self.spacing.get(ctx, inputs)?,
+            phase: self.phase.get(ctx, inputs)?,
+            origin,
+        };
+        // Per group: hatch each feature's polygons into polylines, carrying
+        // properties.
+        let mut out_groups = Vec::with_capacity(feats.groups.len());
+        for g in &feats.groups {
+            let lines = hatch_polygons(&g.polygons, &opts);
+            out_groups.push(FeatureGroup {
+                properties: g.properties.clone(),
+                polygons: vec![],
+                lines,
+                points: vec![],
+            });
+        }
+        Ok(features_value(feats.extent, out_groups))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"hatch");

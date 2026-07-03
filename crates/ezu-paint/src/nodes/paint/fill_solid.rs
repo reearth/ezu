@@ -61,7 +61,7 @@ impl Node for FillSolidNode {
             .as_ref()
             .ok_or_else(|| EvalError::MissingInput("features".into()))?;
         let feats = downcast_features(feats)?;
-        if feats.polygons.is_empty() {
+        if !feats.has_polygons() {
             return Ok(empty_raster(ctx));
         }
         let fill_alpha = self.fill_alpha.get(ctx, inputs)? as f32;
@@ -79,14 +79,9 @@ impl Node for FillSolidNode {
             // group and accumulate each group's polygons onto the same
             // canvas. Whichever expression is absent (or errors for a group)
             // falls back to the constant `fill` / `fill-alpha`.
-            //
-            // Synthetic geometry (e.g. `literal-geometry`) carries no
-            // groups; fall back to a single empty-property group over the
-            // flat polygons so it still renders (the expression just sees
-            // no feature properties).
             let const_fill = color_f32_to_u8(self.fill.get(ctx, inputs)?);
             let z = ctx.tile.z;
-            let paint_group = |canvas: &mut _, group: &crate::nodes::common::FeatureGroup| {
+            for group in &feats.groups {
                 let ectx = crate::render::group_expr_context(group, z);
                 // maplibre-expr `Color` stores straight (non-premultiplied)
                 // channels in `0..=1`, exactly like a parsed `#rrggbb[aa]`
@@ -114,20 +109,7 @@ impl Node for FillSolidNode {
                     edge_width,
                     blur_sigma,
                 };
-                paint_polygons(canvas, &group.polygons, feats.extent, &style);
-            };
-            if feats.groups.is_empty() {
-                let synthetic = crate::nodes::common::FeatureGroup {
-                    properties: std::collections::HashMap::new(),
-                    polygons: feats.polygons.clone(),
-                    lines: Vec::new(),
-                    points: Vec::new(),
-                };
-                paint_group(&mut canvas, &synthetic);
-            } else {
-                for group in &feats.groups {
-                    paint_group(&mut canvas, group);
-                }
+                paint_polygons(&mut canvas, &group.polygons, feats.extent, &style);
             }
             return Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))));
         }
@@ -139,7 +121,8 @@ impl Node for FillSolidNode {
             edge_width,
             blur_sigma,
         };
-        paint_polygons(&mut canvas, &feats.polygons, feats.extent, &style);
+        let polygons: Vec<_> = feats.polygons().cloned().collect();
+        paint_polygons(&mut canvas, &polygons, feats.extent, &style);
         Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))))
     }
     fn param_hash(&self, h: &mut Xxh3) {
