@@ -775,6 +775,7 @@ version = "0.3.0"
 dependencies = [
  "ezu-core",
  "ezu-style",
+ "maplibre-expr",
  "serde",
  "serde_json",
  "thiserror",
@@ -2173,9 +2174,9 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "maplibre-expr"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f33331845a583b561679c694c6d46d93f87de344b7ff1972a19a7a23953d72e7"
+checksum = "e375d4bb181413545cd377f8bfe985f207159356b71eced3c766726a4320db94"
 dependencies = [
  "icu",
  "serde",
