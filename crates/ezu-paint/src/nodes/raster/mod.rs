@@ -1,7 +1,8 @@
-//! Raster utility ops.
+//! Raster and scalar-field utility ops.
 //!
-//! These nodes operate purely on rasters and don't consume feature
-//! data.
+//! These nodes operate on rasters and per-pixel scalar fields
+//! (`density` is the one exception that consumes feature data — it
+//! rasterises points into a field).
 
 mod blend;
 mod blur;
@@ -10,6 +11,7 @@ mod channel_shuffle;
 mod circle;
 mod color_ramp;
 mod color_to_alpha;
+mod density;
 mod displace;
 mod dither;
 mod edge_detect;
