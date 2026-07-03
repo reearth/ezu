@@ -37,7 +37,8 @@ pub struct Document {
     #[serde(default)]
     pub functions: IndexMap<String, FuncDecl>,
     /// External data the host provides. Mixes document-scoped resources
-    /// (`brush`, `image`) — resolved once per style — and tile-scoped
+    /// (`brush`, `image`, `sprite`, `font`) — resolved once per style —
+    /// and tile-scoped
     /// pyramids (`mvt`, `pmtiles`, `dem`) — fetched per tile. The
     /// `type` discriminator selects the variant.
     ///
@@ -271,7 +272,8 @@ pub enum OnMissing {
 }
 
 /// Declaration of one external data source. Mixes document-scoped
-/// resources (`brush`, `image`) — resolved once per style from a file
+/// resources (`brush`, `image`, `sprite`, `font`) — resolved once per
+/// style from a file
 /// path or `http(s)://` URL — and tile-scoped pyramids (`mvt`,
 /// `pmtiles`, `dem`) — fetched per tile via a URL template.
 ///
@@ -302,6 +304,7 @@ pub enum SourceDecl {
     #[serde(rename = "geojson")]
     GeoJson(GeoJsonSource),
     Sprite(SpriteSource),
+    Font(FontSource),
 }
 
 impl SourceDecl {
@@ -315,8 +318,26 @@ impl SourceDecl {
             SourceDecl::Raster(s) => &s.attribution,
             SourceDecl::GeoJson(s) => &s.attribution,
             SourceDecl::Sprite(s) => &s.attribution,
+            SourceDecl::Font(s) => &s.attribution,
         }
     }
+}
+
+/// A document-scoped font face (TTF / OTF / TTC bytes) consumed by the
+/// `text` node's `font` fallback stack. The `url` doubles as the font's
+/// asset key, like a sprite source's `image`.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct FontSource {
+    /// Font file `url` — `http(s)://`, `file:PATH`, or a `data:` URL,
+    /// like [`FileSource::src`].
+    pub url: String,
+    /// Face index within a TrueType collection (`.ttc`); 0 (the
+    /// default) for single-face files.
+    #[serde(default)]
+    pub index: u32,
+    #[serde(default)]
+    pub attribution: Option<String>,
 }
 
 /// A sprite sheet: one atlas image plus a name → sub-rect index, so
@@ -647,6 +668,32 @@ mod tests {
         assert_eq!(r.on_missing, OnMissing::Empty);
         // Dedup: the doc attribution and basemap's identical one merge.
         assert_eq!(doc.attributions(), ["Style © Demo", "© Example Sat"]);
+    }
+
+    #[test]
+    fn parses_font_source() {
+        let json = r##"{
+          "name": "demo",
+          "sources": {
+            "body":  { "type": "font", "url": "https://example.com/NotoSans-Regular.ttf" },
+            "cjk":   { "type": "font", "url": "file:fonts/collection.ttc", "index": 2,
+                       "attribution": "© Font Foundry" }
+          },
+          "nodes": { "out": { "op": "solid", "color": "#000000" } },
+          "output": "@out"
+        }"##;
+        let doc = Document::from_json(json).unwrap();
+        let SourceDecl::Font(f) = &doc.sources["body"] else {
+            panic!("expected font source");
+        };
+        assert_eq!(f.url, "https://example.com/NotoSans-Regular.ttf");
+        assert_eq!(f.index, 0);
+        assert!(f.attribution.is_none());
+        let SourceDecl::Font(f) = &doc.sources["cjk"] else {
+            panic!("expected font source");
+        };
+        assert_eq!(f.index, 2);
+        assert_eq!(doc.attributions(), ["© Font Foundry"]);
     }
 
     #[test]

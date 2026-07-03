@@ -86,6 +86,7 @@ const ERR_WEBP: &str = "WebpEncode";
 const ERR_SOURCE: &str = "UnknownSource";
 const ERR_GEOJSON: &str = "GeoJsonDecode";
 const ERR_SPRITE: &str = "SpriteDecode";
+const ERR_FONT: &str = "FontParse";
 
 /// Pending tile bytes for a single named source. MVT bytes are
 /// validated at bind time (we attempt a decode and discard the
@@ -260,6 +261,14 @@ impl Renderer {
                     .map_err(|e| named_err(ERR_SPRITE, e))?;
                 self.assets
                     .insert_sprite(sprite.image.clone(), SpriteSheet { atlas, icons });
+            }
+            // Font: the JS host provides the raw TTF/OTF/TTC bytes. Built
+            // once into the persistent bank keyed by the source's `url`,
+            // like brushes/images (unaffected by `clearSources`).
+            SourceDecl::Font(font) => {
+                let face = ezu_core::text::Font::from_bytes(bytes.into(), font.index)
+                    .map_err(|e| named_err(ERR_FONT, e))?;
+                self.assets.insert_font(font.url.clone(), face);
             }
         }
         Ok(())
