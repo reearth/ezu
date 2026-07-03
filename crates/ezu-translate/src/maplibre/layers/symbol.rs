@@ -98,6 +98,9 @@ pub(crate) fn convert_symbol(
             source_defs,
             fonts,
             glyphs_url,
+            &source,
+            &source_layer,
+            base_filter_expr.clone(),
             &mut ensure_feat,
             report,
         );
@@ -176,6 +179,19 @@ fn convert_icon(
         spec["opacity-expr"] = e;
     }
 
+    // Icon collision is not modelled yet (only text collides).
+    for prop in [
+        "icon-allow-overlap",
+        "icon-ignore-placement",
+        "icon-overlap",
+    ] {
+        if layout.and_then(|l| l.get(prop)).is_some() {
+            report.warn(format!(
+                "layer `{id}`: `{prop}` not supported — icons are placed without collision"
+            ));
+        }
+    }
+
     nodes.insert(stamp_id.clone(), spec);
     outputs.push(stamp_id);
 }
@@ -192,6 +208,9 @@ fn convert_text(
     source_defs: &mut Map<String, Value>,
     fonts: &HashMap<String, String>,
     glyphs_url: Option<&str>,
+    source: &str,
+    source_layer: &str,
+    base_filter_expr: Option<Value>,
     ensure_feat: &mut impl FnMut(&mut Map<String, Value>) -> String,
     report: &mut Report,
 ) {
@@ -359,6 +378,57 @@ fn convert_text(
         report,
     ) {
         spec["letter-spacing-em"] = Value::from(s);
+    }
+
+    // Collision (deterministic cross-tile placement). Always thread the
+    // origin source/layer (+ the layer filter) through so the `text` node
+    // gathers neighbour candidates and filters them exactly like its own
+    // features; collision itself is on by default in the `text` node.
+    spec["source"] = Value::from(source);
+    spec["layer"] = Value::from(source_layer);
+    if let Some(f) = base_filter_expr {
+        spec["filter-expr"] = f;
+    }
+
+    // `text-allow-overlap` (bool), superseded by the newer `text-overlap`
+    // enum when present: `always` → allow, `never`/absent → collide,
+    // `cooperative` → treated as `never` with a warning (no cooperative
+    // fade model here).
+    let mut allow_overlap = get("text-allow-overlap").and_then(Value::as_bool);
+    match get("text-overlap").and_then(Value::as_str) {
+        Some("always") => allow_overlap = Some(true),
+        Some("never") => allow_overlap = Some(false),
+        Some("cooperative") => {
+            report.warn(format!(
+                "layer `{id}`: `text-overlap: cooperative` has no ezu equivalent — treated as `never`"
+            ));
+            allow_overlap = Some(false);
+        }
+        Some(other) => report.warn(format!(
+            "layer `{id}`: unknown `text-overlap: {other}` — using collision default"
+        )),
+        None => {}
+    }
+    if allow_overlap == Some(true) {
+        spec["allow-overlap"] = Value::from(true);
+    }
+
+    if get("text-ignore-placement").and_then(Value::as_bool) == Some(true) {
+        spec["ignore-placement"] = Value::from(true);
+    }
+    if let Some(p) = const_number(get("text-padding"), "text-padding", id, report) {
+        spec["padding-px"] = Value::from(p);
+    }
+    // `symbol-sort-key`: constant or expression — the `text` node parses
+    // either on `sort-key-expr`.
+    if let Some(v) = get("symbol-sort-key") {
+        spec["sort-key-expr"] = v.clone();
+    }
+    // Text/icon pairing has no ezu counterpart yet.
+    if get("text-optional").is_some() {
+        report.warn(format!(
+            "layer `{id}`: `text-optional` (icon/text pairing) not supported — text placed independently"
+        ));
     }
 
     let text_id = format!("{id}__text");
