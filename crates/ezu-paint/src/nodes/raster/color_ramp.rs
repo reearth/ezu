@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
 };
 
 use serde_json::Value;
@@ -46,6 +46,11 @@ struct ColorRampNode {
     ramp_expr: Option<maplibre_expr::Expr>,
     /// Raw `ramp-expr` JSON text, for a stable hash.
     ramp_expr_src: Option<String>,
+    /// Uniform output-alpha multiplier (layer opacity). Feed an `expr`
+    /// node for a zoom curve.
+    opacity: In<f64>,
+    ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
 
 impl Node for ColorRampNode {
@@ -53,12 +58,7 @@ impl Node for ColorRampNode {
         "color-ramp"
     }
     fn inputs(&self) -> &[PortSpec] {
-        static SPECS: &[PortSpec] = &[PortSpec {
-            name: "field",
-            accepts: &[PortKind::ScalarField, PortKind::Raster],
-            optional: false,
-        }];
-        SPECS
+        &self.ports
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Raster
@@ -71,6 +71,7 @@ impl Node for ColorRampNode {
         let input = inputs[0]
             .as_ref()
             .ok_or_else(|| EvalError::MissingInput("field".into()))?;
+        let opacity = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
         // With `ramp-expr`, bake the expression into a 256-entry LUT once
         // per eval (zoom is in the context, so zoom×density curves work);
         // otherwise sample the stop table directly.
@@ -88,11 +89,11 @@ impl Node for ColorRampNode {
                 let rgba = sample(v);
                 let off = i * 4;
                 // Premultiply alpha to match the rest of the pipeline.
-                let af = rgba[3] as f32 / 255.0;
+                let af = rgba[3] as f32 / 255.0 * opacity;
                 out.pixels[off] = (rgba[0] as f32 * af).round() as u8;
                 out.pixels[off + 1] = (rgba[1] as f32 * af).round() as u8;
                 out.pixels[off + 2] = (rgba[2] as f32 * af).round() as u8;
-                out.pixels[off + 3] = rgba[3];
+                out.pixels[off + 3] = (af * 255.0).round() as u8;
             }
             return Ok(PortValue::Raster(Arc::new(out)));
         }
@@ -113,7 +114,7 @@ impl Node for ColorRampNode {
                 };
                 let luma = (0.299 * r + 0.587 * g + 0.114 * b).clamp(0.0, 1.0);
                 let rgba = sample(luma);
-                let oa = a * (rgba[3] as f32 / 255.0);
+                let oa = a * (rgba[3] as f32 / 255.0) * opacity;
                 out.pixels[i] = (rgba[0] as f32 / 255.0 * oa * 255.0).round() as u8;
                 out.pixels[i + 1] = (rgba[1] as f32 / 255.0 * oa * 255.0).round() as u8;
                 out.pixels[i + 2] = (rgba[2] as f32 / 255.0 * oa * 255.0).round() as u8;
@@ -137,6 +138,10 @@ impl Node for ColorRampNode {
             h.update(b"rampexpr");
             h.update(s.as_bytes());
         }
+        self.opacity.param_hash(h);
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -222,7 +227,7 @@ impl NodeFactory for ColorRampFactory {
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
-        _ctx: &FactoryCtx<'_>,
+        ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let input = take_input_ref(fields, "field")?;
         // `ramp-expr`: a raw MapLibre color expression over
@@ -244,78 +249,38 @@ impl NodeFactory for ColorRampFactory {
             }
             None => (None, None),
         };
-        let raw = match fields.get("stops") {
-            Some(v) => v,
-            None if ramp_expr.is_some() => {
-                let space = read_space(fields)?;
-                return Ok(BuiltNode {
-                    node: Box::new(ColorRampNode {
-                        stops: Vec::new(),
-                        space,
-                        ramp_expr,
-                        ramp_expr_src,
-                    }),
-                    connections: vec![Connection {
-                        port: "field".into(),
-                        src: input,
-                    }],
-                });
-            }
+        let stops = match fields.get("stops") {
+            Some(raw) => parse_stops(raw)?,
+            None if ramp_expr.is_some() => Vec::new(),
             None => return Err(FactoryError::MissingField("stops".into())),
         };
-        let arr = raw.as_array().ok_or_else(|| FactoryError::BadField {
-            field: "stops".into(),
-            msg: "expected an array of {value, color} objects".into(),
-        })?;
-        if arr.len() < 2 {
-            return Err(FactoryError::BadField {
-                field: "stops".into(),
-                msg: "at least two stops required".into(),
-            });
-        }
-        let mut stops: Vec<Stop> = Vec::with_capacity(arr.len());
-        for (i, v) in arr.iter().enumerate() {
-            let obj = v.as_object().ok_or_else(|| FactoryError::BadField {
-                field: format!("stops[{i}]"),
-                msg: "expected object".into(),
-            })?;
-            let value =
-                obj.get("value")
-                    .and_then(Value::as_f64)
-                    .ok_or_else(|| FactoryError::BadField {
-                        field: format!("stops[{i}].value"),
-                        msg: "expected number".into(),
-                    })? as f32;
-            let color_s =
-                obj.get("color")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| FactoryError::BadField {
-                        field: format!("stops[{i}].color"),
-                        msg: "expected #rrggbb[aa] string".into(),
-                    })?;
-            let rgba = parse_hex_rgba(color_s).ok_or_else(|| FactoryError::BadField {
-                field: format!("stops[{i}].color"),
-                msg: format!("bad color: {color_s}"),
-            })?;
-            stops.push(Stop { value, rgba });
-        }
-        stops.sort_by(|a, b| {
-            a.value
-                .partial_cmp(&b.value)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
         let space = read_space(fields)?;
+        let mut r = InReader::new(fields, ctx, 1);
+        let opacity = r.number_or("opacity", 1.0)?;
+        let parts = r.finish();
+
+        let mut ports = vec![PortSpec {
+            name: "field",
+            accepts: &[PortKind::ScalarField, PortKind::Raster],
+            optional: false,
+        }];
+        ports.extend(parts.ports);
+        let mut connections = vec![Connection {
+            port: "field".into(),
+            src: input,
+        }];
+        connections.extend(parts.connections);
         Ok(BuiltNode {
             node: Box::new(ColorRampNode {
                 stops,
                 space,
                 ramp_expr,
                 ramp_expr_src,
+                opacity,
+                ports,
+                param_refs: parts.param_refs,
             }),
-            connections: vec![Connection {
-                port: "field".into(),
-                src: input,
-            }],
+            connections,
         })
     }
     fn schema(&self) -> Value {
@@ -339,10 +304,57 @@ impl NodeFactory for ColorRampFactory {
                     },
                 },
                 "space": { "type": "string", "enum": ["rgb", "hsl", "hsv", "hcl", "lab"], "default": "rgb", "description": "Colour space the stops interpolate in. `rgb` (default) is a straight sRGB lerp; `hsl`/`hsv`/`hcl` interpolate hue on the shortest path; `hcl`/`lab` are perceptual (ported from the MapLibre style spec)." },
+                "opacity": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0, "maximum": 1.0,
+                             "description": "Uniform output-alpha multiplier (layer opacity). Default 1.0. Feed an `expr` node via `@node` for a zoom curve." })),
             },
             "required": ["field"],
         })
     }
+}
+
+fn parse_stops(raw: &Value) -> Result<Vec<Stop>, FactoryError> {
+    let arr = raw.as_array().ok_or_else(|| FactoryError::BadField {
+        field: "stops".into(),
+        msg: "expected an array of {value, color} objects".into(),
+    })?;
+    if arr.len() < 2 {
+        return Err(FactoryError::BadField {
+            field: "stops".into(),
+            msg: "at least two stops required".into(),
+        });
+    }
+    let mut stops: Vec<Stop> = Vec::with_capacity(arr.len());
+    for (i, v) in arr.iter().enumerate() {
+        let obj = v.as_object().ok_or_else(|| FactoryError::BadField {
+            field: format!("stops[{i}]"),
+            msg: "expected object".into(),
+        })?;
+        let value =
+            obj.get("value")
+                .and_then(Value::as_f64)
+                .ok_or_else(|| FactoryError::BadField {
+                    field: format!("stops[{i}].value"),
+                    msg: "expected number".into(),
+                })? as f32;
+        let color_s =
+            obj.get("color")
+                .and_then(Value::as_str)
+                .ok_or_else(|| FactoryError::BadField {
+                    field: format!("stops[{i}].color"),
+                    msg: "expected #rrggbb[aa] string".into(),
+                })?;
+        let rgba = parse_hex_rgba(color_s).ok_or_else(|| FactoryError::BadField {
+            field: format!("stops[{i}].color"),
+            msg: format!("bad color: {color_s}"),
+        })?;
+        stops.push(Stop { value, rgba });
+    }
+    stops.sort_by(|a, b| {
+        a.value
+            .partial_cmp(&b.value)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Ok(stops)
 }
 
 fn parse_hex_rgba(s: &str) -> Option<[u8; 4]> {

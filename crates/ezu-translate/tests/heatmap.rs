@@ -131,3 +131,25 @@ fn underivable_radius_expression_falls_back_to_the_capped_bound() {
     assert_eq!(dens["radius"], 100.0);
     assert_eq!(dens["radius-expr"], serde_json::json!(["get", "r"]));
 }
+
+#[test]
+fn constant_opacity_routes_to_the_ramp_field() {
+    let style = style_with_paint(r#"{ "heatmap-opacity": 0.6 }"#);
+    let (recipe, _) = convert(&style, &ConvertOptions::default()).unwrap();
+    let ramp = node(&recipe, "color-ramp");
+    assert_eq!(ramp["opacity"], 0.6);
+}
+
+#[test]
+fn opacity_zoom_curve_becomes_an_expr_scalar_node() {
+    // The canonical heatmap→circle crossfade: opacity interpolated down
+    // over zoom lowers to an `expr` node wired into the ramp's port.
+    let style = style_with_paint(
+        r#"{ "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], 13, 1, 15, 0] }"#,
+    );
+    let (recipe, _) = convert(&style, &ConvertOptions::default()).unwrap();
+    let expr = node(&recipe, "expr");
+    assert_eq!(expr["expr"][0], "interpolate");
+    let ramp = node(&recipe, "color-ramp");
+    assert_eq!(ramp["opacity"], "@heat__opacity");
+}

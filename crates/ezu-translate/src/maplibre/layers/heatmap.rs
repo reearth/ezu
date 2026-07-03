@@ -118,14 +118,30 @@ pub(crate) fn convert_heatmap(
         _ => default_heatmap_color(),
     };
     let ramp_id = format!("{id}__ramp");
-    nodes.insert(
-        ramp_id.clone(),
-        serde_json::json!({
-            "op": "color-ramp",
-            "field": format!("@{dens_id}"),
-            "ramp-expr": ramp,
-        }),
-    );
+    let mut ramp_spec = serde_json::json!({
+        "op": "color-ramp",
+        "field": format!("@{dens_id}"),
+        "ramp-expr": ramp,
+    });
+
+    // `heatmap-opacity` → the ramp's `opacity`. A zoom curve (the common
+    // heatmap→circle crossfade) goes through an `expr` scalar node wired
+    // into the field's port.
+    let (opacity, opacity_expr) = resolve_number(paint.get("heatmap-opacity"));
+    if let Some(o) = opacity {
+        if o != 1.0 {
+            ramp_spec["opacity"] = Value::from(o.clamp(0.0, 1.0));
+        }
+    }
+    if let Some(e) = opacity_expr {
+        let op_id = format!("{id}__opacity");
+        nodes.insert(
+            op_id.clone(),
+            serde_json::json!({ "op": "expr", "expr": e }),
+        );
+        ramp_spec["opacity"] = Value::from(format!("@{op_id}"));
+    }
+    nodes.insert(ramp_id.clone(), ramp_spec);
     outputs.push(ramp_id);
 }
 

@@ -207,3 +207,61 @@ fn stops_still_required_without_ramp_expr() {
         "color-ramp without stops or ramp-expr must fail at build"
     );
 }
+
+// --- `opacity`: uniform output-alpha multiplier ----------------------------
+
+#[test]
+fn constant_opacity_scales_output_alpha() {
+    // Zero field on the red stop with opacity 0.5: premultiplied
+    // [128, 0, 0, 128] instead of solid red.
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 8,
+      "sources": {
+        "terrain": { "type": "dem",
+                     "url": "http://example.invalid/{z}/{x}/{y}.webp",
+                     "encoding": "terrarium" }
+      },
+      "nodes": {
+        "dem":  { "op": "dem", "name": "tile.terrain" },
+        "out":  { "op": "color-ramp", "field": "@dem", "opacity": 0.5,
+                  "stops": [ { "value": 0,   "color": "#ff0000" },
+                             { "value": 100, "color": "#0000ff" } ] }
+      },
+      "output": "@out"
+    }"##;
+    let r = render(json, 8, 0);
+    let p = r.pixel(4, 4);
+    assert_eq!(p, [0x80, 0x00, 0x00, 0x80], "got {p:?}");
+}
+
+#[test]
+fn expr_node_drives_opacity_as_a_zoom_curve() {
+    // The heatmap→circle crossfade shape: an `expr` scalar node holding a
+    // zoom curve, wired into the ramp's `opacity` port. Fully opaque at
+    // z0, fully transparent at z4.
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 8,
+      "sources": {
+        "terrain": { "type": "dem",
+                     "url": "http://example.invalid/{z}/{x}/{y}.webp",
+                     "encoding": "terrarium" }
+      },
+      "nodes": {
+        "dem":  { "op": "dem", "name": "tile.terrain" },
+        "fade": { "op": "expr",
+                  "expr": ["interpolate", ["linear"], ["zoom"], 0, 1, 4, 0] },
+        "out":  { "op": "color-ramp", "field": "@dem", "opacity": "@fade",
+                  "stops": [ { "value": 0,   "color": "#ff0000" },
+                             { "value": 100, "color": "#0000ff" } ] }
+      },
+      "output": "@out"
+    }"##;
+    use common::render_tile;
+    use ezu_graph::TileId;
+    let opaque = render(json, 8, 0);
+    assert_eq!(opaque.pixel(4, 4), [0xff, 0x00, 0x00, 0xff]);
+    let faded = render_tile(json, 8, 0, TileId { z: 4, x: 0, y: 0 });
+    assert_eq!(faded.pixel(4, 4), [0x00, 0x00, 0x00, 0x00]);
+}
