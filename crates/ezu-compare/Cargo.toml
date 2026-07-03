@@ -1,6 +1,6 @@
 [package]
 name = "ezu-compare"
-description = "Dev tool: convert a MapLibre style, render it with ezu (CPU) and compare pixels + timing against a MapLibre reference"
+description = "Internal bench for the ezu-translate MapLibre frontend: convert a MapLibre style, render it with ezu (CPU) and compare pixels + timing against a MapLibre reference"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,7 +12,7 @@ publish = false
 
 [dependencies]
 ezu = { workspace = true, features = ["features", "paint", "style-json", "parallel", "http"] }
-ezu-maplibre = { workspace = true }
+ezu-translate = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 image = { workspace = true }

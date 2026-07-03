@@ -16,3 +16,6 @@ pub use ezu_paint as paint;
 
 #[cfg(feature = "style-json")]
 pub use ezu_style as style;
+
+#[cfg(feature = "translate")]
+pub use ezu_translate as translate;

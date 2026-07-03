@@ -157,11 +157,11 @@ fn run_tile(
     let stem = format!("{z}_{x}_{y}");
 
     // Convert at this tile's zoom so baked zoom-functions are exact here.
-    let opts = ezu_maplibre::ConvertOptions {
+    let opts = ezu_translate::maplibre::ConvertOptions {
         zoom: Some(z as f64),
         ..Default::default()
     };
-    let (recipe, _report) = ezu_maplibre::convert(style_json, &opts)?;
+    let (recipe, _report) = ezu_translate::maplibre::convert(style_json, &opts)?;
     let recipe_text = serde_json::to_string_pretty(&recipe)?;
     std::fs::write(args.out.join(format!("{stem}.recipe.json")), &recipe_text)?;
 

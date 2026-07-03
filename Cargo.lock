@@ -645,6 +645,7 @@ dependencies = [
  "ezu-graph",
  "ezu-paint",
  "ezu-style",
+ "ezu-translate",
  "futures",
  "hokusai",
  "pmtiles",
@@ -680,7 +681,7 @@ name = "ezu-compare"
 version = "0.3.0"
 dependencies = [
  "ezu",
- "ezu-maplibre",
+ "ezu-translate",
  "image",
  "reqwest",
  "serde",
@@ -726,17 +727,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ezu-maplibre"
-version = "0.3.0"
-dependencies = [
- "ezu-core",
- "ezu-style",
- "serde",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
 name = "ezu-paint"
 version = "0.3.0"
 dependencies = [
@@ -768,6 +758,17 @@ dependencies = [
  "ezu-core",
  "indexmap",
  "schemars",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "ezu-translate"
+version = "0.3.0"
+dependencies = [
+ "ezu-core",
+ "ezu-style",
  "serde",
  "serde_json",
  "thiserror",
