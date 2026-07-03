@@ -29,8 +29,12 @@ struct FillSolidNode {
     /// feature group. When set, it overrides the constant `fill` (each group
     /// paints in its own resolved color).
     fill_expr: Option<maplibre_expr::Expr>,
-    /// Raw `fill-expr` JSON text, kept only for a stable cache hash.
+    /// Optional data-driven opacity: a MapLibre number expression evaluated per
+    /// feature group. When set, it overrides the constant `fill-alpha`.
+    opacity_expr: Option<maplibre_expr::Expr>,
+    /// Raw `fill-expr` / `opacity-expr` JSON text, kept only for a stable hash.
     fill_expr_src: Option<String>,
+    opacity_expr_src: Option<String>,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
 }
@@ -70,32 +74,42 @@ impl Node for FillSolidNode {
         let blur_sigma = self.blur_sigma.get(ctx, inputs)? as f32;
         let mut canvas = make_canvas(ctx)?;
 
-        if let Some(expr) = &self.fill_expr {
-            // Data-driven fill: resolve a color per feature group and
-            // accumulate each group's polygons onto the same canvas.
-            // A group whose expression doesn't evaluate to a color (or
-            // errors) is simply not painted.
+        if self.fill_expr.is_some() || self.opacity_expr.is_some() {
+            // Data-driven fill: resolve a color and/or opacity per feature
+            // group and accumulate each group's polygons onto the same
+            // canvas. Whichever expression is absent (or errors for a group)
+            // falls back to the constant `fill` / `fill-alpha`.
             //
             // Synthetic geometry (e.g. `literal-geometry`) carries no
             // groups; fall back to a single empty-property group over the
             // flat polygons so it still renders (the expression just sees
             // no feature properties).
+            let const_fill = color_f32_to_u8(self.fill.get(ctx, inputs)?);
             let z = ctx.tile.z;
             let paint_group = |canvas: &mut _, group: &crate::nodes::common::FeatureGroup| {
                 let ectx = crate::render::group_expr_context(group, z);
-                let maplibre_expr::Value::Color(c) = (match maplibre_expr::evaluate(expr, &ectx) {
-                    Ok(v) => v,
-                    Err(_) => return,
-                }) else {
-                    return;
-                };
                 // maplibre-expr `Color` stores straight (non-premultiplied)
                 // channels in `0..=1`, exactly like a parsed `#rrggbb[aa]`
                 // literal — so an opaque data-driven color paints the same
                 // pixels as the constant `fill` path.
-                let fill = color_f32_to_u8([c.r as f32, c.g as f32, c.b as f32, c.a as f32]);
+                let fill = match &self.fill_expr {
+                    Some(expr) => match maplibre_expr::evaluate(expr, &ectx) {
+                        Ok(maplibre_expr::Value::Color(c)) => {
+                            color_f32_to_u8([c.r as f32, c.g as f32, c.b as f32, c.a as f32])
+                        }
+                        _ => const_fill,
+                    },
+                    None => const_fill,
+                };
+                let alpha = match &self.opacity_expr {
+                    Some(expr) => match maplibre_expr::evaluate(expr, &ectx) {
+                        Ok(maplibre_expr::Value::Number(n)) => n as f32,
+                        _ => fill_alpha,
+                    },
+                    None => fill_alpha,
+                };
                 let style = WatercolorStyle {
-                    fill: tint_alpha_color(fill, fill_alpha),
+                    fill: tint_alpha_color(fill, alpha),
                     edge: edge_color,
                     edge_width,
                     blur_sigma,
@@ -144,6 +158,10 @@ impl Node for FillSolidNode {
             h.update(b"fillexpr");
             h.update(s.as_bytes());
         }
+        if let Some(s) = &self.opacity_expr_src {
+            h.update(b"opacityexpr");
+            h.update(s.as_bytes());
+        }
     }
     fn param_refs(&self) -> Vec<String> {
         self.param_refs.clone()
@@ -188,6 +206,24 @@ impl NodeFactory for FillSolidFactory {
             }
             None => (None, None),
         };
+        // `opacity-expr`: a raw MapLibre number expression, evaluated per
+        // feature group at paint time. Overrides `fill-alpha`.
+        let (opacity_expr, opacity_expr_src) = match fields.get("opacity-expr") {
+            Some(v) => {
+                let expr = maplibre_expr::parse(v).map_err(|e| FactoryError::BadField {
+                    field: "opacity-expr".into(),
+                    msg: e.to_string(),
+                })?;
+                let expr =
+                    maplibre_expr::typecheck(&expr, Some(&maplibre_expr::Type::Number), false)
+                        .map_err(|e| FactoryError::BadField {
+                            field: "opacity-expr".into(),
+                            msg: e.to_string(),
+                        })?;
+                (Some(expr), Some(v.to_string()))
+            }
+            None => (None, None),
+        };
         let parts = r.finish();
         let blur_sigma_bound = blur_sigma
             .static_bound()
@@ -219,7 +255,9 @@ impl NodeFactory for FillSolidFactory {
                 blur_sigma,
                 blur_sigma_bound,
                 fill_expr,
+                opacity_expr,
                 fill_expr_src,
+                opacity_expr_src,
                 ports,
                 param_refs: parts.param_refs,
             }),
@@ -236,6 +274,9 @@ impl NodeFactory for FillSolidFactory {
                     "description": "A MapLibre color expression (JSON array, e.g. [\"match\", [\"get\", \"class\"], \"water\", \"#88c\", \"#ccc\"] or [\"interpolate\", [\"linear\"], [\"get\", \"area\"], 0, \"#eef\", 1000, \"#049\"]), evaluated per feature group at paint time. When present it overrides the constant `fill`; a group whose expression doesn't resolve to a color is not painted. Unlocks continuous data-driven fills that constant `fill` can't express.",
                 },
                 "fill-alpha": schema_frag::unit_number(),
+                "opacity-expr": {
+                    "description": "A MapLibre number expression (JSON array) giving fill opacity, evaluated per feature group at paint time. When present it overrides the constant `fill-alpha`; a group whose expression doesn't resolve to a number falls back to `fill-alpha`.",
+                },
                 "edge": schema_frag::color(),
                 "edge-width": schema_frag::px_number(),
                 "blur-sigma": schema_frag::px_number(),

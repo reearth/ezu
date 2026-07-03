@@ -44,9 +44,9 @@ pub(crate) fn convert_fill(
     }
 
     let fill_color = paint.get("fill-color");
-    let opacity = paint
-        .get("fill-opacity")
-        .and_then(|v| zoom::number_at(v, opts.zoom));
+    // `fill-opacity` → constant `fill-alpha` if zoom-bakeable, else a raw
+    // data-driven expression emitted as `opacity-expr`.
+    let (opacity, opacity_expr) = resolve_number(paint.get("fill-opacity"), opts.zoom);
     // `fill-outline-color` → a 1px outline (ezu `fill-solid` `edge`).
     let outline: Option<String> = paint
         .get("fill-outline-color")
@@ -80,6 +80,9 @@ pub(crate) fn convert_fill(
     if let Some(a) = opacity {
         spec["fill-alpha"] = Value::from(a);
     }
+    if let Some(expr) = opacity_expr {
+        spec["opacity-expr"] = expr;
+    }
     if let Some(edge) = &outline {
         spec["edge"] = Value::from(edge.clone());
         spec["edge-width"] = Value::from(1.0);
@@ -103,6 +106,27 @@ pub(crate) fn resolve_paint_color(
         .and_then(|v| parse_color(&v))
     {
         return (Some(hex), None);
+    }
+    if let Some(v) = value {
+        if v.is_array() {
+            return (None, Some(v.clone()));
+        }
+    }
+    (None, None)
+}
+
+/// Route a numeric paint property into ezu paint. Returns
+/// `(constant, number_expr)`:
+/// - `zoom::number_at` resolves (constant / zoom-bakeable) → `(Some(n), None)`.
+/// - otherwise, if the value is a JSON array (a data-driven expression) →
+///   `(None, Some(raw_expr))`.
+/// - otherwise → `(None, None)`.
+pub(crate) fn resolve_number(
+    value: Option<&Value>,
+    zoom: Option<f64>,
+) -> (Option<f64>, Option<Value>) {
+    if let Some(n) = value.and_then(|v| zoom::number_at(v, zoom)) {
+        return (Some(n), None);
     }
     if let Some(v) = value {
         if v.is_array() {

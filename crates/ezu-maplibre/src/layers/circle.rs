@@ -1,17 +1,17 @@
-//! `circle` layer → a `circle` sprite `stamp`ed at each point feature.
+//! `circle` layer → a single `circles` paint node: a filled disk per point
+//! feature, with per-feature radius / color / opacity / stroke routed to the
+//! node's `*-expr` fields when the paint property is a data-driven expression.
 
 use serde_json::{Map, Value};
 
-use crate::color::parse_color;
 use crate::filter;
+use crate::layers::fill::{resolve_number, resolve_paint_color};
 use crate::layers::paint_of;
 use crate::sources::{features_node, resolve_layer_source, Sources};
-use crate::zoom;
 use crate::{ConvertOptions, Report};
 
-/// A `circle` layer → a `circle` sprite `stamp`ed at each point feature.
-/// `circle-stroke-*` is a second, larger disk stamped underneath (the ring
-/// shows around the fill).
+/// A `circle` layer → one `circles` node. Each paint prop bakes to a constant
+/// when zoom-resolvable, else its raw expression is emitted as a `*-expr`.
 pub(crate) fn convert_circle(
     id: &str,
     layer: &Map<String, Value>,
@@ -27,82 +27,64 @@ pub(crate) fn convert_circle(
     let (base_filter, base_filter_expr) = filter::layer_filters(layer, report, id);
     let paint = paint_of(layer);
 
-    let num = |key: &str, default: f64| {
-        paint
-            .get(key)
-            .and_then(|v| zoom::number_at(v, opts.zoom))
-            .unwrap_or(default)
-    };
-    let color = |key: &str, default: &str| {
-        paint
-            .get(key)
-            .and_then(|v| zoom::color_at(v, opts.zoom))
-            .and_then(|v| parse_color(&v))
-            .map(|(hex, _)| hex)
-            .unwrap_or_else(|| default.to_string())
-    };
-
-    let radius = num("circle-radius", 5.0).max(0.1);
-    let fill = color("circle-color", "#000000");
-    let opacity = paint
-        .get("circle-opacity")
-        .and_then(|v| zoom::number_at(v, opts.zoom));
-    let stroke_w = num("circle-stroke-width", 0.0);
-
     let feat_id = format!("{id}__feat");
     nodes.insert(
         feat_id.clone(),
         features_node(&source, &source_layer, base_filter, base_filter_expr),
     );
 
-    // Stroke ring first (drawn under), then the fill disk on top.
-    if stroke_w > 0.0 {
-        let sc = color("circle-stroke-color", "#000000");
-        emit_disk(
-            id,
-            "stroke",
-            &feat_id,
-            radius + stroke_w,
-            sc,
-            opacity,
-            nodes,
-            outputs,
-        );
-    }
-    emit_disk(id, "fill", &feat_id, radius, fill, opacity, nodes, outputs);
-}
-
-/// Emit a `circle` sprite of pixel `radius` + a `stamp` placing it at each
-/// point of `feat_id`.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn emit_disk(
-    id: &str,
-    suffix: &str,
-    feat_id: &str,
-    radius: f64,
-    hex: String,
-    opacity: Option<f64>,
-    nodes: &mut Map<String, Value>,
-    outputs: &mut Vec<String>,
-) {
-    // 1px margin around the disk so its antialiased edge isn't clipped.
-    let size = ((2.0 * radius).ceil() as i64 + 2).max(1);
-    let radius_frac = radius / size as f64;
-    let circle_id = format!("{id}__{suffix}_circle");
-    nodes.insert(
-        circle_id.clone(),
-        serde_json::json!({
-            "op": "circle", "kind": "sprite", "color": hex,
-            "radius-frac": radius_frac, "width-px": size, "height-px": size
-        }),
-    );
-    let stamp_id = format!("{id}__{suffix}_stamp");
+    let circles_id = format!("{id}__circles");
     let mut spec = serde_json::json!({
-        "op": "stamp", "features": format!("@{feat_id}"), "image": format!("@{circle_id}")
+        "op": "circles",
+        "features": format!("@{feat_id}"),
     });
-    if let Some(a) = opacity {
-        spec["opacity"] = Value::from(a);
+
+    // `circle-radius` → `radius` (constant) or `radius-expr`.
+    let (radius, radius_expr) = resolve_number(paint.get("circle-radius"), opts.zoom);
+    if let Some(r) = radius {
+        spec["radius"] = Value::from(r.max(0.0));
     }
-    nodes.insert(stamp_id.clone(), spec);
-    outputs.push(stamp_id);
+    if let Some(e) = radius_expr {
+        spec["radius-expr"] = e;
+    }
+
+    // `circle-color` → `color` (constant hex) or `color-expr`.
+    let (color_hex, color_expr) = resolve_paint_color(paint.get("circle-color"), opts.zoom);
+    if let Some(hex) = color_hex {
+        spec["color"] = Value::from(hex);
+    }
+    if let Some(e) = color_expr {
+        spec["color-expr"] = e;
+    }
+
+    // `circle-opacity` → `opacity` (constant) or `opacity-expr`.
+    let (opacity, opacity_expr) = resolve_number(paint.get("circle-opacity"), opts.zoom);
+    if let Some(o) = opacity {
+        spec["opacity"] = Value::from(o);
+    }
+    if let Some(e) = opacity_expr {
+        spec["opacity-expr"] = e;
+    }
+
+    // `circle-stroke-width` → `stroke-width` (constant) or `stroke-width-expr`.
+    let (sw, sw_expr) = resolve_number(paint.get("circle-stroke-width"), opts.zoom);
+    if let Some(w) = sw {
+        spec["stroke-width"] = Value::from(w.max(0.0));
+    }
+    if let Some(e) = sw_expr {
+        spec["stroke-width-expr"] = e;
+    }
+
+    // `circle-stroke-color` → `stroke-color` (constant hex) or
+    // `stroke-color-expr`.
+    let (sc_hex, sc_expr) = resolve_paint_color(paint.get("circle-stroke-color"), opts.zoom);
+    if let Some(hex) = sc_hex {
+        spec["stroke-color"] = Value::from(hex);
+    }
+    if let Some(e) = sc_expr {
+        spec["stroke-color-expr"] = e;
+    }
+
+    nodes.insert(circles_id.clone(), spec);
+    outputs.push(circles_id);
 }

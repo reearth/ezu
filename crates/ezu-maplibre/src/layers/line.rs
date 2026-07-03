@@ -66,9 +66,10 @@ pub(crate) fn convert_line(
     let (color_hex, color_expr) =
         crate::layers::fill::resolve_paint_color(paint.get("line-color"), opts.zoom);
     let hex = color_hex.unwrap_or_else(|| "#000000".to_string());
-    let opacity = paint
-        .get("line-opacity")
-        .and_then(|v| zoom::number_at(v, opts.zoom));
+    // `line-opacity` → constant `opacity` if zoom-bakeable, else a raw
+    // data-driven expression emitted as `opacity-expr`.
+    let (opacity, opacity_expr) =
+        crate::layers::fill::resolve_number(paint.get("line-opacity"), opts.zoom);
 
     // `layout.line-cap` / `-join` (MapLibre defaults: butt / miter).
     let layout = layer.get("layout").and_then(Value::as_object);
@@ -105,6 +106,9 @@ pub(crate) fn convert_line(
     }
     if let Some(a) = opacity {
         spec["opacity"] = Value::from(a);
+    }
+    if let Some(expr) = opacity_expr {
+        spec["opacity-expr"] = expr;
     }
     // MapLibre `line-dasharray` is in units of line width → convert to px.
     if let Some(arr) = paint.get("line-dasharray").and_then(Value::as_array) {
