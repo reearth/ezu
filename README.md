@@ -74,6 +74,12 @@ ezu tiles --style URL_OR_PATH \
 ezu check style.json
 ezu check style.json --no-fetch    # parse + graph only, offline
 
+# Translate a MapLibre GL style into an ezu recipe (via ezu-translate).
+# `--zoom` bakes zoom functions at that zoom; skipped/approximated
+# layers are reported on stderr. Writes to stdout without `--out`.
+ezu translate maplibre-style.json --zoom 14 --out recipe.json
+ezu translate https://example.com/style.json --zoom 14 | ezu check /dev/stdin --no-fetch
+
 # `--verbose` (or `-v`) enables per-node debug logs from the
 # evaluator: op name, cache hit/miss, output shape, eval duration.
 ezu --verbose tile --style style.json --tile 13/7276/3225 --out tile.png

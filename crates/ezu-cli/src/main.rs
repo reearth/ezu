@@ -57,6 +57,8 @@ enum Cmd {
     Check(CheckCmd),
     /// Emit a Mermaid `graph LR` diagram of the style's node dependencies.
     Graph(GraphCmd),
+    /// Translate a map-engine style (MapLibre GL) into an ezu recipe.
+    Translate(TranslateCmd),
     /// Start the live editor + tile server at `http://127.0.0.1:8080`.
     Serve(serve::ServeCmd),
 }
@@ -141,6 +143,34 @@ struct GraphCmd {
     /// Output file. Writes to stdout when omitted.
     #[arg(long)]
     out: Option<PathBuf>,
+}
+
+#[derive(Args, Debug)]
+struct TranslateCmd {
+    /// Source map-engine style (MapLibre GL JSON) — local path or
+    /// http(s):// URL.
+    style: String,
+    /// Output file for the ezu recipe. Writes to stdout when omitted.
+    #[arg(long)]
+    out: Option<PathBuf>,
+    /// Zoom level at which to bake zoom-dependent functions (`stops`,
+    /// `interpolate`, `step`). Since ezu renders one integer zoom per
+    /// tile, baking at that zoom reproduces MapLibre exactly there.
+    #[arg(long)]
+    zoom: Option<f64>,
+    /// Emitted `tile-size` (MapLibre uses 512).
+    #[arg(long, default_value_t = 512)]
+    tile_size: u32,
+    /// Emitted `pad` — the buffer around the tile for blurs/overflow.
+    #[arg(long, default_value_t = 64)]
+    pad: u32,
+    /// Keep `visibility: none` layers in the recipe, gated off behind a
+    /// `switch` (instead of dropping them).
+    #[arg(long)]
+    keep_hidden: bool,
+    /// Pretty-print the emitted JSON.
+    #[arg(long)]
+    pretty: bool,
 }
 
 #[derive(Args, Debug)]
@@ -237,6 +267,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Cmd::Tiles(args) => run_tiles(args).await,
         Cmd::Check(args) => run_check(args).await,
         Cmd::Graph(args) => run_graph(args).await,
+        Cmd::Translate(args) => run_translate(args).await,
         Cmd::Serve(args) => serve::run(args).await,
     }
 }
@@ -436,6 +467,43 @@ async fn run_graph(args: GraphCmd) -> Result<(), Box<dyn std::error::Error>> {
             tracing::info!("wrote {} ({} bytes)", p.display(), mermaid.len());
         }
         None => print!("{mermaid}"),
+    }
+    Ok(())
+}
+
+async fn run_translate(args: TranslateCmd) -> Result<(), Box<dyn std::error::Error>> {
+    let text = fetch_text(&args.style).await?;
+    let style: serde_json::Value = serde_json::from_str(&text)?;
+    let opts = ezu::translate::maplibre::ConvertOptions {
+        zoom: args.zoom,
+        tile_size: args.tile_size,
+        pad: args.pad,
+        keep_hidden: args.keep_hidden,
+    };
+    let (recipe, report) = ezu::translate::maplibre::convert(&style, &opts)?;
+
+    // Surface everything the converter skipped or approximated on stderr, so
+    // it doesn't pollute the recipe written to stdout.
+    for w in &report.warnings {
+        tracing::warn!("{w}");
+    }
+
+    let json = if args.pretty {
+        serde_json::to_string_pretty(&recipe)?
+    } else {
+        serde_json::to_string(&recipe)?
+    };
+    match &args.out {
+        Some(p) => {
+            std::fs::write(p, &json)?;
+            tracing::info!(
+                "wrote {} ({} bytes, {} warnings)",
+                p.display(),
+                json.len(),
+                report.warnings.len()
+            );
+        }
+        None => println!("{json}"),
     }
     Ok(())
 }
