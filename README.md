@@ -377,6 +377,29 @@ attribution in
 MyPaint `.myb` brush works — declare it in the style's `assets` block
 and the host loads it from disk or HTTP.
 
+## Roadmap
+
+Symbol text currently covers point & line placement, deterministic
+cross-tile collision/dedup, real-font (TTF/OTF) and MapLibre glyph-PBF
+rendering. Remaining fidelity work, roughly in priority order:
+
+- **Legacy-form filters** — convert MapLibre legacy filters
+  (`["==", "class", …]`, `!in`/`!has`/`none`) in `maplibre-expr` so
+  translated styles that still use them filter correctly.
+- **`text-variable-anchor`** — try anchor candidates in order against the
+  collision grid instead of warning.
+- **RTL / bidi text** — Unicode bidi reordering for Arabic/Hebrew (the
+  outline backend already gets contextual joining from rustybuzz; the SDF
+  backend needs presentation-form mapping).
+- **Vertical writing mode** — upright CJK glyph stacking + punctuation
+  substitution (`text-writing-mode`).
+- **`format` sections** — per-section font/colour/size inside one label
+  (currently flattened to plain text with a warning).
+- **Icon collision & `text-optional`** — icons join the collision grid and
+  pair with their text.
+- **`text-halo-blur`** — the draw math exists; expose it on the `text`
+  node and route it in the translator.
+
 ## License
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
