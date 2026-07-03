@@ -415,3 +415,44 @@ fn font_sources_dedupe_by_url_across_layers() {
         .count();
     assert_eq!(font_sources, 1, "one font source per distinct URL");
 }
+
+#[test]
+fn legacy_stops_text_field_expands_tokens_into_a_step_expression() {
+    // demotiles-style `text-field`: a legacy zoom-interval function whose
+    // stop outputs carry `{token}`s. Raw passthrough would render the
+    // token text literally; it must lower to `step` with expanded outputs.
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "legacy-tokens",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "countries", "type": "symbol", "source": "s", "source-layer": "place",
+          "layout": {
+            "text-field": { "stops": [[2, "{ABBREV}"], [4, "{NAME}"]] },
+            "text-font": ["F"]
+          } },
+        { "id": "plainstops", "type": "symbol", "source": "s", "source-layer": "sea",
+          "layout": {
+            "text-field": { "stops": [[2, "Sea"], [4, "Ocean"]] },
+            "text-font": ["F"]
+          } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let opts = opts_with_fonts(&[("F", "https://fonts.example/F.ttf")]);
+    let (recipe, _) = convert(&style, &opts).unwrap();
+
+    let nodes = recipe["nodes"].as_object().unwrap();
+    assert_eq!(
+        nodes["countries__text"]["text"],
+        serde_json::json!([
+            "step",
+            ["zoom"],
+            ["to-string", ["get", "ABBREV"]],
+            4.0,
+            ["to-string", ["get", "NAME"]]
+        ])
+    );
+    // Token-free legacy stops keep the raw passthrough.
+    assert!(nodes["plainstops__text"]["text"].is_object());
+}
