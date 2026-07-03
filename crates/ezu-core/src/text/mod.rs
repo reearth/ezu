@@ -33,6 +33,7 @@
 //!   monochrome outline, or not at all if the font has none
 //! - MapLibre `format` sections (per-span font / size / color)
 
+pub mod collide;
 mod draw;
 mod font;
 mod layout;
@@ -40,6 +41,7 @@ pub mod pbf;
 pub mod sdf;
 mod shape;
 
+pub use collide::{place, Aabb, Candidate, Grid, COLLISION_CELL_PX, DEDUP_QUANTUM};
 pub use draw::{draw, TextPaint};
 pub use font::{Font, FontError, StackEntry};
 pub use layout::{
