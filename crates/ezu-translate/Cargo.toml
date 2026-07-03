@@ -1,0 +1,21 @@
+[package]
+name = "ezu-translate"
+description = "Translate map-engine styles (MapLibre GL, …) into ezu recipes — node-DAG Documents rendered on the CPU"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["maplibre", "map", "style", "gis", "conversion"]
+categories = ["graphics", "science::geo"]
+
+[dependencies]
+ezu-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+ezu-style = { workspace = true }

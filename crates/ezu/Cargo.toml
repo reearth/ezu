@@ -13,10 +13,11 @@ keywords = ["map", "cartography", "vector-tile", "rendering", "painterly"]
 categories = ["graphics", "rendering", "science::geo"]
 
 [features]
-default = ["features", "paint", "style-json"]
+default = ["features", "paint", "style-json", "translate"]
 features = ["dep:ezu-features"]
 paint = ["dep:ezu-paint"]
 style-json = ["dep:ezu-style"]
+translate = ["dep:ezu-translate"]
 # Pull-through to ezu-graph's parallel within-tile evaluation.
 parallel = ["ezu-graph/parallel", "ezu-paint?/parallel"]
 # Pull-through to ezu-paint's URL-fetch helpers (`reqwest`-based).
@@ -28,6 +29,7 @@ ezu-graph = { workspace = true }
 ezu-features = { workspace = true, optional = true }
 ezu-paint = { workspace = true, optional = true }
 ezu-style = { workspace = true, optional = true }
+ezu-translate = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "fs"] }

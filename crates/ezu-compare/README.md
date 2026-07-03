@@ -1,6 +1,6 @@
 # ezu-compare
 
-Dev tool that closes the loop on [`ezu-maplibre`](../ezu-maplibre): take a
+Internal bench for the MapLibre frontend of [`ezu-translate`](../ezu-translate): take a
 MapLibre GL style, **convert** it to an ezu recipe, **render** it on the
 CPU with ezu (timed), and **pixel-compare** the result against a MapLibre
 reference render — per XYZ tile, with metrics and a diff image.
@@ -71,7 +71,7 @@ tile        score   ssim     rmse   diff%  maxΔ   ezu(ms)
 
 The `diff` PNG (bright = disagreement) makes the residual obvious: at high
 zoom it's dominated by missing text labels, line thickness/antialiasing,
-and dashes — exactly the parts `ezu-maplibre` does not convert yet.
+and dashes — exactly the parts `ezu-translate` does not convert yet.
 
 ## License
 
