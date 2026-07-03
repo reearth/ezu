@@ -49,8 +49,8 @@ pub(crate) mod layers;
 pub(crate) mod sources;
 
 use layers::{
-    convert_background, convert_circle, convert_fill, convert_fill_extrusion, convert_hillshade,
-    convert_line, convert_raster, convert_symbol,
+    convert_background, convert_circle, convert_fill, convert_fill_extrusion, convert_heatmap,
+    convert_hillshade, convert_line, convert_raster, convert_symbol,
 };
 use sources::convert_sources;
 
@@ -222,6 +222,15 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
             ),
             "raster" => convert_raster(id, layer, &mut nodes, &mut outputs, &mut report),
             "circle" => convert_circle(
+                id,
+                layer,
+                &mut nodes,
+                &mut outputs,
+                zoom_range,
+                &sources,
+                &mut report,
+            ),
+            "heatmap" => convert_heatmap(
                 id,
                 layer,
                 &mut nodes,
