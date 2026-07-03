@@ -1,9 +1,13 @@
-//! Font loading, coverage lookup, and glyph outline extraction.
+//! Font loading, coverage lookup, and glyph outline extraction — plus
+//! the [`StackEntry`] wrapper that lets an outline [`Font`] and an SDF
+//! glyph stack share one fallback stack.
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use tiny_skia::{Path, PathBuilder};
+
+use super::sdf::SdfFontStack;
 
 /// Errors constructing a [`Font`] from raw bytes.
 #[derive(Debug, thiserror::Error)]
@@ -119,6 +123,49 @@ impl Font {
             .expect("glyph cache poisoned")
             .insert(glyph_id, path.clone());
         path
+    }
+}
+
+/// One entry of a text fallback stack: an outline [`Font`] (real font
+/// file, rustybuzz shaping) or an [`SdfFontStack`] (MapLibre glyph-PBF
+/// ranges, fixed 24 px metrics). Both kinds mix freely in one stack;
+/// itemization walks entries in order and the first one covering a
+/// char wins, exactly as with a homogeneous stack.
+#[derive(Debug, Clone)]
+pub enum StackEntry {
+    Outline(Arc<Font>),
+    Sdf(Arc<SdfFontStack>),
+}
+
+impl StackEntry {
+    /// Whether this entry can shape `c`. For an SDF stack this may
+    /// fetch the char's range on demand (when a fetcher is present).
+    pub(crate) fn covers(&self, c: char) -> bool {
+        match self {
+            StackEntry::Outline(f) => f.covers(c),
+            StackEntry::Sdf(s) => s.coverage(c) == super::sdf::SdfCoverage::Present,
+        }
+    }
+}
+
+impl From<Arc<Font>> for StackEntry {
+    fn from(f: Arc<Font>) -> Self {
+        StackEntry::Outline(f)
+    }
+}
+
+impl From<Arc<SdfFontStack>> for StackEntry {
+    fn from(s: Arc<SdfFontStack>) -> Self {
+        StackEntry::Sdf(s)
+    }
+}
+
+impl std::fmt::Debug for Font {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Font")
+            .field("face_index", &self.face_index)
+            .field("units_per_em", &self.units_per_em)
+            .finish()
     }
 }
 

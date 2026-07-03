@@ -25,7 +25,8 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use ezu_core::text::{
-    draw, layout, Anchor, Font, Justify, LayoutParams, TextBlock, TextPaint, TextTransform,
+    draw, layout, Anchor, Font, Justify, LayoutParams, StackEntry, TextBlock, TextPaint,
+    TextTransform,
 };
 
 use crate::nodes::common::{
@@ -182,7 +183,7 @@ impl Node for TextNode {
         }
 
         // Resolve the font stack once per eval.
-        let mut fonts: Vec<Arc<Font>> = Vec::with_capacity(self.font_keys.len());
+        let mut fonts: Vec<StackEntry> = Vec::with_capacity(self.font_keys.len());
         for key in &self.font_keys {
             let asset = ctx.assets.load(key)?;
             let Asset::Font(opq) = asset else {
@@ -191,7 +192,7 @@ impl Node for TextNode {
             let font = opq
                 .downcast::<Font>()
                 .map_err(|_| EvalError::Other(format!("`{key}` payload is not a text Font")))?;
-            fonts.push(font);
+            fonts.push(StackEntry::Outline(font));
         }
 
         // Constants, resolved once. Data-driven exprs (if present)
@@ -273,6 +274,7 @@ impl Node for TextNode {
                 color,
                 halo_color,
                 halo_width_px: halo_width,
+                halo_blur_px: 0.0,
             };
             for &(x, y) in &group.points {
                 let px = x as f32 * sx + pad;

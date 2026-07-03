@@ -7,19 +7,25 @@
 use std::sync::Arc;
 
 use ezu_core::text::{
-    char_allows_ideographic_breaking, draw, layout, Anchor, Font, LayoutParams, TextBlock,
-    TextPaint, TextTransform,
+    char_allows_ideographic_breaking, draw, layout, Anchor, Font, LayoutParams, StackEntry,
+    TextBlock, TextPaint, TextTransform,
 };
 
 const LATIN: &[u8] = include_bytes!("fonts/NotoSans-Regular.latin.ttf");
 const DIGITS: &[u8] = include_bytes!("fonts/NotoSans-Regular.digits.ttf");
 
-fn latin() -> Arc<Font> {
+fn latin_font() -> Arc<Font> {
     Arc::new(Font::from_bytes(Arc::from(LATIN), 0).expect("latin subset parses"))
 }
 
-fn digits() -> Arc<Font> {
-    Arc::new(Font::from_bytes(Arc::from(DIGITS), 0).expect("digits subset parses"))
+fn latin() -> StackEntry {
+    StackEntry::Outline(latin_font())
+}
+
+fn digits() -> StackEntry {
+    StackEntry::Outline(Arc::new(
+        Font::from_bytes(Arc::from(DIGITS), 0).expect("digits subset parses"),
+    ))
 }
 
 fn no_wrap() -> LayoutParams {
@@ -111,7 +117,7 @@ fn transform_uppercases_before_shaping() {
 /// ascent+descent (~1.36 em for Noto Sans), each extra line adds
 /// `line-height` (1.2 em).
 fn line_count(block: &TextBlock, params: &LayoutParams) -> usize {
-    let single = latin().ascent_em() + latin().descent_em();
+    let single = latin_font().ascent_em() + latin_font().descent_em();
     (((block.bbox.height() - single) / params.line_height_em).round() as usize) + 1
 }
 
@@ -246,6 +252,7 @@ fn draw_produces_pixels_with_the_fill_color() {
         color: [1.0, 0.0, 0.0, 1.0],
         halo_color: [1.0, 1.0, 1.0, 1.0],
         halo_width_px: 0.0,
+        halo_blur_px: 0.0,
     });
     let red = pixmap
         .pixels()
@@ -262,12 +269,14 @@ fn halo_sits_behind_the_fill() {
         color: [1.0, 0.0, 0.0, 1.0],
         halo_color: [1.0, 1.0, 1.0, 1.0],
         halo_width_px: 0.0,
+        halo_blur_px: 0.0,
     });
     let with_halo = render(&TextPaint {
         size_px: 32.0,
         color: [1.0, 0.0, 0.0, 1.0],
         halo_color: [1.0, 1.0, 1.0, 1.0],
         halo_width_px: 2.0,
+        halo_blur_px: 0.0,
     });
     // Every solidly-filled pixel must be unchanged by the halo (the
     // halo never paints over fill) …
