@@ -36,9 +36,10 @@ impl CanvasInfo {
 /// layers, …) so every source-style node consumes the host through the
 /// same trait — like a shader sampling a typed uniform binding.
 /// `Features` carries a type-erased payload; by convention the
-/// concrete type is `Arc<ezu_features::FeatureLayer>`. `Font` is
-/// likewise type-erased (by convention `Arc<ezu_core::text::Font>`) so
-/// this crate gains no font or raster-drawing dependencies.
+/// concrete type is `Arc<ezu_features::FeatureLayer>`. `Font` and
+/// `Glyphs` are likewise type-erased (by convention
+/// `Arc<ezu_core::text::Font>` / `Arc<ezu_core::text::SdfFontStack>`)
+/// so this crate gains no font or raster-drawing dependencies.
 #[derive(Debug, Clone)]
 pub enum Asset {
     Image(Arc<RasterBuf>),
@@ -49,6 +50,8 @@ pub enum Asset {
     Sprite(Arc<SpriteSheet>),
     /// A loaded font face; the `text` node shapes and draws with it.
     Font(OpaqueValue),
+    /// A glyph-PBF (SDF) fontstack; the `text` node's compat backend.
+    Glyphs(OpaqueValue),
 }
 
 #[derive(Debug, thiserror::Error)]

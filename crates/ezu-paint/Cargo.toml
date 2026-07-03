@@ -45,6 +45,9 @@ optional = true
 
 [dependencies.reqwest]
 workspace = true
+# `blocking` backs the lazy glyph-range fetcher, which runs inside
+# `Node::eval` (no async context available there).
+features = ["blocking"]
 optional = true
 
 [dependencies.pmtiles]

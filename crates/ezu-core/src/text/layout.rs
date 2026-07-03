@@ -1,22 +1,23 @@
 //! Line breaking, justification, and anchoring — a port of the
-//! MapLibre GL JS point-label layout (`shaping.ts`) onto rustybuzz
-//! shaping output. Everything here is in em units; the draw step
-//! scales by font size.
+//! MapLibre GL JS point-label layout (`shaping.ts`) onto both shaping
+//! backends (outline fonts and SDF glyph stacks). Everything here is
+//! in em units; the draw step scales by font size.
 //!
 //! Known divergences from the reference (kept deliberately simple):
 //!
 //! - Chars covered by no font are dropped before shaping instead of
 //!   rendering a missing-glyph box.
-//! - Line metrics (first baseline, block height) come from the primary
-//!   (first) font's real ascender/descender rather than MapLibre's
-//!   fixed 24px-glyph rectangle constants.
+//! - With an outline primary font, line metrics (first baseline, block
+//!   height) come from its real ascender/descender rather than
+//!   MapLibre's fixed 24px-glyph rectangle constants. An SDF primary
+//!   uses MapLibre's constants exactly (`line-height × lines` block,
+//!   baselines at the fixed −17 px offset) — see [`super::sdf`].
 //! - `evaluateBreak`'s width bookkeeping runs over shaped glyph
 //!   advances (so ligatures/kerning are measured exactly); break
 //!   candidates only exist at cluster boundaries.
 
-use std::sync::Arc;
-
-use super::font::Font;
+use super::font::StackEntry;
+use super::sdf::{SDF_EM_PX, SDF_Y_OFFSET_PX};
 use super::shape::{shape, ShapedGlyph, ShapedText};
 
 /// The nine MapLibre text anchors: which part of the block sits on the
@@ -170,6 +171,8 @@ impl Default for LayoutParams {
 pub struct PlacedGlyph {
     /// Index into the font stack the block was laid out against.
     pub font: usize,
+    /// Outline entries: the font's glyph id. SDF entries: the BMP
+    /// codepoint.
     pub glyph_id: u16,
     pub x: f32,
     pub y: f32,
@@ -203,6 +206,10 @@ pub struct TextBlock {
     /// Chars covered by no font in the stack, dropped before shaping.
     /// Callers can surface a warning when non-zero.
     pub dropped_chars: usize,
+    /// The subset of `dropped_chars` that hit an SDF glyph range that
+    /// was unavailable (unloaded with no fetcher, or fetch failed) —
+    /// callers can point hosts at pre-binding the missing ranges.
+    pub missing_range_chars: usize,
 }
 
 impl TextBlock {
@@ -212,9 +219,11 @@ impl TextBlock {
     }
 }
 
-/// Shape and lay out `text` against a font fallback stack. The first
-/// font is the primary: its ascender/descender set the line metrics.
-pub fn layout(text: &str, fonts: &[Arc<Font>], params: &LayoutParams) -> TextBlock {
+/// Shape and lay out `text` against a fallback stack. The first entry
+/// is the primary: it sets the line metrics — an outline font through
+/// its real ascender/descender, an SDF stack through MapLibre's fixed
+/// 24 px-em constants.
+pub fn layout(text: &str, fonts: &[StackEntry], params: &LayoutParams) -> TextBlock {
     let (Some(primary), false) = (fonts.first(), text.is_empty()) else {
         return TextBlock::default();
     };
@@ -227,6 +236,7 @@ pub fn layout(text: &str, fonts: &[Arc<Font>], params: &LayoutParams) -> TextBlo
     if shaped.glyphs.is_empty() {
         return TextBlock {
             dropped_chars: shaped.dropped,
+            missing_range_chars: shaped.missing_range,
             ..TextBlock::default()
         };
     }
@@ -234,10 +244,23 @@ pub fn layout(text: &str, fonts: &[Arc<Font>], params: &LayoutParams) -> TextBlo
     let breaks = determine_line_breaks(&shaped, params.max_width_em);
     let lines = split_lines(&shaped, &breaks);
 
-    let ascent = primary.ascent_em();
-    let descent = primary.descent_em();
+    let lh = params.line_height_em;
+    // First-baseline offset from the block top, and total block height.
+    let (first_baseline, block_h) = match primary {
+        StackEntry::Outline(f) => (
+            f.ascent_em(),
+            f.ascent_em() + f.descent_em() + (lines.len() - 1) as f32 * lh,
+        ),
+        // MapLibre metrics: each line is a `line-height` slot with its
+        // baseline pinned `0.5·line-height − 17px` from the slot top
+        // (`shaping.ts` — the align() half-line shift plus the fixed
+        // SHAPING_DEFAULT_OFFSET baseline offset).
+        StackEntry::Sdf(_) => (
+            0.5 * lh + SDF_Y_OFFSET_PX / SDF_EM_PX,
+            lines.len() as f32 * lh,
+        ),
+    };
     let block_w = lines.iter().map(|l| l.width).fold(0.0f32, f32::max);
-    let block_h = ascent + descent + (lines.len() - 1) as f32 * params.line_height_em;
 
     let justify = params.justify.fraction(params.anchor);
     let (ax, ay) = params.anchor.fraction();
@@ -247,7 +270,7 @@ pub fn layout(text: &str, fonts: &[Arc<Font>], params: &LayoutParams) -> TextBlo
     let mut glyphs = Vec::new();
     for (line_ix, line) in lines.iter().enumerate() {
         let line_x = (block_w - line.width) * justify + shift_x;
-        let baseline = ascent + line_ix as f32 * params.line_height_em + shift_y;
+        let baseline = first_baseline + line_ix as f32 * lh + shift_y;
         let mut pen = 0.0f32;
         for g in line.glyphs {
             glyphs.push(PlacedGlyph {
@@ -270,6 +293,7 @@ pub fn layout(text: &str, fonts: &[Arc<Font>], params: &LayoutParams) -> TextBlo
             max_y: shift_y + block_h,
         },
         dropped_chars: shaped.dropped,
+        missing_range_chars: shaped.missing_range,
     }
 }
 

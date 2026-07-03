@@ -696,6 +696,7 @@ dependencies = [
  "rustybuzz",
  "thiserror",
  "tiny-skia",
+ "tracing",
  "ttf-parser",
  "xxhash-rust",
 ]

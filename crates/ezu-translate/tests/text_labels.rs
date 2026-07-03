@@ -182,6 +182,89 @@ fn unmapped_font_warns_and_skips_text() {
 }
 
 #[test]
+fn unmapped_font_with_glyphs_endpoint_emits_a_glyphs_source() {
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "zero-config",
+      "glyphs": "https://fonts.example/{fontstack}/{range}.pbf",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "places", "type": "symbol", "source": "s", "source-layer": "place",
+          "layout": { "text-field": "{name}",
+                      "text-font": ["Noto Sans Regular", "Arial Unicode MS Regular"] } },
+        { "id": "pois", "type": "symbol", "source": "s", "source-layer": "poi",
+          "layout": { "text-field": "{name}",
+                      "text-font": ["Noto Sans Regular", "Arial Unicode MS Regular"] } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let (recipe, report) = convert(&style, &ConvertOptions::default()).unwrap();
+
+    // One glyphs source per distinct stack: entries joined ", ".
+    let sources = recipe["sources"].as_object().unwrap();
+    let (id, glyphs) = sources
+        .iter()
+        .find(|(_, s)| s["type"] == "glyphs")
+        .expect("a glyphs source");
+    assert_eq!(
+        glyphs["url"],
+        "https://fonts.example/{fontstack}/{range}.pbf"
+    );
+    assert_eq!(
+        glyphs["fontstack"],
+        "Noto Sans Regular, Arial Unicode MS Regular"
+    );
+    assert_eq!(
+        sources.values().filter(|s| s["type"] == "glyphs").count(),
+        1,
+        "identical stacks share one glyphs source"
+    );
+
+    // Both text nodes reference it; no skipped-text warning.
+    let nodes = recipe["nodes"].as_object().unwrap();
+    for layer in ["places__text", "pois__text"] {
+        assert_eq!(nodes[layer]["font"], serde_json::json!([id]));
+    }
+    assert!(
+        !report.warnings.iter().any(|w| w.contains("text skipped")),
+        "unexpected warnings: {:?}",
+        report.warnings
+    );
+
+    // Valid ezu Document.
+    let doc_text = serde_json::to_string(&recipe).unwrap();
+    ezu_style::Document::from_json(&doc_text).expect("recipe parses as ezu Document");
+}
+
+#[test]
+fn explicit_font_mapping_wins_over_the_glyphs_endpoint() {
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "mapped",
+      "glyphs": "https://fonts.example/{fontstack}/{range}.pbf",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "places", "type": "symbol", "source": "s", "source-layer": "place",
+          "layout": { "text-field": "{name}", "text-font": ["Noto Sans Regular"] } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let opts = opts_with_fonts(&[("Noto Sans Regular", "https://fonts.example/NotoSans.ttf")]);
+    let (recipe, _) = convert(&style, &opts).unwrap();
+
+    let sources = recipe["sources"].as_object().unwrap();
+    assert_eq!(sources["noto-sans-regular"]["type"], "font");
+    assert!(
+        !sources.values().any(|s| s["type"] == "glyphs"),
+        "a mapped stack must not fall back to the glyphs endpoint"
+    );
+    assert_eq!(
+        recipe["nodes"]["places__text"]["font"],
+        serde_json::json!(["noto-sans-regular"])
+    );
+}
+
+#[test]
 fn icon_and_text_layer_emits_both_nodes() {
     const STYLE: &str = r##"{
       "version": 8,

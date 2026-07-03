@@ -18,9 +18,12 @@ const DEFAULT_TEXT_FONT: [&str; 2] = ["Open Sans Regular", "Arial Unicode MS Reg
 
 /// A `symbol` layer: place the `icon-image` sprite (`features` → `icon`
 /// → `stamp`) and/or the `text-field` label (`features` → `text`) at
-/// each point feature. Text needs every used `text-font` entry mapped
-/// to a font URL via [`ConvertOptions::fonts`](crate::maplibre::ConvertOptions);
-/// unmapped stacks skip the text with a warning.
+/// each point feature. A `text-font` entry mapped to a font URL via
+/// [`ConvertOptions::fonts`](crate::maplibre::ConvertOptions) becomes a
+/// `font` source; a stack with no mapping falls back to the style's
+/// top-level `glyphs` endpoint (`glyphs_url`) as an SDF `glyphs` source
+/// — zero configuration. No mapping and no `glyphs` skips the text
+/// with a warning.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn convert_symbol(
     id: &str,
@@ -31,6 +34,7 @@ pub(crate) fn convert_symbol(
     sources: &Sources,
     source_defs: &mut Map<String, Value>,
     fonts: &HashMap<String, String>,
+    glyphs_url: Option<&str>,
     report: &mut Report,
 ) {
     let Some((source, source_layer)) = resolve_layer_source(id, layer, sources, report) else {
@@ -93,6 +97,7 @@ pub(crate) fn convert_symbol(
             outputs,
             source_defs,
             fonts,
+            glyphs_url,
             &mut ensure_feat,
             report,
         );
@@ -186,6 +191,7 @@ fn convert_text(
     outputs: &mut Vec<String>,
     source_defs: &mut Map<String, Value>,
     fonts: &HashMap<String, String>,
+    glyphs_url: Option<&str>,
     ensure_feat: &mut impl FnMut(&mut Map<String, Value>) -> String,
     report: &mut Report,
 ) {
@@ -226,26 +232,39 @@ fn convert_text(
     };
     let (mapped, unmapped): (Vec<&String>, Vec<&String>) =
         stack.iter().partition(|name| fonts.contains_key(*name));
-    if mapped.is_empty() {
-        report.warn(format!(
-            "layer `{id}`: `symbol` text: no font mapping for {stack:?} — pass `--font \"NAME=URL\"`; text skipped"
-        ));
-        return;
-    }
-    if !unmapped.is_empty() {
-        report.warn(format!(
-            "layer `{id}`: `symbol` text: no font mapping for {unmapped:?} — using the mapped subset"
-        ));
-    }
-    let font_refs: Vec<Value> = mapped
-        .iter()
-        .map(|name| {
-            let url = fonts
-                .get(name.as_str())
-                .expect("partitioned on containment");
-            Value::String(ensure_font_source(source_defs, name, url))
-        })
-        .collect();
+    let font_refs: Vec<Value> = if mapped.is_empty() {
+        // Zero-config compat: with no explicit `--font` mapping, serve
+        // the stack from the style's own glyph endpoint as SDF ranges
+        // (entries join `", "` into one fontstack string; fallback
+        // across them happens server-side, as in MapLibre).
+        let Some(glyphs_url) = glyphs_url else {
+            report.warn(format!(
+                "layer `{id}`: `symbol` text: no font mapping for {stack:?} and the style has no `glyphs` endpoint — pass `--font \"NAME=URL\"`; text skipped"
+            ));
+            return;
+        };
+        vec![Value::String(ensure_glyphs_source(
+            source_defs,
+            glyphs_url,
+            &stack.join(", "),
+        ))]
+    } else {
+        // An explicit mapping wins over the `glyphs` endpoint.
+        if !unmapped.is_empty() {
+            report.warn(format!(
+                "layer `{id}`: `symbol` text: no font mapping for {unmapped:?} — using the mapped subset"
+            ));
+        }
+        mapped
+            .iter()
+            .map(|name| {
+                let url = fonts
+                    .get(name.as_str())
+                    .expect("partitioned on containment");
+                Value::String(ensure_font_source(source_defs, name, url))
+            })
+            .collect()
+    };
 
     // `text-field`: a constant may carry `{token}`s (rewritten to a
     // `concat`-of-`get` expression); expressions / legacy functions pass
@@ -357,8 +376,39 @@ fn ensure_font_source(source_defs: &mut Map<String, Value>, name: &str, url: &st
     {
         return id.clone();
     }
-    // "Noto Sans Regular" → "noto-sans-regular"; suffix on collision
-    // with an unrelated source name.
+    let id = unique_source_id(source_defs, &kebab_id(name));
+    source_defs.insert(
+        id.clone(),
+        serde_json::json!({ "type": "font", "url": url }),
+    );
+    id
+}
+
+/// Reuse or declare a `glyphs` source for one fontstack string served
+/// from the style's glyph endpoint. Returns the source id, derived
+/// from the joined stack.
+fn ensure_glyphs_source(
+    source_defs: &mut Map<String, Value>,
+    url: &str,
+    fontstack: &str,
+) -> String {
+    // One source per distinct (endpoint, fontstack), shared across layers.
+    if let Some((id, _)) = source_defs
+        .iter()
+        .find(|(_, d)| d["type"] == "glyphs" && d["url"] == url && d["fontstack"] == fontstack)
+    {
+        return id.clone();
+    }
+    let id = unique_source_id(source_defs, &kebab_id(fontstack));
+    source_defs.insert(
+        id.clone(),
+        serde_json::json!({ "type": "glyphs", "url": url, "fontstack": fontstack }),
+    );
+    id
+}
+
+/// `"Noto Sans Regular"` → `"noto-sans-regular"` (source-id shape).
+fn kebab_id(name: &str) -> String {
     let mut base: String = name
         .to_lowercase()
         .chars()
@@ -367,17 +417,17 @@ fn ensure_font_source(source_defs: &mut Map<String, Value>, name: &str, url: &st
     while base.contains("--") {
         base = base.replace("--", "-");
     }
-    let base = base.trim_matches('-').to_string();
-    let mut id = base.clone();
+    base.trim_matches('-').to_string()
+}
+
+/// `base`, suffixed on collision with an unrelated source name.
+fn unique_source_id(source_defs: &Map<String, Value>, base: &str) -> String {
+    let mut id = base.to_string();
     let mut n = 2;
     while source_defs.contains_key(&id) {
         id = format!("{base}-{n}");
         n += 1;
     }
-    source_defs.insert(
-        id.clone(),
-        serde_json::json!({ "type": "font", "url": url }),
-    );
     id
 }
 

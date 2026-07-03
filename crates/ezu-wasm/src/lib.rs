@@ -37,6 +37,11 @@
 //! - `geojson` → *remote* GeoJSON only: bind the fetched document
 //!   `bytes`; projected per tile at render (cleared by `clearSources`).
 //!   Inline `data` needs no bind — it's read from the style directly.
+//! - `glyphs` → decode one SDF glyph-range PBF per call into the
+//!   persistent glyph bank (repeat per range; unaffected by
+//!   `clearSources`). This host cannot fetch ranges lazily, so bind
+//!   every range the styled text will need *before* rendering — text
+//!   whose range is missing drops those glyphs with a warning.
 //!
 //! ## Output
 //!
@@ -51,8 +56,8 @@
 //! All fallible methods throw a JavaScript `Error` whose `.name`
 //! discriminates the failure kind: `InvalidStyle`, `BrushParse`,
 //! `MvtDecode`, `DemDecode`, `RasterDecode`, `GeoJsonDecode`,
-//! `SpriteDecode`, `RenderFailed`, `PngEncode`, `WebpEncode`,
-//! `UnknownSource`.
+//! `SpriteDecode`, `FontParse`, `GlyphDecode`, `RenderFailed`,
+//! `PngEncode`, `WebpEncode`, `UnknownSource`.
 
 mod log;
 
@@ -87,6 +92,7 @@ const ERR_SOURCE: &str = "UnknownSource";
 const ERR_GEOJSON: &str = "GeoJsonDecode";
 const ERR_SPRITE: &str = "SpriteDecode";
 const ERR_FONT: &str = "FontParse";
+const ERR_GLYPHS: &str = "GlyphDecode";
 
 /// Pending tile bytes for a single named source. MVT bytes are
 /// validated at bind time (we attempt a decode and discard the
@@ -269,6 +275,35 @@ impl Renderer {
                 let face = ezu_core::text::Font::from_bytes(bytes.into(), font.index)
                     .map_err(|e| named_err(ERR_FONT, e))?;
                 self.assets.insert_font(font.url.clone(), face);
+            }
+            // Glyphs: the JS host provides one raw range PBF per call
+            // (which range is read from the message itself); repeated
+            // calls accumulate ranges into one persistent stack. This
+            // host cannot fetch lazily, so *every* range the styled
+            // text will need must be bound before rendering — a label
+            // whose range is missing drops its glyphs with a warning.
+            SourceDecl::Glyphs(glyphs) => {
+                let key = glyphs.asset_key();
+                let stack = {
+                    let bank = self
+                        .assets
+                        .glyphs
+                        .read()
+                        .expect("glyphs bank poisoned")
+                        .get(&key)
+                        .cloned();
+                    match bank {
+                        Some(stack) => stack,
+                        None => {
+                            let stack = Arc::new(ezu_core::text::SdfFontStack::new());
+                            self.assets.insert_glyphs(key, stack.clone());
+                            stack
+                        }
+                    }
+                };
+                stack
+                    .insert_range(&bytes)
+                    .map_err(|e| named_err(ERR_GLYPHS, e))?;
             }
         }
         Ok(())

@@ -27,10 +27,11 @@
 //!   `fill-pattern`, and `line-pattern` wire through `icon` (crop) +
 //!   `stamp` / `tiling` / `line-stamp`.
 //! - **`symbol` text** (point placement): `text-field` and its paint /
-//!   layout properties lower to the `text` node, with each `text-font`
-//!   entry mapped to a `font` source through
-//!   [`ConvertOptions::fonts`] (MapLibre styles name glyph stacks; ezu
-//!   needs real font files).
+//!   layout properties lower to the `text` node. A `text-font` stack
+//!   with no [`ConvertOptions::fonts`] mapping is served from the
+//!   style's own top-level `glyphs` endpoint as an SDF `glyphs` source
+//!   — zero configuration; an explicit font-URL mapping wins and gives
+//!   higher-fidelity outline rendering.
 //!
 //! What is *not* handled yet is reported in [`Report::warnings`] rather
 //! than failing the conversion: `symbol-placement: line`, text collision
@@ -94,11 +95,12 @@ pub struct ConvertOptions {
     /// turns it on (a build-time toggle, since `switch` resolves at build).
     pub keep_hidden: bool,
     /// MapLibre fontstack entry name → font file URL, used to lower
-    /// `symbol` text (`text-font`) to ezu `font` sources. MapLibre
-    /// styles reference glyph PBF stacks by name only, so a URL per
-    /// used font must be supplied (CLI: repeatable `--font NAME=URL`).
-    /// Layers whose stack has no mapped entry skip their text with a
-    /// warning.
+    /// `symbol` text (`text-font`) to ezu `font` sources (CLI:
+    /// repeatable `--font NAME=URL`). Optional: a stack with no mapped
+    /// entry falls back to the style's top-level `glyphs` endpoint as
+    /// an SDF `glyphs` source (MapLibre's own rendering path); a
+    /// mapping wins where present and renders from the real font file.
+    /// No mapping *and* no `glyphs` skips the text with a warning.
     pub fonts: std::collections::HashMap<String, String>,
 }
 
@@ -166,6 +168,10 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
 
     // --- sources ---------------------------------------------------------
     let (mut source_defs, sources) = convert_sources(style, &mut report)?;
+
+    // The top-level glyph endpoint — `symbol` text's zero-config
+    // fallback for fontstacks without an explicit font mapping.
+    let glyphs_url = style.get("glyphs").and_then(Value::as_str);
 
     // --- layers → paint node chain --------------------------------------
     let layers = style
@@ -258,6 +264,7 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
                 &sources,
                 &mut source_defs,
                 &opts.fonts,
+                glyphs_url,
                 &mut report,
             ),
             other => report.warn(format!(
