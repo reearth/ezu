@@ -4,21 +4,19 @@
 use std::collections::BTreeMap;
 
 use ezu_features::{Feature, Polygon, Value};
-use ezu_style::{FeatureFilter, FilterAtom, FilterMatch, NotInner};
 use maplibre_expr::{EvaluationContext, Expr, Feature as ExprFeature, Value as ExprValue};
 
 /// Walk a layer's features and return every polygon ring that passes
 /// the filter. Polygons are cloned out so callers own contiguous data.
 pub fn collect_polygons(
     features: &[Feature],
-    filter: &Option<FeatureFilter>,
     filter_expr: Option<&Expr>,
     min_zoom_field: &Option<String>,
     z: u8,
 ) -> Vec<Polygon> {
     let mut out = Vec::new();
     for f in features {
-        if !feature_passes(f, filter, filter_expr, min_zoom_field, z) {
+        if !feature_passes(f, filter_expr, min_zoom_field, z) {
             continue;
         }
         out.extend(f.geometry.polygons.iter().cloned());
@@ -30,14 +28,13 @@ pub fn collect_polygons(
 /// filter.
 pub fn collect_points(
     features: &[Feature],
-    filter: &Option<FeatureFilter>,
     filter_expr: Option<&Expr>,
     min_zoom_field: &Option<String>,
     z: u8,
 ) -> Vec<(i32, i32)> {
     let mut out = Vec::new();
     for f in features {
-        if !feature_passes(f, filter, filter_expr, min_zoom_field, z) {
+        if !feature_passes(f, filter_expr, min_zoom_field, z) {
             continue;
         }
         out.extend(f.geometry.points.iter().copied());
@@ -49,14 +46,13 @@ pub fn collect_points(
 /// filter.
 pub fn collect_lines(
     features: &[Feature],
-    filter: &Option<FeatureFilter>,
     filter_expr: Option<&Expr>,
     min_zoom_field: &Option<String>,
     z: u8,
 ) -> Vec<Vec<(i32, i32)>> {
     let mut out = Vec::new();
     for f in features {
-        if !feature_passes(f, filter, filter_expr, min_zoom_field, z) {
+        if !feature_passes(f, filter_expr, min_zoom_field, z) {
             continue;
         }
         out.extend(f.geometry.lines.iter().cloned());
@@ -70,14 +66,13 @@ pub fn collect_lines(
 /// that contribute no geometry at all are skipped (they'd paint nothing).
 pub fn collect_groups(
     features: &[Feature],
-    filter: &Option<FeatureFilter>,
     filter_expr: Option<&Expr>,
     min_zoom_field: &Option<String>,
     z: u8,
 ) -> Vec<crate::nodes::common::FeatureGroup> {
     let mut out = Vec::new();
     for f in features {
-        if !feature_passes(f, filter, filter_expr, min_zoom_field, z) {
+        if !feature_passes(f, filter_expr, min_zoom_field, z) {
             continue;
         }
         if f.geometry.polygons.is_empty()
@@ -98,12 +93,11 @@ pub fn collect_groups(
 
 fn feature_passes(
     f: &Feature,
-    filter: &Option<FeatureFilter>,
     filter_expr: Option<&Expr>,
     min_zoom_field: &Option<String>,
     z: u8,
 ) -> bool {
-    // A MapLibre-expression filter (full expression language: `any`, `has`,
+    // A MapLibre filter expression (full expression language: `any`, `has`,
     // comparisons, `geometry-type`, …), evaluated per feature. A feature
     // passes only if the expression is truthy; an eval error excludes it.
     if let Some(expr) = filter_expr {
@@ -124,24 +118,6 @@ fn feature_passes(
             .unwrap_or(true); // missing field → assume visible
         if !ok {
             return false;
-        }
-    }
-    if let Some(filter) = filter.as_ref() {
-        for (k, expected) in filter {
-            match f.properties.get(k) {
-                Some(actual) => {
-                    if !match_value(actual, expected) {
-                        return false;
-                    }
-                }
-                // Missing property: passes a Not clause (the value is
-                // not in the excluded set, vacuously), fails One/Any.
-                None => {
-                    if !matches!(expected, FilterMatch::Not(_)) {
-                        return false;
-                    }
-                }
-            }
         }
     }
     true
@@ -220,32 +196,6 @@ pub(crate) fn value_to_expr(v: &Value) -> ExprValue {
     }
 }
 
-fn match_value(actual: &Value, expected: &FilterMatch) -> bool {
-    match expected {
-        FilterMatch::One(atom) => atom_equals(actual, atom),
-        FilterMatch::Any(atoms) => atoms.iter().any(|a| atom_equals(actual, a)),
-        FilterMatch::Not(n) => match &n.not {
-            NotInner::One(atom) => !atom_equals(actual, atom),
-            NotInner::Any(atoms) => !atoms.iter().any(|a| atom_equals(actual, a)),
-        },
-    }
-}
-
-fn atom_equals(actual: &Value, expected: &FilterAtom) -> bool {
-    match (actual, expected) {
-        (Value::String(a), FilterAtom::Str(b)) => a == b,
-        (Value::Bool(a), FilterAtom::Bool(b)) => a == b,
-        (Value::Int(a), FilterAtom::Int(b)) | (Value::SInt(a), FilterAtom::Int(b)) => a == b,
-        (Value::UInt(a), FilterAtom::Int(b)) => (*a as i64) == *b,
-        (Value::Float(a), FilterAtom::Float(b)) => (*a as f64) == *b,
-        (Value::Double(a), FilterAtom::Float(b)) => a == b,
-        (Value::Int(a), FilterAtom::Float(b)) | (Value::SInt(a), FilterAtom::Float(b)) => {
-            (*a as f64) == *b
-        }
-        _ => false,
-    }
-}
-
 fn value_as_i64(v: &Value) -> Option<i64> {
     match v {
         Value::Int(n) | Value::SInt(n) => Some(*n),
@@ -284,7 +234,7 @@ mod tests {
     }
 
     fn passes(f: &Feature, e: &Expr) -> bool {
-        feature_passes(f, &None, Some(e), &None, 14)
+        feature_passes(f, Some(e), &None, 14)
     }
 
     #[test]
@@ -326,47 +276,34 @@ mod tests {
     }
 
     #[test]
-    fn expr_filter_and_structured_filter_are_anded() {
-        // Structured filter (class == road) AND expr (lanes >= 2).
-        use ezu_style::{FeatureFilter, FilterAtom, FilterMatch};
-        let mut sf: FeatureFilter = FeatureFilter::new();
-        sf.insert(
-            "class".to_string(),
-            FilterMatch::One(FilterAtom::Str("road".into())),
-        );
-        let e = expr(serde_json::json!([">=", ["get", "lanes"], 2]));
-        let f_ok = feat(&[
-            ("class", Value::String("road".into())),
-            ("lanes", Value::Int(4)),
-        ]);
-        let f_wrong_class = feat(&[
-            ("class", Value::String("path".into())),
-            ("lanes", Value::Int(4)),
-        ]);
-        let f_few_lanes = feat(&[
-            ("class", Value::String("road".into())),
-            ("lanes", Value::Int(1)),
-        ]);
-        assert!(feature_passes(
-            &f_ok,
-            &Some(sf.clone()),
-            Some(&e),
-            &None,
-            14
+    fn expr_filter_all_combines_clauses() {
+        // `all` AND-combines an equality and a comparison; a feature must
+        // satisfy every sub-expression to pass.
+        let e = expr(serde_json::json!([
+            "all",
+            ["==", ["get", "class"], "road"],
+            [">=", ["get", "lanes"], 2]
+        ]));
+        assert!(passes(
+            &feat(&[
+                ("class", Value::String("road".into())),
+                ("lanes", Value::Int(4)),
+            ]),
+            &e
         ));
-        assert!(!feature_passes(
-            &f_wrong_class,
-            &Some(sf.clone()),
-            Some(&e),
-            &None,
-            14
-        ));
-        assert!(!feature_passes(
-            &f_few_lanes,
-            &Some(sf),
-            Some(&e),
-            &None,
-            14
-        ));
+        assert!(!passes(
+            &feat(&[
+                ("class", Value::String("path".into())),
+                ("lanes", Value::Int(4)),
+            ]),
+            &e
+        )); // wrong class
+        assert!(!passes(
+            &feat(&[
+                ("class", Value::String("road".into())),
+                ("lanes", Value::Int(1)),
+            ]),
+            &e
+        )); // too few lanes
     }
 }

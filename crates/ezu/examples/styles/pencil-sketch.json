@@ -105,19 +105,18 @@
     "pencil_soft_b":   { "op": "brush-file", "src": "@pencil_soft" },
 
     "ocean_feat":      { "op": "features", "layer": "water",
-                         "filter": { "kind": "ocean" } },
+                         "filter-expr": ["==", ["get","kind"], "ocean"] },
     "ocean_hatch":     { "op": "func", "fn": "water-hatch",
                          "features": "@ocean_feat", "brush": "@pencil_soft_b" },
 
     "inland_feat":     { "op": "features", "layer": "water",
-                         "filter": { "kind": "water",
-                                     "kind_detail": ["lake", "basin"] } },
+                         "filter-expr": ["all", ["==",["get","kind"],"water"], ["in",["get","kind_detail"],["literal",["lake","basin"]]]] },
     "inland_hatch":    { "op": "func", "fn": "water-hatch",
                          "features": "@inland_feat", "brush": "@pencil_soft_b" },
 
     "river_feat":      { "op": "features", "layer": "water",
                          "min-zoom-field": "min_zoom",
-                         "filter": { "kind": ["river", "canal", "stream"] } },
+                         "filter-expr": ["in", ["get","kind"], ["literal", ["river", "canal", "stream"]]] },
     "river_strokes":   { "op": "func", "fn": "sketchy-line",
                          "features": "@river_feat", "brush": "@pencil_soft_b",
                          "color": "$graphite", "radius": 1.1, "opacity": 0.65,
@@ -139,7 +138,7 @@
 
     "roads_minor_f":   { "op": "features", "layer": "roads",
                          "min-zoom-field": "min_zoom", "min-zoom": 12,
-                         "filter": { "kind": "minor_road" } },
+                         "filter-expr": ["==", ["get","kind"], "minor_road"] },
     "roads_minor":     { "op": "func", "fn": "sketchy-line",
                          "features": "@roads_minor_f", "brush": "@pencil_hard_b",
                          "color": "#2c2620", "radius": 0.9, "opacity": 0.7,
@@ -151,7 +150,7 @@
 
     "roads_med_f":     { "op": "features", "layer": "roads",
                          "min-zoom-field": "min_zoom",
-                         "filter": { "kind": "medium_road" } },
+                         "filter-expr": ["==", ["get","kind"], "medium_road"] },
     "roads_med":       { "op": "func", "fn": "sketchy-line",
                          "features": "@roads_med_f", "brush": "@pencil_soft_b",
                          "color": "#363029", "radius": 1.2, "opacity": 0.35,
@@ -163,8 +162,7 @@
 
     "roads_major_low_f":{"op": "features", "layer": "roads",
                          "min-zoom-field": "min_zoom", "max-zoom": 11,
-                         "filter": { "kind": "major_road",
-                                     "kind_detail": ["trunk", "primary"] } },
+                         "filter-expr": ["all", ["==",["get","kind"],"major_road"], ["in",["get","kind_detail"],["literal",["trunk","primary"]]]] },
     "roads_major_low": { "op": "func", "fn": "sketchy-line",
                          "features": "@roads_major_low_f", "brush": "@pencil_soft_b",
                          "color": "#2a241e", "radius": 1.2, "opacity": 0.5,
@@ -176,8 +174,7 @@
 
     "roads_major_f":   { "op": "features", "layer": "roads",
                          "min-zoom-field": "min_zoom", "min-zoom": 12,
-                         "filter": { "kind": "major_road",
-                                     "kind_detail": ["trunk", "primary"] } },
+                         "filter-expr": ["all", ["==",["get","kind"],"major_road"], ["in",["get","kind_detail"],["literal",["trunk","primary"]]]] },
     "roads_major":     { "op": "func", "fn": "sketchy-line",
                          "features": "@roads_major_f", "brush": "@pencil_soft_b",
                          "color": "#2a241e", "radius": 2.0, "opacity": 0.5,
@@ -190,8 +187,7 @@
 
     "roads_path_f":    { "op": "features", "layer": "roads",
                          "min-zoom-field": "min_zoom", "min-zoom": 14,
-                         "filter": { "kind": "path",
-                                     "kind_detail": { "not": ["steps"] } } },
+                         "filter-expr": ["all", ["==",["get","kind"],"path"], ["!", ["in",["get","kind_detail"],["literal",["steps"]]]]] },
     "roads_path":      { "op": "func", "fn": "sketchy-line",
                          "features": "@roads_path_f", "brush": "@pencil_hard_b",
                          "color": "#3a342c", "radius": 0.6, "opacity": 0.5,
@@ -203,8 +199,7 @@
 
     "roads_sec_f":     { "op": "features", "layer": "roads",
                          "min-zoom-field": "min_zoom", "min-zoom": 12,
-                         "filter": { "kind": "major_road",
-                                     "kind_detail": ["secondary", "tertiary", "primary_link"] } },
+                         "filter-expr": ["all", ["==",["get","kind"],"major_road"], ["in",["get","kind_detail"],["literal",["secondary","tertiary","primary_link"]]]] },
     "roads_sec":       { "op": "func", "fn": "sketchy-line",
                          "features": "@roads_sec_f", "brush": "@pencil_soft_b",
                          "color": "#322b24", "radius": 1.5, "opacity": 0.4,
@@ -216,7 +211,7 @@
 
     "roads_hwy_low_f": { "op": "features", "layer": "roads",
                          "min-zoom-field": "min_zoom", "max-zoom": 11,
-                         "filter": { "kind": "highway" } },
+                         "filter-expr": ["==", ["get","kind"], "highway"] },
     "roads_hwy_low":   { "op": "func", "fn": "sketchy-line",
                          "features": "@roads_hwy_low_f", "brush": "@pencil_soft_b",
                          "color": "#1c1814", "radius": 1.6, "opacity": 0.6,
@@ -229,7 +224,7 @@
 
     "roads_hwy_f":     { "op": "features", "layer": "roads",
                          "min-zoom-field": "min_zoom", "min-zoom": 12,
-                         "filter": { "kind": "highway" } },
+                         "filter-expr": ["==", ["get","kind"], "highway"] },
     "roads_hwy":       { "op": "func", "fn": "sketchy-line",
                          "features": "@roads_hwy_f", "brush": "@pencil_soft_b",
                          "color": "#1c1814", "radius": 2.7, "opacity": 0.6,

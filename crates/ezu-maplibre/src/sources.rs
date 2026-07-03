@@ -229,26 +229,14 @@ pub(crate) fn resolve_layer_source(
 }
 
 /// A `features` source node selecting `(source, source-layer)`, with an
-/// optional structured `filter` and/or a raw MapLibre `filter-expr`. ezu-paint
-/// AND-combines the two per feature, so a node may carry both (e.g. a
-/// bucket-membership `filter` alongside the layer's expression `filter-expr`).
-/// `source` is the ezu vector-source key (= the MapLibre source name), so
-/// multiple vector sources coexist.
-pub(crate) fn features_node(
-    source: &str,
-    source_layer: &str,
-    filter: Option<Map<String, Value>>,
-    filter_expr: Option<Value>,
-) -> Value {
+/// optional raw MapLibre `filter-expr` evaluated per feature by ezu-paint via
+/// `maplibre-expr`. `source` is the ezu vector-source key (= the MapLibre
+/// source name), so multiple vector sources coexist.
+pub(crate) fn features_node(source: &str, source_layer: &str, filter_expr: Option<Value>) -> Value {
     let mut m = Map::new();
     m.insert("op".into(), Value::String("features".into()));
     m.insert("source".into(), Value::String(source.to_string()));
     m.insert("layer".into(), Value::String(source_layer.to_string()));
-    if let Some(f) = filter {
-        if !f.is_empty() {
-            m.insert("filter".into(), Value::Object(f));
-        }
-    }
     if let Some(expr) = filter_expr {
         m.insert("filter-expr".into(), expr);
     }

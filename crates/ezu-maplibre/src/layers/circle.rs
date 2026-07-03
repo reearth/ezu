@@ -24,13 +24,13 @@ pub(crate) fn convert_circle(
     let Some((source, source_layer)) = resolve_layer_source(id, layer, sources, report) else {
         return;
     };
-    let (base_filter, base_filter_expr) = filter::layer_filters(layer, report, id);
+    let base_filter_expr = filter::layer_filter_expr(layer, report, id);
     let paint = paint_of(layer);
 
     let feat_id = format!("{id}__feat");
     nodes.insert(
         feat_id.clone(),
-        features_node(&source, &source_layer, base_filter, base_filter_expr),
+        features_node(&source, &source_layer, base_filter_expr),
     );
 
     let circles_id = format!("{id}__circles");

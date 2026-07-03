@@ -38,8 +38,10 @@ References inside node fields use a prefix:
 
 Each `features` node selects a layer with `source` (optional when the
 document declares a single MVT-flavoured source) + `layer`, and
-carries an optional `filter` (entries AND-combined; values are single
-literals, membership lists, or `{ "not": ... }`), an optional
+carries an optional `filter-expr` (a [MapLibre filter
+expression](https://maplibre.org/maplibre-style-spec/expressions/),
+e.g. `["all", ["==", ["get", "kind"], "water"], ["has", "name"]]`,
+evaluated per feature via `maplibre-expr`), an optional
 `min-zoom-field`, and optional `min-zoom` / `max-zoom` tile-zoom
 gates.
 
@@ -206,9 +208,6 @@ pub struct Document {
     pub output: NodeRef,
 }
 pub struct NodeSpec { pub op: String, pub fields: serde_json::Map<String, Value> }
-pub type FeatureFilter = HashMap<String, FilterMatch>;
-pub enum FilterMatch { One(FilterAtom), Any(Vec<FilterAtom>) }
-pub enum FilterAtom { Bool, Int, Float, Str }
 ```
 
 ## Example

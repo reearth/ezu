@@ -21,7 +21,7 @@ pub(crate) fn convert_line(
     let Some((source, source_layer)) = resolve_layer_source(id, layer, sources, report) else {
         return;
     };
-    let (base_filter, base_filter_expr) = filter::layer_filters(layer, report, id);
+    let base_filter_expr = filter::layer_filter_expr(layer, report, id);
     let paint = paint_of(layer);
 
     // `line-width` → a constant `width-px` when zoom-bakeable, else a raw
@@ -48,7 +48,6 @@ pub(crate) fn convert_line(
             pattern,
             &source,
             &source_layer,
-            base_filter,
             base_filter_expr,
             width,
             opacity,
@@ -86,7 +85,7 @@ pub(crate) fn convert_line(
     let stroke_id = format!("{id}__stroke");
     nodes.insert(
         feat_id.clone(),
-        features_node(&source, &source_layer, base_filter, base_filter_expr),
+        features_node(&source, &source_layer, base_filter_expr),
     );
     // Crisp `stroke` (tiny-skia) rather than a painterly brush, to match
     // MapLibre's clean vector lines.
@@ -133,7 +132,6 @@ pub(crate) fn convert_line_pattern(
     pattern: &Value,
     source: &str,
     source_layer: &str,
-    base_filter: Option<Map<String, Value>>,
     base_filter_expr: Option<Value>,
     width: f64,
     opacity: Option<f64>,
@@ -157,7 +155,7 @@ pub(crate) fn convert_line_pattern(
     let feat_id = format!("{id}__feat");
     nodes.insert(
         feat_id.clone(),
-        features_node(source, source_layer, base_filter, base_filter_expr),
+        features_node(source, source_layer, base_filter_expr),
     );
     let icon_id = format!("{id}__icon");
     nodes.insert(

@@ -1,7 +1,8 @@
 //! `features` — `() -> Features`. Resolves a host-bound feature layer
 //! via the unified [`AssetLoader`](ezu_graph::AssetLoader), applies an
-//! optional property filter and `min-zoom-field`, and emits the
-//! surviving features as a [`FilteredFeatures`].
+//! optional `filter-expr` (a MapLibre filter expression) and
+//! `min-zoom-field`, and emits the surviving features as a
+//! [`FilteredFeatures`].
 //!
 //! Style fields: `source` (optional, matches a `mvt`/`pmtiles` entry
 //! in the document's `sources` block; defaults to the single such
@@ -23,9 +24,7 @@ use crate::render::collect_groups;
 
 struct FeaturesNode {
     name: String,
-    filter: Option<ezu_style::FeatureFilter>,
-    /// A MapLibre-expression filter, compiled once. Evaluated per feature
-    /// (AND-combined with the structured `filter` when both are present).
+    /// A MapLibre filter expression, compiled once and evaluated per feature.
     filter_expr: Option<maplibre_expr::Expr>,
     /// The raw `filter-expr` JSON text, kept only for a stable cache hash.
     filter_expr_src: Option<String>,
@@ -78,22 +77,12 @@ impl Node for FeaturesNode {
             EvalError::Other(format!("`{}` payload is not FeatureLayer", self.name))
         })?;
         let fe = self.filter_expr.as_ref();
-        let groups = collect_groups(&layer.features, &self.filter, fe, &self.min_zoom_field, z);
+        let groups = collect_groups(&layer.features, fe, &self.min_zoom_field, z);
         Ok(features_value_grouped(layer.extent, groups))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"features");
         h.update(self.name.as_bytes());
-        if let Some(f) = &self.filter {
-            let mut keys: Vec<&String> = f.keys().collect();
-            keys.sort();
-            for k in keys {
-                h.update(k.as_bytes());
-                // Lightweight hash of the FilterMatch via Debug; not
-                // beautiful but stable enough for cache invalidation.
-                h.update(format!("{:?}", f[k]).as_bytes());
-            }
-        }
         if let Some(s) = &self.filter_expr_src {
             h.update(b"fexpr");
             h.update(s.as_bytes());
@@ -129,17 +118,6 @@ impl NodeFactory for FeaturesFactory {
             .to_string();
         let source = resolve_feature_source(fields, ctx)?;
         let name = format!("{source}.{layer}");
-        let filter = match fields.get("filter") {
-            Some(v) => Some(
-                serde_json::from_value::<ezu_style::FeatureFilter>(v.clone()).map_err(|e| {
-                    FactoryError::BadField {
-                        field: "filter".into(),
-                        msg: e.to_string(),
-                    }
-                })?,
-            ),
-            None => None,
-        };
         // `filter-expr`: a raw MapLibre filter expression, compiled once.
         let (filter_expr, filter_expr_src) = match fields.get("filter-expr") {
             Some(v) => {
@@ -157,7 +135,6 @@ impl NodeFactory for FeaturesFactory {
         Ok(BuiltNode {
             node: Box::new(FeaturesNode {
                 name,
-                filter,
                 filter_expr,
                 filter_expr_src,
                 min_zoom_field,
@@ -175,13 +152,8 @@ impl NodeFactory for FeaturesFactory {
                             "description": "Name of an `mvt` or `pmtiles` entry in the document's `sources`. Optional — defaults to the only such source when the document declares exactly one." },
                 "layer": { "type": "string",
                            "description": "Vector tile layer name within `source` (e.g. `earth`, `roads`)." },
-                "filter": {
-                    "type": "object",
-                    "additionalProperties": true,
-                    "description": "Property-value filter; entries are AND-combined."
-                },
                 "filter-expr": {
-                    "description": "A MapLibre filter expression (JSON array, e.g. [\"all\", [\"==\", [\"get\", \"class\"], \"primary\"], [\"has\", \"name\"]]), evaluated per feature. AND-combined with `filter` if both are given. Supports the full expression language (any/has/comparisons/geometry-type)."
+                    "description": "A MapLibre filter expression (JSON array, e.g. [\"all\", [\"==\", [\"get\", \"class\"], \"primary\"], [\"has\", \"name\"]]), evaluated per feature. A feature passes only when the expression is truthy. Supports the full expression language (any/has/comparisons/geometry-type)."
                 },
                 "min-zoom-field": { "type": "string",
                                     "description": "Per-feature property name carrying its data-side `min_zoom`. Features with `<field> > z` are dropped." },

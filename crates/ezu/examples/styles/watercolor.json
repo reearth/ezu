@@ -50,7 +50,7 @@
 
     "roads_trunk_f":   { "op": "features", "layer": "roads",
                          "min-zoom-field": "min_zoom",
-                         "filter": { "kind_detail": ["trunk", "primary", "motorway"] } },
+                         "filter-expr": ["in", ["get","kind_detail"], ["literal", ["trunk", "primary", "motorway"]]] },
     "roads_trunk":     { "op": "line", "features": "@roads_trunk_f",
                          "brush": "@glazing_brush",
                          "color": "$road", "radius-px": 1.6,
