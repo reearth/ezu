@@ -1,0 +1,517 @@
+//! Line breaking, justification, and anchoring — a port of the
+//! MapLibre GL JS point-label layout (`shaping.ts`) onto rustybuzz
+//! shaping output. Everything here is in em units; the draw step
+//! scales by font size.
+//!
+//! Known divergences from the reference (kept deliberately simple):
+//!
+//! - Chars covered by no font are dropped before shaping instead of
+//!   rendering a missing-glyph box.
+//! - Line metrics (first baseline, block height) come from the primary
+//!   (first) font's real ascender/descender rather than MapLibre's
+//!   fixed 24px-glyph rectangle constants.
+//! - `evaluateBreak`'s width bookkeeping runs over shaped glyph
+//!   advances (so ligatures/kerning are measured exactly); break
+//!   candidates only exist at cluster boundaries.
+
+use std::sync::Arc;
+
+use super::font::Font;
+use super::shape::{shape, ShapedGlyph, ShapedText};
+
+/// The nine MapLibre text anchors: which part of the block sits on the
+/// anchor point (`Left` = the block's left edge touches the point, so
+/// the text extends to the right of it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Anchor {
+    #[default]
+    Center,
+    Left,
+    Right,
+    Top,
+    Bottom,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+impl Anchor {
+    /// Parse the MapLibre kebab-case anchor name.
+    pub fn parse(s: &str) -> Option<Anchor> {
+        Some(match s {
+            "center" => Anchor::Center,
+            "left" => Anchor::Left,
+            "right" => Anchor::Right,
+            "top" => Anchor::Top,
+            "bottom" => Anchor::Bottom,
+            "top-left" => Anchor::TopLeft,
+            "top-right" => Anchor::TopRight,
+            "bottom-left" => Anchor::BottomLeft,
+            "bottom-right" => Anchor::BottomRight,
+            _ => return None,
+        })
+    }
+
+    /// The fraction of the block's width/height that sits left/above
+    /// the anchor point.
+    fn fraction(self) -> (f32, f32) {
+        match self {
+            Anchor::Center => (0.5, 0.5),
+            Anchor::Left => (0.0, 0.5),
+            Anchor::Right => (1.0, 0.5),
+            Anchor::Top => (0.5, 0.0),
+            Anchor::Bottom => (0.5, 1.0),
+            Anchor::TopLeft => (0.0, 0.0),
+            Anchor::TopRight => (1.0, 0.0),
+            Anchor::BottomLeft => (0.0, 1.0),
+            Anchor::BottomRight => (1.0, 1.0),
+        }
+    }
+}
+
+/// Line justification within the wrapped block. `Auto` follows the
+/// anchor's horizontal side (MapLibre `text-justify: auto`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Justify {
+    #[default]
+    Auto,
+    Left,
+    Center,
+    Right,
+}
+
+impl Justify {
+    /// Parse the MapLibre justify name.
+    pub fn parse(s: &str) -> Option<Justify> {
+        Some(match s {
+            "auto" => Justify::Auto,
+            "left" => Justify::Left,
+            "center" => Justify::Center,
+            "right" => Justify::Right,
+            _ => return None,
+        })
+    }
+
+    /// The fraction of a line's leftover width shifted to its left,
+    /// resolving `Auto` against the anchor.
+    fn fraction(self, anchor: Anchor) -> f32 {
+        match self {
+            Justify::Left => 0.0,
+            Justify::Center => 0.5,
+            Justify::Right => 1.0,
+            Justify::Auto => match anchor {
+                Anchor::Left | Anchor::TopLeft | Anchor::BottomLeft => 0.0,
+                Anchor::Right | Anchor::TopRight | Anchor::BottomRight => 1.0,
+                _ => 0.5,
+            },
+        }
+    }
+}
+
+/// MapLibre `text-transform`, applied to the input before shaping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextTransform {
+    #[default]
+    None,
+    Uppercase,
+    Lowercase,
+}
+
+impl TextTransform {
+    /// Parse the MapLibre transform name.
+    pub fn parse(s: &str) -> Option<TextTransform> {
+        Some(match s {
+            "none" => TextTransform::None,
+            "uppercase" => TextTransform::Uppercase,
+            "lowercase" => TextTransform::Lowercase,
+            _ => return None,
+        })
+    }
+}
+
+/// Layout parameters, all in em (scaled by font size at draw time).
+#[derive(Debug, Clone, Copy)]
+pub struct LayoutParams {
+    /// Target wrap width in em (MapLibre `text-max-width`). `0` = no
+    /// wrapping.
+    pub max_width_em: f32,
+    /// Distance between line baselines in em (MapLibre
+    /// `text-line-height`, default 1.2).
+    pub line_height_em: f32,
+    /// Extra advance added to every glyph, in em (MapLibre
+    /// `text-letter-spacing`).
+    pub letter_spacing_em: f32,
+    pub anchor: Anchor,
+    pub justify: Justify,
+    /// Block shift in em, applied after anchoring (MapLibre
+    /// `text-offset`).
+    pub offset_em: [f32; 2],
+    pub transform: TextTransform,
+}
+
+impl Default for LayoutParams {
+    fn default() -> Self {
+        LayoutParams {
+            max_width_em: 10.0,
+            line_height_em: 1.2,
+            letter_spacing_em: 0.0,
+            anchor: Anchor::Center,
+            justify: Justify::Auto,
+            offset_em: [0.0, 0.0],
+            transform: TextTransform::None,
+        }
+    }
+}
+
+/// One positioned glyph of a laid-out block. Coordinates are the
+/// glyph's baseline origin in em, relative to the anchor point, y down.
+#[derive(Debug, Clone, Copy)]
+pub struct PlacedGlyph {
+    /// Index into the font stack the block was laid out against.
+    pub font: usize,
+    pub glyph_id: u16,
+    pub x: f32,
+    pub y: f32,
+}
+
+/// Axis-aligned box in em, relative to the anchor point (y down).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct EmBox {
+    pub min_x: f32,
+    pub min_y: f32,
+    pub max_x: f32,
+    pub max_y: f32,
+}
+
+impl EmBox {
+    pub fn width(&self) -> f32 {
+        self.max_x - self.min_x
+    }
+    pub fn height(&self) -> f32 {
+        self.max_y - self.min_y
+    }
+}
+
+/// A laid-out label: positioned glyphs plus the block's typographic
+/// bounding box (the future collision box), both in em relative to the
+/// anchor point.
+#[derive(Debug, Default)]
+pub struct TextBlock {
+    pub glyphs: Vec<PlacedGlyph>,
+    pub bbox: EmBox,
+    /// Chars covered by no font in the stack, dropped before shaping.
+    /// Callers can surface a warning when non-zero.
+    pub dropped_chars: usize,
+}
+
+impl TextBlock {
+    /// Whether the block has anything to draw.
+    pub fn is_empty(&self) -> bool {
+        self.glyphs.is_empty()
+    }
+}
+
+/// Shape and lay out `text` against a font fallback stack. The first
+/// font is the primary: its ascender/descender set the line metrics.
+pub fn layout(text: &str, fonts: &[Arc<Font>], params: &LayoutParams) -> TextBlock {
+    let (Some(primary), false) = (fonts.first(), text.is_empty()) else {
+        return TextBlock::default();
+    };
+    let transformed = match params.transform {
+        TextTransform::None => text.to_string(),
+        TextTransform::Uppercase => text.to_uppercase(),
+        TextTransform::Lowercase => text.to_lowercase(),
+    };
+    let shaped = shape(&transformed, fonts, params.letter_spacing_em);
+    if shaped.glyphs.is_empty() {
+        return TextBlock {
+            dropped_chars: shaped.dropped,
+            ..TextBlock::default()
+        };
+    }
+
+    let breaks = determine_line_breaks(&shaped, params.max_width_em);
+    let lines = split_lines(&shaped, &breaks);
+
+    let ascent = primary.ascent_em();
+    let descent = primary.descent_em();
+    let block_w = lines.iter().map(|l| l.width).fold(0.0f32, f32::max);
+    let block_h = ascent + descent + (lines.len() - 1) as f32 * params.line_height_em;
+
+    let justify = params.justify.fraction(params.anchor);
+    let (ax, ay) = params.anchor.fraction();
+    let shift_x = -ax * block_w + params.offset_em[0];
+    let shift_y = -ay * block_h + params.offset_em[1];
+
+    let mut glyphs = Vec::new();
+    for (line_ix, line) in lines.iter().enumerate() {
+        let line_x = (block_w - line.width) * justify + shift_x;
+        let baseline = ascent + line_ix as f32 * params.line_height_em + shift_y;
+        let mut pen = 0.0f32;
+        for g in line.glyphs {
+            glyphs.push(PlacedGlyph {
+                font: g.font,
+                glyph_id: g.glyph_id,
+                x: line_x + pen + g.x_offset,
+                // Shaping offsets are y-up; block coordinates are y-down.
+                y: baseline - g.y_offset,
+            });
+            pen += g.x_advance;
+        }
+    }
+
+    TextBlock {
+        glyphs,
+        bbox: EmBox {
+            min_x: shift_x,
+            min_y: shift_y,
+            max_x: shift_x + block_w,
+            max_y: shift_y + block_h,
+        },
+        dropped_chars: shaped.dropped,
+    }
+}
+
+/// One wrapped line: its glyphs (whitespace-trimmed at both ends) and
+/// their total advance.
+struct Line<'a> {
+    glyphs: &'a [ShapedGlyph],
+    width: f32,
+}
+
+/// Split the shaped glyphs at the char-index `breaks`, trimming
+/// whitespace glyphs at both ends of each line (a break eats the space
+/// it happened at, like MapLibre's `TaggedString.trim`).
+fn split_lines<'a>(shaped: &'a ShapedText, breaks: &[usize]) -> Vec<Line<'a>> {
+    let mut lines = Vec::new();
+    let mut glyph_start = 0usize;
+    for &brk in breaks {
+        let glyph_end = shaped.glyphs[glyph_start..]
+            .iter()
+            .position(|g| g.char_ix >= brk)
+            .map(|p| glyph_start + p)
+            .unwrap_or(shaped.glyphs.len());
+        let mut slice = &shaped.glyphs[glyph_start..glyph_end];
+        while let Some(g) = slice.first() {
+            if !is_whitespace(shaped.chars[g.char_ix]) {
+                break;
+            }
+            slice = &slice[1..];
+        }
+        while let Some(g) = slice.last() {
+            if !is_whitespace(shaped.chars[g.char_ix]) {
+                break;
+            }
+            slice = &slice[..slice.len() - 1];
+        }
+        lines.push(Line {
+            glyphs: slice,
+            width: slice.iter().map(|g| g.x_advance).sum(),
+        });
+        glyph_start = glyph_end;
+    }
+    lines
+}
+
+// ---------------------------------------------------------------------------
+// Line-break choice — the penalty-based dynamic program of maplibre-gl-js
+// `shaping.ts` (`determineLineBreaks` / `evaluateBreak` / `leastBadBreaks`):
+// minimize the squared deviation of each line from the target width, with
+// penalties around punctuation and a bonus for a short last line.
+
+/// A candidate break in the DP: the logical char index the next line
+/// starts at, the accumulated width up to it, the best prior break
+/// (index into the candidate list), and the accumulated badness.
+struct BreakCandidate {
+    char_ix: usize,
+    x: f32,
+    prior: Option<usize>,
+    badness: f32,
+}
+
+/// Choose line breaks for the shaped text. Returns the char index each
+/// line ends at (exclusive), always ending with `chars.len()`.
+fn determine_line_breaks(shaped: &ShapedText, max_width_em: f32) -> Vec<usize> {
+    let end = shaped.chars.len();
+    if max_width_em <= 0.0 {
+        return vec![end];
+    }
+    // Target width: the total advance spread over the ideal line count.
+    // Whitespace counts here but not in the per-line accumulation below,
+    // mirroring the reference (spaces at wraps are trimmed away).
+    let total: f32 = shaped.glyphs.iter().map(|g| g.x_advance).sum();
+    let line_count = (total / max_width_em).ceil().max(1.0);
+    let target = total / line_count;
+
+    // MapLibre only penalizes ideographic breaks when the text carries
+    // explicit server-supplied breaks (zero-width spaces).
+    let has_zwsp = shaped.chars.contains(&'\u{200b}');
+
+    let mut candidates: Vec<BreakCandidate> = Vec::new();
+    let mut current_x = 0.0f32;
+    for (i, g) in shaped.glyphs.iter().enumerate() {
+        let c = shaped.chars[g.char_ix];
+        if !is_whitespace(c) {
+            current_x += g.x_advance;
+        }
+        let Some(next) = shaped.glyphs.get(i + 1) else {
+            break;
+        };
+        // A break can only fall on a cluster boundary (never inside a
+        // ligature).
+        if next.char_ix <= g.char_ix {
+            continue;
+        }
+        let ideographic = char_allows_ideographic_breaking(c);
+        if is_breakable(c) || ideographic {
+            let penalty = calculate_penalty(
+                c,
+                shaped.chars.get(next.char_ix).copied(),
+                ideographic && has_zwsp,
+            );
+            let cand = evaluate_break(next.char_ix, current_x, target, &candidates, penalty, false);
+            candidates.push(cand);
+        }
+    }
+    let last = evaluate_break(end, current_x, target, &candidates, 0.0, true);
+    least_bad_breaks(&last, &candidates)
+}
+
+/// Badness of a line of `line_width` against the target: squared
+/// raggedness plus the (signed-squared) break penalty; a short last
+/// line is half-forgiven.
+fn calculate_badness(line_width: f32, target: f32, penalty: f32, is_last: bool) -> f32 {
+    let raggedness = (line_width - target).powi(2);
+    if is_last && line_width < target {
+        return raggedness / 2.0;
+    }
+    raggedness + penalty.abs() * penalty
+}
+
+/// Penalty for breaking after `c` (the last char of a line) before
+/// `next` (the first char of the next line).
+fn calculate_penalty(c: char, next: Option<char>, penalizable_ideographic: bool) -> f32 {
+    let mut penalty = 0.0f32;
+    // A newline forces a break.
+    if c == '\n' {
+        penalty -= 10000.0;
+    }
+    // Breaks between ideographic chars are less preferable than breaks
+    // at explicit zero-width spaces.
+    if penalizable_ideographic {
+        penalty += 150.0;
+    }
+    // Penalize an open parenthesis at the end of a line …
+    if c == '(' || c == '\u{ff08}' {
+        penalty += 50.0;
+    }
+    // … and a close parenthesis at the start of one.
+    if next == Some(')') || next == Some('\u{ff09}') {
+        penalty += 50.0;
+    }
+    penalty
+}
+
+/// Evaluate one candidate break at accumulated width `x`: either start
+/// a fresh first line or chain onto whichever prior break minimizes
+/// the accumulated badness.
+fn evaluate_break(
+    char_ix: usize,
+    x: f32,
+    target: f32,
+    candidates: &[BreakCandidate],
+    penalty: f32,
+    is_last: bool,
+) -> BreakCandidate {
+    let mut best_prior = None;
+    let mut best_badness = calculate_badness(x, target, penalty, is_last);
+    for (ix, prior) in candidates.iter().enumerate() {
+        let line_width = x - prior.x;
+        let badness = calculate_badness(line_width, target, penalty, is_last) + prior.badness;
+        if badness <= best_badness {
+            best_prior = Some(ix);
+            best_badness = badness;
+        }
+    }
+    BreakCandidate {
+        char_ix,
+        x,
+        prior: best_prior,
+        badness: best_badness,
+    }
+}
+
+/// Walk the prior-break chain of the final candidate into an ordered
+/// list of break char indices (ending with the text length).
+fn least_bad_breaks(last: &BreakCandidate, candidates: &[BreakCandidate]) -> Vec<usize> {
+    let mut breaks = vec![last.char_ix];
+    let mut prior = last.prior;
+    while let Some(ix) = prior {
+        breaks.push(candidates[ix].char_ix);
+        prior = candidates[ix].prior;
+    }
+    breaks.reverse();
+    breaks
+}
+
+/// The whitespace set MapLibre trims at line breaks.
+fn is_whitespace(c: char) -> bool {
+    matches!(c, '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ')
+}
+
+/// Chars a line may break after even without surrounding spaces
+/// (MapLibre's `breakable` map): whitespace plus word-breaking
+/// punctuation.
+fn is_breakable(c: char) -> bool {
+    matches!(
+        c,
+        '\n' | ' '
+            | '&'
+            | '('
+            | ')'
+            | '+'
+            | '-'
+            | '\u{ad}'   // soft hyphen
+            | '\u{b7}'   // middle dot
+            | '\u{200b}' // zero-width space
+            | '\u{2010}' // hyphen
+            | '\u{2013}' // en dash
+            | '\u{2027}' // interpunct
+            | '/'
+    )
+}
+
+/// Whether a line may break after `c` without punctuation or spaces —
+/// CJK and other scripts that wrap anywhere. Mirrors maplibre-gl-js
+/// `charAllowsIdeographicBreaking` (block-range based).
+pub fn char_allows_ideographic_breaking(c: char) -> bool {
+    let u = c as u32;
+    // Everything below the CJK Radicals Supplement is out.
+    if u < 0x2e80 {
+        return false;
+    }
+    matches!(
+        u,
+        0x2e80..=0x2eff      // CJK Radicals Supplement
+        | 0x2f00..=0x2fdf    // Kangxi Radicals
+        | 0x2ff0..=0x2fff    // Ideographic Description Characters
+        | 0x3000..=0x303f    // CJK Symbols and Punctuation
+        | 0x3040..=0x309f    // Hiragana
+        | 0x30a0..=0x30ff    // Katakana
+        | 0x3100..=0x312f    // Bopomofo
+        | 0x31a0..=0x31bf    // Bopomofo Extended
+        | 0x31c0..=0x31ef    // CJK Strokes
+        | 0x31f0..=0x31ff    // Katakana Phonetic Extensions
+        | 0x3200..=0x32ff    // Enclosed CJK Letters and Months
+        | 0x3300..=0x33ff    // CJK Compatibility
+        | 0x3400..=0x4dbf    // CJK Unified Ideographs Extension A
+        | 0x4e00..=0x9fff    // CJK Unified Ideographs
+        | 0xa000..=0xa48f    // Yi Syllables
+        | 0xa490..=0xa4cf    // Yi Radicals
+        | 0xf900..=0xfaff    // CJK Compatibility Ideographs
+        | 0xfe10..=0xfe1f    // Vertical Forms
+        | 0xfe30..=0xfe4f    // CJK Compatibility Forms
+        | 0xff00..=0xffef // Halfwidth and Fullwidth Forms
+    )
+}

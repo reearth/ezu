@@ -14,3 +14,13 @@ categories = ["graphics", "rendering", "science::geo"]
 
 [dependencies]
 xxhash-rust = { workspace = true }
+ttf-parser = { workspace = true, optional = true }
+rustybuzz = { workspace = true, optional = true }
+tiny-skia = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+
+[features]
+# Text shaping & layout (the `text` module): pulls in ttf-parser /
+# rustybuzz / tiny-skia. Off by default so light consumers of the coord
+# / seed / color types stay dependency-free.
+text = ["dep:ttf-parser", "dep:rustybuzz", "dep:tiny-skia", "dep:thiserror"]
