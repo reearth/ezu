@@ -308,10 +308,7 @@ fn chain_segments(segments: Vec<Segment>) -> Vec<Vec<(f32, f32)>> {
     let walk = |i: usize, used: &mut Vec<bool>| -> Vec<(f32, f32)> {
         used[i] = true;
         let mut line = vec![segments[i].0, segments[i].1];
-        loop {
-            let Some(candidates) = by_start.get(&key(*line.last().expect("non-empty"))) else {
-                break;
-            };
+        while let Some(candidates) = by_start.get(&key(*line.last().expect("non-empty"))) {
             let Some(&j) = candidates.iter().find(|&&j| !used[j]) else {
                 break;
             };
