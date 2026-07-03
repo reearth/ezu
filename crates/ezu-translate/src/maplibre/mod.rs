@@ -26,18 +26,20 @@
 //!   sheets) becomes `sprite` source(s); `symbol` **icons**,
 //!   `fill-pattern`, and `line-pattern` wire through `icon` (crop) +
 //!   `stamp` / `tiling` / `line-stamp`.
-//! - **`symbol` text** (point placement): `text-field` and its paint /
-//!   layout properties lower to the `text` node. A `text-font` stack
-//!   with no [`ConvertOptions::fonts`] mapping is served from the
-//!   style's own top-level `glyphs` endpoint as an SDF `glyphs` source
-//!   — zero configuration; an explicit font-URL mapping wins and gives
-//!   higher-fidelity outline rendering.
+//! - **`symbol` text**: `text-field` and its paint / layout properties
+//!   lower to the `text` node — `symbol-placement: point` at each
+//!   feature point, `line` / `line-center` along each polyline (with
+//!   `symbol-spacing` / `text-max-angle` / `text-keep-upright`). A
+//!   `text-font` stack with no [`ConvertOptions::fonts`] mapping is
+//!   served from the style's own top-level `glyphs` endpoint as an SDF
+//!   `glyphs` source — zero configuration; an explicit font-URL mapping
+//!   wins and gives higher-fidelity outline rendering.
 //!
 //! What is *not* handled yet is reported in [`Report::warnings`] rather
-//! than failing the conversion: `symbol-placement: line`, text collision
-//! / variable anchors, and expression operators outside the set above.
-//! Inline/remote `geojson` sources *are* converted (the host projects
-//! them into each tile).
+//! than failing the conversion: text variable anchors, icon collision,
+//! and expression operators outside the set above. Inline/remote
+//! `geojson` sources *are* converted (the host projects them into each
+//! tile).
 //!
 //! [MapLibre GL styles]: https://maplibre.org/maplibre-style-spec/
 //! [`Document`]: https://docs.rs/ezu-style

@@ -10,12 +10,12 @@ fn converts_and_parses_as_ezu_document() {
     let style: serde_json::Value = serde_json::from_str(DEMOTILES).unwrap();
     let (recipe, report) = convert(&style, &ConvertOptions::default()).expect("conversion");
 
-    // The two symbol layers should be reported as skipped, not silently
-    // dropped.
+    // Both symbol layers convert — the line-placed `geolines-label` to a
+    // `text` node with `placement: line`, no skipped-text warnings.
     let joined = report.warnings.join("\n");
     assert!(
-        joined.contains("symbol"),
-        "expected symbol warning:\n{joined}"
+        !joined.contains("text skipped") && !joined.contains("line placement"),
+        "unexpected symbol warnings:\n{joined}"
     );
 
     // Recipe shape.
@@ -44,6 +44,9 @@ fn converts_and_parses_as_ezu_document() {
         has_fill_expr,
         "expected a fill-solid with a fill-expr referencing ADM0_A3"
     );
+
+    // The line-placed geolines label routed through.
+    assert_eq!(nodes["geolines-label__text"]["placement"], "line");
 
     // The crimea geojson layer resolved to a `(crimea, crimea)` features node.
     let has_geojson_layer = nodes.values().any(|n| {
