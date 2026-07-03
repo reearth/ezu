@@ -383,9 +383,6 @@ Symbol text currently covers point & line placement, deterministic
 cross-tile collision/dedup, real-font (TTF/OTF) and MapLibre glyph-PBF
 rendering. Remaining fidelity work, roughly in priority order:
 
-- **Legacy-form filters** — convert MapLibre legacy filters
-  (`["==", "class", …]`, `!in`/`!has`/`none`) in `maplibre-expr` so
-  translated styles that still use them filter correctly.
 - **`text-variable-anchor`** — try anchor candidates in order against the
   collision grid instead of warning.
 - **RTL / bidi text** — Unicode bidi reordering for Arabic/Hebrew (the
