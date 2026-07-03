@@ -15,6 +15,13 @@ fn font_url() -> String {
     format!("file:{}", path.display()).replace('\\', "/")
 }
 
+/// Absolute `file:` glyphs URL template over the vendored ezu-core test
+/// range (`0-255.pbf` — see ../ezu-core/tests/glyphs/README.md).
+fn glyphs_url() -> String {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../ezu-core/tests/glyphs");
+    format!("file:{}/{{range}}.pbf", dir.display()).replace('\\', "/")
+}
+
 /// A single point feature at extent coords `(x, y)` with a `name`.
 fn point_feature(name: &str, x: i32, y: i32) -> Feature {
     let mut properties = HashMap::new();
@@ -138,6 +145,99 @@ fn color_and_halo_exprs_match_their_constants() {
     assert_eq!(
         constant.pixels, expr.pixels,
         "constant paint and equivalent expressions must render identically"
+    );
+}
+
+#[test]
+fn label_renders_from_a_glyphs_source() {
+    // Same shape as the outline test, but the stack is a `glyphs`
+    // source: ranges pull lazily from the vendored PBF at eval time.
+    let recipe = format!(
+        r##"{{
+      "name": "text-glyphs",
+      "tile-size": 64,
+      "sources": {{
+        "src":    {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
+        "labels": {{ "type": "glyphs", "url": "{glyphs}",
+                     "fontstack": "Klokantech Noto Sans Regular" }}
+      }},
+      "nodes": {{
+        "feats": {{ "op": "features", "source": "src", "layer": "pts" }},
+        "out":   {{ "op": "text", "features": "@feats", "font": ["labels"],
+                    "text": "WWW", "size": 20 }}
+      }},
+      "output": "@out"
+    }}"##,
+        glyphs = glyphs_url()
+    );
+    let r = render(&recipe, layer(vec![point_feature("x", 2048, 2048)]));
+    let mut central = 0;
+    for y in 24..40 {
+        for x in 8..56 {
+            if r.pixel(x, y)[3] > 100 {
+                central += 1;
+            }
+        }
+    }
+    assert!(
+        central > 30,
+        "expected SDF label ink near center: {central}"
+    );
+    let mut top = 0;
+    for y in 0..8 {
+        for x in 0..64 {
+            if r.pixel(x, y)[3] > 100 {
+                top += 1;
+            }
+        }
+    }
+    assert_eq!(top, 0, "no ink near the top edge for a centered label");
+}
+
+#[test]
+fn outline_font_and_glyphs_fallback_mix_in_one_stack() {
+    // The outline subset covers letters only; digits fall through to
+    // the glyphs source.
+    let recipe = |font: &str, text: &str| {
+        format!(
+            r##"{{
+          "name": "text-mixed",
+          "tile-size": 64,
+          "sources": {{
+            "src":    {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
+            "body":   {{ "type": "font", "url": "{font_url}" }},
+            "labels": {{ "type": "glyphs", "url": "{glyphs}",
+                         "fontstack": "Klokantech Noto Sans Regular" }}
+          }},
+          "nodes": {{
+            "feats": {{ "op": "features", "source": "src", "layer": "pts" }},
+            "out":   {{ "op": "text", "features": "@feats", "font": {font},
+                        "text": "{text}", "size": 24 }}
+          }},
+          "output": "@out"
+        }}"##,
+            font_url = font_url(),
+            glyphs = glyphs_url(),
+            font = font,
+            text = text
+        )
+    };
+    let ink = |r: &ezu_graph::RasterBuf| opaque_in(r, 0, 64);
+    let feature = || layer(vec![point_feature("x", 2048, 2048)]);
+
+    // Outline alone cannot shape a digit …
+    let outline_only = render(&recipe(r#"["body"]"#, "1"), feature());
+    assert_eq!(ink(&outline_only), 0, "latin subset has no digits");
+    // … the glyphs fallback shapes it …
+    let fallback = render(&recipe(r#"["body", "labels"]"#, "1"), feature());
+    assert!(ink(&fallback) > 0, "digit must fall through to the SDF run");
+    // … and a mixed label renders both runs (outline 'A' + SDF '1').
+    let mixed = render(&recipe(r#"["body", "labels"]"#, "A1"), feature());
+    assert!(
+        ink(&mixed) > ink(&fallback),
+        "mixed label should add the outline run's ink: {} vs {}",
+        ink(&mixed),
+        ink(&fallback)
     );
 }
 

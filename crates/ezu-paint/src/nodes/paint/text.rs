@@ -2,8 +2,10 @@
 //! every feature group, shaped and laid out by `ezu-core`'s `text`
 //! module (MapLibre point placement, phase 1: no collision handling).
 //!
-//! `font` names an ordered fallback stack of `font` sources from the
-//! document's `sources` block. `text` is a constant string or a raw
+//! `font` names an ordered fallback stack of `font` and/or `glyphs`
+//! sources from the document's `sources` block — outline font files
+//! and MapLibre SDF glyph endpoints mix freely; the first entry
+//! covering a char shapes it. `text` is a constant string or a raw
 //! MapLibre string expression evaluated per feature group; `size` /
 //! `color` / `halo-color` / `halo-width` / `opacity` follow the usual
 //! constant-plus-`*-expr`-sibling pattern. Layout knobs (anchor,
@@ -25,8 +27,8 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use ezu_core::text::{
-    draw, layout, Anchor, Font, Justify, LayoutParams, StackEntry, TextBlock, TextPaint,
-    TextTransform,
+    draw, layout, Anchor, Font, Justify, LayoutParams, SdfFontStack, StackEntry, TextBlock,
+    TextPaint, TextTransform,
 };
 
 use crate::nodes::common::{
@@ -93,7 +95,8 @@ fn eval_color(
 }
 
 struct TextNode {
-    /// Font asset keys (each `font` source's `url`), in fallback order.
+    /// Font asset keys in fallback order: a `font` source's `url`, or a
+    /// `glyphs` source's asset key (its `{range}` URL template).
     font_keys: Vec<String>,
     /// Constant label; `None` when `text` is an expression.
     text: Option<String>,
@@ -182,17 +185,27 @@ impl Node for TextNode {
             return Ok(empty_raster(ctx));
         }
 
-        // Resolve the font stack once per eval.
+        // Resolve the font stack once per eval. Outline fonts and SDF
+        // glyph stacks share the fallback stack; the draw path is
+        // picked per glyph by its entry's backend.
         let mut fonts: Vec<StackEntry> = Vec::with_capacity(self.font_keys.len());
         for key in &self.font_keys {
-            let asset = ctx.assets.load(key)?;
-            let Asset::Font(opq) = asset else {
-                return Err(EvalError::Other(format!("asset `{key}` is not a font")));
+            let entry = match ctx.assets.load(key)? {
+                Asset::Font(opq) => StackEntry::Outline(opq.downcast::<Font>().map_err(|_| {
+                    EvalError::Other(format!("`{key}` payload is not a text Font"))
+                })?),
+                Asset::Glyphs(opq) => {
+                    StackEntry::Sdf(opq.downcast::<SdfFontStack>().map_err(|_| {
+                        EvalError::Other(format!("`{key}` payload is not an SdfFontStack"))
+                    })?)
+                }
+                _ => {
+                    return Err(EvalError::Other(format!(
+                        "asset `{key}` is not a font or glyphs source"
+                    )))
+                }
             };
-            let font = opq
-                .downcast::<Font>()
-                .map_err(|_| EvalError::Other(format!("`{key}` payload is not a text Font")))?;
-            fonts.push(StackEntry::Outline(font));
+            fonts.push(entry);
         }
 
         // Constants, resolved once. Data-driven exprs (if present)
@@ -219,6 +232,7 @@ impl Node for TextNode {
         let mut blocks: HashMap<(String, u32), Arc<TextBlock>> = HashMap::new();
         let mut culled = 0usize;
         let mut dropped_chars = 0usize;
+        let mut missing_range_chars = 0usize;
 
         let pm = canvas.pixmap_mut();
         let mut pm = pm.as_mut();
@@ -255,6 +269,7 @@ impl Node for TextNode {
                 .or_insert_with(|| Arc::new(layout(&text, &fonts, &params)))
                 .clone();
             dropped_chars += block.dropped_chars;
+            missing_range_chars += block.missing_range_chars;
             if block.is_empty() {
                 continue;
             }
@@ -292,6 +307,13 @@ impl Node for TextNode {
         if dropped_chars > 0 {
             tracing::warn!(
                 "text: {dropped_chars} char(s) not covered by the font stack were dropped"
+            );
+        }
+        if missing_range_chars > 0 {
+            tracing::warn!(
+                "text: {missing_range_chars} of the dropped char(s) hit glyph ranges that were \
+                 unavailable — a host without lazy fetching (wasm) must bind every needed range \
+                 up front"
             );
         }
 
@@ -354,8 +376,9 @@ impl NodeFactory for TextFactory {
     ) -> Result<BuiltNode, FactoryError> {
         let features = take_input_ref(fields, "features")?;
 
-        // `font`: an ordered array of `font` source names — the fallback
-        // stack. Each resolves to its source's `url`, the asset key.
+        // `font`: an ordered array of `font` / `glyphs` source names —
+        // the fallback stack. Each resolves to its source's asset key
+        // (a font's `url`; a glyphs source's `{range}` URL template).
         let font_field = fields
             .get("font")
             .ok_or_else(|| FactoryError::MissingField("font".into()))?;
@@ -379,10 +402,11 @@ impl NodeFactory for TextFactory {
             })?;
             match ctx.sources.get(name) {
                 Some(ezu_style::SourceDecl::Font(f)) => font_keys.push(f.url.clone()),
+                Some(ezu_style::SourceDecl::Glyphs(g)) => font_keys.push(g.asset_key()),
                 Some(_) => {
                     return Err(FactoryError::BadField {
                         field: "font".into(),
-                        msg: format!("source `{name}` is not a font"),
+                        msg: format!("source `{name}` is not a font or glyphs source"),
                     })
                 }
                 None => return Err(FactoryError::UnknownAsset(name.to_string())),
@@ -502,11 +526,11 @@ impl NodeFactory for TextFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Text labels at every feature point (MapLibre point placement, no collision handling). `font` is an ordered fallback stack of `font` source names; `text` is a literal string or a MapLibre string expression evaluated per feature group. Paint properties have optional `*-expr` siblings; layout knobs are build-time constants in em.",
+            "description": "Text labels at every feature point (MapLibre point placement, no collision handling). `font` is an ordered fallback stack of `font` and/or `glyphs` source names; `text` is a literal string or a MapLibre string expression evaluated per feature group. Paint properties have optional `*-expr` siblings; layout knobs are build-time constants in em.",
             "properties": {
                 "features": schema_frag::node_ref(),
                 "font": { "type": "array", "items": { "type": "string" },
-                          "description": "Ordered fallback stack of `font` source names from the document's `sources`." },
+                          "description": "Ordered fallback stack of `font` and/or `glyphs` source names from the document's `sources`. Outline fonts and SDF glyph stacks mix freely; the first entry covering a char shapes it." },
                 "text": {
                     "description": "The label: a literal string, or a MapLibre string expression (evaluated per feature group; empty/failed → the group draws nothing).",
                 },

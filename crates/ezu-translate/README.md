@@ -45,7 +45,7 @@ cargo run -p ezu-translate --example convert -- style.json > recipe.json
 | `raster` | `raster` |
 | `circle` (+ `circle-stroke-*`) | a `circle` sprite `stamp`ed at each point (stroke = a larger ring stamped underneath) |
 | `symbol` **icons** (constant `icon-image`, `icon-size`/`-rotate`/`-opacity`) | `sprite` source → `icon` (crop) → `stamp` at each point |
-| `symbol` **text** (point placement: `text-field`, `-size`/`-color`/`-halo-*`/`-opacity`, anchor/offset/justify/wrapping/transform/spacing) | `font` source(s) → `text` node at each point; each `text-font` entry needs a URL via `ConvertOptions::fonts` / CLI `--font "NAME=URL"` (`{token}` fields rewrite to expressions) |
+| `symbol` **text** (point placement: `text-field`, `-size`/`-color`/`-halo-*`/`-opacity`, anchor/offset/justify/wrapping/transform/spacing) | `text` node at each point — zero-config: an unmapped `text-font` stack is served from the style's own `glyphs` endpoint as an SDF `glyphs` source (the same pre-rendered glyphs MapLibre draws); `ConvertOptions::fonts` / CLI `--font "NAME=URL"` overrides with a real font file per entry for higher-fidelity outline rendering (`{token}` fields rewrite to expressions) |
 | `fill-pattern` (constant) | `icon` → `tiling`, clipped to the fill shape via `blend { clip: true }` |
 | `line-pattern` (constant) | `icon` → `line-stamp` (repeat along the line, fit to `line-width`) |
 | `fill-extrusion` | flat footprint `fill-solid` with `fill-extrusion-color` (no 3-D — height/base dropped) |
@@ -70,7 +70,8 @@ zoom — nothing is baked to a fixed zoom.
 - **`symbol` text on lines** (`symbol-placement: line`/`line-center`),
   **collision handling**, and **`text-variable-anchor`** — point-placed
   labels draw, but nothing hides overlapping ones yet. Layers whose
-  `text-font` has no `--font NAME=URL` mapping skip their text.
+  `text-font` has no `--font NAME=URL` mapping *and* whose style
+  declares no `glyphs` endpoint skip their text.
 - **SDF (recolourable) icons** — an `sdf: true` sprite entry is drawn as
   its raw RGBA; `icon-color` tinting isn't applied.
 - **Data-driven `icon-image` / `fill-pattern` / `line-pattern`** (only a

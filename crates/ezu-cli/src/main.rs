@@ -166,8 +166,9 @@ struct TranslateCmd {
     /// Map a MapLibre fontstack entry to a font file URL, as
     /// `NAME=URL` (repeatable) — e.g.
     /// `--font "Noto Sans Regular=https://example.com/NotoSans-Regular.ttf"`.
-    /// `symbol` text lowers only for layers whose `text-font` has a
-    /// mapped entry.
+    /// Optional: unmapped `text-font` stacks fall back to the style's
+    /// `glyphs` endpoint (SDF glyph ranges); a mapping wins where
+    /// present and renders from the real font file.
     #[arg(long = "font", value_name = "NAME=URL")]
     fonts: Vec<String>,
     /// Pretty-print the emitted JSON.
