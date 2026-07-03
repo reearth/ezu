@@ -52,7 +52,7 @@ cargo run -p ezu-translate --example convert -- style.json > recipe.json
 | top-level `sprite` (single URL or `[{id, url}]` sheets; `sheet:icon` names) | one `sprite` source per sheet (atlas `<url>.png` + index `<url>.json`, or inline index) |
 | `hillshade` (over `raster-dem`) | `dem` + `hillshade` (tone calibration still approximate) |
 | `heatmap` (`-radius`/`-weight`/`-intensity`/`-opacity` incl. expressions; `heatmap-color` over `heatmap-density`) | `features` → `density` (GL-JS kernel) → `color-ramp` with the colour expression baked to a 256-entry ramp per tile (`ramp-expr`); an opacity zoom curve becomes an `expr` scalar node feeding the ramp's `opacity` |
-| expression-form layer `filter` (e.g. `["all", ["==", ["get", k], v], ["has", n]]`) | passed through verbatim as the `features` node's `filter-expr`, evaluated by ezu-paint via `maplibre-expr` (full fidelity) |
+| layer `filter` — expression-form (e.g. `["all", ["==", ["get", k], v], ["has", n]]`) **and** legacy-form (bare field names, `!in`/`!has`/`none`) | expression-form passes through verbatim as the `features` node's `filter-expr`; legacy-form is converted to the equivalent expression by `maplibre_expr::convert_legacy_filter` (MapLibre's own pre-compile conversion, strict-type semantics included) — both evaluated by ezu-paint via `maplibre-expr` (full fidelity) |
 | zoom / data functions (`stops`, `interpolate`, `step`, any expression) | emitted raw onto the target node's `*-expr` field (e.g. `fill-expr`, `color-expr`, `width-expr`, `opacity-expr`, `radius-expr`), evaluated per tile by ezu-paint via `maplibre-expr` |
 | CSS named colours (`steelblue`, `white`, `transparent`, …) | resolved to hex |
 | `layout.visibility: "none"` | layer dropped (default), or — with `ConvertOptions::keep_hidden` — kept but gated off behind a `switch` (flip its `select` to `b` to enable) |
@@ -89,10 +89,6 @@ zoom — nothing is baked to a fixed zoom.
   and the text paint properties — *are* supported, emitted as `*-expr`.
 - True 3-D **`fill-extrusion`** (the footprint is drawn flat).
 - Road **casing** (the darker under-stroke MapLibre draws beneath a line).
-- **Legacy-form filters** (bare field names, e.g. `["==", "class", "primary"]`,
-  and `!in` / `!has` / `none`) — vanishingly rare in modern styles; the layer
-  is left unfiltered and a warning is reported. Use the expression form
-  (`["==", ["get", "class"], "primary"]`), which converts with full fidelity.
 
 See [`ezu-compare`](../ezu-compare) to measure how close a converted recipe
 lands against a MapLibre reference render.

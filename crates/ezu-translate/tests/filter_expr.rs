@@ -68,7 +68,7 @@ fn expression_filter_emits_filter_expr_no_structured_filter() {
 }
 
 #[test]
-fn legacy_filter_is_unsupported_and_layer_left_unfiltered() {
+fn legacy_filter_converts_to_a_filter_expr() {
     let (recipe, warnings) = convert_one(json!({
         "id": "roads",
         "type": "line",
@@ -79,21 +79,44 @@ fn legacy_filter_is_unsupported_and_layer_left_unfiltered() {
     }));
 
     let feat = features_node(&recipe);
-    // A legacy filter is unsupported: the layer carries neither a structured
-    // `filter` nor a raw `filter-expr` — it is left unfiltered.
+    // A legacy filter converts through `maplibre_expr::convert_legacy_filter`
+    // to the equivalent expression on `filter-expr` — MapLibre's own
+    // pre-compile conversion.
+    assert_eq!(
+        feat["filter-expr"],
+        json!(["==", ["get", "class"], "primary"])
+    );
     assert!(
         feat.get("filter").is_none(),
         "legacy filter must not emit a structured `filter`: {feat}"
     );
-    assert!(
-        feat.get("filter-expr").is_none(),
-        "legacy filter must not emit a raw `filter-expr`: {feat}"
-    );
-    // …and a warning explains the legacy form is unsupported.
+    // …and converts silently (full fidelity, nothing dropped).
     let joined = warnings.join("\n");
     assert!(
-        joined.contains("legacy filter"),
-        "legacy filter should warn about the unsupported form, got:\n{joined}"
+        !joined.contains("filter"),
+        "legacy filter should convert without warning, got:\n{joined}"
+    );
+}
+
+#[test]
+fn legacy_none_filter_converts_and_excludes_matches() {
+    // `none` has no expression counterpart — conversion must negate an `any`.
+    let (recipe, warnings) = convert_one(json!({
+        "id": "geolines",
+        "type": "line",
+        "source": "src",
+        "source-layer": "geolines",
+        "filter": ["none", ["==", "name", "International Date Line"]],
+        "paint": { "line-color": "#0000ff" },
+    }));
+
+    let feat = features_node(&recipe);
+    let expr = &feat["filter-expr"];
+    assert_eq!(expr[0], "!", "none must lower to a negation: {expr}");
+    let joined = warnings.join("\n");
+    assert!(
+        !joined.contains("filter"),
+        "legacy `none` should convert without warning, got:\n{joined}"
     );
 }
 
