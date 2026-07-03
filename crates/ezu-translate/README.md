@@ -41,7 +41,6 @@ cargo run -p ezu-translate --example convert -- style.json > recipe.json
 | ordered layer list | `blend` chain (painter's algorithm) |
 | `background` | `solid` |
 | `fill` (solid colour, `fill-outline-color`) | `features` + `fill-solid` (outline → `edge`) |
-| `fill-color: ["match", ["get", k], …]` | one filtered `fill-solid` per colour bucket (membership filters) |
 | `line` (+ `line-dasharray`, `line-cap`/`join`) | `features` + crisp `stroke` (dash in px) |
 | `raster` | `raster` |
 | `circle` (+ `circle-stroke-*`) | a `circle` sprite `stamp`ed at each point (stroke = a larger ring stamped underneath) |
@@ -74,10 +73,9 @@ zoom — nothing is baked to a fixed zoom.
 - **SDF (recolourable) icons** — an `sdf: true` sprite entry is drawn as
   its raw RGBA; `icon-color` tinting isn't applied.
 - **Data-driven `icon-image` / `fill-pattern` / `line-pattern`** (only a
-  constant name converts), and **expression `symbol` `icon-size` /
-  `-rotate` / `-opacity`** (the `stamp` node has no `*-expr` for these, so
-  only a literal constant carries over). Data-driven fill/line/circle
-  colour/opacity/width/radius *are* supported — emitted as `*-expr`.
+  constant name converts). Data-driven *values* — fill/line/circle
+  colour/opacity/width/radius, `symbol` `icon-size`/`-rotate`/`-opacity`,
+  and the text paint properties — *are* supported, emitted as `*-expr`.
 - **`heatmap`**; true 3-D **`fill-extrusion`** (the footprint is drawn flat).
 - Road **casing** (the darker under-stroke MapLibre draws beneath a line).
 - **Legacy-form filters** (bare field names, e.g. `["==", "class", "primary"]`,
