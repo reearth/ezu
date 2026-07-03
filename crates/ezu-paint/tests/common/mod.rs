@@ -129,6 +129,40 @@ pub fn render_with_features(
     }
 }
 
+/// Render with both tile-scoped feature layers and in-memory images, the
+/// combination a `features` → `stamp` (icon) pipeline needs.
+#[allow(dead_code)]
+pub fn render_with_features_and_images(
+    json: &str,
+    tile_size: u32,
+    pad: u32,
+    tile: TileId,
+    features: &[(&str, ezu_features::FeatureLayer)],
+    images: &[(&str, RasterBuf)],
+) -> std::sync::Arc<ezu_graph::RasterBuf> {
+    use ezu_paint::host::TileLoader;
+    let doc = Document::from_json(json).expect("parse");
+    let registry = default_registry();
+    let graph = build_graph(&doc, &registry).expect("build");
+    let cache = Cache::new();
+    let mut bank = BrushBankLoader::new();
+    for (name, img) in images {
+        bank.insert_image(name.to_string(), img.clone());
+    }
+    let mut loader = TileLoader::new(&bank, tile);
+    for (name, layer) in features {
+        loader.bind_features(name.to_string(), layer.clone());
+    }
+    let ev = Evaluator::new(&graph, &cache, &loader);
+    let out = ev
+        .render(tile, CanvasInfo { tile_size, pad }, &ParamValues::new(), 0)
+        .expect("render");
+    match out {
+        PortValue::Raster(r) => r,
+        other => panic!("expected raster output, got {:?}", other.kind()),
+    }
+}
+
 fn render_with_assets(
     json: &str,
     tile_size: u32,

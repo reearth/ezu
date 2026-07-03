@@ -72,44 +72,45 @@ pub(crate) fn convert_symbol(
         serde_json::json!({ "op": "icon", "sprite": format!("@{sprite_src}"), "name": sprite_icon }),
     );
 
-    // The `stamp` node's scale / rotation / opacity are plain `In<f64>`
-    // ports with no `*-expr` sibling, so only literal constants carry over;
-    // a zoom/data function on these is not representable and is dropped.
-    let mut const_or_warn = |value: Option<&Value>, prop: &str, default: f64| -> f64 {
-        let (n, expr) = resolve_number(value);
-        if expr.is_some() {
-            report.warn(format!(
-                "layer `{id}`: data-driven `{prop}` not supported on `stamp` — using {default}"
-            ));
-        }
-        n.unwrap_or(default)
-    };
-    let size = const_or_warn(layout.and_then(|l| l.get("icon-size")), "icon-size", 1.0);
-    let rotate = const_or_warn(
-        layout.and_then(|l| l.get("icon-rotate")),
-        "icon-rotate",
-        0.0,
-    );
-    let (opacity, opacity_expr) = resolve_number(paint_of(layer).get("icon-opacity"));
-    if opacity_expr.is_some() {
-        report.warn(format!(
-            "layer `{id}`: data-driven `icon-opacity` not supported on `stamp` — using layer default"
-        ));
-    }
-
+    // `stamp` scale / rotation / opacity each carry a constant literal on the
+    // plain field, or a data-driven expression / legacy `{stops}` object on
+    // the matching `*-expr` sibling.
     let stamp_id = format!("{id}__stamp");
     let mut spec = serde_json::json!({
         "op": "stamp", "features": format!("@{feat_id}"), "image": format!("@{icon_id}")
     });
-    if size != 1.0 {
-        spec["scale"] = Value::from(size);
+
+    // `layout.icon-size` → `scale` (constant) or `scale-expr`.
+    let (size, size_expr) = resolve_number(layout.and_then(|l| l.get("icon-size")));
+    if let Some(s) = size {
+        if s != 1.0 {
+            spec["scale"] = Value::from(s);
+        }
     }
-    if rotate != 0.0 {
-        spec["rotation-deg"] = Value::from(rotate);
+    if let Some(e) = size_expr {
+        spec["scale-expr"] = e;
     }
+
+    // `layout.icon-rotate` → `rotation-deg` (constant) or `rotation-deg-expr`.
+    let (rotate, rotate_expr) = resolve_number(layout.and_then(|l| l.get("icon-rotate")));
+    if let Some(r) = rotate {
+        if r != 0.0 {
+            spec["rotation-deg"] = Value::from(r);
+        }
+    }
+    if let Some(e) = rotate_expr {
+        spec["rotation-deg-expr"] = e;
+    }
+
+    // `paint.icon-opacity` → `opacity` (constant) or `opacity-expr`.
+    let (opacity, opacity_expr) = resolve_number(paint_of(layer).get("icon-opacity"));
     if let Some(a) = opacity {
         spec["opacity"] = Value::from(a);
     }
+    if let Some(e) = opacity_expr {
+        spec["opacity-expr"] = e;
+    }
+
     nodes.insert(stamp_id.clone(), spec);
     outputs.push(stamp_id);
 }
