@@ -98,6 +98,37 @@ pub fn render_with_rasters(
     }
 }
 
+/// Render with tile-scoped scalar-field bindings (bare source names),
+/// the way a host binds a stitched DEM via `TileLoader::bind_scalar_field`.
+/// Each field must be sized to the padded canvas.
+#[allow(dead_code)]
+pub fn render_with_scalar_fields(
+    json: &str,
+    tile_size: u32,
+    pad: u32,
+    tile: TileId,
+    fields: &[(&str, ezu_graph::ScalarField)],
+) -> std::sync::Arc<ezu_graph::RasterBuf> {
+    use ezu_paint::host::TileLoader;
+    let doc = Document::from_json(json).expect("parse");
+    let registry = default_registry();
+    let graph = build_graph(&doc, &registry).expect("build");
+    let cache = Cache::new();
+    let base = NoAssets;
+    let mut loader = TileLoader::new(&base, tile);
+    for (name, field) in fields {
+        loader.bind_scalar_field(name.to_string(), field.clone());
+    }
+    let ev = Evaluator::new(&graph, &cache, &loader);
+    let out = ev
+        .render(tile, CanvasInfo { tile_size, pad }, &ParamValues::new(), 0)
+        .expect("render");
+    match out {
+        PortValue::Raster(r) => r,
+        other => panic!("expected raster output, got {:?}", other.kind()),
+    }
+}
+
 /// Render with tile-scoped feature-layer bindings, the way a host binds
 /// per-tile MVT layers via `TileLoader::bind_features`. `features` maps a
 /// bare `<source>.<layer>` name to the layer a `features` node resolves.
