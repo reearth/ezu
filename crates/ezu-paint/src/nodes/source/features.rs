@@ -4,10 +4,11 @@
 //! `min-zoom-field`, and emits the surviving features as a
 //! [`FilteredFeatures`].
 //!
-//! Style fields: `source` (optional, matches a `mvt`/`pmtiles` entry
-//! in the document's `sources` block; defaults to the single such
-//! entry when only one exists) + `layer` (the MVT layer name). The
-//! op looks up `<source>.<layer>` on the host's AssetLoader.
+//! Style fields: `source` (optional, matches an `mvt`/`pmtiles`/
+//! `geojson` entry in the document's `sources` block; defaults to the
+//! single such entry when only one exists) + `layer` (the MVT layer
+//! name; for `geojson` the host binds the layer under the source's own
+//! name). The op looks up `<source>.<layer>` on the host's AssetLoader.
 //! A missing binding is treated as "no features for this tile" and
 //! yields an empty result.
 
@@ -146,10 +147,10 @@ impl NodeFactory for FeaturesFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Sample features from a host-bound vector tile layer. `source` names a `mvt`/`pmtiles` entry in the document's `sources` block (optional when exactly one exists); `layer` selects a layer within that source.",
+            "description": "Sample features from a host-bound feature layer. `source` names an `mvt`/`pmtiles`/`geojson` entry in the document's `sources` block (optional when exactly one exists); `layer` selects a layer within that source (for `geojson`, the layer name equals the source name).",
             "properties": {
                 "source": { "type": "string",
-                            "description": "Name of an `mvt` or `pmtiles` entry in the document's `sources`. Optional — defaults to the only such source when the document declares exactly one." },
+                            "description": "Name of an `mvt`, `pmtiles`, or `geojson` entry in the document's `sources`. Optional — defaults to the only such source when the document declares exactly one." },
                 "layer": { "type": "string",
                            "description": "Vector tile layer name within `source` (e.g. `earth`, `roads`)." },
                 "filter-expr": {
@@ -167,23 +168,33 @@ impl NodeFactory for FeaturesFactory {
     }
 }
 
-/// Resolve the `source` field for ops that target a vector tile
-/// source. When omitted, defaults to the document's single
-/// `mvt`/`pmtiles` source. Errors if `source` is omitted and the
-/// document has zero or multiple such sources, or if a named source
-/// doesn't exist / isn't a vector tile source.
+/// Whether a source declaration can feed a `features` node: vector
+/// tiles (`mvt`/`pmtiles`) or GeoJSON (the host projects it into each
+/// tile and binds it as one feature layer).
+fn is_feature_source(decl: &ezu_style::SourceDecl) -> bool {
+    matches!(
+        decl,
+        ezu_style::SourceDecl::Mvt(_)
+            | ezu_style::SourceDecl::Pmtiles(_)
+            | ezu_style::SourceDecl::GeoJson(_)
+    )
+}
+
+/// Resolve the `source` field for ops that target a feature source.
+/// When omitted, defaults to the document's single `mvt`/`pmtiles`/
+/// `geojson` source. Errors if `source` is omitted and the document
+/// has zero or multiple such sources, or if a named source doesn't
+/// exist / isn't a feature source.
 fn resolve_feature_source(
     fields: &serde_json::Map<String, Value>,
     ctx: &FactoryCtx<'_>,
 ) -> Result<String, FactoryError> {
     if let Some(name) = read_optional_string(fields, "source")? {
         match ctx.sources.get(&name) {
-            Some(ezu_style::SourceDecl::Mvt(_)) | Some(ezu_style::SourceDecl::Pmtiles(_)) => {
-                Ok(name)
-            }
+            Some(decl) if is_feature_source(decl) => Ok(name),
             Some(_) => Err(FactoryError::BadField {
                 field: "source".into(),
-                msg: format!("`{name}` exists but is not an `mvt` / `pmtiles` source"),
+                msg: format!("`{name}` exists but is not an `mvt` / `pmtiles` / `geojson` source"),
             }),
             None => Err(FactoryError::BadField {
                 field: "source".into(),
@@ -191,23 +202,20 @@ fn resolve_feature_source(
             }),
         }
     } else {
-        let mut matches = ctx.sources.iter().filter(|(_, decl)| {
-            matches!(
-                decl,
-                ezu_style::SourceDecl::Mvt(_) | ezu_style::SourceDecl::Pmtiles(_)
-            )
-        });
+        let mut matches = ctx
+            .sources
+            .iter()
+            .filter(|(_, decl)| is_feature_source(decl));
         match (matches.next(), matches.next()) {
             (Some((name, _)), None) => Ok(name.clone()),
             (None, _) => Err(FactoryError::BadField {
                 field: "source".into(),
-                msg:
-                    "no `mvt`/`pmtiles` source in document; declare one or pass `source` explicitly"
-                        .into(),
+                msg: "no `mvt`/`pmtiles`/`geojson` source in document; declare one or pass `source` explicitly"
+                    .into(),
             }),
             (Some(_), Some(_)) => Err(FactoryError::BadField {
                 field: "source".into(),
-                msg: "multiple `mvt`/`pmtiles` sources in document; pass `source` explicitly"
+                msg: "multiple `mvt`/`pmtiles`/`geojson` sources in document; pass `source` explicitly"
                     .into(),
             }),
         }
