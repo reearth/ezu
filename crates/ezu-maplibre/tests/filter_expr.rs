@@ -1,6 +1,7 @@
 //! Expression-form layer filters emit as a raw `filter-expr` on the
-//! `features` node (evaluated by ezu-paint via `maplibre-expr`), while
-//! legacy-form filters keep the structured `filter` translation.
+//! `features` node (evaluated by ezu-paint via `maplibre-expr`). Legacy-form
+//! filters are unsupported: the layer is left unfiltered and a warning is
+//! reported.
 
 use ezu_maplibre::{convert, ConvertOptions};
 use serde_json::{json, Value};
@@ -67,8 +68,8 @@ fn expression_filter_emits_filter_expr_no_structured_filter() {
 }
 
 #[test]
-fn legacy_filter_emits_structured_filter_no_filter_expr() {
-    let (recipe, _warnings) = convert_one(json!({
+fn legacy_filter_is_unsupported_and_layer_left_unfiltered() {
+    let (recipe, warnings) = convert_one(json!({
         "id": "roads",
         "type": "line",
         "source": "src",
@@ -78,17 +79,21 @@ fn legacy_filter_emits_structured_filter_no_filter_expr() {
     }));
 
     let feat = features_node(&recipe);
-    // Legacy filter → structured `filter` object.
-    let structured = feat.get("filter").and_then(|f| f.as_object());
+    // A legacy filter is unsupported: the layer carries neither a structured
+    // `filter` nor a raw `filter-expr` — it is left unfiltered.
     assert!(
-        structured.is_some(),
-        "legacy filter should emit a structured `filter` object: {feat}"
+        feat.get("filter").is_none(),
+        "legacy filter must not emit a structured `filter`: {feat}"
     );
-    assert_eq!(structured.unwrap().get("class"), Some(&json!("primary")));
-    // …and NOT a raw `filter-expr`.
     assert!(
         feat.get("filter-expr").is_none(),
         "legacy filter must not emit a raw `filter-expr`: {feat}"
+    );
+    // …and a warning explains the legacy form is unsupported.
+    let joined = warnings.join("\n");
+    assert!(
+        joined.contains("legacy filter"),
+        "legacy filter should warn about the unsupported form, got:\n{joined}"
     );
 }
 

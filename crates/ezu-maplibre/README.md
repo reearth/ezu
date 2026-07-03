@@ -42,7 +42,7 @@ cargo run -p ezu-maplibre --example convert -- style.json 14 > recipe.json
 | `fill-extrusion` | flat footprint `fill-solid` with `fill-extrusion-color` (no 3-D — height/base dropped) |
 | top-level `sprite` (single URL or `[{id, url}]` sheets; `sheet:icon` names) | one `sprite` source per sheet (atlas `<url>.png` + index `<url>.json`, or inline index) |
 | `hillshade` (over `raster-dem`) | `dem` + `hillshade` (tone calibration still approximate) |
-| filters `all` / `!` / `==` / `!=` / `in` / `!in` (legacy **and** expression form, e.g. `["in", ["get", k], ["literal", […]]]`) | ezu feature filter map |
+| expression-form layer `filter` (e.g. `["all", ["==", ["get", k], v], ["has", n]]`) | passed through verbatim as the `features` node's `filter-expr`, evaluated by ezu-paint via `maplibre-expr` (full fidelity) |
 | zoom functions (`stops`, `interpolate`, `step`) | baked to a constant at [`ConvertOptions::zoom`] |
 | CSS named colours (`steelblue`, `white`, `transparent`, …) | resolved to hex |
 | `layout.visibility: "none"` | layer dropped (default), or — with `ConvertOptions::keep_hidden` — kept but gated off behind a `switch` (flip its `select` to `b` to enable) |
@@ -65,8 +65,10 @@ the tile's zoom reproduces MapLibre's value exactly for that tile.
   the `match`-bucket case (e.g. `["interpolate", …, ["get", "height"], …]`).
 - **`heatmap`**; true 3-D **`fill-extrusion`** (the footprint is drawn flat).
 - Road **casing** (the darker under-stroke MapLibre draws beneath a line).
-- Filter operators ezu's flat filter can't represent: `any` (OR),
-  `has` / `!has` (field existence), comparisons (`<` / `>`), `geometry-type`.
+- **Legacy-form filters** (bare field names, e.g. `["==", "class", "primary"]`,
+  and `!in` / `!has` / `none`) — vanishingly rare in modern styles; the layer
+  is left unfiltered and a warning is reported. Use the expression form
+  (`["==", ["get", "class"], "primary"]`), which converts with full fidelity.
 
 See [`ezu-compare`](../ezu-compare) to measure how close a converted recipe
 lands against a MapLibre reference render.

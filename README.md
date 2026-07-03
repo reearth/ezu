@@ -264,7 +264,7 @@ earth-tone background.
                 "color": "#5876a0", "opacity": 0.22,
                 "radius-px": 7, "spacing-px": 3 },
     "roads":  { "op": "features", "layer": "roads",
-                "filter": { "kind_detail": "motorway" } },
+                "filter-expr": ["==", ["get", "kind_detail"], "motorway"] },
     "brush":  { "op": "brush-file", "src": "@glazing" },
     "roads_p":{ "op": "line", "features": "@roads", "brush": "@brush",
                 "color": "#4a3424", "radius-px": 2.6 },
