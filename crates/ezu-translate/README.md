@@ -51,6 +51,7 @@ cargo run -p ezu-translate --example convert -- style.json > recipe.json
 | `fill-extrusion` | flat footprint `fill-solid` with `fill-extrusion-color` (no 3-D — height/base dropped) |
 | top-level `sprite` (single URL or `[{id, url}]` sheets; `sheet:icon` names) | one `sprite` source per sheet (atlas `<url>.png` + index `<url>.json`, or inline index) |
 | `hillshade` (over `raster-dem`) | `dem` + `hillshade` (tone calibration still approximate) |
+| `heatmap` (`-radius`/`-weight`/`-intensity`/`-opacity` incl. expressions; `heatmap-color` over `heatmap-density`) | `features` → `density` (GL-JS kernel) → `color-ramp` with the colour expression baked to a 256-entry ramp per tile (`ramp-expr`); an opacity zoom curve becomes an `expr` scalar node feeding the ramp's `opacity` |
 | expression-form layer `filter` (e.g. `["all", ["==", ["get", k], v], ["has", n]]`) | passed through verbatim as the `features` node's `filter-expr`, evaluated by ezu-paint via `maplibre-expr` (full fidelity) |
 | zoom / data functions (`stops`, `interpolate`, `step`, any expression) | emitted raw onto the target node's `*-expr` field (e.g. `fill-expr`, `color-expr`, `width-expr`, `opacity-expr`, `radius-expr`), evaluated per tile by ezu-paint via `maplibre-expr` |
 | CSS named colours (`steelblue`, `white`, `transparent`, …) | resolved to hex |
@@ -76,7 +77,7 @@ zoom — nothing is baked to a fixed zoom.
   constant name converts). Data-driven *values* — fill/line/circle
   colour/opacity/width/radius, `symbol` `icon-size`/`-rotate`/`-opacity`,
   and the text paint properties — *are* supported, emitted as `*-expr`.
-- **`heatmap`**; true 3-D **`fill-extrusion`** (the footprint is drawn flat).
+- True 3-D **`fill-extrusion`** (the footprint is drawn flat).
 - Road **casing** (the darker under-stroke MapLibre draws beneath a line).
 - **Legacy-form filters** (bare field names, e.g. `["==", "class", "primary"]`,
   and `!in` / `!has` / `none`) — vanishingly rare in modern styles; the layer
