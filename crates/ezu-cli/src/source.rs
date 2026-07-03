@@ -127,6 +127,34 @@ impl TileSource {
         Ok(None)
     }
 
+    /// Fetch the requested neighbour tiles for cross-tile placement.
+    /// Applies the Web-Mercator convention: `x` wraps at the antimeridian
+    /// (`rem_euclid`), `y` past the poles is skipped, and a missing
+    /// neighbour is simply omitted (never an error). Each returned entry
+    /// is tagged with its `(dx, dy)` offset and the bytes/`TileId` they
+    /// came from (an ancestor under overzoom), for the caller to clip.
+    pub async fn fetch_neighbors(
+        &self,
+        tile: TileId,
+        offsets: &[(i32, i32)],
+        max_parent_levels: u8,
+    ) -> Result<Vec<((i32, i32), (Bytes, TileId))>, SourceError> {
+        let world = 1i64 << tile.z;
+        let mut out = Vec::with_capacity(offsets.len());
+        for &(dx, dy) in offsets {
+            let ny = tile.y as i64 + dy as i64;
+            if ny < 0 || ny >= world {
+                continue; // top/bottom edge: no wrap in Y
+            }
+            let nx = (tile.x as i64 + dx as i64).rem_euclid(world) as u32;
+            let ntile = TileId::new(tile.z, nx, ny as u32);
+            if let Some(hit) = self.fetch_with_fallback(ntile, max_parent_levels).await? {
+                out.push(((dx, dy), hit));
+            }
+        }
+        Ok(out)
+    }
+
     pub async fn fetch(&self, tile: TileId) -> Result<Option<Bytes>, SourceError> {
         match &self.kind {
             TileSourceKind::PmTilesHttp(r) => {

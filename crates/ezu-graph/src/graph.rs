@@ -356,6 +356,16 @@ impl Graph {
         &self.topo
     }
 
+    /// The union of every node's [`Node::asset_inputs`], deduplicated and
+    /// ordered. A host consults this to learn which named bindings the
+    /// document's graph samples — including the `@<dx>,<dy>` neighbour
+    /// names (see [`crate::neighbor`]) a cross-tile node requests, so it
+    /// can fetch and bind exactly the neighbour tiles the graph needs
+    /// rather than the whole 3×3 window unconditionally.
+    pub fn asset_inputs(&self) -> std::collections::BTreeSet<String> {
+        self.nodes.values().flat_map(|n| n.asset_inputs()).collect()
+    }
+
     pub fn node(&self, ix: NodeIx) -> &dyn Node {
         self.nodes
             .get_index(ix)

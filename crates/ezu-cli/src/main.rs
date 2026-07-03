@@ -20,8 +20,8 @@ use ezu::graph::{
 };
 use ezu::paint::host::{
     bind_dem_sources, bind_raster_sources, build_dem_sources, build_raster_sources, pixmap_to_webp,
-    raster_to_png, raster_to_webp, BrushBankLoader, DemSourceRegistry, RasterSourceRegistry,
-    TileLoader,
+    raster_to_png, raster_to_webp, requested_neighbor_offsets, BrushBankLoader, DemSourceRegistry,
+    RasterSourceRegistry, TileLoader,
 };
 use ezu::paint::nodes::default_registry;
 use ezu::style::{Document, SourceDecl};
@@ -831,9 +831,24 @@ async fn render_one(
     overzoom_levels: u8,
     params: Arc<ParamValues>,
 ) -> Result<Arc<RasterBuf>, Box<dyn std::error::Error + Send + Sync>> {
-    let fetched = match source {
+    let fetched = match &source {
         Some(s) => s.fetch_with_fallback(tile, overzoom_levels).await?,
         None => None,
+    };
+    // Cross-tile placement (label collision): fetch only the neighbour
+    // tiles the graph actually asks for (via `@dx,dy` binding names),
+    // never the whole 3×3 window unconditionally.
+    let neighbor_mvt: Vec<((i32, i32), (bytes::Bytes, CoreTileId))> = match (&source, &source_name)
+    {
+        (Some(s), Some(name)) => {
+            let offsets = requested_neighbor_offsets(&graph.asset_inputs(), name);
+            if offsets.is_empty() {
+                Vec::new()
+            } else {
+                s.fetch_neighbors(tile, &offsets, overzoom_levels).await?
+            }
+        }
+        _ => Vec::new(),
     };
     let tile_id = TileId {
         z: tile.z,
@@ -871,12 +886,26 @@ async fn render_one(
     let raster = tokio::task::spawn_blocking(
         move || -> Result<Arc<RasterBuf>, Box<dyn std::error::Error + Send + Sync>> {
             let mut tile_loader = TileLoader::new(loader.as_ref(), tile_id);
-            if let (Some((bytes, src_tile)), Some(src_name)) = (fetched, source_name) {
+            if let (Some((bytes, src_tile)), Some(src_name)) = (fetched, &source_name) {
                 let mut decoded = mvt::decode(&bytes)?;
                 if src_tile != tile {
                     decoded = mvt::clip_to_descendant(&decoded, src_tile, tile)?;
                 }
-                tile_loader.bind_mvt(&src_name, decoded);
+                tile_loader.bind_mvt(src_name, decoded);
+            }
+            if let Some(src_name) = &source_name {
+                for ((dx, dy), (bytes, src_tile)) in neighbor_mvt {
+                    let ntile = CoreTileId::new(
+                        tile.z,
+                        (tile.x as i64 + dx as i64).rem_euclid(1i64 << tile.z) as u32,
+                        (tile.y as i64 + dy as i64) as u32,
+                    );
+                    let mut decoded = mvt::decode(&bytes)?;
+                    if src_tile != ntile {
+                        decoded = mvt::clip_to_descendant(&decoded, src_tile, ntile)?;
+                    }
+                    tile_loader.bind_mvt_neighbor(src_name, dx, dy, decoded);
+                }
             }
             for (name, field) in dem_bindings {
                 tile_loader.bind_scalar_field(name, field);

@@ -101,15 +101,19 @@ const ERR_GLYPHS: &str = "GlyphDecode";
 /// freshly. DEM stays as raw bytes per `(dx, dy)` neighbour offset
 /// until render time, when the centre tile id is known.
 enum SourceBinding {
-    Mvt(Vec<u8>),
+    /// Raw MVT bytes per `(dx, dy)` neighbour offset. The centre tile is
+    /// `coord: [0, 0]` (default); neighbours (bound with `coord`) feed
+    /// cross-tile label collision and are bound under `@dx,dy` names at
+    /// render time. Re-decoded at render because `DecodedTile` isn't Clone.
+    Mvt(HashMap<(i32, i32), Vec<u8>>),
     Dem(HashMap<(i32, i32), Vec<u8>>),
     /// RGBA imagery tiles per `(dx, dy)` neighbour offset, decoded +
     /// stitched at render time like DEM.
     Raster(HashMap<(i32, i32), Vec<u8>>),
-    /// Raw GeoJSON bytes (WGS84 lon/lat), projected into the tile frame at
-    /// render time. Only needed for *remote* geojson; inline `data` is read
-    /// straight from the document.
-    GeoJson(Vec<u8>),
+    /// Raw GeoJSON bytes (WGS84 lon/lat) per `(dx, dy)` neighbour offset,
+    /// projected into each tile frame at render time. Only needed for
+    /// *remote* geojson; inline `data` is read straight from the document.
+    GeoJson(HashMap<(i32, i32), Vec<u8>>),
 }
 
 /// Stateful WASM renderer.
@@ -164,11 +168,16 @@ impl Renderer {
     /// Bind raw tile bytes under a `sources.<name>` entry from the style.
     /// The renderer dispatches on the source's declared `type`:
     ///
-    /// - `mvt` / `pmtiles` → decode MVT layers eagerly; layers are bound
-    ///   as `tile.<layer>` when [`render_tile`] runs.
-    /// - `dem` → store the raw raster-DEM bytes per `(dx, dy)` neighbour
+    /// - `mvt` / `pmtiles` → store raw MVT bytes per `(dx, dy)` neighbour
+    ///   offset (centre `coord: [0, 0]`, the default). Layers are bound as
+    ///   `<source>.<layer>` (centre) or `<source>.<layer>@dx,dy`
+    ///   (neighbours) when [`render_tile`] runs. Binding only the centre
+    ///   degrades cross-tile label collision to centre-only at borders.
+    /// - `dem` / `raster` → store the raw bytes per `(dx, dy)` neighbour
     ///   offset. The centre tile is `coord: [0, 0]` (default). Decoding
     ///   and 3×3 stitching happen at render time once the tile id is known.
+    /// - `geojson` (remote) → store raw bytes per `(dx, dy)` offset;
+    ///   projected per tile (and neighbour) at render time.
     ///
     /// `opts` is a JS object: `{ coord?: [dx, dy] }`. Throws
     /// `UnknownSource` if `name` doesn't match any entry in the style's
@@ -211,8 +220,19 @@ impl Renderer {
                 // time rather than render time — we toss the result and
                 // re-decode at render since `DecodedTile` isn't Clone.
                 let _ = ezu_features::mvt::decode(&bytes).map_err(|e| named_err(ERR_MVT, e))?;
-                self.bindings
-                    .insert(name.to_string(), SourceBinding::Mvt(bytes));
+                let coord = parse_coord_opt(opts.as_ref())?;
+                let entry = self
+                    .bindings
+                    .entry(name.to_string())
+                    .or_insert_with(|| SourceBinding::Mvt(HashMap::new()));
+                if let SourceBinding::Mvt(map) = entry {
+                    map.insert(coord, bytes);
+                } else {
+                    return Err(named_err(
+                        ERR_SOURCE,
+                        format!("source `{name}` already bound as a different kind"),
+                    ));
+                }
             }
             SourceDecl::Dem(_) => {
                 let coord = parse_coord_opt(opts.as_ref())?;
@@ -252,8 +272,19 @@ impl Renderer {
                 // Validate now so malformed bytes throw at bind time.
                 serde_json::from_slice::<serde_json::Value>(&bytes)
                     .map_err(|e| named_err(ERR_GEOJSON, e))?;
-                self.bindings
-                    .insert(name.to_string(), SourceBinding::GeoJson(bytes));
+                let coord = parse_coord_opt(opts.as_ref())?;
+                let entry = self
+                    .bindings
+                    .entry(name.to_string())
+                    .or_insert_with(|| SourceBinding::GeoJson(HashMap::new()));
+                if let SourceBinding::GeoJson(map) = entry {
+                    map.insert(coord, bytes);
+                } else {
+                    return Err(named_err(
+                        ERR_SOURCE,
+                        format!("source `{name}` already bound as a different kind"),
+                    ));
+                }
             }
             // Sprite: the JS host provides the atlas PNG as `bytes`. The index
             // is either inline in the document or supplied as `opts.index` (the
@@ -386,10 +417,16 @@ impl Renderer {
 
         for (name, binding) in &self.bindings {
             match binding {
-                SourceBinding::Mvt(bytes) => {
-                    let decoded =
-                        ezu_features::mvt::decode(bytes).map_err(|e| named_err(ERR_MVT, e))?;
-                    tile_loader.bind_mvt(name, decoded);
+                SourceBinding::Mvt(byte_map) => {
+                    // Centre under `<source>.<layer>`, any neighbours the
+                    // host bound under `@dx,dy` (cross-tile collision). A
+                    // host binding only the centre degrades to centre-only
+                    // collision at borders — no error.
+                    for (&(dx, dy), bytes) in byte_map {
+                        let decoded =
+                            ezu_features::mvt::decode(bytes).map_err(|e| named_err(ERR_MVT, e))?;
+                        tile_loader.bind_mvt_neighbor(name, dx, dy, decoded);
+                    }
                 }
                 SourceBinding::Dem(byte_map) => {
                     let encoding = match self.doc.sources.get(name) {
@@ -452,23 +489,31 @@ impl Renderer {
                     })?;
                     tile_loader.bind_raster(name.clone(), buf);
                 }
-                SourceBinding::GeoJson(bytes) => {
-                    let data: serde_json::Value =
-                        serde_json::from_slice(bytes).map_err(|e| named_err(ERR_GEOJSON, e))?;
-                    bind_geojson(&mut tile_loader, name, &data, tile_id)?;
+                SourceBinding::GeoJson(byte_map) => {
+                    for (&(dx, dy), bytes) in byte_map {
+                        let data: serde_json::Value =
+                            serde_json::from_slice(bytes).map_err(|e| named_err(ERR_GEOJSON, e))?;
+                        bind_geojson(&mut tile_loader, name, &data, tile_id, dx, dy)?;
+                    }
                 }
             }
         }
 
         // Inline GeoJSON needs no `bindSource` — project the document's `data`
         // straight into this tile. Skip any that were bound remotely above.
+        // When the graph asks for neighbour features (cross-tile collision),
+        // project into those neighbour tiles too and bind under `@dx,dy`.
+        let requested = self.graph.asset_inputs();
         for (name, decl) in &self.doc.sources {
             if let SourceDecl::GeoJson(g) = decl {
                 if self.bindings.contains_key(name) {
                     continue;
                 }
                 if let Some(data) = g.data.as_ref().filter(|d| d.is_object() || d.is_array()) {
-                    bind_geojson(&mut tile_loader, name, data, tile_id)?;
+                    bind_geojson(&mut tile_loader, name, data, tile_id, 0, 0)?;
+                    for (dx, dy) in ezu_paint::host::requested_neighbor_offsets(&requested, name) {
+                        bind_geojson(&mut tile_loader, name, data, tile_id, dx, dy)?;
+                    }
                 }
             }
         }
@@ -593,16 +638,29 @@ fn parse_render_options(obj: Option<&js_sys::Object>) -> RenderOptions {
 /// Project WGS84 GeoJSON `data` into `tile`'s local frame (extent 4096) and
 /// bind it as one feature layer under `<name>.<name>` — matching a
 /// converter-emitted `features` node's `(source, source)` target.
+/// Project inline/remote GeoJSON into the tile at neighbour offset
+/// `(dx, dy)` (`(0, 0)` = the tile itself) and bind it under
+/// `<name>.<name>` (own) or `<name>.<name>@dx,dy` (neighbour). Neighbour
+/// `x` wraps at the antimeridian; out-of-range `y` (poles) is skipped.
 fn bind_geojson(
     tile_loader: &mut TileLoader<'_>,
     name: &str,
     data: &serde_json::Value,
     tile: TileId,
+    dx: i32,
+    dy: i32,
 ) -> Result<(), JsValue> {
-    let features = ezu_features::geojson::decode_projected(data, tile.z, tile.x, tile.y, 4096)
+    let world = 1i64 << tile.z;
+    let ny = tile.y as i64 + dy as i64;
+    if ny < 0 || ny >= world {
+        return Ok(()); // top/bottom edge: no neighbour in Y
+    }
+    let nx = (tile.x as i64 + dx as i64).rem_euclid(world) as u32;
+    let features = ezu_features::geojson::decode_projected(data, tile.z, nx, ny as u32, 4096)
         .map_err(|e| named_err(ERR_GEOJSON, e))?;
+    let base = format!("{name}.{name}");
     tile_loader.bind_features(
-        format!("{name}.{name}"),
+        ezu_graph::neighbor_binding(&base, dx, dy),
         FeatureLayer {
             name: name.to_string(),
             extent: 4096,
