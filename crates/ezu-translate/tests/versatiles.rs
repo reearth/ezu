@@ -48,6 +48,11 @@ fn converts_full_osm_style_to_valid_document() {
                 // the `stamp` node, so they're dropped with a warning.
                 || w.contains("on `stamp`")
                 || w.contains("dasharray")
+                // Collision knobs ezu doesn't model yet (icon collision,
+                // text/icon pairing, cooperative overlap).
+                || w.contains("text-optional")
+                || w.contains("overlap")
+                || w.contains("ignore-placement")
                 || w.contains("`has`")
                 || w.contains("`!has`")
                 || w.contains("`any`"))

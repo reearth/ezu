@@ -312,6 +312,85 @@ fn icon_and_text_layer_emits_both_nodes() {
 }
 
 #[test]
+fn collision_properties_route_to_the_text_node() {
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "collision",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "places", "type": "symbol", "source": "s", "source-layer": "place",
+          "filter": ["==", ["get", "class"], "city"],
+          "layout": {
+            "text-field": "{name}",
+            "text-font": ["F"],
+            "text-allow-overlap": true,
+            "text-ignore-placement": true,
+            "text-padding": 4,
+            "symbol-sort-key": ["get", "rank"]
+          } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let opts = opts_with_fonts(&[("F", "https://fonts.example/F.ttf")]);
+    let (recipe, _) = convert(&style, &opts).unwrap();
+
+    let text = &recipe["nodes"]["places__text"];
+    // Neighbour-gathering wiring: origin source/layer + the layer filter,
+    // reproduced so neighbour candidates filter identically.
+    assert_eq!(text["source"], "s");
+    assert_eq!(text["layer"], "place");
+    assert_eq!(
+        text["filter-expr"],
+        serde_json::json!(["==", ["get", "class"], "city"])
+    );
+    // Overlap knobs.
+    assert_eq!(text["allow-overlap"], true);
+    assert_eq!(text["ignore-placement"], true);
+    assert_eq!(text["padding-px"], 4.0);
+    assert_eq!(text["sort-key-expr"], serde_json::json!(["get", "rank"]));
+
+    // Still a valid ezu Document.
+    let doc_text = serde_json::to_string(&recipe).unwrap();
+    ezu_style::Document::from_json(&doc_text).expect("recipe parses as ezu Document");
+}
+
+#[test]
+fn text_overlap_enum_maps_and_cooperative_warns() {
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "overlap-enum",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "always", "type": "symbol", "source": "s", "source-layer": "a",
+          "layout": { "text-field": "{name}", "text-font": ["F"], "text-overlap": "always" } },
+        { "id": "never", "type": "symbol", "source": "s", "source-layer": "b",
+          "layout": { "text-field": "{name}", "text-font": ["F"], "text-overlap": "never" } },
+        { "id": "coop", "type": "symbol", "source": "s", "source-layer": "c",
+          "layout": { "text-field": "{name}", "text-font": ["F"], "text-overlap": "cooperative" } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let opts = opts_with_fonts(&[("F", "https://fonts.example/F.ttf")]);
+    let (recipe, report) = convert(&style, &opts).unwrap();
+
+    let nodes = recipe["nodes"].as_object().unwrap();
+    // `always` → allow-overlap true.
+    assert_eq!(nodes["always__text"]["allow-overlap"], true);
+    // `never` → collide (no allow-overlap field emitted).
+    assert!(nodes["never__text"].get("allow-overlap").is_none());
+    // `cooperative` → treated as never (collide) with a warning.
+    assert!(nodes["coop__text"].get("allow-overlap").is_none());
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("cooperative") && w.contains("coop")),
+        "expected a cooperative-overlap warning: {:?}",
+        report.warnings
+    );
+}
+
+#[test]
 fn font_sources_dedupe_by_url_across_layers() {
     const STYLE: &str = r##"{
       "version": 8,

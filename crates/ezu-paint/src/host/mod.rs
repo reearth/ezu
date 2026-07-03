@@ -602,7 +602,12 @@ fn load_font_file(path: &str, src: &str) -> Result<Option<Asset>, AssetError> {
 ///
 /// Bindings are keyed by the exact name the style references — by
 /// convention `<source>.<layer>` for per-tile MVT layers and bare
-/// `<source>` for per-tile scalar fields (DEM).
+/// `<source>` for per-tile scalar fields (DEM). A **neighbour** tile's
+/// copy of a per-tile binding is keyed by suffixing that plain name with
+/// `@<dx>,<dy>` (`dx`/`dy` ∈ `-1..=1`); see [`ezu_graph::neighbor`].
+/// Cross-tile nodes (label collision) list the eight neighbour names in
+/// `asset_inputs`, and a host that can fetch neighbour tiles binds them
+/// via [`TileLoader::bind_mvt_neighbor`] / [`TileLoader::bind_features`].
 pub struct TileLoader<'a> {
     base: &'a dyn AssetLoader,
     bindings: HashMap<String, Binding>,
@@ -691,6 +696,30 @@ impl<'a> TileLoader<'a> {
         self
     }
 
+    /// Bind a **neighbour** tile's MVT layers for cross-tile placement.
+    /// Each layer binds under `<source>.<layer>@<dx>,<dy>` (see
+    /// [`ezu_graph::neighbor`]); the layer geometry stays in the
+    /// neighbour's own `[0, extent]` frame — the consuming node offsets
+    /// it into the current tile's frame by `(dx, dy) × extent`. `(0, 0)`
+    /// is rejected (use [`bind_mvt`](Self::bind_mvt) for the tile's own
+    /// data).
+    pub fn bind_mvt_neighbor(
+        &mut self,
+        source: &str,
+        dx: i32,
+        dy: i32,
+        tile: DecodedTile,
+    ) -> &mut Self {
+        if dx == 0 && dy == 0 {
+            return self.bind_mvt(source, tile);
+        }
+        for layer in tile.layers {
+            let base = format!("{source}.{}", layer.name);
+            self.bind_features(ezu_graph::neighbor_binding(&base, dx, dy), layer);
+        }
+        self
+    }
+
     fn binding_hash(&self, name: &str) -> u128 {
         let mut h = Xxh3::new();
         h.update(&self.tile.z.to_le_bytes());
@@ -735,6 +764,29 @@ impl AssetLoader for TileLoader<'_> {
 /// has a `scheme:` prefix). Tile bindings never carry a scheme.
 fn looks_like_asset_src(name: &str) -> bool {
     name.contains(':')
+}
+
+/// The distinct neighbour offsets `(dx, dy)` the graph requests for a
+/// feature `source` — i.e. every `@<dx>,<dy>` suffix on a requested
+/// binding whose base is `<source>.<layer>` (any layer). A host uses
+/// this to fetch *only* the neighbour tiles the document's graph needs,
+/// rather than the whole 3×3 window unconditionally. Offsets are
+/// deduplicated and returned in a fixed (sorted) order.
+pub fn requested_neighbor_offsets(
+    requested: &std::collections::BTreeSet<String>,
+    source: &str,
+) -> Vec<(i32, i32)> {
+    let prefix = format!("{source}.");
+    let mut offs: Vec<(i32, i32)> = requested
+        .iter()
+        .filter_map(|name| {
+            let (base, dx, dy) = ezu_graph::parse_neighbor_binding(name);
+            ((dx, dy) != (0, 0) && base.starts_with(&prefix)).then_some((dx, dy))
+        })
+        .collect();
+    offs.sort_unstable();
+    offs.dedup();
+    offs
 }
 
 /// Decode a PNG (or other format supported by the `image` crate) into a
@@ -1176,6 +1228,94 @@ fn is_http_url(s: &str) -> bool {
 mod tests {
     use super::*;
     use base64::Engine;
+    use ezu_features::mvt::DecodedTile;
+    use ezu_features::{Feature, FeatureLayer, Geometry};
+    use std::collections::BTreeSet;
+
+    fn point_layer(name: &str, pts: &[(i32, i32)]) -> FeatureLayer {
+        FeatureLayer {
+            name: name.into(),
+            extent: 4096,
+            features: pts
+                .iter()
+                .map(|&(x, y)| Feature {
+                    id: None,
+                    geometry: Geometry {
+                        points: vec![(x, y)],
+                        ..Default::default()
+                    },
+                    properties: Default::default(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn neighbor_mvt_binds_under_offset_names() {
+        let base = BrushBankLoader::empty();
+        let mut loader = TileLoader::new(&base, TileId { z: 3, x: 4, y: 5 });
+        loader.bind_mvt(
+            "roads",
+            DecodedTile {
+                layers: vec![point_layer("road", &[(10, 20)])],
+            },
+        );
+        loader.bind_mvt_neighbor(
+            "roads",
+            1,
+            0,
+            DecodedTile {
+                layers: vec![point_layer("road", &[(30, 40)])],
+            },
+        );
+
+        // Own layer under the plain name, neighbour under `@1,0`.
+        assert!(matches!(loader.load("roads.road"), Ok(Asset::Features(_))));
+        assert!(matches!(
+            loader.load("roads.road@1,0"),
+            Ok(Asset::Features(_))
+        ));
+        // An unbound neighbour is a clean NotFound (→ centre-only, no error).
+        assert!(matches!(
+            loader.load("roads.road@-1,0"),
+            Err(AssetError::NotFound(_))
+        ));
+        // Neighbour geometry stays in its own frame (offset applied by the
+        // consumer, not at bind time).
+        let Ok(Asset::Features(opq)) = loader.load("roads.road@1,0") else {
+            panic!("neighbour bound");
+        };
+        let layer = opq.downcast::<FeatureLayer>().unwrap();
+        assert_eq!(layer.features[0].geometry.points, vec![(30, 40)]);
+    }
+
+    #[test]
+    fn requested_offsets_filter_by_source() {
+        let requested: BTreeSet<String> = [
+            "roads.road",        // own
+            "roads.road@1,0",    // east
+            "roads.road@0,-1",   // north
+            "roads.label@1,0",   // another layer, same offset
+            "water.sea@1,1",     // different source
+            "https://h/{range}", // an asset src, ignored
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+
+        assert_eq!(
+            requested_neighbor_offsets(&requested, "roads"),
+            vec![(0, -1), (1, 0)]
+        );
+        assert_eq!(
+            requested_neighbor_offsets(&requested, "water"),
+            vec![(1, 1)]
+        );
+        assert_eq!(
+            requested_neighbor_offsets(&requested, "absent"),
+            Vec::<(i32, i32)>::new()
+        );
+    }
 
     /// Encode a 2×1 red/green PNG and wrap it as a base64 `data:` URL.
     fn red_green_png_data_url() -> String {

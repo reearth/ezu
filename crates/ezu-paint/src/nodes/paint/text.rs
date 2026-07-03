@@ -1,6 +1,6 @@
-//! `text` — `Features -> Raster`. Draw a text label at every point of
-//! every feature group, shaped and laid out by `ezu-core`'s `text`
-//! module (MapLibre point placement, phase 1: no collision handling).
+//! `text` — `Features -> Raster`. Draw a text label at feature points,
+//! shaped and laid out by `ezu-core`'s `text` module (MapLibre point
+//! placement) with deterministic cross-tile collision.
 //!
 //! `font` names an ordered fallback stack of `font` and/or `glyphs`
 //! sources from the document's `sources` block — outline font files
@@ -13,8 +13,16 @@
 //!
 //! Lines and polygons in the features input are ignored. Drawing is a
 //! pure function of world position (no jitter), so labels match across
-//! tile borders; points outside `[0, extent]` (MVT buffer features)
-//! are drawn too, for the same reason.
+//! tile borders. Collision (default on) is likewise world-space
+//! deterministic: candidates are gathered from this tile plus its 8
+//! neighbour tiles (host-bound under `<source>.<layer>@dx,dy`), deduped
+//! by `(text, quantized world anchor)`, ordered by
+//! `(sort-key, world anchor, text)`, and placed greedily against a grid
+//! — all from world-space quantities, so adjacent tiles agree on every
+//! straddling label. Missing neighbour bindings degrade to centre-only.
+//! Divergence from MapLibre is deliberate and not emulated: no
+//! viewport-centre priority and no per-frame fade in/out. See
+//! [`ezu_core::text::collide`].
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -27,14 +35,17 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use ezu_core::text::{
+    collide::{self, Aabb, Candidate},
     draw, layout, Anchor, Font, Justify, LayoutParams, SdfFontStack, StackEntry, TextBlock,
     TextPaint, TextTransform,
 };
+use ezu_features::FeatureLayer;
 
 use crate::nodes::common::{
-    canvas_into_raster, downcast_features, empty_raster, make_canvas, read_number_or,
-    read_string_or, read_xy,
+    canvas_into_raster, downcast_features, empty_raster, make_canvas, read_bool_or, read_number_or,
+    read_optional_string, read_string_or, read_xy, FeatureGroup,
 };
+use crate::render::collect_groups;
 
 /// Parse an optional raw MapLibre expression field, type-checked against
 /// `expect`. Returns `(parsed, raw_json_text)` for a stable cache hash.
@@ -134,6 +145,31 @@ struct TextNode {
     /// Labels whose rendered bbox half-extent exceeds this many px are
     /// culled (they'd overflow the canvas pad this node requested).
     max_extent_px: f32,
+    // --- Collision (deterministic cross-tile placement) ---
+    /// Whether to run collision. MapLibre's default is on; `false`
+    /// restores the draw-everything behaviour (every label draws).
+    collide: bool,
+    /// MapLibre `text-allow-overlap`: place regardless of collision.
+    allow_overlap: bool,
+    /// MapLibre `text-ignore-placement`: don't block later labels.
+    ignore_placement: bool,
+    /// MapLibre `text-padding`: collision box inflation in px.
+    padding_px: f32,
+    /// MapLibre `symbol-sort-key`: per-feature number; lower places
+    /// first. Absent = 0.
+    sort_key_expr: Option<maplibre_expr::Expr>,
+    sort_key_expr_src: Option<String>,
+    /// The upstream `<source>.<layer>` asset name, used only to spell the
+    /// neighbour binding names in [`Node::asset_inputs`] (the translator
+    /// always sets `source`/`layer`; hand-written recipes may omit them →
+    /// centre-only collision). `None` disables neighbour gathering.
+    neighbor_base: Option<String>,
+    /// The upstream feature filter, reproduced when gathering neighbour
+    /// candidates so they are filtered identically to the tile's own
+    /// features (the translator copies the `features` node's filter here).
+    filter_expr: Option<maplibre_expr::Expr>,
+    filter_expr_src: Option<String>,
+    min_zoom_field: Option<String>,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
 }
@@ -169,7 +205,16 @@ impl Node for TextNode {
         downstream + self.max_extent_px.max(0.0).ceil() as u32
     }
     fn asset_inputs(&self) -> Vec<String> {
-        self.font_keys.clone()
+        let mut keys = self.font_keys.clone();
+        // With collision on and a known upstream source, request the 8
+        // neighbour layers so a host that can fetch them binds them for
+        // cross-tile placement. Unbound neighbours degrade to centre-only.
+        if self.collide {
+            if let Some(base) = &self.neighbor_base {
+                keys.extend(ezu_graph::neighbor_bindings(base));
+            }
+        }
+        keys
     }
     fn eval(
         &self,
@@ -181,7 +226,10 @@ impl Node for TextNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
-        if !feats.has_points() {
+        // With collision off and no own points there is nothing to draw.
+        // With collision on, neighbour tiles may still spill labels into
+        // this tile, so we proceed and decide from the gathered candidates.
+        if !self.collide && !feats.has_points() {
             return Ok(empty_raster(ctx));
         }
 
@@ -220,43 +268,64 @@ impl Node for TextNode {
         let pad = canvas.pad() as f32;
         let tile_w = canvas.tile_width() as f32;
         let tile_h = canvas.tile_height() as f32;
-        let extent = feats.extent.max(1) as f32;
-        let sx = tile_w / extent;
-        let sy = tile_h / extent;
+        let extent_i = feats.extent.max(1) as i64;
+        let sx = tile_w / extent_i as f32;
+        let sy = tile_h / extent_i as f32;
         let z = ctx.tile.z;
         let params = self.layout_params();
+        let (tx, ty) = (ctx.tile.x as i64, ctx.tile.y as i64);
 
         // Shaping is the expensive step; the same (text, size) pair is
         // laid out once per eval no matter how many groups/points repeat
-        // it.
+        // it. Neighbour candidates share this cache (identical exprs →
+        // identical layout across tiles).
         let mut blocks: HashMap<(String, u32), Arc<TextBlock>> = HashMap::new();
         let mut culled = 0usize;
         let mut dropped_chars = 0usize;
         let mut missing_range_chars = 0usize;
 
-        let pm = canvas.pixmap_mut();
-        let mut pm = pm.as_mut();
-        for group in &feats.groups {
+        /// One placed label's draw payload, index-aligned with the
+        /// collision candidate list.
+        struct DrawRec {
+            block: Arc<TextBlock>,
+            anchor: (f32, f32),
+            paint: TextPaint,
+        }
+        let mut cands: Vec<Candidate> = Vec::new();
+        let mut draws: Vec<DrawRec> = Vec::new();
+
+        // Turn one feature group's points into placement candidates,
+        // evaluated at neighbour offset `(dx, dy)` (`(0, 0)` for the
+        // tile's own features). Everything that feeds the collision
+        // decision is derived from the world anchor (exact integer
+        // tile-frame coordinate) and the em box × size — never from
+        // tile-local floats — so adjacent tiles agree.
+        let mut add_group = |group: &FeatureGroup, dx: i64, dy: i64| {
             if group.points.is_empty() {
-                continue;
+                return;
             }
             let ectx = crate::render::group_expr_context(group, z);
-            // The label: the group's expression result, or the constant.
-            // Empty / failed → the group draws nothing.
             let text = match &self.text_expr {
                 Some(e) => match maplibre_expr::evaluate(e, &ectx) {
                     Ok(maplibre_expr::Value::String(s)) => s,
-                    _ => continue,
+                    _ => return,
                 },
                 None => self.text.clone().unwrap_or_default(),
             };
             if text.is_empty() {
-                continue;
+                return;
             }
             let size = eval_number(&self.size_expr, &ectx, const_size).max(0.0);
             if size <= 0.0 {
-                continue;
+                return;
             }
+            let sort_key = match &self.sort_key_expr {
+                Some(e) => match maplibre_expr::evaluate(e, &ectx) {
+                    Ok(maplibre_expr::Value::Number(n)) => n,
+                    _ => 0.0,
+                },
+                None => 0.0,
+            };
             let opacity = eval_number(&self.opacity_expr, &ectx, const_opacity).clamp(0.0, 1.0);
             let mut color = eval_color(&self.color_expr, &ectx, const_color);
             let mut halo_color = eval_color(&self.halo_color_expr, &ectx, const_halo_color);
@@ -268,21 +337,27 @@ impl Node for TextNode {
                 .entry((text.clone(), size.to_bits()))
                 .or_insert_with(|| Arc::new(layout(&text, &fonts, &params)))
                 .clone();
-            dropped_chars += block.dropped_chars;
-            missing_range_chars += block.missing_range_chars;
-            if block.is_empty() {
-                continue;
+            // Count layout warnings once per distinct label (own groups
+            // only; neighbours repeat the same strings).
+            if dx == 0 && dy == 0 {
+                dropped_chars += block.dropped_chars;
+                missing_range_chars += block.missing_range_chars;
             }
-            // A label reaching past the pad this node requested would
-            // clip at tile borders — cull it instead.
+            if block.is_empty() {
+                return;
+            }
+            // A label reaching past the pad this node requested would clip
+            // at tile borders — cull it instead.
             let b = block.bbox;
             let half_extent = [b.min_x, b.max_x, b.min_y, b.max_y]
                 .iter()
                 .fold(0.0f32, |m, v| m.max(v.abs()))
                 * size;
             if half_extent > self.max_extent_px {
-                culled += group.points.len();
-                continue;
+                if dx == 0 && dy == 0 {
+                    culled += group.points.len();
+                }
+                return;
             }
             let paint = TextPaint {
                 size_px: size,
@@ -292,10 +367,105 @@ impl Node for TextNode {
                 halo_blur_px: 0.0,
             };
             for &(x, y) in &group.points {
-                let px = x as f32 * sx + pad;
-                let py = y as f32 * sy + pad;
-                draw(&block, &fonts, &mut pm, (px, py), &paint);
+                let world_ax = (tx + dx) * extent_i + x as i64;
+                let world_ay = (ty + dy) * extent_i + y as i64;
+                // Local world-pixel frame (current tile origin subtracted):
+                // small magnitudes, and translation-invariant so a
+                // neighbour tile — which subtracts its own origin — reaches
+                // identical collision decisions.
+                let lpx = (world_ax - tx * extent_i) as f32 * sx;
+                let lpy = (world_ay - ty * extent_i) as f32 * sy;
+                let aabb = Aabb {
+                    min_x: lpx + b.min_x * size,
+                    min_y: lpy + b.min_y * size,
+                    max_x: lpx + b.max_x * size,
+                    max_y: lpy + b.max_y * size,
+                }
+                .inflate(self.padding_px);
+                cands.push(Candidate {
+                    sort_key,
+                    world_ax,
+                    world_ay,
+                    text: text.clone(),
+                    aabb,
+                    allow_overlap: self.allow_overlap,
+                    ignore_placement: self.ignore_placement,
+                });
+                draws.push(DrawRec {
+                    block: block.clone(),
+                    anchor: (lpx + pad, lpy + pad),
+                    paint,
+                });
             }
+        };
+
+        // The tile's own features.
+        for group in &feats.groups {
+            add_group(group, 0, 0);
+        }
+        // Neighbour candidates (cross-tile placement): re-read each bound
+        // neighbour layer, re-apply the same filter, and evaluate the same
+        // expressions — so both tiles sharing a border produce identical
+        // candidates. Unbound neighbours simply contribute nothing.
+        if self.collide {
+            if let Some(base) = &self.neighbor_base {
+                for dy in -1i32..=1 {
+                    for dx in -1i32..=1 {
+                        if dx == 0 && dy == 0 {
+                            continue;
+                        }
+                        let name = ezu_graph::neighbor_binding(base, dx, dy);
+                        let layer = match ctx.assets.load(&name) {
+                            Ok(Asset::Features(opq)) => opq.downcast::<FeatureLayer>().ok(),
+                            _ => None,
+                        };
+                        let Some(layer) = layer else { continue };
+                        // Mismatched extent would break the shared world frame.
+                        if layer.extent.max(1) as i64 != extent_i {
+                            continue;
+                        }
+                        let groups = collect_groups(
+                            &layer.features,
+                            self.filter_expr.as_ref(),
+                            &self.min_zoom_field,
+                            z,
+                        );
+                        for group in &groups {
+                            add_group(group, dx as i64, dy as i64);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Deterministic placement (or draw-everything when collision off).
+        let placed: Vec<usize> = if self.collide {
+            collide::place(&cands, collide::COLLISION_CELL_PX)
+        } else {
+            (0..cands.len()).collect()
+        };
+
+        let padded_w = tile_w + 2.0 * pad;
+        let padded_h = tile_h + 2.0 * pad;
+        let pm = canvas.pixmap_mut();
+        let mut pm = pm.as_mut();
+        for &i in &placed {
+            let d = &draws[i];
+            // Draw only placed labels whose box touches this padded canvas
+            // (a neighbour's winner may sit entirely outside it).
+            if self.collide {
+                let bb = d.block.bbox;
+                let s = d.paint.size_px;
+                let (ax, ay) = d.anchor;
+                let min_x = ax + bb.min_x * s - self.padding_px;
+                let max_x = ax + bb.max_x * s + self.padding_px;
+                let min_y = ay + bb.min_y * s - self.padding_px;
+                let max_y = ay + bb.max_y * s + self.padding_px;
+                if max_x < 0.0 || min_x > padded_w || max_y < 0.0 || min_y > padded_h {
+                    continue;
+                }
+            }
+            draw(&d.block, &fonts, &mut pm, d.anchor, &d.paint);
         }
         // One summary line per eval, not one per label.
         if culled > 0 {
@@ -341,6 +511,8 @@ impl Node for TextNode {
             (b"halocolorexpr".as_slice(), &self.halo_color_expr_src),
             (b"halowidthexpr".as_slice(), &self.halo_width_expr_src),
             (b"opacityexpr".as_slice(), &self.opacity_expr_src),
+            (b"sortkeyexpr".as_slice(), &self.sort_key_expr_src),
+            (b"filterexpr".as_slice(), &self.filter_expr_src),
         ] {
             if let Some(s) = src {
                 h.update(tag);
@@ -355,8 +527,22 @@ impl Node for TextNode {
             self.line_height,
             self.letter_spacing_em,
             self.max_extent_px,
+            self.padding_px,
         ] {
             h.update(&v.to_le_bytes());
+        }
+        h.update(&[
+            self.collide as u8,
+            self.allow_overlap as u8,
+            self.ignore_placement as u8,
+        ]);
+        if let Some(base) = &self.neighbor_base {
+            h.update(b"nbase");
+            h.update(base.as_bytes());
+        }
+        if let Some(f) = &self.min_zoom_field {
+            h.update(b"mzf");
+            h.update(f.as_bytes());
         }
     }
     fn param_refs(&self) -> Vec<String> {
@@ -477,6 +663,37 @@ impl NodeFactory for TextFactory {
         let letter_spacing_em = read_number_or(fields, "letter-spacing-em", ctx, 0.0)? as f32;
         let max_extent_px = read_number_or(fields, "max-extent-px", ctx, 128.0)? as f32;
 
+        // Collision. Default on (MapLibre's default); `collide: false`
+        // restores the draw-everything behaviour.
+        let collide = read_bool_or(fields, "collide", ctx, true)?;
+        let allow_overlap = read_bool_or(fields, "allow-overlap", ctx, false)?;
+        let ignore_placement = read_bool_or(fields, "ignore-placement", ctx, false)?;
+        let padding_px = read_number_or(fields, "padding-px", ctx, 2.0)? as f32;
+        let (sort_key_expr, sort_key_expr_src) =
+            parse_expr_field(fields, "sort-key-expr", &maplibre_expr::Type::Number)?;
+        // Neighbour candidate gathering: the upstream `<source>.<layer>`
+        // (used only to name the neighbour bindings in `asset_inputs`) plus
+        // the upstream feature filter, so neighbours are filtered exactly
+        // like the tile's own features. All optional — absent → the node
+        // collides against its own tile's features only.
+        let source = read_optional_string(fields, "source")?;
+        let layer = read_optional_string(fields, "layer")?;
+        let neighbor_base = match (source, layer) {
+            (Some(s), Some(l)) => Some(format!("{s}.{l}")),
+            _ => None,
+        };
+        let (filter_expr, filter_expr_src) = match fields.get("filter-expr") {
+            Some(v) => {
+                let expr = maplibre_expr::parse(v).map_err(|e| FactoryError::BadField {
+                    field: "filter-expr".into(),
+                    msg: e.to_string(),
+                })?;
+                (Some(expr), Some(v.to_string()))
+            }
+            None => (None, None),
+        };
+        let min_zoom_field = read_optional_string(fields, "min-zoom-field")?;
+
         let mut ports = vec![PortSpec {
             name: "features",
             accepts: &[PortKind::Features],
@@ -518,6 +735,16 @@ impl NodeFactory for TextFactory {
                 line_height,
                 letter_spacing_em,
                 max_extent_px,
+                collide,
+                allow_overlap,
+                ignore_placement,
+                padding_px,
+                sort_key_expr,
+                sort_key_expr_src,
+                neighbor_base,
+                filter_expr,
+                filter_expr_src,
+                min_zoom_field,
                 ports,
                 param_refs: parts.param_refs,
             }),
@@ -526,7 +753,7 @@ impl NodeFactory for TextFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Text labels at every feature point (MapLibre point placement, no collision handling). `font` is an ordered fallback stack of `font` and/or `glyphs` source names; `text` is a literal string or a MapLibre string expression evaluated per feature group. Paint properties have optional `*-expr` siblings; layout knobs are build-time constants in em.",
+            "description": "Text labels at feature points (MapLibre point placement). `font` is an ordered fallback stack of `font` and/or `glyphs` source names; `text` is a literal string or a MapLibre string expression evaluated per feature group. Paint properties have optional `*-expr` siblings; layout knobs are build-time constants in em. Collision is on by default and is deterministic across tiles: candidates come from this tile plus the 8 neighbour tiles (host-bound under `<source>.<layer>@dx,dy`), so borders stay seamless. Set `source`/`layer` (the upstream feature source) to enable neighbour gathering; without them collision is centre-tile-only.",
             "properties": {
                 "features": schema_frag::node_ref(),
                 "font": { "type": "array", "items": { "type": "string" },
@@ -572,6 +799,26 @@ impl NodeFactory for TextFactory {
                                "description": "Case transform applied before shaping. Default `none`." },
                 "max-extent-px": { "type": "number", "minimum": 0.0,
                                    "description": "Canvas pad this node requests; labels whose bbox half-extent exceeds it are culled with a warning. Default 128." },
+                "collide": { "type": "boolean",
+                             "description": "Whether to run deterministic label collision. Default true (MapLibre's default). Set false to draw every label (the pre-collision behaviour)." },
+                "allow-overlap": { "type": "boolean",
+                                   "description": "MapLibre `text-allow-overlap`: place the label even if it collides. It still reserves its box (blocking later labels) unless `ignore-placement`. Default false." },
+                "ignore-placement": { "type": "boolean",
+                                      "description": "MapLibre `text-ignore-placement`: don't let this label block later ones (skip inserting its collision box). Default false." },
+                "padding-px": { "type": "number", "minimum": 0.0,
+                                "description": "Collision-box inflation in px on every side. Default 2." },
+                "sort-key-expr": {
+                    "description": "A MapLibre number expression (MapLibre `symbol-sort-key`), evaluated per feature group; lower values place first under collision. Absent = 0.",
+                },
+                "source": { "type": "string",
+                            "description": "Upstream feature source name (matches the `features` node). Used only to name the neighbour tile bindings for cross-tile collision. Omit to collide within this tile only." },
+                "layer": { "type": "string",
+                           "description": "Upstream feature layer name (with `source`). Used only to name neighbour bindings for cross-tile collision." },
+                "filter-expr": {
+                    "description": "The upstream `features` filter, reproduced when gathering neighbour candidates so they are filtered identically to this tile's own features. Set it to whatever the `features` node uses.",
+                },
+                "min-zoom-field": { "type": "string",
+                                    "description": "Per-feature `min_zoom` property name, reproduced for neighbour candidate filtering (mirrors the `features` node)." },
             },
             "required": ["features", "font", "text"],
         })

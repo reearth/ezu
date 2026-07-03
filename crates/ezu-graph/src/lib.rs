@@ -17,6 +17,7 @@ pub mod eval;
 pub mod evaluator;
 pub mod graph;
 pub mod input;
+pub mod neighbor;
 pub mod node;
 pub mod port;
 pub mod registry;
@@ -31,6 +32,7 @@ pub use eval::{
 pub use evaluator::{Evaluator, RenderError};
 pub use graph::{BuildError, Edge, Graph, GraphBuilder, NodeId, NodeIx, MAX_PAD};
 pub use input::{parse_param_value, In, InParts, InReader, ScalarType, ACCEPTS_SCALAR};
+pub use neighbor::{neighbor_binding, neighbor_bindings, parse_neighbor_binding};
 pub use node::Node;
 pub use port::{CoordSpace, PortKind, PortSpec};
 pub use registry::{

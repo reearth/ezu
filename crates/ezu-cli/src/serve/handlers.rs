@@ -17,8 +17,9 @@ use ezu::core::TileId as CoreTileId;
 use ezu::features::mvt;
 use ezu::graph::{CanvasInfo, Evaluator, ParamValues, PortValue, TileId};
 use ezu::paint::host::{
-    bind_dem_sources, bind_raster_sources, raster_to_png, raster_to_webp, BrushBankLoader,
-    DemFetchError, DemSourceRegistry, RasterFetchError, RasterSourceRegistry, TileLoader,
+    bind_dem_sources, bind_raster_sources, raster_to_png, raster_to_webp,
+    requested_neighbor_offsets, BrushBankLoader, DemFetchError, DemSourceRegistry,
+    RasterFetchError, RasterSourceRegistry, TileLoader,
 };
 use futures::stream::{self, Stream};
 use serde_json::json;
@@ -281,6 +282,25 @@ async fn get_tile(
         )
     };
 
+    // Cross-tile placement (label collision): fetch only the neighbour
+    // tiles the graph asks for via `@dx,dy` binding names — never the
+    // whole 3×3 window unconditionally. Reuses the MVT cache per tile.
+    let mut neighbor_mvt: Vec<((i32, i32), (bytes::Bytes, CoreTileId))> = Vec::new();
+    if let Some(name) = s.source_name.as_deref() {
+        let offsets = requested_neighbor_offsets(&graph.asset_inputs(), name);
+        let world = 1i64 << tile.z;
+        for (dx, dy) in offsets {
+            let ny = tile.y as i64 + dy as i64;
+            if ny < 0 || ny >= world {
+                continue;
+            }
+            let nx = (tile.x as i64 + dx as i64).rem_euclid(world) as u32;
+            if let Some(hit) = fetch_mvt(&s, CoreTileId::new(tile.z, nx, ny as u32)).await? {
+                neighbor_mvt.push(((dx, dy), hit));
+            }
+        }
+    }
+
     let canvas = CanvasInfo { tile_size, pad };
     let tile_id = TileId {
         z: tile.z,
@@ -302,6 +322,7 @@ async fn get_tile(
                 &cache,
                 &assets,
                 fetched,
+                neighbor_mvt,
                 source_name.as_deref(),
                 dem_bindings,
                 raster_bindings,
@@ -511,6 +532,7 @@ fn render_tile(
     cache: &ezu::graph::Cache,
     assets: &BrushBankLoader,
     fetched_mvt: Option<(bytes::Bytes, CoreTileId)>,
+    neighbor_mvt: Vec<((i32, i32), (bytes::Bytes, CoreTileId))>,
     source_name: Option<&str>,
     dem_bindings: Vec<(String, ezu::graph::ScalarField)>,
     raster_bindings: Vec<(String, ezu::graph::RasterBuf)>,
@@ -543,6 +565,30 @@ fn render_tile(
                 .map_err(|e| format!("overzoom clip: {e}"))?;
         }
         tile_loader.bind_mvt(src_name, decoded);
+        for ((dx, dy), (bytes, src_tile)) in neighbor_mvt {
+            let ntile = CoreTileId::new(
+                tile.z,
+                (tile.x as i64 + dx as i64).rem_euclid(1i64 << tile.z) as u32,
+                (tile.y as i64 + dy as i64) as u32,
+            );
+            let mut decoded = match mvt::decode(&bytes) {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::warn!("neighbour mvt decode {dx},{dy}: {e}");
+                    continue;
+                }
+            };
+            if src_tile != ntile {
+                match mvt::clip_to_descendant(&decoded, src_tile, ntile) {
+                    Ok(d) => decoded = d,
+                    Err(e) => {
+                        tracing::warn!("neighbour overzoom clip {dx},{dy}: {e}");
+                        continue;
+                    }
+                }
+            }
+            tile_loader.bind_mvt_neighbor(src_name, dx, dy, decoded);
+        }
     }
     for (name, field) in dem_bindings {
         tile_loader.bind_scalar_field(name, field);
@@ -551,18 +597,40 @@ fn render_tile(
         tile_loader.bind_raster(name, buf);
     }
     // Project inline GeoJSON (WGS84) into this tile's frame and bind it as a
-    // single feature layer under `<source>.<source>`.
+    // single feature layer under `<source>.<source>`. When the graph asks
+    // for neighbour features (cross-tile label collision), project into
+    // those neighbour tiles too and bind them under `@dx,dy` names.
+    let requested = graph.asset_inputs();
     for (name, data) in geojson_inline {
-        match ezu::features::geojson::decode_projected(&data, tile.z, tile.x, tile.y, 4096) {
-            Ok(features) => {
-                let layer = ezu::features::FeatureLayer {
+        let project = |z: u8, tx: u32, ty: u32| {
+            ezu::features::geojson::decode_projected(&data, z, tx, ty, 4096).map(|features| {
+                ezu::features::FeatureLayer {
                     name: name.clone(),
                     extent: 4096,
                     features,
-                };
+                }
+            })
+        };
+        match project(tile.z, tile.x, tile.y) {
+            Ok(layer) => {
                 tile_loader.bind_features(format!("{name}.{name}"), layer);
             }
             Err(e) => tracing::warn!("geojson source `{name}`: {e}"),
+        }
+        let world = 1i64 << tile.z;
+        for (dx, dy) in requested_neighbor_offsets(&requested, &name) {
+            let ny = tile.y as i64 + dy as i64;
+            if ny < 0 || ny >= world {
+                continue;
+            }
+            let nx = (tile.x as i64 + dx as i64).rem_euclid(world) as u32;
+            match project(tile.z, nx, ny as u32) {
+                Ok(layer) => {
+                    let base = format!("{name}.{name}");
+                    tile_loader.bind_features(ezu::graph::neighbor_binding(&base, dx, dy), layer);
+                }
+                Err(e) => tracing::warn!("geojson neighbour `{name}` {dx},{dy}: {e}"),
+            }
         }
     }
     let ev = Evaluator::new(graph, cache, &tile_loader);

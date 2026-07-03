@@ -158,6 +158,22 @@ pub(super) fn read_number_or(
     read_number(fields, name, ctx)
 }
 
+pub(super) fn read_bool_or(
+    fields: &serde_json::Map<String, Value>,
+    name: &str,
+    ctx: &FactoryCtx<'_>,
+    default: bool,
+) -> Result<bool, FactoryError> {
+    if !fields.contains_key(name) {
+        return Ok(default);
+    }
+    let v = resolve_field(fields, name, ctx)?;
+    v.as_bool().ok_or_else(|| FactoryError::BadField {
+        field: name.into(),
+        msg: "expected boolean".into(),
+    })
+}
+
 pub(super) fn read_string_or(
     fields: &serde_json::Map<String, Value>,
     name: &str,
