@@ -391,6 +391,75 @@ fn text_overlap_enum_maps_and_cooperative_warns() {
 }
 
 #[test]
+fn line_placement_routes_to_the_text_node() {
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "line-placement",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "streets", "type": "symbol", "source": "s", "source-layer": "street",
+          "layout": {
+            "text-field": "{name}",
+            "text-font": ["F"],
+            "symbol-placement": "line",
+            "symbol-spacing": 400,
+            "text-max-angle": 30,
+            "text-keep-upright": false
+          } },
+        { "id": "rivers", "type": "symbol", "source": "s", "source-layer": "water",
+          "layout": {
+            "text-field": "{name}",
+            "text-font": ["F"],
+            "symbol-placement": "line-center"
+          } },
+        { "id": "viewport", "type": "symbol", "source": "s", "source-layer": "rail",
+          "layout": {
+            "text-field": "{name}",
+            "text-font": ["F"],
+            "symbol-placement": "line",
+            "text-rotation-alignment": "viewport"
+          } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let opts = opts_with_fonts(&[("F", "https://fonts.example/F.ttf")]);
+    let (recipe, report) = convert(&style, &opts).unwrap();
+
+    let nodes = recipe["nodes"].as_object().unwrap();
+    // Full knob routing.
+    let streets = &nodes["streets__text"];
+    assert_eq!(streets["placement"], "line");
+    assert_eq!(streets["spacing-px"], 400.0);
+    assert_eq!(streets["max-angle-deg"], 30.0);
+    assert_eq!(streets["keep-upright"], false);
+    // Defaults stay off the node (the `text` node's own defaults apply).
+    let rivers = &nodes["rivers__text"];
+    assert_eq!(rivers["placement"], "line-center");
+    assert!(rivers.get("spacing-px").is_none());
+    assert!(rivers.get("keep-upright").is_none());
+    // No line-placement skip warning; viewport rotation alignment warns
+    // but the text still converts.
+    assert!(
+        !report.warnings.iter().any(|w| w.contains("text skipped")),
+        "unexpected warnings: {:?}",
+        report.warnings
+    );
+    assert_eq!(nodes["viewport__text"]["placement"], "line");
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("text-rotation-alignment: viewport")),
+        "expected a rotation-alignment warning: {:?}",
+        report.warnings
+    );
+
+    // Still a valid ezu Document.
+    let doc_text = serde_json::to_string(&recipe).unwrap();
+    ezu_style::Document::from_json(&doc_text).expect("recipe parses as ezu Document");
+}
+
+#[test]
 fn font_sources_dedupe_by_url_across_layers() {
     const STYLE: &str = r##"{
       "version": 8,

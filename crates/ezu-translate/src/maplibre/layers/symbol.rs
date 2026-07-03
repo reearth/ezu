@@ -1,7 +1,8 @@
 //! `symbol` layer → icon (`layout.icon-image` → sprite `stamp`) and/or
-//! text (`layout.text-field` → the `text` node), each placed at the
-//! layer's point features. An icon+text layer emits both, text blended
-//! over the icon.
+//! text (`layout.text-field` → the `text` node). Icons are placed at
+//! the layer's point features; text follows `symbol-placement` (points,
+//! or along polylines for `line` / `line-center`). An icon+text layer
+//! emits both, text blended over the icon.
 
 use std::collections::HashMap;
 
@@ -216,17 +217,21 @@ fn convert_text(
 ) {
     let get = |key: &str| layout.and_then(|l| l.get(key));
 
-    // Only point placement is supported — a line-placed label needs the
-    // glyph-along-path machinery.
+    // `symbol-placement`: `point` labels each point feature; `line` /
+    // `line-center` walk the layer's polylines with tangent-rotated
+    // glyphs. Anything else falls back to point with a warning.
     let placement = get("symbol-placement")
         .and_then(Value::as_str)
         .unwrap_or("point");
-    if placement != "point" {
-        report.warn(format!(
-            "layer `{id}`: `symbol` text with `symbol-placement: {placement}` — line placement not supported yet, text skipped"
-        ));
-        return;
-    }
+    let placement = match placement {
+        "point" | "line" | "line-center" => placement,
+        other => {
+            report.warn(format!(
+                "layer `{id}`: unknown `symbol-placement: {other}` — using point placement"
+            ));
+            "point"
+        }
+    };
     if get("text-variable-anchor").is_some() {
         report.warn(format!(
             "layer `{id}`: `text-variable-anchor` not supported — using `text-anchor`"
@@ -383,6 +388,28 @@ fn convert_text(
         report,
     ) {
         spec["letter-spacing-em"] = Value::from(s);
+    }
+
+    // Line placement and its layout knobs (point placement is the node
+    // default and ignores them).
+    if placement != "point" {
+        spec["placement"] = Value::from(placement);
+        if let Some(s) = const_number(get("symbol-spacing"), "symbol-spacing", id, report) {
+            spec["spacing-px"] = Value::from(s);
+        }
+        if let Some(a) = const_number(get("text-max-angle"), "text-max-angle", id, report) {
+            spec["max-angle-deg"] = Value::from(a);
+        }
+        if get("text-keep-upright").and_then(Value::as_bool) == Some(false) {
+            spec["keep-upright"] = Value::from(false);
+        }
+        // Glyphs always rotate with the line in ezu (map alignment); a
+        // viewport-aligned line label has no static-renderer equivalent.
+        if get("text-rotation-alignment").and_then(Value::as_str) == Some("viewport") {
+            report.warn(format!(
+                "layer `{id}`: `text-rotation-alignment: viewport` on line placement not supported — glyphs follow the line"
+            ));
+        }
     }
 
     // Collision (deterministic cross-tile placement). Always thread the
