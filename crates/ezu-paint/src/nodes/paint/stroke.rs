@@ -34,9 +34,14 @@ struct StrokeNode {
     /// Optional data-driven stroke width (px): a MapLibre number expression
     /// evaluated per feature group. When set, it overrides `width-px`.
     width_expr: Option<maplibre_expr::Expr>,
-    /// Raw `color-expr` / `width-expr` JSON text, kept for a stable hash.
+    /// Optional data-driven opacity: a MapLibre number expression evaluated
+    /// per feature group. When set, it overrides the constant `opacity`.
+    opacity_expr: Option<maplibre_expr::Expr>,
+    /// Raw `color-expr` / `width-expr` / `opacity-expr` JSON text, for a
+    /// stable hash.
     color_expr_src: Option<String>,
     width_expr_src: Option<String>,
+    opacity_expr_src: Option<String>,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
 }
@@ -70,17 +75,24 @@ impl Node for StrokeNode {
         let const_width = (self.width_px.get(ctx, inputs)? as f32).max(0.0);
         let mut canvas = make_canvas(ctx)?;
 
-        if self.color_expr.is_some() || self.width_expr.is_some() {
-            // Data-driven stroke: resolve color and/or width per feature group
-            // and accumulate each group's lines onto the same canvas. Whichever
-            // expression is absent (or errors for a group) falls back to the
-            // constant `color` / `width-px`.
+        if self.color_expr.is_some() || self.width_expr.is_some() || self.opacity_expr.is_some() {
+            // Data-driven stroke: resolve color, width, and/or opacity per
+            // feature group and accumulate each group's lines onto the same
+            // canvas. Whichever expression is absent (or errors for a group)
+            // falls back to the constant `color` / `width-px` / `opacity`.
             //
             // Synthetic geometry (e.g. `literal-geometry`) carries no groups;
             // fall back to a single empty-property group over the flat lines.
             let z = ctx.tile.z;
             let paint_group = |canvas: &mut _, group: &crate::nodes::common::FeatureGroup| {
                 let ectx = crate::render::group_expr_context(group, z);
+                let alpha = match &self.opacity_expr {
+                    Some(expr) => match maplibre_expr::evaluate(expr, &ectx) {
+                        Ok(maplibre_expr::Value::Number(n)) => n as f32,
+                        _ => opacity,
+                    },
+                    None => opacity,
+                };
                 let color = match &self.color_expr {
                     Some(expr) => match maplibre_expr::evaluate(expr, &ectx) {
                         Ok(maplibre_expr::Value::Color(c)) => tint_alpha_color(
@@ -89,11 +101,11 @@ impl Node for StrokeNode {
                             // opaque data-driven color paints the same pixels as
                             // the constant `color` path.
                             color_f32_to_u8([c.r as f32, c.g as f32, c.b as f32, c.a as f32]),
-                            opacity,
+                            alpha,
                         ),
-                        _ => const_color,
+                        _ => tint_alpha_color(rgba8, alpha),
                     },
-                    None => const_color,
+                    None => tint_alpha_color(rgba8, alpha),
                 };
                 let width = match &self.width_expr {
                     Some(expr) => match maplibre_expr::evaluate(expr, &ectx) {
@@ -157,6 +169,10 @@ impl Node for StrokeNode {
         }
         if let Some(s) = &self.width_expr_src {
             h.update(b"widthexpr");
+            h.update(s.as_bytes());
+        }
+        if let Some(s) = &self.opacity_expr_src {
+            h.update(b"opacityexpr");
             h.update(s.as_bytes());
         }
     }
@@ -280,6 +296,24 @@ impl NodeFactory for StrokeFactory {
             }
             None => (None, None),
         };
+        // `opacity-expr`: a raw MapLibre number expression, evaluated per
+        // feature group at paint time. Overrides `opacity`.
+        let (opacity_expr, opacity_expr_src) = match fields.get("opacity-expr") {
+            Some(v) => {
+                let expr = maplibre_expr::parse(v).map_err(|e| FactoryError::BadField {
+                    field: "opacity-expr".into(),
+                    msg: e.to_string(),
+                })?;
+                let expr =
+                    maplibre_expr::typecheck(&expr, Some(&maplibre_expr::Type::Number), false)
+                        .map_err(|e| FactoryError::BadField {
+                            field: "opacity-expr".into(),
+                            msg: e.to_string(),
+                        })?;
+                (Some(expr), Some(v.to_string()))
+            }
+            None => (None, None),
+        };
 
         let mut ports = vec![PortSpec {
             name: "features",
@@ -303,8 +337,10 @@ impl NodeFactory for StrokeFactory {
                 dash,
                 color_expr,
                 width_expr,
+                opacity_expr,
                 color_expr_src,
                 width_expr_src,
+                opacity_expr_src,
                 ports,
                 param_refs: parts.param_refs,
             }),
@@ -325,6 +361,9 @@ impl NodeFactory for StrokeFactory {
                     "description": "A MapLibre number expression (JSON array, e.g. [\"interpolate\", [\"linear\"], [\"zoom\"], 10, 1, 16, 4]) giving stroke width in pixels, evaluated per feature group at paint time. When present it overrides the constant `width-px`; a group whose expression doesn't resolve to a number falls back to `width-px`.",
                 },
                 "opacity": schema_frag::unit_number(),
+                "opacity-expr": {
+                    "description": "A MapLibre number expression (JSON array) giving stroke opacity, evaluated per feature group at paint time. When present it overrides the constant `opacity`; a group whose expression doesn't resolve to a number falls back to `opacity`.",
+                },
                 "cap": { "type": "string", "enum": ["butt", "round", "square"], "default": "butt" },
                 "join": { "type": "string", "enum": ["miter", "round", "bevel"], "default": "miter" },
                 "dasharray": { "type": "array", "items": { "type": "number" }, "description": "On/off lengths in pixels; omit for solid." },
