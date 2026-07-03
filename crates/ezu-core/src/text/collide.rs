@@ -207,6 +207,74 @@ pub fn place(candidates: &[Candidate], cell_px: f32) -> Vec<usize> {
     placed
 }
 
+/// A line-placed label candidate. Unlike a point label it carries one
+/// collision box *per glyph* (each already inflated by `padding-px`): the
+/// label places only if every box is free, and reserves all of them —
+/// MapLibre's along-line collision circles, mapped onto the AABB grid.
+#[derive(Debug, Clone)]
+pub struct LineCandidate {
+    /// MapLibre `symbol-sort-key`: lower places first. Absent = 0.
+    pub sort_key: f64,
+    /// World anchor in tile-extent units (the label-centre sample point),
+    /// identical across the tiles that share this line.
+    pub world_ax: i64,
+    pub world_ay: i64,
+    /// The evaluated label text, part of the dedup key and order
+    /// tie-break.
+    pub text: String,
+    /// Per-glyph collision boxes in the shared world-pixel frame.
+    pub boxes: Vec<Aabb>,
+    pub allow_overlap: bool,
+    pub ignore_placement: bool,
+}
+
+impl LineCandidate {
+    fn quant(&self) -> (i64, i64) {
+        (
+            self.world_ax.div_euclid(DEDUP_QUANTUM),
+            self.world_ay.div_euclid(DEDUP_QUANTUM),
+        )
+    }
+}
+
+/// Deterministically dedup, order, and greedily place line-label
+/// `candidates` (all-or-nothing per label). Same total order and dedup
+/// key as [`place`]; a label shows only when *every* glyph box is free,
+/// and then reserves all of them (unless `ignore_placement`).
+pub fn place_lines(candidates: &[LineCandidate], cell_px: f32) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..candidates.len()).collect();
+    order.sort_by(|&a, &b| {
+        let (ca, cb) = (&candidates[a], &candidates[b]);
+        ca.sort_key
+            .total_cmp(&cb.sort_key)
+            .then_with(|| ca.quant().1.cmp(&cb.quant().1))
+            .then_with(|| ca.quant().0.cmp(&cb.quant().0))
+            .then_with(|| ca.text.cmp(&cb.text))
+    });
+
+    let mut grid = Grid::new(cell_px);
+    let mut seen: HashSet<(i64, i64, &str)> = HashSet::new();
+    let mut placed = Vec::new();
+    for i in order {
+        let c = &candidates[i];
+        let (qx, qy) = c.quant();
+        if !seen.insert((qx, qy, c.text.as_str())) {
+            continue;
+        }
+        let shown = c.allow_overlap || c.boxes.iter().all(|b| !grid.intersects_any(b));
+        if !shown {
+            continue;
+        }
+        placed.push(i);
+        if !c.ignore_placement {
+            for b in &c.boxes {
+                grid.insert(*b);
+            }
+        }
+    }
+    placed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

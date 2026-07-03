@@ -176,6 +176,10 @@ pub struct PlacedGlyph {
     pub glyph_id: u16,
     pub x: f32,
     pub y: f32,
+    /// Horizontal advance in em (including letter spacing). Point
+    /// placement ignores it; line placement needs it to find each
+    /// glyph's horizontal centre along the path.
+    pub advance: f32,
 }
 
 /// Axis-aligned box in em, relative to the anchor point (y down).
@@ -279,6 +283,7 @@ pub fn layout(text: &str, fonts: &[StackEntry], params: &LayoutParams) -> TextBl
                 x: line_x + pen + g.x_offset,
                 // Shaping offsets are y-up; block coordinates are y-down.
                 y: baseline - g.y_offset,
+                advance: g.x_advance,
             });
             pen += g.x_advance;
         }

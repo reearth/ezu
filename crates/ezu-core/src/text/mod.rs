@@ -37,16 +37,20 @@ pub mod collide;
 mod draw;
 mod font;
 mod layout;
+pub mod line;
 pub mod pbf;
 pub mod sdf;
 mod shape;
 
-pub use collide::{place, Aabb, Candidate, Grid, COLLISION_CELL_PX, DEDUP_QUANTUM};
-pub use draw::{draw, TextPaint};
+pub use collide::{
+    place, place_lines, Aabb, Candidate, Grid, LineCandidate, COLLISION_CELL_PX, DEDUP_QUANTUM,
+};
+pub use draw::{draw, draw_line, GlyphPlacement, TextPaint};
 pub use font::{Font, FontError, StackEntry};
 pub use layout::{
     char_allows_ideographic_breaking, layout, Anchor, EmBox, Justify, LayoutParams, PlacedGlyph,
     TextBlock, TextTransform,
 };
+pub use line::{generate_anchors, place_glyphs, Anchor as LineAnchor, GlyphOnLine, LinePlacement};
 pub use pbf::{decode_glyph_range, GlyphPbfError, GlyphRange};
 pub use sdf::{RangeFetcher, SdfCoverage, SdfFontStack, SdfGlyph};
