@@ -32,6 +32,7 @@ fn registry_emits_document_schema_with_all_ops() {
         "stamp",
         "tiling",
         "place",
+        "text",
     ] {
         assert!(
             s.contains(&format!("\"const\":\"{op}\"")),

@@ -26,12 +26,17 @@
 //!   sheets) becomes `sprite` source(s); `symbol` **icons**,
 //!   `fill-pattern`, and `line-pattern` wire through `icon` (crop) +
 //!   `stamp` / `tiling` / `line-stamp`.
+//! - **`symbol` text** (point placement): `text-field` and its paint /
+//!   layout properties lower to the `text` node, with each `text-font`
+//!   entry mapped to a `font` source through
+//!   [`ConvertOptions::fonts`] (MapLibre styles name glyph stacks; ezu
+//!   needs real font files).
 //!
 //! What is *not* handled yet is reported in [`Report::warnings`] rather
-//! than failing the conversion: `symbol` **text** labels, per-feature
-//! data-driven paint (other than the `match`-bucket case), and expression
-//! operators outside the set above. Inline/remote `geojson` sources *are*
-//! converted (the host projects them into each tile).
+//! than failing the conversion: `symbol-placement: line`, text collision
+//! / variable anchors, and expression operators outside the set above.
+//! Inline/remote `geojson` sources *are* converted (the host projects
+//! them into each tile).
 //!
 //! [MapLibre GL styles]: https://maplibre.org/maplibre-style-spec/
 //! [`Document`]: https://docs.rs/ezu-style
@@ -88,6 +93,13 @@ pub struct ConvertOptions {
     /// layer is off yet present, and flipping the switch's `select` to `b`
     /// turns it on (a build-time toggle, since `switch` resolves at build).
     pub keep_hidden: bool,
+    /// MapLibre fontstack entry name → font file URL, used to lower
+    /// `symbol` text (`text-font`) to ezu `font` sources. MapLibre
+    /// styles reference glyph PBF stacks by name only, so a URL per
+    /// used font must be supplied (CLI: repeatable `--font NAME=URL`).
+    /// Layers whose stack has no mapped entry skip their text with a
+    /// warning.
+    pub fonts: std::collections::HashMap<String, String>,
 }
 
 impl Default for ConvertOptions {
@@ -96,6 +108,7 @@ impl Default for ConvertOptions {
             tile_size: 512,
             pad: 64,
             keep_hidden: false,
+            fonts: std::collections::HashMap::new(),
         }
     }
 }
@@ -152,7 +165,7 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
     let mut report = Report::default();
 
     // --- sources ---------------------------------------------------------
-    let (source_defs, sources) = convert_sources(style, &mut report)?;
+    let (mut source_defs, sources) = convert_sources(style, &mut report)?;
 
     // --- layers → paint node chain --------------------------------------
     let layers = style
@@ -234,6 +247,8 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
                 &mut outputs,
                 zoom_range,
                 &sources,
+                &mut source_defs,
+                &opts.fonts,
                 &mut report,
             ),
             other => report.warn(format!(

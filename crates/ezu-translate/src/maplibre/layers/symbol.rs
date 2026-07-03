@@ -1,18 +1,27 @@
-//! `symbol` layer icon (`layout.icon-image`) → a sprite `stamp`ed at each
-//! point feature. Text labels are not supported yet.
+//! `symbol` layer → icon (`layout.icon-image` → sprite `stamp`) and/or
+//! text (`layout.text-field` → the `text` node), each placed at the
+//! layer's point features. An icon+text layer emits both, text blended
+//! over the icon.
+
+use std::collections::HashMap;
 
 use serde_json::{Map, Value};
 
 use crate::maplibre::filter;
-use crate::maplibre::layers::fill::resolve_number;
+use crate::maplibre::layers::fill::{resolve_number, resolve_paint_color};
 use crate::maplibre::layers::paint_of;
 use crate::maplibre::sources::{features_node, resolve_layer_source, Sources};
 use crate::maplibre::{Report, ZoomRange};
 
-/// A `symbol` layer's **icon** (`layout.icon-image`): place the named sprite
-/// at each point feature (`features` → `icon` → `stamp`). Text labels
-/// (`text-field`) are not supported yet — an icon+text layer draws the icon
-/// and warns about the dropped text.
+/// MapLibre's default `text-font` stack, used when a layer omits it.
+const DEFAULT_TEXT_FONT: [&str; 2] = ["Open Sans Regular", "Arial Unicode MS Regular"];
+
+/// A `symbol` layer: place the `icon-image` sprite (`features` → `icon`
+/// → `stamp`) and/or the `text-field` label (`features` → `text`) at
+/// each point feature. Text needs every used `text-font` entry mapped
+/// to a font URL via [`ConvertOptions::fonts`](crate::maplibre::ConvertOptions);
+/// unmapped stacks skip the text with a warning.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn convert_symbol(
     id: &str,
     layer: &Map<String, Value>,
@@ -20,6 +29,8 @@ pub(crate) fn convert_symbol(
     outputs: &mut Vec<String>,
     zoom_range: ZoomRange,
     sources: &Sources,
+    source_defs: &mut Map<String, Value>,
+    fonts: &HashMap<String, String>,
     report: &mut Report,
 ) {
     let Some((source, source_layer)) = resolve_layer_source(id, layer, sources, report) else {
@@ -32,20 +43,79 @@ pub(crate) fn convert_symbol(
         .and_then(|l| l.get("text-field"))
         .is_some_and(|v| !v.is_null());
 
-    let Some(icon_name) = icon_image.and_then(Value::as_str) else {
-        if icon_image.is_some() {
-            report.warn(format!(
-                "layer `{id}`: data-driven `icon-image` not supported — skipped"
-            ));
-        } else if has_text {
-            report.warn(format!(
-                "layer `{id}`: text-only `symbol` (labels) not supported yet — skipped"
-            ));
-        } else {
-            report.warn(format!(
-                "layer `{id}`: `symbol` without a constant `icon-image` — skipped"
-            ));
+    if icon_image.is_none() && !has_text {
+        report.warn(format!(
+            "layer `{id}`: `symbol` without `icon-image` or `text-field` — skipped"
+        ));
+        return;
+    }
+
+    let base_filter_expr = filter::layer_filter_expr(layer, report, id);
+    // Shared by the icon and text nodes; created on first use.
+    let feat_id = format!("{id}__feat");
+    let mut feat_emitted = false;
+    let mut ensure_feat = |nodes: &mut Map<String, Value>| {
+        if !feat_emitted {
+            nodes.insert(
+                feat_id.clone(),
+                features_node(
+                    &source,
+                    &source_layer,
+                    base_filter_expr.clone(),
+                    min_zoom,
+                    max_zoom,
+                ),
+            );
+            feat_emitted = true;
         }
+        format!("@{feat_id}")
+    };
+
+    if let Some(icon_image) = icon_image {
+        convert_icon(
+            id,
+            icon_image,
+            layer,
+            layout,
+            nodes,
+            outputs,
+            sources,
+            &mut ensure_feat,
+            report,
+        );
+    }
+    if has_text {
+        convert_text(
+            id,
+            layer,
+            layout,
+            nodes,
+            outputs,
+            source_defs,
+            fonts,
+            &mut ensure_feat,
+            report,
+        );
+    }
+}
+
+/// The icon half: `layout.icon-image` → `icon` (sprite crop) + `stamp`.
+#[allow(clippy::too_many_arguments)]
+fn convert_icon(
+    id: &str,
+    icon_image: &Value,
+    layer: &Map<String, Value>,
+    layout: Option<&Map<String, Value>>,
+    nodes: &mut Map<String, Value>,
+    outputs: &mut Vec<String>,
+    sources: &Sources,
+    ensure_feat: &mut impl FnMut(&mut Map<String, Value>) -> String,
+    report: &mut Report,
+) {
+    let Some(icon_name) = icon_image.as_str() else {
+        report.warn(format!(
+            "layer `{id}`: data-driven `icon-image` not supported — skipped"
+        ));
         return;
     };
     let Some((sprite_src, sprite_icon)) = sources.resolve_icon(icon_name) else {
@@ -54,18 +124,8 @@ pub(crate) fn convert_symbol(
         ));
         return;
     };
-    if has_text {
-        report.warn(format!(
-            "layer `{id}`: drawing icon only — `text-field` labels not supported yet"
-        ));
-    }
 
-    let base_filter_expr = filter::layer_filter_expr(layer, report, id);
-    let feat_id = format!("{id}__feat");
-    nodes.insert(
-        feat_id.clone(),
-        features_node(&source, &source_layer, base_filter_expr, min_zoom, max_zoom),
-    );
+    let feat_ref = ensure_feat(nodes);
     let icon_id = format!("{id}__icon");
     nodes.insert(
         icon_id.clone(),
@@ -77,7 +137,7 @@ pub(crate) fn convert_symbol(
     // the matching `*-expr` sibling.
     let stamp_id = format!("{id}__stamp");
     let mut spec = serde_json::json!({
-        "op": "stamp", "features": format!("@{feat_id}"), "image": format!("@{icon_id}")
+        "op": "stamp", "features": feat_ref, "image": format!("@{icon_id}")
     });
 
     // `layout.icon-size` → `scale` (constant) or `scale-expr`.
@@ -113,4 +173,311 @@ pub(crate) fn convert_symbol(
 
     nodes.insert(stamp_id.clone(), spec);
     outputs.push(stamp_id);
+}
+
+/// The text half: `layout.text-field` (+ text paint/layout properties)
+/// → the `text` node.
+#[allow(clippy::too_many_arguments)]
+fn convert_text(
+    id: &str,
+    layer: &Map<String, Value>,
+    layout: Option<&Map<String, Value>>,
+    nodes: &mut Map<String, Value>,
+    outputs: &mut Vec<String>,
+    source_defs: &mut Map<String, Value>,
+    fonts: &HashMap<String, String>,
+    ensure_feat: &mut impl FnMut(&mut Map<String, Value>) -> String,
+    report: &mut Report,
+) {
+    let get = |key: &str| layout.and_then(|l| l.get(key));
+
+    // Only point placement is supported — a line-placed label needs the
+    // glyph-along-path machinery.
+    let placement = get("symbol-placement")
+        .and_then(Value::as_str)
+        .unwrap_or("point");
+    if placement != "point" {
+        report.warn(format!(
+            "layer `{id}`: `symbol` text with `symbol-placement: {placement}` — line placement not supported yet, text skipped"
+        ));
+        return;
+    }
+    if get("text-variable-anchor").is_some() {
+        report.warn(format!(
+            "layer `{id}`: `text-variable-anchor` not supported — using `text-anchor`"
+        ));
+    }
+
+    // `text-font` → font source refs, each entry mapped through the
+    // caller-supplied name → URL table.
+    let stack: Vec<String> = match get("text-font") {
+        None => DEFAULT_TEXT_FONT.iter().map(|s| s.to_string()).collect(),
+        Some(Value::Array(a)) if a.iter().all(Value::is_string) => a
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect(),
+        Some(_) => {
+            report.warn(format!(
+                "layer `{id}`: data-driven `text-font` not supported — text skipped"
+            ));
+            return;
+        }
+    };
+    let (mapped, unmapped): (Vec<&String>, Vec<&String>) =
+        stack.iter().partition(|name| fonts.contains_key(*name));
+    if mapped.is_empty() {
+        report.warn(format!(
+            "layer `{id}`: `symbol` text: no font mapping for {stack:?} — pass `--font \"NAME=URL\"`; text skipped"
+        ));
+        return;
+    }
+    if !unmapped.is_empty() {
+        report.warn(format!(
+            "layer `{id}`: `symbol` text: no font mapping for {unmapped:?} — using the mapped subset"
+        ));
+    }
+    let font_refs: Vec<Value> = mapped
+        .iter()
+        .map(|name| {
+            let url = fonts
+                .get(name.as_str())
+                .expect("partitioned on containment");
+            Value::String(ensure_font_source(source_defs, name, url))
+        })
+        .collect();
+
+    // `text-field`: a constant may carry `{token}`s (rewritten to a
+    // `concat`-of-`get` expression); expressions / legacy functions pass
+    // through raw, except `format` (rewritten to plain concatenated text
+    // — per-section styling has no ezu counterpart yet).
+    let text_value = match get("text-field") {
+        Some(Value::String(s)) => match rewrite_field_tokens(s) {
+            Some(expr) => expr,
+            None => Value::String(s.clone()),
+        },
+        Some(v @ Value::Array(_)) => match rewrite_format_expr(v) {
+            Some(plain) => {
+                report.warn(format!(
+                    "layer `{id}`: `format` text styling dropped — using plain concatenated text"
+                ));
+                plain
+            }
+            None => v.clone(),
+        },
+        Some(v @ Value::Object(_)) => v.clone(), // legacy {stops} function
+        _ => return,
+    };
+
+    let feat_ref = ensure_feat(nodes);
+    let mut spec = serde_json::json!({
+        "op": "text", "features": feat_ref,
+        "font": Value::Array(font_refs), "text": text_value
+    });
+
+    // Paint / size: constant → plain field, expression → `*-expr`.
+    let paint = paint_of(layer);
+    let (size, size_expr) = resolve_number(get("text-size"));
+    if let Some(s) = size {
+        spec["size"] = Value::from(s);
+    }
+    if let Some(e) = size_expr {
+        spec["size-expr"] = e;
+    }
+    let (color, color_expr) = resolve_paint_color(paint.get("text-color"));
+    if let Some(c) = color {
+        spec["color"] = Value::from(c);
+    }
+    if let Some(e) = color_expr {
+        spec["color-expr"] = e;
+    }
+    let (halo_color, halo_color_expr) = resolve_paint_color(paint.get("text-halo-color"));
+    if let Some(c) = halo_color {
+        spec["halo-color"] = Value::from(c);
+    }
+    if let Some(e) = halo_color_expr {
+        spec["halo-color-expr"] = e;
+    }
+    let (halo_width, halo_width_expr) = resolve_number(paint.get("text-halo-width"));
+    if let Some(w) = halo_width {
+        spec["halo-width"] = Value::from(w);
+    }
+    if let Some(e) = halo_width_expr {
+        spec["halo-width-expr"] = e;
+    }
+    let (opacity, opacity_expr) = resolve_number(paint.get("text-opacity"));
+    if let Some(a) = opacity {
+        spec["opacity"] = Value::from(a);
+    }
+    if let Some(e) = opacity_expr {
+        spec["opacity-expr"] = e;
+    }
+
+    // Layout constants. The `text` node takes these at build time, so an
+    // expression here falls back to the default with a warning.
+    if let Some(anchor) = const_string(get("text-anchor"), "text-anchor", id, report) {
+        spec["anchor"] = Value::from(anchor);
+    }
+    if let Some(justify) = const_string(get("text-justify"), "text-justify", id, report) {
+        spec["justify"] = Value::from(justify);
+    }
+    if let Some(transform) = const_string(get("text-transform"), "text-transform", id, report) {
+        spec["transform"] = Value::from(transform);
+    }
+    if let Some(offset) = const_offset(get("text-offset"), id, report) {
+        spec["offset-em"] = serde_json::json!(offset);
+    }
+    if let Some(w) = const_number(get("text-max-width"), "text-max-width", id, report) {
+        spec["max-width-em"] = Value::from(w);
+    }
+    if let Some(h) = const_number(get("text-line-height"), "text-line-height", id, report) {
+        spec["line-height"] = Value::from(h);
+    }
+    if let Some(s) = const_number(
+        get("text-letter-spacing"),
+        "text-letter-spacing",
+        id,
+        report,
+    ) {
+        spec["letter-spacing-em"] = Value::from(s);
+    }
+
+    let text_id = format!("{id}__text");
+    nodes.insert(text_id.clone(), spec);
+    outputs.push(text_id);
+}
+
+/// Reuse (by URL) or declare a `font` source for one fontstack entry.
+/// Returns the source id, derived from the entry name.
+fn ensure_font_source(source_defs: &mut Map<String, Value>, name: &str, url: &str) -> String {
+    // One source per distinct URL, shared across layers and stacks.
+    if let Some((id, _)) = source_defs
+        .iter()
+        .find(|(_, d)| d["type"] == "font" && d["url"] == url)
+    {
+        return id.clone();
+    }
+    // "Noto Sans Regular" → "noto-sans-regular"; suffix on collision
+    // with an unrelated source name.
+    let mut base: String = name
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    while base.contains("--") {
+        base = base.replace("--", "-");
+    }
+    let base = base.trim_matches('-').to_string();
+    let mut id = base.clone();
+    let mut n = 2;
+    while source_defs.contains_key(&id) {
+        id = format!("{base}-{n}");
+        n += 1;
+    }
+    source_defs.insert(
+        id.clone(),
+        serde_json::json!({ "type": "font", "url": url }),
+    );
+    id
+}
+
+/// Rewrite a constant `text-field` carrying `{token}`s into a MapLibre
+/// expression: `{name}` → `["to-string", ["get", "name"]]`, mixed text →
+/// `["concat", …]`. Returns `None` when the string has no tokens.
+fn rewrite_field_tokens(s: &str) -> Option<Value> {
+    let mut parts: Vec<Value> = Vec::new();
+    let mut literal = String::new();
+    let mut rest = s;
+    let mut found = false;
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('}') else {
+            break; // unclosed brace: literal from here on
+        };
+        let token = &after[..close];
+        literal.push_str(&rest[..open]);
+        if !literal.is_empty() {
+            parts.push(Value::String(std::mem::take(&mut literal)));
+        }
+        parts.push(serde_json::json!(["to-string", ["get", token]]));
+        found = true;
+        rest = &after[close + 1..];
+    }
+    if !found {
+        return None;
+    }
+    literal.push_str(rest);
+    if !literal.is_empty() {
+        parts.push(Value::String(literal));
+    }
+    if parts.len() == 1 {
+        return Some(parts.pop().expect("one part"));
+    }
+    let mut concat = vec![Value::String("concat".into())];
+    concat.extend(parts);
+    Some(Value::Array(concat))
+}
+
+/// Rewrite a `["format", …]` expression into the concatenation of its
+/// input sections (dropping the per-section style objects). Returns
+/// `None` for any other expression.
+fn rewrite_format_expr(v: &Value) -> Option<Value> {
+    let arr = v.as_array()?;
+    if arr.first().and_then(Value::as_str) != Some("format") {
+        return None;
+    }
+    // Arguments alternate input, options-object; keep the inputs.
+    let inputs: Vec<&Value> = arr[1..].iter().filter(|a| !a.is_object()).collect();
+    let mut concat = vec![Value::String("concat".into())];
+    for input in inputs {
+        concat.push(serde_json::json!(["to-string", input]));
+    }
+    Some(Value::Array(concat))
+}
+
+/// A constant string layout property; an expression warns and yields
+/// `None` (the node default applies).
+fn const_string(v: Option<&Value>, prop: &str, id: &str, report: &mut Report) -> Option<String> {
+    match v {
+        None => None,
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(_) => {
+            report.warn(format!(
+                "layer `{id}`: expression `{prop}` not supported — using the default"
+            ));
+            None
+        }
+    }
+}
+
+/// A constant numeric layout property; an expression warns and yields
+/// `None` (the node default applies).
+fn const_number(v: Option<&Value>, prop: &str, id: &str, report: &mut Report) -> Option<f64> {
+    match v {
+        None => None,
+        Some(n) if n.is_number() => n.as_f64(),
+        Some(_) => {
+            report.warn(format!(
+                "layer `{id}`: expression `{prop}` not supported — using the default"
+            ));
+            None
+        }
+    }
+}
+
+/// A constant `text-offset` (`[x, y]` in em); an expression warns and
+/// yields `None`.
+fn const_offset(v: Option<&Value>, id: &str, report: &mut Report) -> Option<[f64; 2]> {
+    match v {
+        None => None,
+        Some(Value::Array(a)) if a.len() == 2 && a.iter().all(Value::is_number) => {
+            Some([a[0].as_f64()?, a[1].as_f64()?])
+        }
+        Some(_) => {
+            report.warn(format!(
+                "layer `{id}`: expression `text-offset` not supported — using the default"
+            ));
+            None
+        }
+    }
 }

@@ -163,6 +163,13 @@ struct TranslateCmd {
     /// `switch` (instead of dropping them).
     #[arg(long)]
     keep_hidden: bool,
+    /// Map a MapLibre fontstack entry to a font file URL, as
+    /// `NAME=URL` (repeatable) — e.g.
+    /// `--font "Noto Sans Regular=https://example.com/NotoSans-Regular.ttf"`.
+    /// `symbol` text lowers only for layers whose `text-font` has a
+    /// mapped entry.
+    #[arg(long = "font", value_name = "NAME=URL")]
+    fonts: Vec<String>,
     /// Pretty-print the emitted JSON.
     #[arg(long)]
     pretty: bool,
@@ -474,10 +481,18 @@ async fn run_graph(args: GraphCmd) -> Result<(), Box<dyn std::error::Error>> {
 async fn run_translate(args: TranslateCmd) -> Result<(), Box<dyn std::error::Error>> {
     let text = fetch_text(&args.style).await?;
     let style: serde_json::Value = serde_json::from_str(&text)?;
+    let mut fonts = std::collections::HashMap::new();
+    for entry in &args.fonts {
+        let Some((name, url)) = entry.split_once('=') else {
+            return Err(format!("--font `{entry}`: expected NAME=URL").into());
+        };
+        fonts.insert(name.trim().to_string(), url.trim().to_string());
+    }
     let opts = ezu::translate::maplibre::ConvertOptions {
         tile_size: args.tile_size,
         pad: args.pad,
         keep_hidden: args.keep_hidden,
+        fonts,
     };
     let (recipe, report) = ezu::translate::maplibre::convert(&style, &opts)?;
 

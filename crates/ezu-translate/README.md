@@ -45,7 +45,8 @@ cargo run -p ezu-translate --example convert -- style.json > recipe.json
 | `line` (+ `line-dasharray`, `line-cap`/`join`) | `features` + crisp `stroke` (dash in px) |
 | `raster` | `raster` |
 | `circle` (+ `circle-stroke-*`) | a `circle` sprite `stamp`ed at each point (stroke = a larger ring stamped underneath) |
-| `symbol` **icons** (constant `icon-image`, `icon-size`/`-rotate`/`-opacity`) | `sprite` source → `icon` (crop) → `stamp` at each point (text labels still skipped) |
+| `symbol` **icons** (constant `icon-image`, `icon-size`/`-rotate`/`-opacity`) | `sprite` source → `icon` (crop) → `stamp` at each point |
+| `symbol` **text** (point placement: `text-field`, `-size`/`-color`/`-halo-*`/`-opacity`, anchor/offset/justify/wrapping/transform/spacing) | `font` source(s) → `text` node at each point; each `text-font` entry needs a URL via `ConvertOptions::fonts` / CLI `--font "NAME=URL"` (`{token}` fields rewrite to expressions) |
 | `fill-pattern` (constant) | `icon` → `tiling`, clipped to the fill shape via `blend { clip: true }` |
 | `line-pattern` (constant) | `icon` → `line-stamp` (repeat along the line, fit to `line-width`) |
 | `fill-extrusion` | flat footprint `fill-solid` with `fill-extrusion-color` (no 3-D — height/base dropped) |
@@ -66,9 +67,10 @@ zoom — nothing is baked to a fixed zoom.
 
 ### What it does not (yet) — reported in `Report::warnings`
 
-- **`symbol` text labels** (`text-field`) — needs glyph rasterization,
-  layout, and cross-tile collision. The single largest fidelity gap.
-  Icons on the same layer *are* drawn.
+- **`symbol` text on lines** (`symbol-placement: line`/`line-center`),
+  **collision handling**, and **`text-variable-anchor`** — point-placed
+  labels draw, but nothing hides overlapping ones yet. Layers whose
+  `text-font` has no `--font NAME=URL` mapping skip their text.
 - **SDF (recolourable) icons** — an `sdf: true` sprite entry is drawn as
   its raw RGBA; `icon-color` tinting isn't applied.
 - **Data-driven `icon-image` / `fill-pattern` / `line-pattern`** (only a

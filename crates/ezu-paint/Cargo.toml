@@ -27,6 +27,7 @@ libblur = { workspace = true }
 noise = { workspace = true }
 image = { workspace = true }
 thiserror = { workspace = true }
+tracing = "0.1"
 
 [features]
 default = []
