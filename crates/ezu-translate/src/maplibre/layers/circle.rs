@@ -8,29 +8,30 @@ use crate::maplibre::filter;
 use crate::maplibre::layers::fill::{resolve_number, resolve_paint_color};
 use crate::maplibre::layers::paint_of;
 use crate::maplibre::sources::{features_node, resolve_layer_source, Sources};
-use crate::maplibre::{ConvertOptions, Report};
+use crate::maplibre::{Report, ZoomRange};
 
-/// A `circle` layer → one `circles` node. Each paint prop bakes to a constant
-/// when zoom-resolvable, else its raw expression is emitted as a `*-expr`.
+/// A `circle` layer → one `circles` node. Each paint prop is a constant when
+/// it's a literal, else its raw expression is emitted as a `*-expr`.
 pub(crate) fn convert_circle(
     id: &str,
     layer: &Map<String, Value>,
     nodes: &mut Map<String, Value>,
     outputs: &mut Vec<String>,
-    opts: &ConvertOptions,
+    zoom_range: ZoomRange,
     sources: &Sources,
     report: &mut Report,
 ) {
     let Some((source, source_layer)) = resolve_layer_source(id, layer, sources, report) else {
         return;
     };
+    let (min_zoom, max_zoom) = zoom_range;
     let base_filter_expr = filter::layer_filter_expr(layer, report, id);
     let paint = paint_of(layer);
 
     let feat_id = format!("{id}__feat");
     nodes.insert(
         feat_id.clone(),
-        features_node(&source, &source_layer, base_filter_expr),
+        features_node(&source, &source_layer, base_filter_expr, min_zoom, max_zoom),
     );
 
     let circles_id = format!("{id}__circles");
@@ -40,7 +41,7 @@ pub(crate) fn convert_circle(
     });
 
     // `circle-radius` → `radius` (constant) or `radius-expr`.
-    let (radius, radius_expr) = resolve_number(paint.get("circle-radius"), opts.zoom);
+    let (radius, radius_expr) = resolve_number(paint.get("circle-radius"));
     if let Some(r) = radius {
         spec["radius"] = Value::from(r.max(0.0));
     }
@@ -49,7 +50,7 @@ pub(crate) fn convert_circle(
     }
 
     // `circle-color` → `color` (constant hex) or `color-expr`.
-    let (color_hex, color_expr) = resolve_paint_color(paint.get("circle-color"), opts.zoom);
+    let (color_hex, color_expr) = resolve_paint_color(paint.get("circle-color"));
     if let Some(hex) = color_hex {
         spec["color"] = Value::from(hex);
     }
@@ -58,7 +59,7 @@ pub(crate) fn convert_circle(
     }
 
     // `circle-opacity` → `opacity` (constant) or `opacity-expr`.
-    let (opacity, opacity_expr) = resolve_number(paint.get("circle-opacity"), opts.zoom);
+    let (opacity, opacity_expr) = resolve_number(paint.get("circle-opacity"));
     if let Some(o) = opacity {
         spec["opacity"] = Value::from(o);
     }
@@ -67,7 +68,7 @@ pub(crate) fn convert_circle(
     }
 
     // `circle-stroke-width` → `stroke-width` (constant) or `stroke-width-expr`.
-    let (sw, sw_expr) = resolve_number(paint.get("circle-stroke-width"), opts.zoom);
+    let (sw, sw_expr) = resolve_number(paint.get("circle-stroke-width"));
     if let Some(w) = sw {
         spec["stroke-width"] = Value::from(w.max(0.0));
     }
@@ -77,7 +78,7 @@ pub(crate) fn convert_circle(
 
     // `circle-stroke-color` → `stroke-color` (constant hex) or
     // `stroke-color-expr`.
-    let (sc_hex, sc_expr) = resolve_paint_color(paint.get("circle-stroke-color"), opts.zoom);
+    let (sc_hex, sc_expr) = resolve_paint_color(paint.get("circle-stroke-color"));
     if let Some(hex) = sc_hex {
         spec["stroke-color"] = Value::from(hex);
     }

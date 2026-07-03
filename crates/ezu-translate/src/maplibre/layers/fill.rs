@@ -7,21 +7,22 @@ use crate::maplibre::color::parse_color;
 use crate::maplibre::filter;
 use crate::maplibre::layers::paint_of;
 use crate::maplibre::sources::{features_node, resolve_layer_source, Sources};
-use crate::maplibre::zoom;
-use crate::maplibre::{ConvertOptions, Report};
+use crate::maplibre::{const_color, const_number, is_expr};
+use crate::maplibre::{Report, ZoomRange};
 
 pub(crate) fn convert_fill(
     id: &str,
     layer: &Map<String, Value>,
     nodes: &mut Map<String, Value>,
     outputs: &mut Vec<String>,
-    opts: &ConvertOptions,
+    zoom_range: ZoomRange,
     sources: &Sources,
     report: &mut Report,
 ) {
     let Some((source, source_layer)) = resolve_layer_source(id, layer, sources, report) else {
         return;
     };
+    let (min_zoom, max_zoom) = zoom_range;
     let base_filter_expr = filter::layer_filter_expr(layer, report, id);
     let paint = paint_of(layer);
 
@@ -34,6 +35,7 @@ pub(crate) fn convert_fill(
             &source,
             &source_layer,
             base_filter_expr,
+            zoom_range,
             sources,
             nodes,
             outputs,
@@ -43,19 +45,20 @@ pub(crate) fn convert_fill(
     }
 
     let fill_color = paint.get("fill-color");
-    // `fill-opacity` → constant `fill-alpha` if zoom-bakeable, else a raw
-    // data-driven expression emitted as `opacity-expr`.
-    let (opacity, opacity_expr) = resolve_number(paint.get("fill-opacity"), opts.zoom);
-    // `fill-outline-color` → a 1px outline (ezu `fill-solid` `edge`).
+    // `fill-opacity` → constant `fill-alpha` (literal) else a raw expression
+    // emitted as `opacity-expr`, evaluated per tile.
+    let (opacity, opacity_expr) = resolve_number(paint.get("fill-opacity"));
+    // `fill-outline-color` → a 1px outline (ezu `fill-solid` `edge`). Only a
+    // literal colour is supported; an expression outline is dropped.
     let outline: Option<String> = paint
         .get("fill-outline-color")
-        .and_then(|v| zoom::color_at(v, opts.zoom))
+        .and_then(const_color)
         .and_then(|v| parse_color(&v))
         .map(|(hex, _)| hex);
 
-    // Resolve `fill-color` into either a constant hex (zoom-bakeable) or a
-    // raw data-driven expression emitted as `fill-expr`.
-    let (hex, fill_expr) = resolve_paint_color(fill_color, opts.zoom);
+    // Resolve `fill-color` into either a constant hex (literal) or a raw
+    // expression emitted as `fill-expr`.
+    let (hex, fill_expr) = resolve_paint_color(fill_color);
     if fill_expr.is_none() && hex.is_none() {
         report.warn(format!(
             "layer `{id}`: fill-color is data-driven/unsupported — using grey fallback"
@@ -69,7 +72,7 @@ pub(crate) fn convert_fill(
     let fill_id = format!("{id}__fill");
     nodes.insert(
         feat_id.clone(),
-        features_node(&source, &source_layer, base_filter_expr),
+        features_node(&source, &source_layer, base_filter_expr, min_zoom, max_zoom),
     );
     let mut spec =
         serde_json::json!({ "op": "fill-solid", "features": format!("@{feat_id}"), "fill": hex });
@@ -90,47 +93,39 @@ pub(crate) fn convert_fill(
     outputs.push(fill_id);
 }
 
-/// Route a color paint property into ezu paint. Returns
-/// `(constant_hex, fill_expr)`:
-/// - `zoom::color_at` resolves (constant / zoom-bakeable) → `(Some(hex), None)`.
-/// - otherwise, if the value is a JSON array (a data-driven expression) →
-///   `(None, Some(raw_expr))` so it can be emitted as an `*-expr` field.
-/// - otherwise (a bare unsupported value) → `(None, None)`.
-pub(crate) fn resolve_paint_color(
-    value: Option<&Value>,
-    zoom: Option<f64>,
-) -> (Option<String>, Option<Value>) {
-    if let Some((hex, _)) = value
-        .and_then(|v| zoom::color_at(v, zoom))
-        .and_then(|v| parse_color(&v))
-    {
-        return (Some(hex), None);
+/// Route a colour paint property into ezu paint. Returns
+/// `(constant_hex, color_expr)`:
+/// - a literal colour string → `(Some(hex), None)` (the constant field).
+/// - any function/expression (array or legacy object) → `(None, Some(raw))`
+///   so it can be emitted as an `*-expr` field, evaluated per tile.
+/// - a bare unsupported value → `(None, None)`.
+pub(crate) fn resolve_paint_color(value: Option<&Value>) -> (Option<String>, Option<Value>) {
+    let Some(v) = value else {
+        return (None, None);
+    };
+    if is_expr(v) {
+        return (None, Some(v.clone()));
     }
-    if let Some(v) = value {
-        if v.is_array() {
-            return (None, Some(v.clone()));
-        }
+    if let Some((hex, _)) = const_color(v).and_then(|s| parse_color(&s)) {
+        return (Some(hex), None);
     }
     (None, None)
 }
 
 /// Route a numeric paint property into ezu paint. Returns
 /// `(constant, number_expr)`:
-/// - `zoom::number_at` resolves (constant / zoom-bakeable) → `(Some(n), None)`.
-/// - otherwise, if the value is a JSON array (a data-driven expression) →
-///   `(None, Some(raw_expr))`.
+/// - a literal number → `(Some(n), None)`.
+/// - any function/expression (array or legacy object) → `(None, Some(raw))`.
 /// - otherwise → `(None, None)`.
-pub(crate) fn resolve_number(
-    value: Option<&Value>,
-    zoom: Option<f64>,
-) -> (Option<f64>, Option<Value>) {
-    if let Some(n) = value.and_then(|v| zoom::number_at(v, zoom)) {
-        return (Some(n), None);
+pub(crate) fn resolve_number(value: Option<&Value>) -> (Option<f64>, Option<Value>) {
+    let Some(v) = value else {
+        return (None, None);
+    };
+    if is_expr(v) {
+        return (None, Some(v.clone()));
     }
-    if let Some(v) = value {
-        if v.is_array() {
-            return (None, Some(v.clone()));
-        }
+    if let Some(n) = const_number(v) {
+        return (Some(n), None);
     }
     (None, None)
 }
@@ -145,23 +140,24 @@ pub(crate) fn convert_fill_extrusion(
     layer: &Map<String, Value>,
     nodes: &mut Map<String, Value>,
     outputs: &mut Vec<String>,
-    opts: &ConvertOptions,
+    zoom_range: ZoomRange,
     sources: &Sources,
     report: &mut Report,
 ) {
     let Some((source, source_layer)) = resolve_layer_source(id, layer, sources, report) else {
         return;
     };
+    let (min_zoom, max_zoom) = zoom_range;
     let base_filter_expr = filter::layer_filter_expr(layer, report, id);
     let paint = paint_of(layer);
     let color = paint.get("fill-extrusion-color");
-    let opacity = paint
-        .get("fill-extrusion-opacity")
-        .and_then(|v| zoom::number_at(v, opts.zoom));
+    // `fill-extrusion-opacity` → constant `fill-alpha` (literal) else a raw
+    // expression emitted as `opacity-expr`.
+    let (opacity, opacity_expr) = resolve_number(paint.get("fill-extrusion-opacity"));
 
-    // `fill-extrusion-color` → constant `fill` if zoom-bakeable, else a raw
-    // data-driven expression emitted as `fill-expr`.
-    let (hex, fill_expr) = resolve_paint_color(color, opts.zoom);
+    // `fill-extrusion-color` → constant `fill` (literal) else a raw
+    // expression emitted as `fill-expr`.
+    let (hex, fill_expr) = resolve_paint_color(color);
     if fill_expr.is_none() && hex.is_none() {
         report.warn(format!(
             "layer `{id}`: fill-extrusion-color is data-driven/unsupported — using grey fallback"
@@ -173,7 +169,7 @@ pub(crate) fn convert_fill_extrusion(
     let fill_id = format!("{id}__ext_fill");
     nodes.insert(
         feat_id.clone(),
-        features_node(&source, &source_layer, base_filter_expr),
+        features_node(&source, &source_layer, base_filter_expr, min_zoom, max_zoom),
     );
     let mut spec =
         serde_json::json!({ "op": "fill-solid", "features": format!("@{feat_id}"), "fill": hex });
@@ -182,6 +178,9 @@ pub(crate) fn convert_fill_extrusion(
     }
     if let Some(a) = opacity {
         spec["fill-alpha"] = Value::from(a);
+    }
+    if let Some(expr) = opacity_expr {
+        spec["opacity-expr"] = expr;
     }
     nodes.insert(fill_id.clone(), spec);
     outputs.push(fill_id);
@@ -198,11 +197,13 @@ pub(crate) fn convert_fill_pattern(
     source: &str,
     source_layer: &str,
     base_filter_expr: Option<Value>,
+    zoom_range: ZoomRange,
     sources: &Sources,
     nodes: &mut Map<String, Value>,
     outputs: &mut Vec<String>,
     report: &mut Report,
 ) {
+    let (min_zoom, max_zoom) = zoom_range;
     let Some(name) = pattern.as_str() else {
         report.warn(format!(
             "layer `{id}`: data-driven `fill-pattern` not supported — skipped"
@@ -218,7 +219,7 @@ pub(crate) fn convert_fill_pattern(
     let feat_id = format!("{id}__feat");
     nodes.insert(
         feat_id.clone(),
-        features_node(source, source_layer, base_filter_expr),
+        features_node(source, source_layer, base_filter_expr, min_zoom, max_zoom),
     );
     let shape_id = format!("{id}__shape");
     nodes.insert(

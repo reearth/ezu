@@ -9,11 +9,7 @@ const STYLE: &str = include_str!("fixtures/versatiles-colorful.json");
 #[test]
 fn converts_full_osm_style_to_valid_document() {
     let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
-    let opts = ConvertOptions {
-        zoom: Some(14.0),
-        ..Default::default()
-    };
-    let (recipe, report) = convert(&style, &opts).expect("conversion");
+    let (recipe, report) = convert(&style, &ConvertOptions::default()).expect("conversion");
 
     // Big real style → a large recipe that still builds as an ezu Document.
     let text = serde_json::to_string(&recipe).unwrap();
@@ -47,6 +43,10 @@ fn converts_full_osm_style_to_valid_document() {
         .iter()
         .filter(|w| {
             !(w.contains("symbol")
+                || w.contains("icon-image")
+                // Data-driven icon-size/-rotate/-opacity have no `*-expr` on
+                // the `stamp` node, so they're dropped with a warning.
+                || w.contains("on `stamp`")
                 || w.contains("dasharray")
                 || w.contains("`has`")
                 || w.contains("`!has`")

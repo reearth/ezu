@@ -1,5 +1,5 @@
 //! Small-fidelity conversions: CSS named colours, `visibility: none`, and
-//! per-layer zoom ranges.
+//! per-layer zoom ranges → the `features` node's `min-zoom`/`max-zoom`.
 
 use ezu_translate::maplibre::{convert, ConvertOptions};
 
@@ -28,17 +28,20 @@ fn fills(recipe: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
+fn features(recipe: &serde_json::Value) -> Vec<serde_json::Value> {
+    recipe["nodes"]
+        .as_object()
+        .unwrap()
+        .values()
+        .filter(|n| n["op"] == "features")
+        .cloned()
+        .collect()
+}
+
 #[test]
-fn named_colors_visibility_and_zoom_range() {
+fn named_colors_and_visibility() {
     let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
-    let (recipe, _) = convert(
-        &style,
-        &ConvertOptions {
-            zoom: Some(10.0),
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    let (recipe, _) = convert(&style, &ConvertOptions::default()).unwrap();
 
     // Named colour on background resolves (steelblue → #4682b4).
     let bg = recipe["nodes"]
@@ -55,29 +58,29 @@ fn named_colors_visibility_and_zoom_range() {
         !fills.contains(&"#123456".to_string()),
         "hidden layer emitted"
     );
-    // `maxzoom: 6` layer dropped at z10.
-    assert!(
-        !fills.contains(&"#ff0000".to_string()),
-        "out-of-range layer emitted"
-    );
-    // In-range layer present (white → #ffffff).
+    // Both zoom-ranged layers are now always emitted (recipes are
+    // zoom-independent; the range becomes a render-time gate).
+    assert!(fills.contains(&"#ff0000".to_string()), "red layer missing");
     assert!(
         fills.contains(&"#ffffff".to_string()),
-        "in-range layer missing"
+        "white layer missing"
     );
 }
 
 #[test]
-fn zoom_range_keeps_layer_when_in_range() {
+fn zoom_range_becomes_features_gate() {
     let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
-    // At z5 the `maxzoom: 6` red layer is in range and should appear.
-    let (recipe, _) = convert(
-        &style,
-        &ConvertOptions {
-            zoom: Some(5.0),
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    assert!(fills(&recipe).contains(&"#ff0000".to_string()));
+    let (recipe, _) = convert(&style, &ConvertOptions::default()).unwrap();
+
+    let feats = features(&recipe);
+    // `maxzoom: 6` → a features node with `max-zoom: 6`.
+    assert!(
+        feats.iter().any(|f| f["max-zoom"] == 6),
+        "expected a features node with max-zoom 6: {feats:?}"
+    );
+    // `minzoom: 4` → a features node with `min-zoom: 4`.
+    assert!(
+        feats.iter().any(|f| f["min-zoom"] == 4),
+        "expected a features node with min-zoom 4: {feats:?}"
+    );
 }

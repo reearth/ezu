@@ -8,11 +8,7 @@ const DEMOTILES: &str = include_str!("fixtures/demotiles.json");
 #[test]
 fn converts_and_parses_as_ezu_document() {
     let style: serde_json::Value = serde_json::from_str(DEMOTILES).unwrap();
-    let opts = ConvertOptions {
-        zoom: Some(2.0),
-        ..Default::default()
-    };
-    let (recipe, report) = convert(&style, &opts).expect("conversion");
+    let (recipe, report) = convert(&style, &ConvertOptions::default()).expect("conversion");
 
     // The two symbol layers should be reported as skipped, not silently
     // dropped.

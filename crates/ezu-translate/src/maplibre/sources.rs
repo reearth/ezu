@@ -231,14 +231,28 @@ pub(crate) fn resolve_layer_source(
 /// A `features` source node selecting `(source, source-layer)`, with an
 /// optional raw MapLibre `filter-expr` evaluated per feature by ezu-paint via
 /// `maplibre-expr`. `source` is the ezu vector-source key (= the MapLibre
-/// source name), so multiple vector sources coexist.
-pub(crate) fn features_node(source: &str, source_layer: &str, filter_expr: Option<Value>) -> Value {
+/// source name), so multiple vector sources coexist. `min_zoom`/`max_zoom`
+/// come from the layer's `minzoom`/`maxzoom` and gate the layer at render
+/// time (the layer is drawn only for `min_zoom <= z <= max_zoom`).
+pub(crate) fn features_node(
+    source: &str,
+    source_layer: &str,
+    filter_expr: Option<Value>,
+    min_zoom: Option<u8>,
+    max_zoom: Option<u8>,
+) -> Value {
     let mut m = Map::new();
     m.insert("op".into(), Value::String("features".into()));
     m.insert("source".into(), Value::String(source.to_string()));
     m.insert("layer".into(), Value::String(source_layer.to_string()));
     if let Some(expr) = filter_expr {
         m.insert("filter-expr".into(), expr);
+    }
+    if let Some(z) = min_zoom {
+        m.insert("min-zoom".into(), Value::from(z));
+    }
+    if let Some(z) = max_zoom {
+        m.insert("max-zoom".into(), Value::from(z));
     }
     Value::Object(m)
 }
