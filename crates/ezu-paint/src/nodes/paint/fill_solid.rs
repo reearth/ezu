@@ -25,6 +25,12 @@ struct FillSolidNode {
     blur_sigma: In<f64>,
     /// Build-time upper bound on `blur-sigma`, for pad propagation.
     blur_sigma_bound: f32,
+    /// Optional data-driven fill: a MapLibre color expression evaluated per
+    /// feature group. When set, it overrides the constant `fill` (each group
+    /// paints in its own resolved color).
+    fill_expr: Option<maplibre_expr::Expr>,
+    /// Raw `fill-expr` JSON text, kept only for a stable cache hash.
+    fill_expr_src: Option<String>,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
 }
@@ -54,18 +60,70 @@ impl Node for FillSolidNode {
         if feats.polygons.is_empty() {
             return Ok(empty_raster(ctx));
         }
-        let fill = color_f32_to_u8(self.fill.get(ctx, inputs)?);
         let fill_alpha = self.fill_alpha.get(ctx, inputs)? as f32;
         let edge = match &self.edge {
             Some(e) => Some(color_f32_to_u8(e.get(ctx, inputs)?)),
             None => None,
         };
+        let edge_color = edge.map(rgba8_to_color);
+        let edge_width = self.edge_width.get(ctx, inputs)? as f32;
+        let blur_sigma = self.blur_sigma.get(ctx, inputs)? as f32;
         let mut canvas = make_canvas(ctx)?;
+
+        if let Some(expr) = &self.fill_expr {
+            // Data-driven fill: resolve a color per feature group and
+            // accumulate each group's polygons onto the same canvas.
+            // A group whose expression doesn't evaluate to a color (or
+            // errors) is simply not painted.
+            //
+            // Synthetic geometry (e.g. `literal-geometry`) carries no
+            // groups; fall back to a single empty-property group over the
+            // flat polygons so it still renders (the expression just sees
+            // no feature properties).
+            let z = ctx.tile.z;
+            let paint_group = |canvas: &mut _, group: &crate::nodes::common::FeatureGroup| {
+                let ectx = crate::render::group_expr_context(group, z);
+                let maplibre_expr::Value::Color(c) = (match maplibre_expr::evaluate(expr, &ectx) {
+                    Ok(v) => v,
+                    Err(_) => return,
+                }) else {
+                    return;
+                };
+                // maplibre-expr `Color` stores straight (non-premultiplied)
+                // channels in `0..=1`, exactly like a parsed `#rrggbb[aa]`
+                // literal — so an opaque data-driven color paints the same
+                // pixels as the constant `fill` path.
+                let fill = color_f32_to_u8([c.r as f32, c.g as f32, c.b as f32, c.a as f32]);
+                let style = WatercolorStyle {
+                    fill: tint_alpha_color(fill, fill_alpha),
+                    edge: edge_color,
+                    edge_width,
+                    blur_sigma,
+                };
+                paint_polygons(canvas, &group.polygons, feats.extent, &style);
+            };
+            if feats.groups.is_empty() {
+                let synthetic = crate::nodes::common::FeatureGroup {
+                    properties: std::collections::HashMap::new(),
+                    polygons: feats.polygons.clone(),
+                    lines: Vec::new(),
+                    points: Vec::new(),
+                };
+                paint_group(&mut canvas, &synthetic);
+            } else {
+                for group in &feats.groups {
+                    paint_group(&mut canvas, group);
+                }
+            }
+            return Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))));
+        }
+
+        let fill = color_f32_to_u8(self.fill.get(ctx, inputs)?);
         let style = WatercolorStyle {
             fill: tint_alpha_color(fill, fill_alpha),
-            edge: edge.map(rgba8_to_color),
-            edge_width: self.edge_width.get(ctx, inputs)? as f32,
-            blur_sigma: self.blur_sigma.get(ctx, inputs)? as f32,
+            edge: edge_color,
+            edge_width,
+            blur_sigma,
         };
         paint_polygons(&mut canvas, &feats.polygons, feats.extent, &style);
         Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))))
@@ -82,6 +140,10 @@ impl Node for FillSolidNode {
         }
         self.edge_width.param_hash(h);
         self.blur_sigma.param_hash(h);
+        if let Some(s) = &self.fill_expr_src {
+            h.update(b"fillexpr");
+            h.update(s.as_bytes());
+        }
     }
     fn param_refs(&self) -> Vec<String> {
         self.param_refs.clone()
@@ -105,6 +167,27 @@ impl NodeFactory for FillSolidFactory {
         let edge = r.color_opt("edge")?;
         let edge_width = r.number_or("edge-width", 1.0)?;
         let blur_sigma = r.number_or("blur-sigma", 0.0)?;
+        // `fill-expr`: a raw MapLibre color expression, compiled once and
+        // evaluated per feature group at paint time. Overrides `fill`.
+        let (fill_expr, fill_expr_src) = match fields.get("fill-expr") {
+            Some(v) => {
+                let expr = maplibre_expr::parse(v).map_err(|e| FactoryError::BadField {
+                    field: "fill-expr".into(),
+                    msg: e.to_string(),
+                })?;
+                // Type-check against `Color` so string branches (e.g. a
+                // `["match", …, "#ff0000"]`) coerce to color values, matching
+                // how MapLibre resolves a color-typed paint property.
+                let expr =
+                    maplibre_expr::typecheck(&expr, Some(&maplibre_expr::Type::Color), false)
+                        .map_err(|e| FactoryError::BadField {
+                            field: "fill-expr".into(),
+                            msg: e.to_string(),
+                        })?;
+                (Some(expr), Some(v.to_string()))
+            }
+            None => (None, None),
+        };
         let parts = r.finish();
         let blur_sigma_bound = blur_sigma
             .static_bound()
@@ -135,6 +218,8 @@ impl NodeFactory for FillSolidFactory {
                 edge_width,
                 blur_sigma,
                 blur_sigma_bound,
+                fill_expr,
+                fill_expr_src,
                 ports,
                 param_refs: parts.param_refs,
             }),
@@ -147,6 +232,9 @@ impl NodeFactory for FillSolidFactory {
             "properties": {
                 "features": schema_frag::node_ref(),
                 "fill": schema_frag::color(),
+                "fill-expr": {
+                    "description": "A MapLibre color expression (JSON array, e.g. [\"match\", [\"get\", \"class\"], \"water\", \"#88c\", \"#ccc\"] or [\"interpolate\", [\"linear\"], [\"get\", \"area\"], 0, \"#eef\", 1000, \"#049\"]), evaluated per feature group at paint time. When present it overrides the constant `fill`; a group whose expression doesn't resolve to a color is not painted. Unlocks continuous data-driven fills that constant `fill` can't express.",
+                },
                 "fill-alpha": schema_frag::unit_number(),
                 "edge": schema_frag::color(),
                 "edge-width": schema_frag::px_number(),

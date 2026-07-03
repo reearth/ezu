@@ -64,6 +64,38 @@ pub fn collect_lines(
     out
 }
 
+/// Walk a layer's features and return one [`FeatureGroup`] per surviving
+/// feature, preserving its properties alongside its own geometry. Used by
+/// data-driven paint, which evaluates a per-feature expression. Features
+/// that contribute no geometry at all are skipped (they'd paint nothing).
+pub fn collect_groups(
+    features: &[Feature],
+    filter: &Option<FeatureFilter>,
+    filter_expr: Option<&Expr>,
+    min_zoom_field: &Option<String>,
+    z: u8,
+) -> Vec<crate::nodes::common::FeatureGroup> {
+    let mut out = Vec::new();
+    for f in features {
+        if !feature_passes(f, filter, filter_expr, min_zoom_field, z) {
+            continue;
+        }
+        if f.geometry.polygons.is_empty()
+            && f.geometry.lines.is_empty()
+            && f.geometry.points.is_empty()
+        {
+            continue;
+        }
+        out.push(crate::nodes::common::FeatureGroup {
+            properties: f.properties.clone(),
+            polygons: f.geometry.polygons.clone(),
+            lines: f.geometry.lines.clone(),
+            points: f.geometry.points.clone(),
+        });
+    }
+    out
+}
+
 fn feature_passes(
     f: &Feature,
     filter: &Option<FeatureFilter>,
@@ -117,7 +149,7 @@ fn feature_passes(
 
 /// Build a maplibre-expr evaluation context for one feature: its
 /// properties, geometry type, and the tile zoom.
-fn expr_context(f: &Feature, z: u8) -> EvaluationContext {
+pub(crate) fn expr_context(f: &Feature, z: u8) -> EvaluationContext {
     let properties: BTreeMap<String, ExprValue> = f
         .properties
         .iter()
@@ -132,10 +164,38 @@ fn expr_context(f: &Feature, z: u8) -> EvaluationContext {
         })
 }
 
+/// Build a maplibre-expr evaluation context for a [`FeatureGroup`]: its
+/// properties, geometry type (highest dimension present), and the tile zoom.
+/// The group's own `properties`/geometry drive a per-feature paint expression.
+pub(crate) fn group_expr_context(
+    g: &crate::nodes::common::FeatureGroup,
+    z: u8,
+) -> EvaluationContext {
+    let properties: BTreeMap<String, ExprValue> = g
+        .properties
+        .iter()
+        .map(|(k, v)| (k.clone(), value_to_expr(v)))
+        .collect();
+    let geometry_type = if !g.polygons.is_empty() {
+        "Polygon"
+    } else if !g.lines.is_empty() {
+        "LineString"
+    } else {
+        "Point"
+    };
+    EvaluationContext::new()
+        .with_zoom(z as f64)
+        .with_feature(ExprFeature {
+            properties,
+            geometry_type: Some(geometry_type.to_string()),
+            ..Default::default()
+        })
+}
+
 /// The MapLibre `geometry-type` string for a feature. MVT features carry
 /// one geometry class; if several are present, report the highest-dimension
 /// one (polygon > line > point).
-fn geometry_type(f: &Feature) -> &'static str {
+pub(crate) fn geometry_type(f: &Feature) -> &'static str {
     if !f.geometry.polygons.is_empty() {
         "Polygon"
     } else if !f.geometry.lines.is_empty() {
@@ -148,7 +208,7 @@ fn geometry_type(f: &Feature) -> &'static str {
 /// Convert an ezu feature-property value into a maplibre-expr value. All
 /// numeric kinds collapse to `Number`; there is no distinct integer type in
 /// the expression language.
-fn value_to_expr(v: &Value) -> ExprValue {
+pub(crate) fn value_to_expr(v: &Value) -> ExprValue {
     match v {
         Value::String(s) => ExprValue::String(s.clone()),
         Value::Bool(b) => ExprValue::Bool(*b),

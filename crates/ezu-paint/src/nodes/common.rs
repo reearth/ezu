@@ -14,13 +14,32 @@ use crate::Canvas;
 // ---------------------------------------------------------------------------
 // Concrete payload types for type-erased ports.
 
+/// One feature's properties paired with its own geometry. Produced by
+/// `features` (one per surviving feature); consumed by data-driven paint
+/// nodes that evaluate a per-feature MapLibre expression (e.g. `fill-solid`'s
+/// `fill-expr`). Synthetic geometry (e.g. `literal-geometry`) carries no
+/// groups.
+pub struct FeatureGroup {
+    pub properties: std::collections::HashMap<String, ezu_features::Value>,
+    pub polygons: Vec<ezu_features::Polygon>,
+    pub lines: Vec<Vec<(i32, i32)>>,
+    pub points: Vec<(i32, i32)>,
+}
+
 /// Payload carried on a `Features` port. Produced by `features`;
 /// consumed by `fill-solid`, `fill-dabs`, `line`.
+///
+/// The flat `polygons`/`lines`/`points` fields are the concatenation of
+/// every surviving feature's geometry (in order) — the shape every existing
+/// consumer relies on. `groups` additionally preserves the per-feature split
+/// (with properties) so data-driven paint can evaluate an expression per
+/// feature; it is empty for synthetic geometry with no per-feature properties.
 pub struct FilteredFeatures {
     pub extent: u32,
     pub polygons: Vec<ezu_features::Polygon>,
     pub lines: Vec<Vec<(i32, i32)>>,
     pub points: Vec<(i32, i32)>,
+    pub groups: Vec<FeatureGroup>,
 }
 
 /// Payload carried on a `Brush` port. Wraps a hokusai brush.
@@ -490,6 +509,30 @@ pub(super) fn features_value(
         polygons,
         lines,
         points,
+        groups: Vec::new(),
+    };
+    PortValue::Features(Arc::new(payload) as Arc<dyn Any + Send + Sync>)
+}
+
+/// Build a [`FilteredFeatures`] from per-feature groups: the flat
+/// `polygons`/`lines`/`points` fields are derived by concatenating each
+/// group's geometry (in order), and the groups are stored alongside so
+/// data-driven paint can walk them with per-feature properties.
+pub(super) fn features_value_grouped(extent: u32, groups: Vec<FeatureGroup>) -> PortValue {
+    let mut polygons = Vec::new();
+    let mut lines = Vec::new();
+    let mut points = Vec::new();
+    for g in &groups {
+        polygons.extend(g.polygons.iter().cloned());
+        lines.extend(g.lines.iter().cloned());
+        points.extend(g.points.iter().copied());
+    }
+    let payload = FilteredFeatures {
+        extent,
+        polygons,
+        lines,
+        points,
+        groups,
     };
     PortValue::Features(Arc::new(payload) as Arc<dyn Any + Send + Sync>)
 }

@@ -40,7 +40,7 @@
 use ezu_graph::NodeRegistry;
 
 mod brush;
-mod common;
+pub(crate) mod common;
 mod geometry;
 mod paint;
 mod raster;
