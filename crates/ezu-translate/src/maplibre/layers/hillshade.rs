@@ -2,9 +2,9 @@
 
 use serde_json::{Map, Value};
 
+use crate::maplibre::const_number;
 use crate::maplibre::layers::paint_of;
-use crate::maplibre::zoom;
-use crate::maplibre::{ConvertOptions, Report};
+use crate::maplibre::Report;
 
 /// A `hillshade` layer over a `raster-dem` source → an ezu `dem` node
 /// feeding a `hillshade` node. ezu already has the whole terrain stack
@@ -15,7 +15,6 @@ pub(crate) fn convert_hillshade(
     layer: &Map<String, Value>,
     nodes: &mut Map<String, Value>,
     outputs: &mut Vec<String>,
-    opts: &ConvertOptions,
     report: &mut Report,
 ) {
     let Some(src) = layer.get("source").and_then(Value::as_str) else {
@@ -23,14 +22,16 @@ pub(crate) fn convert_hillshade(
         return;
     };
     let paint = paint_of(layer);
-    // MapLibre defaults: illumination-direction 335°, exaggeration 0.5.
+    // MapLibre defaults: illumination-direction 335°, exaggeration 0.5. The
+    // `hillshade` node's params are plain ports (no `*-expr`), so only a
+    // literal value carries over.
     let azimuth = paint
         .get("hillshade-illumination-direction")
-        .and_then(|v| zoom::number_at(v, opts.zoom))
+        .and_then(const_number)
         .unwrap_or(335.0);
     let exaggeration = paint
         .get("hillshade-exaggeration")
-        .and_then(|v| zoom::number_at(v, opts.zoom))
+        .and_then(const_number)
         .unwrap_or(0.5);
 
     let dem_id = format!("{id}__dem");

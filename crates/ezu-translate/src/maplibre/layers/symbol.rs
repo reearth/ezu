@@ -4,10 +4,10 @@
 use serde_json::{Map, Value};
 
 use crate::maplibre::filter;
+use crate::maplibre::layers::fill::resolve_number;
 use crate::maplibre::layers::paint_of;
 use crate::maplibre::sources::{features_node, resolve_layer_source, Sources};
-use crate::maplibre::zoom;
-use crate::maplibre::{ConvertOptions, Report};
+use crate::maplibre::{Report, ZoomRange};
 
 /// A `symbol` layer's **icon** (`layout.icon-image`): place the named sprite
 /// at each point feature (`features` → `icon` → `stamp`). Text labels
@@ -18,13 +18,14 @@ pub(crate) fn convert_symbol(
     layer: &Map<String, Value>,
     nodes: &mut Map<String, Value>,
     outputs: &mut Vec<String>,
-    opts: &ConvertOptions,
+    zoom_range: ZoomRange,
     sources: &Sources,
     report: &mut Report,
 ) {
     let Some((source, source_layer)) = resolve_layer_source(id, layer, sources, report) else {
         return;
     };
+    let (min_zoom, max_zoom) = zoom_range;
     let layout = layer.get("layout").and_then(Value::as_object);
     let icon_image = layout.and_then(|l| l.get("icon-image"));
     let has_text = layout
@@ -63,7 +64,7 @@ pub(crate) fn convert_symbol(
     let feat_id = format!("{id}__feat");
     nodes.insert(
         feat_id.clone(),
-        features_node(&source, &source_layer, base_filter_expr),
+        features_node(&source, &source_layer, base_filter_expr, min_zoom, max_zoom),
     );
     let icon_id = format!("{id}__icon");
     nodes.insert(
@@ -71,17 +72,30 @@ pub(crate) fn convert_symbol(
         serde_json::json!({ "op": "icon", "sprite": format!("@{sprite_src}"), "name": sprite_icon }),
     );
 
-    let size = layout
-        .and_then(|l| l.get("icon-size"))
-        .and_then(|v| zoom::number_at(v, opts.zoom))
-        .unwrap_or(1.0);
-    let rotate = layout
-        .and_then(|l| l.get("icon-rotate"))
-        .and_then(|v| zoom::number_at(v, opts.zoom))
-        .unwrap_or(0.0);
-    let opacity = paint_of(layer)
-        .get("icon-opacity")
-        .and_then(|v| zoom::number_at(v, opts.zoom));
+    // The `stamp` node's scale / rotation / opacity are plain `In<f64>`
+    // ports with no `*-expr` sibling, so only literal constants carry over;
+    // a zoom/data function on these is not representable and is dropped.
+    let mut const_or_warn = |value: Option<&Value>, prop: &str, default: f64| -> f64 {
+        let (n, expr) = resolve_number(value);
+        if expr.is_some() {
+            report.warn(format!(
+                "layer `{id}`: data-driven `{prop}` not supported on `stamp` — using {default}"
+            ));
+        }
+        n.unwrap_or(default)
+    };
+    let size = const_or_warn(layout.and_then(|l| l.get("icon-size")), "icon-size", 1.0);
+    let rotate = const_or_warn(
+        layout.and_then(|l| l.get("icon-rotate")),
+        "icon-rotate",
+        0.0,
+    );
+    let (opacity, opacity_expr) = resolve_number(paint_of(layer).get("icon-opacity"));
+    if opacity_expr.is_some() {
+        report.warn(format!(
+            "layer `{id}`: data-driven `icon-opacity` not supported on `stamp` — using layer default"
+        ));
+    }
 
     let stamp_id = format!("{id}__stamp");
     let mut spec = serde_json::json!({

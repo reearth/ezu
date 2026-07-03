@@ -153,11 +153,6 @@ struct TranslateCmd {
     /// Output file for the ezu recipe. Writes to stdout when omitted.
     #[arg(long)]
     out: Option<PathBuf>,
-    /// Zoom level at which to bake zoom-dependent functions (`stops`,
-    /// `interpolate`, `step`). Since ezu renders one integer zoom per
-    /// tile, baking at that zoom reproduces MapLibre exactly there.
-    #[arg(long)]
-    zoom: Option<f64>,
     /// Emitted `tile-size` (MapLibre uses 512).
     #[arg(long, default_value_t = 512)]
     tile_size: u32,
@@ -475,7 +470,6 @@ async fn run_translate(args: TranslateCmd) -> Result<(), Box<dyn std::error::Err
     let text = fetch_text(&args.style).await?;
     let style: serde_json::Value = serde_json::from_str(&text)?;
     let opts = ezu::translate::maplibre::ConvertOptions {
-        zoom: args.zoom,
         tile_size: args.tile_size,
         pad: args.pad,
         keep_hidden: args.keep_hidden,

@@ -97,7 +97,8 @@ fn data_driven_fill_opacity_emits_opacity_expr() {
 }
 
 #[test]
-fn data_driven_line_emits_color_expr_and_baked_width() {
+fn data_driven_line_emits_color_expr_and_raw_width_expr() {
+    let width_fn = json!(["interpolate", ["linear"], ["zoom"], 10, 1, 16, 4]);
     let style = style_with_layer(json!({
         "id": "roads",
         "type": "line",
@@ -105,16 +106,13 @@ fn data_driven_line_emits_color_expr_and_baked_width() {
         "source-layer": "transportation",
         "paint": {
             "line-color": ["match", ["get", "class"], "a", "#ff0000", "#00ff00"],
-            "line-width": ["interpolate", ["linear"], ["zoom"], 10, 1, 16, 4]
+            "line-width": width_fn
         }
     }));
-    // At zoom 14 the interpolate is bakeable to a constant; the color match
-    // is data-driven and must become a `color-expr`.
-    let opts = ConvertOptions {
-        zoom: Some(14.0),
-        ..Default::default()
-    };
-    let (recipe, _report) = convert(&style, &opts).expect("conversion");
+    // Recipes are zoom-independent: the zoom `interpolate` on `line-width` is
+    // emitted raw as `width-expr` (evaluated per tile), NOT baked to a
+    // constant; the colour `match` is data-driven → a `color-expr`.
+    let (recipe, _report) = convert(&style, &ConvertOptions::default()).expect("conversion");
 
     let nodes = recipe["nodes"].as_object().unwrap();
     let strokes: Vec<_> = nodes.values().filter(|n| n["op"] == "stroke").collect();
@@ -135,21 +133,90 @@ fn data_driven_line_emits_color_expr_and_baked_width() {
         "color-expr should reference `class`: {serialized}"
     );
 
-    // Zoom-bakeable width → constant width-px, no width-expr.
-    assert!(
-        stroke.get("width-expr").is_none(),
-        "zoom-bakeable width should bake to a constant, not width-expr: {stroke}"
-    );
-    let width = stroke
-        .get("width-px")
-        .and_then(|v| v.as_f64())
-        .expect("stroke should have a constant width-px");
-    // interpolate 10→1, 16→4 at z=14 → 1 + (14-10)/(16-10)*(4-1) = 3.0.
-    assert!(
-        (width - 3.0).abs() < 1e-6,
-        "width baked at z=14 should be 3.0, got {width}"
+    // Zoom width is emitted raw as `width-expr` (not baked).
+    assert_eq!(
+        stroke.get("width-expr"),
+        Some(&width_fn),
+        "zoom width should be emitted raw as width-expr: {stroke}"
     );
 
+    let text = serde_json::to_string(&recipe).unwrap();
+    ezu_style::Document::from_json(&text).expect("recipe parses as ezu Document");
+}
+
+#[test]
+fn zoom_functions_are_emitted_raw_not_baked() {
+    // Legacy `{stops}` on `line-width` → `stroke.width-expr` holds the object
+    // verbatim (not baked to a constant).
+    let stops = json!({ "stops": [[10, 1], [16, 4]] });
+    let style = style_with_layer(json!({
+        "id": "roads",
+        "type": "line",
+        "source": "src",
+        "source-layer": "transportation",
+        "paint": { "line-width": stops }
+    }));
+    let (recipe, _) = convert(&style, &ConvertOptions::default()).expect("conversion");
+    let nodes = recipe["nodes"].as_object().unwrap();
+    let stroke = nodes
+        .values()
+        .find(|n| n["op"] == "stroke")
+        .expect("a stroke node");
+    assert_eq!(
+        stroke.get("width-expr"),
+        Some(&stops),
+        "legacy {{stops}} width should be emitted raw: {stroke}"
+    );
+
+    // `interpolate` on zoom for `fill-color` → `fill-expr` holds it verbatim.
+    let fill_fn = json!([
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        10,
+        "#000000",
+        16,
+        "#ffffff"
+    ]);
+    let style = style_with_layer(json!({
+        "id": "polys",
+        "type": "fill",
+        "source": "src",
+        "source-layer": "land",
+        "paint": { "fill-color": fill_fn }
+    }));
+    let (recipe, _) = convert(&style, &ConvertOptions::default()).expect("conversion");
+    let nodes = recipe["nodes"].as_object().unwrap();
+    let fill = nodes
+        .values()
+        .find(|n| n["op"] == "fill-solid")
+        .expect("a fill-solid node");
+    assert_eq!(
+        fill.get("fill-expr"),
+        Some(&fill_fn),
+        "zoom fill-color should be emitted raw: {fill}"
+    );
+
+    // A layer's `minzoom`/`maxzoom` → the features node's gate.
+    let style = style_with_layer(json!({
+        "id": "polys",
+        "type": "fill",
+        "source": "src",
+        "source-layer": "land",
+        "minzoom": 5,
+        "maxzoom": 12,
+        "paint": { "fill-color": "#123456" }
+    }));
+    let (recipe, _) = convert(&style, &ConvertOptions::default()).expect("conversion");
+    let nodes = recipe["nodes"].as_object().unwrap();
+    let feat = nodes
+        .values()
+        .find(|n| n["op"] == "features")
+        .expect("a features node");
+    assert_eq!(feat["min-zoom"], 5, "features node should gate min-zoom");
+    assert_eq!(feat["max-zoom"], 12, "features node should gate max-zoom");
+
+    // And the recipe still builds.
     let text = serde_json::to_string(&recipe).unwrap();
     ezu_style::Document::from_json(&text).expect("recipe parses as ezu Document");
 }

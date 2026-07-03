@@ -4,51 +4,44 @@
 use serde_json::{Map, Value};
 
 use crate::maplibre::filter;
+use crate::maplibre::layers::fill::{resolve_number, resolve_paint_color};
 use crate::maplibre::layers::paint_of;
 use crate::maplibre::sources::{features_node, resolve_layer_source, Sources};
-use crate::maplibre::zoom;
-use crate::maplibre::{ConvertOptions, Report};
+use crate::maplibre::{Report, ZoomRange};
 
 pub(crate) fn convert_line(
     id: &str,
     layer: &Map<String, Value>,
     nodes: &mut Map<String, Value>,
     outputs: &mut Vec<String>,
-    opts: &ConvertOptions,
+    zoom_range: ZoomRange,
     sources: &Sources,
     report: &mut Report,
 ) {
     let Some((source, source_layer)) = resolve_layer_source(id, layer, sources, report) else {
         return;
     };
+    let (min_zoom, max_zoom) = zoom_range;
     let base_filter_expr = filter::layer_filter_expr(layer, report, id);
     let paint = paint_of(layer);
 
-    // `line-width` → a constant `width-px` when zoom-bakeable, else a raw
-    // data-driven expression emitted as `width-expr`. The pattern path and
+    // `line-width` → a constant `width-px` (literal) else a raw expression
+    // emitted as `width-expr`, evaluated per tile. The pattern path and
     // dasharray scaling need a concrete width, so keep a constant fallback.
-    let line_width = paint.get("line-width");
-    let width_expr: Option<Value> = match line_width {
-        Some(v) if zoom::number_at(v, opts.zoom).is_none() && v.is_array() => Some(v.clone()),
-        _ => None,
-    };
-    let width = line_width
-        .and_then(|v| zoom::number_at(v, opts.zoom))
-        .unwrap_or(1.0)
-        .max(0.1);
+    let (width_const, width_expr) = resolve_number(paint.get("line-width"));
+    let width = width_const.unwrap_or(1.0).max(0.1);
 
     // `line-pattern` replaces the solid stroke: repeat the named sprite icon
     // along each line, scaled to the stroke width (`line-stamp`).
     if let Some(pattern) = paint.get("line-pattern") {
-        let opacity = paint
-            .get("line-opacity")
-            .and_then(|v| zoom::number_at(v, opts.zoom));
+        let (opacity, _) = resolve_number(paint.get("line-opacity"));
         convert_line_pattern(
             id,
             pattern,
             &source,
             &source_layer,
             base_filter_expr,
+            zoom_range,
             width,
             opacity,
             sources,
@@ -59,16 +52,14 @@ pub(crate) fn convert_line(
         return;
     }
 
-    // `line-color` → constant `color` if zoom-bakeable, else a raw data-driven
-    // expression emitted as `color-expr` (with `#000000` as the constant
-    // fallback the `stroke` node always needs).
-    let (color_hex, color_expr) =
-        crate::maplibre::layers::fill::resolve_paint_color(paint.get("line-color"), opts.zoom);
+    // `line-color` → constant `color` (literal) else a raw expression emitted
+    // as `color-expr` (with `#000000` as the constant fallback the `stroke`
+    // node always needs).
+    let (color_hex, color_expr) = resolve_paint_color(paint.get("line-color"));
     let hex = color_hex.unwrap_or_else(|| "#000000".to_string());
-    // `line-opacity` → constant `opacity` if zoom-bakeable, else a raw
-    // data-driven expression emitted as `opacity-expr`.
-    let (opacity, opacity_expr) =
-        crate::maplibre::layers::fill::resolve_number(paint.get("line-opacity"), opts.zoom);
+    // `line-opacity` → constant `opacity` (literal) else a raw expression
+    // emitted as `opacity-expr`.
+    let (opacity, opacity_expr) = resolve_number(paint.get("line-opacity"));
 
     // `layout.line-cap` / `-join` (MapLibre defaults: butt / miter).
     let layout = layer.get("layout").and_then(Value::as_object);
@@ -85,7 +76,7 @@ pub(crate) fn convert_line(
     let stroke_id = format!("{id}__stroke");
     nodes.insert(
         feat_id.clone(),
-        features_node(&source, &source_layer, base_filter_expr),
+        features_node(&source, &source_layer, base_filter_expr, min_zoom, max_zoom),
     );
     // Crisp `stroke` (tiny-skia) rather than a painterly brush, to match
     // MapLibre's clean vector lines.
@@ -133,6 +124,7 @@ pub(crate) fn convert_line_pattern(
     source: &str,
     source_layer: &str,
     base_filter_expr: Option<Value>,
+    zoom_range: ZoomRange,
     width: f64,
     opacity: Option<f64>,
     sources: &Sources,
@@ -140,6 +132,7 @@ pub(crate) fn convert_line_pattern(
     outputs: &mut Vec<String>,
     report: &mut Report,
 ) {
+    let (min_zoom, max_zoom) = zoom_range;
     let Some(name) = pattern.as_str() else {
         report.warn(format!(
             "layer `{id}`: data-driven `line-pattern` not supported — skipped"
@@ -155,7 +148,7 @@ pub(crate) fn convert_line_pattern(
     let feat_id = format!("{id}__feat");
     nodes.insert(
         feat_id.clone(),
-        features_node(source, source_layer, base_filter_expr),
+        features_node(source, source_layer, base_filter_expr, min_zoom, max_zoom),
     );
     let icon_id = format!("{id}__icon");
     nodes.insert(

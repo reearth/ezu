@@ -14,9 +14,13 @@
 //!   `fill-solid` per colour bucket (ezu membership filters do this
 //!   cleanly).
 //! - **filters**: `all` + `==` / `!=` / `in` / `!in`.
-//! - **zoom functions** (legacy `stops` and `interpolate`) are baked to a
-//!   constant at [`ConvertOptions::zoom`] when supplied — ezu renders one
-//!   integer zoom per tile, so a per-zoom bake is exact for that tile.
+//! - **zoom / data functions** (legacy `stops`, `interpolate`, `step`, and
+//!   any other MapLibre expression) are emitted **raw** onto the target
+//!   node's `*-expr` field and evaluated per tile by ezu-paint (via
+//!   `maplibre-expr`, with the tile's zoom in the evaluation context). The
+//!   converter never bakes them to a constant, so one recipe renders
+//!   correctly at every zoom. Layer `minzoom`/`maxzoom` become the
+//!   `features` node's `min-zoom`/`max-zoom` render-time gate.
 //!
 //! - **sprites**: a top-level `sprite` (single URL or `[{id, url}]`
 //!   sheets) becomes `sprite` source(s); `symbol` **icons**,
@@ -38,7 +42,6 @@ pub(crate) mod color;
 pub(crate) mod filter;
 pub(crate) mod layers;
 pub(crate) mod sources;
-pub(crate) mod zoom;
 
 use layers::{
     convert_background, convert_circle, convert_fill, convert_fill_extrusion, convert_hillshade,
@@ -46,14 +49,34 @@ use layers::{
 };
 use sources::convert_sources;
 
+// --- MapLibre paint-value classification ------------------------------------
+//
+// ezu recipes are zoom-independent: a zoom/data *function* is emitted as a raw
+// MapLibre expression on the target node's `*-expr` field and evaluated per
+// tile by ezu-paint (via `maplibre-expr`, with the tile's zoom in the eval
+// context). So the converter never bakes a function to a constant — it only
+// tells a *plain literal constant* apart from *any function/expression*.
+
+/// A plain numeric constant: a bare JSON number. Arrays/objects are
+/// functions/expressions, not constants.
+pub(crate) fn const_number(v: &Value) -> Option<f64> {
+    v.as_f64()
+}
+
+/// A plain colour constant: a literal colour string.
+pub(crate) fn const_color(v: &Value) -> Option<String> {
+    v.as_str().map(str::to_string)
+}
+
+/// Whether the value is a MapLibre expression (array) or a legacy function
+/// object (`{stops}`, …) — i.e. it routes to a `*-expr` field, not a constant.
+pub(crate) fn is_expr(v: &Value) -> bool {
+    v.is_array() || v.is_object()
+}
+
 /// Knobs controlling how a MapLibre style is lowered to an ezu recipe.
 #[derive(Debug, Clone)]
 pub struct ConvertOptions {
-    /// Zoom level at which to bake zoom-dependent property functions
-    /// (legacy `stops`, `interpolate`). `None` uses each function's base
-    /// value (first stop). Because ezu renders a single integer zoom per
-    /// tile, baking at the tile's zoom reproduces MapLibre exactly there.
-    pub zoom: Option<f64>,
     /// Emitted `tile-size`. MapLibre uses 512px tiles.
     pub tile_size: u32,
     /// Emitted `pad` — the buffer around the tile where blurs and
@@ -70,12 +93,28 @@ pub struct ConvertOptions {
 impl Default for ConvertOptions {
     fn default() -> Self {
         Self {
-            zoom: None,
             tile_size: 512,
             pad: 64,
             keep_hidden: false,
         }
     }
+}
+
+/// A layer's `(minzoom, maxzoom)` render-time gate, threaded onto its
+/// `features` node as `min-zoom`/`max-zoom`. `None` where the layer omits
+/// the bound.
+pub(crate) type ZoomRange = (Option<u8>, Option<u8>);
+
+/// Read a layer's `minzoom`/`maxzoom` (JSON numbers) as `u8`, clamped to
+/// ezu's `0..=24` zoom range.
+fn layer_zoom_range(layer: &Map<String, Value>) -> ZoomRange {
+    let read = |key| {
+        layer
+            .get(key)
+            .and_then(Value::as_f64)
+            .map(|z| z.round().clamp(0.0, 24.0) as u8)
+    };
+    (read("minzoom"), read("maxzoom"))
 }
 
 /// Non-fatal notes accumulated during conversion: layers or properties
@@ -141,32 +180,21 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
         if hidden && !opts.keep_hidden {
             continue;
         }
-        // Honour the layer's zoom range at the baked zoom (MapLibre shows a
-        // layer for `minzoom <= z < maxzoom`). ezu renders one zoom per
-        // tile, so a layer outside the range simply isn't emitted.
-        if let Some(z) = opts.zoom {
-            let below = layer
-                .get("minzoom")
-                .and_then(Value::as_f64)
-                .is_some_and(|mz| z < mz);
-            let above = layer
-                .get("maxzoom")
-                .and_then(Value::as_f64)
-                .is_some_and(|mz| z >= mz);
-            if below || above {
-                continue;
-            }
-        }
+        // MapLibre shows a layer for `minzoom <= z < maxzoom`. ezu recipes
+        // are zoom-independent, so rather than dropping the layer at a baked
+        // zoom we thread the range onto the `features` node as a render-time
+        // gate (`min-zoom`/`max-zoom`), computed once per layer.
+        let zoom_range = layer_zoom_range(layer);
         let ty = layer.get("type").and_then(Value::as_str).unwrap_or("");
         let out_start = outputs.len();
         match ty {
-            "background" => convert_background(id, layer, &mut nodes, &mut outputs, opts),
+            "background" => convert_background(id, layer, &mut nodes, &mut outputs),
             "fill" => convert_fill(
                 id,
                 layer,
                 &mut nodes,
                 &mut outputs,
-                opts,
+                zoom_range,
                 &sources,
                 &mut report,
             ),
@@ -175,7 +203,7 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
                 layer,
                 &mut nodes,
                 &mut outputs,
-                opts,
+                zoom_range,
                 &sources,
                 &mut report,
             ),
@@ -185,19 +213,17 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
                 layer,
                 &mut nodes,
                 &mut outputs,
-                opts,
+                zoom_range,
                 &sources,
                 &mut report,
             ),
-            "hillshade" => {
-                convert_hillshade(id, layer, &mut nodes, &mut outputs, opts, &mut report)
-            }
+            "hillshade" => convert_hillshade(id, layer, &mut nodes, &mut outputs, &mut report),
             "fill-extrusion" => convert_fill_extrusion(
                 id,
                 layer,
                 &mut nodes,
                 &mut outputs,
-                opts,
+                zoom_range,
                 &sources,
                 &mut report,
             ),
@@ -206,7 +232,7 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
                 layer,
                 &mut nodes,
                 &mut outputs,
-                opts,
+                zoom_range,
                 &sources,
                 &mut report,
             ),

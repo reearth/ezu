@@ -19,14 +19,7 @@ const STYLE: &str = r##"{
 #[test]
 fn lines_use_stroke_with_dash_and_fill_has_outline() {
     let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
-    let (recipe, _) = convert(
-        &style,
-        &ConvertOptions {
-            zoom: Some(6.0),
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    let (recipe, _) = convert(&style, &ConvertOptions::default()).unwrap();
     let nodes = recipe["nodes"].as_object().unwrap();
 
     // Line → crisp `stroke` with cap/join and pixel dash (3,2 × width 2 = 6,4).
