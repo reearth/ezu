@@ -241,7 +241,14 @@ fn render(paint: &TextPaint) -> tiny_skia::Pixmap {
     let fonts = [latin(), digits()];
     let block = layout("Ag", &fonts, &no_wrap());
     let mut pixmap = tiny_skia::Pixmap::new(96, 64).unwrap();
-    draw(&block, &fonts, &mut pixmap.as_mut(), (48.0, 32.0), paint);
+    draw(
+        &block,
+        &fonts,
+        &mut pixmap.as_mut(),
+        (48.0, 32.0),
+        paint,
+        &[],
+    );
     pixmap
 }
 
@@ -292,4 +299,95 @@ fn halo_sits_behind_the_fill() {
         .filter(|p| p.alpha() == 255 && p.green() > 200 && p.blue() > 200)
         .count();
     assert!(white > 20, "expected white halo pixels, got {white}");
+}
+
+// --- format sections (per-section font / scale) -----------------------------
+
+#[test]
+fn single_section_equals_plain_layout() {
+    use ezu_core::text::{layout_sections, SectionSpec};
+    let fonts = [latin(), digits()];
+    let params = no_wrap();
+    let plain = layout("A1B", &fonts, &params);
+    let sectioned = layout_sections(
+        &[SectionSpec {
+            text: "A1B",
+            fonts: 0..fonts.len(),
+            scale: 1.0,
+        }],
+        &fonts,
+        &params,
+    );
+    assert_eq!(plain.glyphs.len(), sectioned.glyphs.len());
+    for (a, b) in plain.glyphs.iter().zip(&sectioned.glyphs) {
+        assert_eq!((a.font, a.glyph_id), (b.font, b.glyph_id));
+        assert_eq!(
+            (a.x.to_bits(), a.y.to_bits()),
+            (b.x.to_bits(), b.y.to_bits())
+        );
+        assert_eq!(b.scale, 1.0);
+        assert_eq!(b.section, 0);
+    }
+    assert_eq!(plain.bbox, sectioned.bbox);
+}
+
+#[test]
+fn each_section_shapes_against_its_own_font_subrange() {
+    use ezu_core::text::{layout_sections, SectionSpec};
+    // Flat stack [latin, digits]; section 0 ("AB") may use only latin,
+    // section 1 ("12") only digits.
+    let fonts = [latin(), digits()];
+    let block = layout_sections(
+        &[
+            SectionSpec {
+                text: "AB",
+                fonts: 0..1,
+                scale: 1.0,
+            },
+            SectionSpec {
+                text: "12",
+                fonts: 1..2,
+                scale: 1.0,
+            },
+        ],
+        &fonts,
+        &no_wrap(),
+    );
+    assert_eq!(block.dropped_chars, 0);
+    // Section 0 glyphs shaped by the latin font (index 0), section 1 by
+    // the digits font (index 1), and each glyph tagged with its section.
+    for g in &block.glyphs {
+        match g.section {
+            0 => assert_eq!(g.font, 0, "AB should use latin"),
+            1 => assert_eq!(g.font, 1, "12 should use digits"),
+            s => panic!("unexpected section {s}"),
+        }
+    }
+    assert!(block.glyphs.iter().any(|g| g.section == 0));
+    assert!(block.glyphs.iter().any(|g| g.section == 1));
+}
+
+#[test]
+fn font_scale_grows_a_sections_advances() {
+    use ezu_core::text::{layout_sections, SectionSpec};
+    let fonts = [latin(), digits()];
+    let width = |scale: f32| {
+        layout_sections(
+            &[SectionSpec {
+                text: "AB",
+                fonts: 0..1,
+                scale,
+            }],
+            &fonts,
+            &no_wrap(),
+        )
+        .bbox
+        .width()
+    };
+    // A 2× section is about twice as wide (advances carry the scale).
+    let (w1, w2) = (width(1.0), width(2.0));
+    assert!(
+        (w2 - 2.0 * w1).abs() < 0.05 * w1,
+        "2x section width {w2} should be ~2x the 1x width {w1}"
+    );
 }

@@ -692,3 +692,65 @@ fn all_string_array_expression_text_font_is_treated_as_dynamic() {
         report.warnings
     );
 }
+
+#[test]
+fn format_text_field_passes_through_and_registers_section_fonts() {
+    // A `format` label with a per-section `text-font` (and a `vertical-align`
+    // to warn about). The expression passes through verbatim on `text`, and
+    // the section's stack is registered in `font-stacks`.
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "fmt",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "places", "type": "symbol", "source": "s", "source-layer": "place",
+          "layout": {
+            "text-font": ["Noto Sans Regular"],
+            "text-field": ["format",
+              ["get", "name"], {},
+              "\n", {},
+              ["get", "name:hi"], {"text-font": ["literal", ["Noto Sans Devanagari Regular"]],
+                                   "font-scale": 0.8, "vertical-align": "bottom"}]
+          } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let opts = opts_with_fonts(&[
+        ("Noto Sans Regular", "https://fonts.example/NotoSans.ttf"),
+        (
+            "Noto Sans Devanagari Regular",
+            "https://fonts.example/NotoSansDevanagari.ttf",
+        ),
+    ]);
+    let (recipe, report) = convert(&style, &opts).unwrap();
+    let nodes = recipe["nodes"].as_object().unwrap();
+    let text = nodes
+        .values()
+        .find(|n| n["op"] == "text")
+        .expect("text node");
+
+    // The `format` expression passes through unchanged (no flatten to concat).
+    assert_eq!(text["text"][0], "format");
+    // The section's `text-font` is registered under its canonical key.
+    assert_eq!(
+        text["font-stacks"]["Noto Sans Devanagari Regular"],
+        serde_json::json!(["noto-sans-devanagari-regular"])
+    );
+    // `vertical-align` is warned about, and `format` is not "dropped".
+    assert!(
+        report.warnings.iter().any(|w| w.contains("vertical-align")),
+        "expected a vertical-align warning: {:?}",
+        report.warnings
+    );
+    assert!(
+        !report
+            .warnings
+            .iter()
+            .any(|w| w.contains("format") && w.contains("dropped")),
+        "format must not be flattened: {:?}",
+        report.warnings
+    );
+
+    let doc_text = serde_json::to_string(&recipe).unwrap();
+    ezu_style::Document::from_json(&doc_text).expect("recipe parses as ezu Document");
+}

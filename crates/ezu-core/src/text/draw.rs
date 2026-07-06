@@ -30,6 +30,25 @@ pub struct TextPaint {
     pub halo_blur_px: f32,
 }
 
+/// Per-`format`-section fill override, indexed by [`PlacedGlyph::section`].
+/// A `None` color (or a section past the end of the table) falls back to
+/// [`TextPaint::color`]. Halo color/width stay block-level — MapLibre `format`
+/// has no per-section halo. Callers pass an empty slice for unstyled text.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SectionPaint {
+    /// Straight sRGB RGBA in `[0, 1]`, with the group opacity already
+    /// multiplied into alpha by the caller.
+    pub color: Option<[f32; 4]>,
+}
+
+/// The fill color for a glyph: its section's override, else the block color.
+fn glyph_fill(paint: &TextPaint, sections: &[SectionPaint], section: u16) -> [f32; 4] {
+    sections
+        .get(section as usize)
+        .and_then(|s| s.color)
+        .unwrap_or(paint.color)
+}
+
 /// The shader's `EDGE_GAMMA` anti-aliasing constant (at device pixel
 /// ratio 1 — ezu tiles are 1:1).
 const EDGE_GAMMA: f32 = 0.105;
@@ -48,34 +67,39 @@ pub fn draw(
     pixmap: &mut PixmapMut<'_>,
     origin: (f32, f32),
     paint: &TextPaint,
+    sections: &[SectionPaint],
 ) {
     if block.is_empty() || paint.size_px <= 0.0 {
         return;
     }
-    // Glyph outlines are in font units (y-up); flip and scale to px.
-    let transform_of = |g: &super::layout::PlacedGlyph, scale: f32| {
+    // Glyph outlines are in font units (y-up); flip and scale to px. `g.x`/
+    // `g.y` are em block coordinates (advances already carry the section
+    // scale), so positions use the base size; only the glyph's ink `scale`
+    // carries the per-section `font-scale`.
+    let transform_of = |g: &PlacedGlyph, scale: f32| {
         Transform::from_translate(
             origin.0 + g.x * paint.size_px,
             origin.1 + g.y * paint.size_px,
         )
         .pre_scale(scale, -scale)
     };
-    // SDF glyphs are rasterized at the 24 px em.
-    let font_scale = paint.size_px / SDF_EM_PX;
 
     if paint.halo_width_px > 0.0 {
         let mut halo = Paint::default();
         halo.set_color(color_of(paint.halo_color));
         halo.anti_alias = true;
         for g in &block.glyphs {
+            // SDF glyphs are rasterized at the 24 px em, per-glyph scaled.
+            let font_scale = paint.size_px * g.scale / SDF_EM_PX;
             match &fonts[g.font] {
                 StackEntry::Outline(font) => {
                     let Some(path) = font.glyph_path(g.glyph_id) else {
                         continue;
                     };
-                    let scale = paint.size_px / font.units_per_em();
+                    let scale = paint.size_px * g.scale / font.units_per_em();
                     // The stroke runs in path (font-unit) space; the transform
-                    // scales it back to `2 × halo-width` px.
+                    // scales it back to `2 × halo-width` px (a fixed px width,
+                    // independent of the glyph's `font-scale`).
                     let stroke = Stroke {
                         width: 2.0 * paint.halo_width_px / scale,
                         line_cap: LineCap::Round,
@@ -111,16 +135,18 @@ pub fn draw(
         }
     }
 
-    let mut fill = Paint::default();
-    fill.set_color(color_of(paint.color));
-    fill.anti_alias = true;
     for g in &block.glyphs {
+        let font_scale = paint.size_px * g.scale / SDF_EM_PX;
+        let color = glyph_fill(paint, sections, g.section);
         match &fonts[g.font] {
             StackEntry::Outline(font) => {
                 let Some(path) = font.glyph_path(g.glyph_id) else {
                     continue;
                 };
-                let scale = paint.size_px / font.units_per_em();
+                let scale = paint.size_px * g.scale / font.units_per_em();
+                let mut fill = Paint::default();
+                fill.set_color(color_of(color));
+                fill.anti_alias = true;
                 pixmap.fill_path(
                     &path,
                     &fill,
@@ -138,7 +164,7 @@ pub fn draw(
                     &glyph,
                     sdf_pen(origin, g, paint.size_px),
                     font_scale,
-                    paint.color,
+                    color,
                     SDF_EDGE,
                     EDGE_GAMMA / font_scale,
                 );
@@ -317,25 +343,26 @@ pub fn draw_line(
     placements: &[GlyphPlacement],
     perp_offset_px: f32,
     paint: &TextPaint,
+    sections: &[SectionPaint],
 ) {
     if block.is_empty() || paint.size_px <= 0.0 || placements.len() != block.glyphs.len() {
         return;
     }
     let size = paint.size_px;
-    let font_scale = size / SDF_EM_PX;
 
     if paint.halo_width_px > 0.0 {
         let mut halo = Paint::default();
         halo.set_color(color_of(paint.halo_color));
         halo.anti_alias = true;
         for (g, p) in block.glyphs.iter().zip(placements) {
+            let font_scale = size * g.scale / SDF_EM_PX;
             let t = line_glyph_transform(g, p, size, perp_offset_px);
             match &fonts[g.font] {
                 StackEntry::Outline(font) => {
                     let Some(path) = font.glyph_path(g.glyph_id) else {
                         continue;
                     };
-                    let scale = size / font.units_per_em();
+                    let scale = size * g.scale / font.units_per_em();
                     let stroke = Stroke {
                         width: 2.0 * paint.halo_width_px / scale,
                         line_cap: LineCap::Round,
@@ -367,17 +394,19 @@ pub fn draw_line(
         }
     }
 
-    let mut fill = Paint::default();
-    fill.set_color(color_of(paint.color));
-    fill.anti_alias = true;
     for (g, p) in block.glyphs.iter().zip(placements) {
+        let font_scale = size * g.scale / SDF_EM_PX;
+        let color = glyph_fill(paint, sections, g.section);
         let t = line_glyph_transform(g, p, size, perp_offset_px);
         match &fonts[g.font] {
             StackEntry::Outline(font) => {
                 let Some(path) = font.glyph_path(g.glyph_id) else {
                     continue;
                 };
-                let scale = size / font.units_per_em();
+                let scale = size * g.scale / font.units_per_em();
+                let mut fill = Paint::default();
+                fill.set_color(color_of(color));
+                fill.anti_alias = true;
                 pixmap.fill_path(
                     &path,
                     &fill,
@@ -395,7 +424,7 @@ pub fn draw_line(
                     &glyph,
                     t,
                     font_scale,
-                    paint.color,
+                    color,
                     SDF_EDGE,
                     EDGE_GAMMA / font_scale,
                 );

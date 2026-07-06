@@ -23,15 +23,20 @@
 //! 2. [`draw`] — rasterize a [`TextBlock`] onto a `tiny_skia::PixmapMut`
 //!    at a given origin and font size, with fill color and optional halo.
 //!
-//! # Scope (phase 1)
+//! MapLibre `format` sections are supported: [`layout_sections`] lays out
+//! per-section font (a subrange of the stack) and `font-scale`, and [`draw`]
+//! takes a per-section fill table (see [`SectionPaint`]). Per-section
+//! `vertical-align` is not applied, and mixed-scale line metrics step by the
+//! constant line height rather than the per-line max scale.
 //!
-//! Deliberately not handled yet; callers should not expect them:
+//! # Scope
+//!
+//! Deliberately not handled; callers should not expect them:
 //!
 //! - bidi / RTL reordering (input is laid out in logical order, LTR)
 //! - vertical writing mode
 //! - color-emoji tables (`COLR` / `CBDT`) — such glyphs draw as their
 //!   monochrome outline, or not at all if the font has none
-//! - MapLibre `format` sections (per-span font / size / color)
 
 pub mod collide;
 mod draw;
@@ -45,11 +50,11 @@ mod shape;
 pub use collide::{
     place, place_lines, Aabb, Candidate, Grid, LineCandidate, COLLISION_CELL_PX, DEDUP_QUANTUM,
 };
-pub use draw::{draw, draw_line, GlyphPlacement, TextPaint};
+pub use draw::{draw, draw_line, GlyphPlacement, SectionPaint, TextPaint};
 pub use font::{Font, FontError, StackEntry};
 pub use layout::{
-    char_allows_ideographic_breaking, layout, Anchor, EmBox, Justify, LayoutParams, PlacedGlyph,
-    TextBlock, TextTransform,
+    char_allows_ideographic_breaking, layout, layout_sections, Anchor, EmBox, Justify,
+    LayoutParams, PlacedGlyph, SectionSpec, TextBlock, TextTransform,
 };
 pub use line::{generate_anchors, place_glyphs, Anchor as LineAnchor, GlyphOnLine, LinePlacement};
 pub use pbf::{decode_glyph_range, GlyphPbfError, GlyphRange};
