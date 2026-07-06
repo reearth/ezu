@@ -135,6 +135,47 @@ fn label_text(value: &maplibre_expr::Value) -> Option<String> {
     }
 }
 
+/// Canonical registry key for a font stack: names trimmed, joined with `,`
+/// (no space). Matches `maplibre_expr`'s `FormatSection::font_stack` so a
+/// `format` section's stack and a `font-expr` result look up identically.
+fn stack_key<'a>(names: impl Iterator<Item = &'a str>) -> String {
+    names.map(str::trim).collect::<Vec<_>>().join(",")
+}
+
+/// All of a `text` node's font stacks, loaded once per eval. `font_id` is a
+/// stable small integer — `0` = the default stack, `i + 1` = the i-th
+/// registry entry in recipe declaration order — so two tiles built from the
+/// same recipe assign identical ids (used by the layout cache and the
+/// collision tie-break).
+struct FontRegistry {
+    /// `font_id` 0.
+    default: Vec<StackEntry>,
+    /// `font_id` i+1, aligned with `TextNode::font_stacks`.
+    stacks: Vec<Vec<StackEntry>>,
+    /// Canonical stack key → index into `stacks`.
+    by_key: HashMap<String, usize>,
+}
+
+impl FontRegistry {
+    /// Resolve a stack key to `(font_id, stack)`. `None`, an eval miss, or an
+    /// unregistered key → the default stack (`font_id` 0).
+    fn resolve(&self, key: Option<&str>) -> (u32, &[StackEntry]) {
+        match key.and_then(|k| self.by_key.get(k)) {
+            Some(&i) => (i as u32 + 1, &self.stacks[i]),
+            None => (0, &self.default),
+        }
+    }
+
+    /// The stack for a resolved `font_id` (`0` = default).
+    fn stack_by_id(&self, id: u32) -> &[StackEntry] {
+        if id == 0 {
+            &self.default
+        } else {
+            &self.stacks[(id - 1) as usize]
+        }
+    }
+}
+
 /// MapLibre `symbol-placement`: where the label sits relative to its
 /// feature. Line modes consume the feature's polylines; point mode its
 /// points.
@@ -181,6 +222,15 @@ struct TextNode {
     opacity: In<f64>,
     /// Optional data-driven overrides, MapLibre expressions evaluated
     /// per feature group; each overrides its constant counterpart.
+    /// (A) Data-driven `text-font`: a MapLibre expression yielding an array
+    /// of font names, evaluated per feature group. Its result is canonicalized
+    /// (see [`stack_key`]) and looked up in `font_stacks`; a miss falls back to
+    /// the default stack. `None` → the static default stack for every feature.
+    font_expr: Option<maplibre_expr::Expr>,
+    font_expr_src: Option<String>,
+    /// Build-resolved registry: `(canonical stack key, asset keys)` in recipe
+    /// declaration order. Entry index + 1 is the stack's stable `font_id`.
+    font_stacks: Vec<(String, Vec<String>)>,
     size_expr: Option<maplibre_expr::Expr>,
     color_expr: Option<maplibre_expr::Expr>,
     halo_color_expr: Option<maplibre_expr::Expr>,
@@ -274,12 +324,11 @@ impl TextNode {
         }
     }
 
-    /// Resolve the font stack once per eval. Outline fonts and SDF glyph
-    /// stacks share the fallback stack; the draw path is picked per glyph
-    /// by its entry's backend.
-    fn load_fonts(&self, ctx: &EvalCtx<'_>) -> Result<Vec<StackEntry>, EvalError> {
-        let mut fonts: Vec<StackEntry> = Vec::with_capacity(self.font_keys.len());
-        for key in &self.font_keys {
+    /// Load one stack of font asset keys into `StackEntry`s. Outline fonts and
+    /// SDF glyph stacks mix; the draw path is picked per glyph by its backend.
+    fn load_stack(&self, ctx: &EvalCtx<'_>, keys: &[String]) -> Result<Vec<StackEntry>, EvalError> {
+        let mut fonts: Vec<StackEntry> = Vec::with_capacity(keys.len());
+        for key in keys {
             let entry = match ctx.assets.load(key)? {
                 Asset::Font(opq) => StackEntry::Outline(opq.downcast::<Font>().map_err(|_| {
                     EvalError::Other(format!("`{key}` payload is not a text Font"))
@@ -298,6 +347,47 @@ impl TextNode {
             fonts.push(entry);
         }
         Ok(fonts)
+    }
+
+    /// Load the default stack plus every registry stack, once per eval.
+    /// Registries are small (a handful of stacks) and `ctx.assets.load` is a
+    /// map lookup for pre-bound assets, so loading all up front is cheap and
+    /// keeps neighbour-candidate resolution trivially symmetric.
+    fn load_registry(&self, ctx: &EvalCtx<'_>) -> Result<FontRegistry, EvalError> {
+        let default = self.load_stack(ctx, &self.font_keys)?;
+        let mut stacks = Vec::with_capacity(self.font_stacks.len());
+        let mut by_key = HashMap::with_capacity(self.font_stacks.len());
+        for (i, (key, keys)) in self.font_stacks.iter().enumerate() {
+            stacks.push(self.load_stack(ctx, keys)?);
+            by_key.insert(key.clone(), i);
+        }
+        Ok(FontRegistry {
+            default,
+            stacks,
+            by_key,
+        })
+    }
+
+    /// (A) Evaluate `font-expr` for a feature group into a canonical stack key.
+    /// `None` when there is no expression, it doesn't evaluate to an array of
+    /// strings, or the array is empty — the caller then uses the default stack.
+    fn group_stack_key(&self, ectx: &maplibre_expr::EvaluationContext) -> Option<String> {
+        let expr = self.font_expr.as_ref()?;
+        let items = match maplibre_expr::evaluate(expr, ectx) {
+            Ok(maplibre_expr::Value::Array(items)) => items,
+            _ => return None,
+        };
+        let mut names = Vec::with_capacity(items.len());
+        for v in &items {
+            match v {
+                maplibre_expr::Value::String(s) => names.push(s.as_str()),
+                _ => return None,
+            }
+        }
+        if names.is_empty() {
+            return None;
+        }
+        Some(stack_key(names.into_iter()))
     }
 
     /// Line / line-center placement: shape each label once, then walk
@@ -319,7 +409,7 @@ impl TextNode {
             return Ok(empty_raster(ctx));
         }
 
-        let fonts = self.load_fonts(ctx)?;
+        let registry = self.load_registry(ctx)?;
         let const_size = (self.size.get(ctx, inputs)? as f32).max(0.0);
         let const_color = self.color.get(ctx, inputs)?;
         let const_halo_color = self.halo_color.get(ctx, inputs)?;
@@ -337,9 +427,12 @@ impl TextNode {
         let params = self.line_layout_params();
         let (tx, ty) = (ctx.tile.x as i64, ctx.tile.y as i64);
 
-        let mut blocks: HashMap<(String, u32), Arc<TextBlock>> = HashMap::new();
+        // Keyed by `(text, size, font_id)` — a data-driven `font-expr` can lay
+        // the same text/size out against different stacks in one eval.
+        let mut blocks: HashMap<(String, u32, u32), Arc<TextBlock>> = HashMap::new();
         let mut dropped_chars = 0usize;
         let mut missing_range_chars = 0usize;
+        let mut font_fallbacks = 0usize;
 
         /// One placed line label's draw payload, index-aligned with the
         /// collision candidate list. `placements` are in the local
@@ -349,6 +442,9 @@ impl TextNode {
             placements: Vec<GlyphPlacement>,
             perp_px: f32,
             paint: TextPaint,
+            /// Registry `font_id` of the stack this label was laid out
+            /// against; resolved back to a stack via `stack_by_id` at draw.
+            font_id: u32,
         }
         let mut cands: Vec<LineCandidate> = Vec::new();
         let mut draws: Vec<LineDraw> = Vec::new();
@@ -375,6 +471,11 @@ impl TextNode {
             if text.is_empty() {
                 return;
             }
+            // (A) Per-feature font stack. A miss (or no `font-expr`) → default.
+            let (font_id, group_fonts) = registry.resolve(self.group_stack_key(&ectx).as_deref());
+            if dx == 0 && dy == 0 && self.font_expr.is_some() && font_id == 0 {
+                font_fallbacks += 1;
+            }
             let size = eval_number(&self.size_expr, &ectx, const_size).max(0.0);
             if size <= 0.0 {
                 return;
@@ -394,8 +495,8 @@ impl TextNode {
             let halo_width = eval_number(&self.halo_width_expr, &ectx, const_halo_width).max(0.0);
 
             let block = blocks
-                .entry((text.clone(), size.to_bits()))
-                .or_insert_with(|| Arc::new(layout(&text, &fonts, &params)))
+                .entry((text.clone(), size.to_bits(), font_id))
+                .or_insert_with(|| Arc::new(layout(&text, group_fonts, &params)))
                 .clone();
             if dx == 0 && dy == 0 {
                 dropped_chars += block.dropped_chars;
@@ -476,6 +577,7 @@ impl TextNode {
                         world_ax,
                         world_ay,
                         text: text.clone(),
+                        style_id: font_id as u64,
                         boxes,
                         allow_overlap: self.allow_overlap,
                         ignore_placement: self.ignore_placement,
@@ -493,6 +595,7 @@ impl TextNode {
                         placements,
                         perp_px: perp,
                         paint,
+                        font_id,
                     });
                 }
             }
@@ -575,7 +678,14 @@ impl TextNode {
                     angle: p.angle,
                 })
                 .collect();
-            draw_line(&d.block, &fonts, &mut pm, &shifted, d.perp_px, &d.paint);
+            draw_line(
+                &d.block,
+                registry.stack_by_id(d.font_id),
+                &mut pm,
+                &shifted,
+                d.perp_px,
+                &d.paint,
+            );
         }
 
         if dropped_chars > 0 {
@@ -588,6 +698,12 @@ impl TextNode {
                 "text: {missing_range_chars} of the dropped char(s) hit glyph ranges that were \
                  unavailable — a host without lazy fetching (wasm) must bind every needed range \
                  up front"
+            );
+        }
+        if font_fallbacks > 0 {
+            tracing::warn!(
+                "text: {font_fallbacks} label(s) named a font stack not in `font-stacks` — \
+                 the default stack was used"
             );
         }
 
@@ -613,6 +729,13 @@ impl Node for TextNode {
     }
     fn asset_inputs(&self) -> Vec<String> {
         let mut keys = self.font_keys.clone();
+        // Every stack a `font-expr` (or a `format` section) could pick must be
+        // enumerable up front — wasm hosts pre-bind assets from this list.
+        for (_, asset_keys) in &self.font_stacks {
+            keys.extend(asset_keys.iter().cloned());
+        }
+        keys.sort();
+        keys.dedup();
         // With collision on and a known upstream source, request the 8
         // neighbour layers so a host that can fetch them binds them for
         // cross-tile placement. Unbound neighbours degrade to centre-only.
@@ -647,10 +770,10 @@ impl Node for TextNode {
             return Ok(empty_raster(ctx));
         }
 
-        // Resolve the font stack once per eval. Outline fonts and SDF
-        // glyph stacks share the fallback stack; the draw path is
-        // picked per glyph by its entry's backend.
-        let fonts = self.load_fonts(ctx)?;
+        // Resolve the default stack plus every registry stack once per eval.
+        // A per-feature `font-expr` picks among them; the draw path is picked
+        // per glyph by each entry's backend.
+        let registry = self.load_registry(ctx)?;
 
         // Constants, resolved once. Data-driven exprs (if present)
         // override these per feature group.
@@ -675,10 +798,11 @@ impl Node for TextNode {
         // laid out once per eval no matter how many groups/points repeat
         // it. Neighbour candidates share this cache (identical exprs →
         // identical layout across tiles).
-        let mut blocks: HashMap<(String, u32), Arc<TextBlock>> = HashMap::new();
+        let mut blocks: HashMap<(String, u32, u32), Arc<TextBlock>> = HashMap::new();
         let mut culled = 0usize;
         let mut dropped_chars = 0usize;
         let mut missing_range_chars = 0usize;
+        let mut font_fallbacks = 0usize;
 
         /// One placed label's draw payload, index-aligned with the
         /// collision candidate list.
@@ -686,6 +810,9 @@ impl Node for TextNode {
             block: Arc<TextBlock>,
             anchor: (f32, f32),
             paint: TextPaint,
+            /// Registry `font_id` of the stack this label was laid out
+            /// against; resolved back to a stack via `stack_by_id` at draw.
+            font_id: u32,
         }
         let mut cands: Vec<Candidate> = Vec::new();
         let mut draws: Vec<DrawRec> = Vec::new();
@@ -714,6 +841,11 @@ impl Node for TextNode {
             if text.is_empty() {
                 return;
             }
+            // (A) Per-feature font stack. A miss (or no `font-expr`) → default.
+            let (font_id, group_fonts) = registry.resolve(self.group_stack_key(&ectx).as_deref());
+            if dx == 0 && dy == 0 && self.font_expr.is_some() && font_id == 0 {
+                font_fallbacks += 1;
+            }
             let size = eval_number(&self.size_expr, &ectx, const_size).max(0.0);
             if size <= 0.0 {
                 return;
@@ -733,8 +865,8 @@ impl Node for TextNode {
             let halo_width = eval_number(&self.halo_width_expr, &ectx, const_halo_width).max(0.0);
 
             let block = blocks
-                .entry((text.clone(), size.to_bits()))
-                .or_insert_with(|| Arc::new(layout(&text, &fonts, &params)))
+                .entry((text.clone(), size.to_bits(), font_id))
+                .or_insert_with(|| Arc::new(layout(&text, group_fonts, &params)))
                 .clone();
             // Count layout warnings once per distinct label (own groups
             // only; neighbours repeat the same strings).
@@ -786,6 +918,7 @@ impl Node for TextNode {
                     world_ax,
                     world_ay,
                     text: text.clone(),
+                    style_id: font_id as u64,
                     aabb,
                     allow_overlap: self.allow_overlap,
                     ignore_placement: self.ignore_placement,
@@ -794,6 +927,7 @@ impl Node for TextNode {
                     block: block.clone(),
                     anchor: (lpx + pad, lpy + pad),
                     paint,
+                    font_id,
                 });
             }
         };
@@ -864,13 +998,25 @@ impl Node for TextNode {
                     continue;
                 }
             }
-            draw(&d.block, &fonts, &mut pm, d.anchor, &d.paint);
+            draw(
+                &d.block,
+                registry.stack_by_id(d.font_id),
+                &mut pm,
+                d.anchor,
+                &d.paint,
+            );
         }
         // One summary line per eval, not one per label.
         if culled > 0 {
             tracing::warn!(
                 "text: culled {culled} label placement(s) whose bbox exceeds max-extent-px ({}px)",
                 self.max_extent_px
+            );
+        }
+        if font_fallbacks > 0 {
+            tracing::warn!(
+                "text: {font_fallbacks} label(s) named a font stack not in `font-stacks` — \
+                 the default stack was used"
             );
         }
         if dropped_chars > 0 {
@@ -893,6 +1039,21 @@ impl Node for TextNode {
         for key in &self.font_keys {
             h.update(key.as_bytes());
             h.update(&[0]);
+        }
+        // Dynamic font config — absent fields fold nothing, so existing
+        // recipes keep their hashes (and caches).
+        if let Some(s) = &self.font_expr_src {
+            h.update(b"fontexpr");
+            h.update(s.as_bytes());
+        }
+        for (key, asset_keys) in &self.font_stacks {
+            h.update(b"fontstack");
+            h.update(key.as_bytes());
+            h.update(&[0]);
+            for k in asset_keys {
+                h.update(k.as_bytes());
+                h.update(&[0]);
+            }
         }
         if let Some(t) = &self.text {
             h.update(b"const");
@@ -987,24 +1148,83 @@ impl NodeFactory for TextFactory {
                 msg: "font stack must name at least one font source".into(),
             });
         }
+        // Resolve one `font`/`glyphs` source name to its asset key, validating
+        // the source exists and is a font-like source. Shared by the default
+        // `font` stack and every `font-stacks` registry entry.
+        let resolve_font_source = |field: &str, name: &str| -> Result<String, FactoryError> {
+            match ctx.sources.get(name) {
+                Some(ezu_style::SourceDecl::Font(f)) => Ok(f.url.clone()),
+                Some(ezu_style::SourceDecl::Glyphs(g)) => Ok(g.asset_key()),
+                Some(_) => Err(FactoryError::BadField {
+                    field: field.into(),
+                    msg: format!("source `{name}` is not a font or glyphs source"),
+                }),
+                None => Err(FactoryError::UnknownAsset(name.to_string())),
+            }
+        };
         let mut font_keys = Vec::with_capacity(names.len());
         for v in names {
             let name = v.as_str().ok_or_else(|| FactoryError::BadField {
                 field: "font".into(),
                 msg: "font stack entries must be strings".into(),
             })?;
-            match ctx.sources.get(name) {
-                Some(ezu_style::SourceDecl::Font(f)) => font_keys.push(f.url.clone()),
-                Some(ezu_style::SourceDecl::Glyphs(g)) => font_keys.push(g.asset_key()),
-                Some(_) => {
-                    return Err(FactoryError::BadField {
-                        field: "font".into(),
-                        msg: format!("source `{name}` is not a font or glyphs source"),
-                    })
-                }
-                None => return Err(FactoryError::UnknownAsset(name.to_string())),
-            }
+            font_keys.push(resolve_font_source("font", name)?);
         }
+
+        // (A) `font-expr`: a MapLibre expression → array<string> of font names,
+        // evaluated per feature group. Prefer an `array<string>` check; fall
+        // back to untyped (a `case`/`match` over `["literal", [...]]` may not
+        // type-narrow), mirroring how `text` typechecks.
+        let (font_expr, font_expr_src) = match fields.get("font-expr") {
+            Some(v) => {
+                let expr = maplibre_expr::parse(v).map_err(|e| FactoryError::BadField {
+                    field: "font-expr".into(),
+                    msg: e.to_string(),
+                })?;
+                let array_of_string =
+                    maplibre_expr::Type::Array(Box::new(maplibre_expr::Type::String), None);
+                let expr = maplibre_expr::typecheck(&expr, Some(&array_of_string), false)
+                    .or_else(|_| maplibre_expr::typecheck(&expr, None, false))
+                    .map_err(|e| FactoryError::BadField {
+                        field: "font-expr".into(),
+                        msg: e.to_string(),
+                    })?;
+                (Some(expr), Some(v.to_string()))
+            }
+            None => (None, None),
+        };
+
+        // (A+B) `font-stacks`: canonical stack key → ordered source names. Each
+        // entry resolves exactly like `font`. Insertion order (serde_json
+        // `preserve_order`, the workspace default) fixes each stack's `font_id`.
+        let font_stacks: Vec<(String, Vec<String>)> = match fields.get("font-stacks") {
+            None => Vec::new(),
+            Some(Value::Object(map)) => {
+                let mut out = Vec::with_capacity(map.len());
+                for (key, names) in map {
+                    let arr = names.as_array().ok_or_else(|| FactoryError::BadField {
+                        field: "font-stacks".into(),
+                        msg: format!("stack `{key}` must be an array of source names"),
+                    })?;
+                    let mut keys = Vec::with_capacity(arr.len());
+                    for v in arr {
+                        let name = v.as_str().ok_or_else(|| FactoryError::BadField {
+                            field: "font-stacks".into(),
+                            msg: format!("stack `{key}` entries must be strings"),
+                        })?;
+                        keys.push(resolve_font_source("font-stacks", name)?);
+                    }
+                    out.push((key.clone(), keys));
+                }
+                out
+            }
+            Some(_) => {
+                return Err(FactoryError::BadField {
+                    field: "font-stacks".into(),
+                    msg: "expected an object of stack key → source-name array".into(),
+                })
+            }
+        };
 
         // `text`: a literal string, or a raw MapLibre expression. We prefer a
         // String-typed check (with top-level coercion, so number / property
@@ -1140,6 +1360,9 @@ impl NodeFactory for TextFactory {
                 font_keys,
                 text,
                 text_expr,
+                font_expr,
+                font_expr_src,
+                font_stacks,
                 size,
                 color,
                 halo_color,
@@ -1190,7 +1413,13 @@ impl NodeFactory for TextFactory {
             "properties": {
                 "features": schema_frag::node_ref(),
                 "font": { "type": "array", "items": { "type": "string" },
-                          "description": "Ordered fallback stack of `font` and/or `glyphs` source names from the document's `sources`. Outline fonts and SDF glyph stacks mix freely; the first entry covering a char shapes it." },
+                          "description": "Ordered fallback stack of `font` and/or `glyphs` source names from the document's `sources`. Outline fonts and SDF glyph stacks mix freely; the first entry covering a char shapes it. Also the default/fallback stack for `font-expr` and unlisted `font-stacks` keys." },
+                "font-expr": {
+                    "description": "A MapLibre expression yielding an array of font names, evaluated per feature group (MapLibre data-driven `text-font`); overrides the constant `font`. Each result is canonicalized (names joined with `,`) and looked up in `font-stacks`; an unlisted stack, a non-array result, or an eval error falls back to `font`. Every stack a host may need must be enumerable in `font-stacks` (wasm hosts pre-bind glyph assets).",
+                },
+                "font-stacks": { "type": "object",
+                                 "additionalProperties": { "type": "array", "items": { "type": "string" } },
+                                 "description": "Named dynamic font stacks: canonical stack key (font names joined with `,`) → ordered `font`/`glyphs` source names. Consulted by `font-expr` and by `format` text sections carrying `text-font`. Declaration order fixes each stack's stable id (used by the layout cache and cross-tile collision)." },
                 "text": {
                     "description": "The label: a literal string, or a MapLibre string expression (evaluated per feature group; empty/failed → the group draws nothing).",
                 },

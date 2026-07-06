@@ -328,3 +328,105 @@ fn formatted_text_field_renders_like_the_flattened_string() {
         "flattened `format` label ({formatted_ink} px) should match the plain two-line string ({plain_ink} px)"
     );
 }
+
+/// Absolute `file:` URL of the digits-only test font (covers `0-9`, not
+/// letters) — lets a per-feature stack test prove which font shaped a label.
+fn digits_font_url() -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../ezu-core/tests/fonts/NotoSans-Regular.digits.ttf");
+    format!("file:{}", path.display()).replace('\\', "/")
+}
+
+/// A point feature at extent `(x, y)` with `name` and a `kind` property.
+fn kinded_point(name: &str, kind: &str, x: i32, y: i32) -> Feature {
+    let mut properties = HashMap::new();
+    properties.insert("name".to_string(), Value::String(name.to_string()));
+    properties.insert("kind".to_string(), Value::String(kind.to_string()));
+    let mut geometry = Geometry::default();
+    geometry.points.push((x, y));
+    Feature {
+        id: None,
+        geometry,
+        properties,
+    }
+}
+
+/// A data-driven `font-expr` selects the stack per feature. Two features
+/// carry the *same* label text and size but route to different stacks: the
+/// letters-bearing label sent to the digits-only font drops all glyphs (no
+/// ink), while the one sent to the latin font renders. This proves per-feature
+/// stack selection *and* that the block cache is keyed by font (same text +
+/// size must not reuse one stack's block for the other).
+#[test]
+fn font_expr_switches_stack_per_feature() {
+    let recipe = format!(
+        r##"{{
+      "name": "text-font-expr",
+      "tile-size": 64,
+      "sources": {{
+        "src":   {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
+        "latin": {{ "type": "font", "url": "{latin}" }},
+        "digits":{{ "type": "font", "url": "{digits}" }}
+      }},
+      "nodes": {{
+        "feats": {{ "op": "features", "source": "src", "layer": "pts" }},
+        "out":   {{ "op": "text", "features": "@feats", "size": 20,
+                    "font": ["latin"],
+                    "font-stacks": {{ "Digits": ["digits"], "Latin": ["latin"] }},
+                    "font-expr": ["case", ["==", ["get", "kind"], "num"],
+                                  ["literal", ["Digits"]], ["literal", ["Latin"]]],
+                    "text": ["get", "name"] }}
+      }},
+      "output": "@out"
+    }}"##,
+        latin = font_url(),
+        digits = digits_font_url()
+    );
+    // Left feature: "ab" routed to the digits font (kind=num) → no glyphs.
+    // Right feature: "ab" routed to the latin font → renders.
+    let feats = vec![
+        kinded_point("ab", "num", 1024, 2048),
+        kinded_point("ab", "text", 3072, 2048),
+    ];
+    let r = render(&recipe, layer(feats));
+    let left = opaque_in(&r, 0, 32);
+    let right = opaque_in(&r, 32, 64);
+    assert_eq!(
+        left, 0,
+        "letters in the digits-only font must drop (no ink): {left}"
+    );
+    assert!(right > 20, "latin-routed label should render ink: {right}");
+}
+
+/// A `font-expr` result absent from `font-stacks` falls back to the default
+/// `font` (still renders), rather than erroring or drawing nothing.
+#[test]
+fn font_expr_unknown_stack_falls_back() {
+    let recipe = format!(
+        r##"{{
+      "name": "text-font-expr-fallback",
+      "tile-size": 64,
+      "sources": {{
+        "src":   {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
+        "latin": {{ "type": "font", "url": "{latin}" }}
+      }},
+      "nodes": {{
+        "feats": {{ "op": "features", "source": "src", "layer": "pts" }},
+        "out":   {{ "op": "text", "features": "@feats", "size": 20,
+                    "font": ["latin"],
+                    "font-stacks": {{ "Latin": ["latin"] }},
+                    "font-expr": ["literal", ["Nonexistent Stack"]],
+                    "text": ["get", "name"] }}
+      }},
+      "output": "@out"
+    }}"##,
+        latin = font_url()
+    );
+    // Label uses letters (the default latin font covers them; the digits-only
+    // font would not — see the coverage split in the sibling test).
+    let r = render(&recipe, layer(vec![point_feature("ab", 2048, 2048)]));
+    assert!(
+        opaque_in(&r, 0, r.width) > 20,
+        "unknown stack should fall back to the default font and still render"
+    );
+}

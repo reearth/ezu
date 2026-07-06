@@ -2174,9 +2174,9 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "maplibre-expr"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f953eb72eb9cb6d93bdaba6c106868d83b3118a3e7e0615dfdfb0ce5009d685"
+checksum = "a917e8bb3edf96c2ffbe652ad950c50119f6d4dde5545604f124fd4f8ac2370e"
 dependencies = [
  "icu",
  "serde",
