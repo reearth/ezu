@@ -114,6 +114,27 @@ fn eval_color(
     }
 }
 
+/// Reduce an evaluated `text` value to the string to lay out.
+///
+/// A `format` expression evaluates to [`maplibre_expr::Value::Formatted`] — a
+/// list of styled sections. We flatten it by concatenating the sections' text
+/// (embedded `"\n"` sections survive as newlines, which [`layout`] treats as
+/// line breaks), rendering the whole label with the layer's font and paint.
+/// Per-section font / colour / scale overrides are not yet applied. Scalars
+/// stringify; `null` and other types yield `None` so the label is skipped.
+fn label_text(value: &maplibre_expr::Value) -> Option<String> {
+    use maplibre_expr::Value as V;
+    match value {
+        V::String(s) => Some(s.clone()),
+        V::Formatted(sections) => {
+            Some(sections.iter().map(|s| s.text.as_str()).collect::<String>())
+        }
+        V::Number(n) => Some(n.to_string()),
+        V::Bool(b) => Some(b.to_string()),
+        _ => None,
+    }
+}
+
 /// MapLibre `symbol-placement`: where the label sits relative to its
 /// feature. Line modes consume the feature's polylines; point mode its
 /// points.
@@ -343,7 +364,10 @@ impl TextNode {
             let ectx = crate::render::group_expr_context(group, z);
             let text = match &self.text_expr {
                 Some(e) => match maplibre_expr::evaluate(e, &ectx) {
-                    Ok(maplibre_expr::Value::String(s)) => s,
+                    Ok(v) => match label_text(&v) {
+                        Some(s) => s,
+                        None => return,
+                    },
                     _ => return,
                 },
                 None => self.text.clone().unwrap_or_default(),
@@ -679,7 +703,10 @@ impl Node for TextNode {
             let ectx = crate::render::group_expr_context(group, z);
             let text = match &self.text_expr {
                 Some(e) => match maplibre_expr::evaluate(e, &ectx) {
-                    Ok(maplibre_expr::Value::String(s)) => s,
+                    Ok(v) => match label_text(&v) {
+                        Some(s) => s,
+                        None => return,
+                    },
                     _ => return,
                 },
                 None => self.text.clone().unwrap_or_default(),
@@ -979,9 +1006,13 @@ impl NodeFactory for TextFactory {
             }
         }
 
-        // `text`: a literal string, or a raw MapLibre expression
-        // type-checked to String (with top-level coercion, so number /
-        // property expressions stringify).
+        // `text`: a literal string, or a raw MapLibre expression. We prefer a
+        // String-typed check (with top-level coercion, so number / property
+        // expressions stringify), but a `format` expression yields `formatted`
+        // — which String coercion rejects. Fall back to a `Formatted` check
+        // (then an untyped one) and flatten the sections at eval time via
+        // `label_text`, so real-world `text-field`s (e.g. Protomaps' multi-
+        // script `format` labels) build and render instead of erroring.
         let (text, text_expr, text_expr_src) = match fields.get("text") {
             None => return Err(FactoryError::MissingField("text".into())),
             Some(Value::String(s)) => (Some(s.clone()), None, None),
@@ -992,6 +1023,14 @@ impl NodeFactory for TextFactory {
                 })?;
                 let expr =
                     maplibre_expr::typecheck(&expr, Some(&maplibre_expr::Type::String), true)
+                        .or_else(|_| {
+                            maplibre_expr::typecheck(
+                                &expr,
+                                Some(&maplibre_expr::Type::Formatted),
+                                false,
+                            )
+                        })
+                        .or_else(|_| maplibre_expr::typecheck(&expr, None, false))
                         .map_err(|e| FactoryError::BadField {
                             field: "text".into(),
                             msg: e.to_string(),
