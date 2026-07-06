@@ -1021,19 +1021,20 @@ impl NodeFactory for TextFactory {
                     field: "text".into(),
                     msg: e.to_string(),
                 })?;
-                let expr = maplibre_expr::typecheck(
-                    &expr,
-                    Some(&maplibre_expr::Type::String),
-                    true,
-                )
-                .or_else(|_| {
-                    maplibre_expr::typecheck(&expr, Some(&maplibre_expr::Type::Formatted), false)
-                })
-                .or_else(|_| maplibre_expr::typecheck(&expr, None, false))
-                .map_err(|e| FactoryError::BadField {
-                    field: "text".into(),
-                    msg: e.to_string(),
-                })?;
+                let expr =
+                    maplibre_expr::typecheck(&expr, Some(&maplibre_expr::Type::String), true)
+                        .or_else(|_| {
+                            maplibre_expr::typecheck(
+                                &expr,
+                                Some(&maplibre_expr::Type::Formatted),
+                                false,
+                            )
+                        })
+                        .or_else(|_| maplibre_expr::typecheck(&expr, None, false))
+                        .map_err(|e| FactoryError::BadField {
+                            field: "text".into(),
+                            msg: e.to_string(),
+                        })?;
                 (None, Some(expr), Some(v.to_string()))
             }
         };

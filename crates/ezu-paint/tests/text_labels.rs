@@ -312,7 +312,10 @@ fn formatted_text_field_renders_like_the_flattened_string() {
         &recipe(r##"["format", "AB", {}, "\n", {}, "CD", {}]"##),
         layer(vec![point_feature("x", 2048, 2048)]),
     );
-    let plain = render(&recipe(r##""AB\nCD""##), layer(vec![point_feature("x", 2048, 2048)]));
+    let plain = render(
+        &recipe(r##""AB\nCD""##),
+        layer(vec![point_feature("x", 2048, 2048)]),
+    );
 
     let formatted_ink = opaque_in(&formatted, 0, formatted.width);
     let plain_ink = opaque_in(&plain, 0, plain.width);
