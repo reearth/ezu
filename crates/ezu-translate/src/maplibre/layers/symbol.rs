@@ -238,57 +238,75 @@ fn convert_text(
         ));
     }
 
-    // `text-font` → font source refs, each entry mapped through the
-    // caller-supplied name → URL table.
-    let stack: Vec<String> = match get("text-font") {
-        None => DEFAULT_TEXT_FONT.iter().map(|s| s.to_string()).collect(),
-        Some(Value::Array(a)) if a.iter().all(Value::is_string) => a
-            .iter()
-            .filter_map(Value::as_str)
-            .map(str::to_string)
-            .collect(),
-        Some(_) => {
-            report.warn(format!(
-                "layer `{id}`: data-driven `text-font` not supported — text skipped"
-            ));
-            return;
-        }
+    // `text-font`: a static string array (or absent → default) lowers to a
+    // single stack. A data-driven expression / legacy function (A) is
+    // enumerated for the literal stacks it can yield; each is lowered and
+    // registered under its canonical key in `font-stacks`, the raw expression
+    // is emitted as `font-expr`, and the first stack becomes the required
+    // default `font`. Unenumerable expressions fall back to the default stack
+    // (renders more of the map than the old "skip whole layer").
+    let text_font = get("text-font");
+    let is_static_stack = match text_font {
+        None => true,
+        Some(Value::Array(a)) => a.iter().all(Value::is_string),
+        _ => false,
     };
-    let (mapped, unmapped): (Vec<&String>, Vec<&String>) =
-        stack.iter().partition(|name| fonts.contains_key(*name));
-    let font_refs: Vec<Value> = if mapped.is_empty() {
-        // Zero-config compat: with no explicit `--font` mapping, serve
-        // the stack from the style's own glyph endpoint as SDF ranges
-        // (entries join `", "` into one fontstack string; fallback
-        // across them happens server-side, as in MapLibre).
-        let Some(glyphs_url) = glyphs_url else {
-            report.warn(format!(
-                "layer `{id}`: `symbol` text: no font mapping for {stack:?} and the style has no `glyphs` endpoint — pass `--font \"NAME=URL\"`; text skipped"
-            ));
-            return;
+    let mut font_expr_value: Option<Value> = None;
+    let mut font_stacks_obj = Map::new();
+    let font_refs: Vec<String> = if is_static_stack {
+        let stack: Vec<String> = match text_font {
+            Some(Value::Array(a)) => a
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect(),
+            _ => DEFAULT_TEXT_FONT.iter().map(|s| s.to_string()).collect(),
         };
-        vec![Value::String(ensure_glyphs_source(
-            source_defs,
-            glyphs_url,
-            &stack.join(", "),
-        ))]
-    } else {
-        // An explicit mapping wins over the `glyphs` endpoint.
-        if !unmapped.is_empty() {
-            report.warn(format!(
-                "layer `{id}`: `symbol` text: no font mapping for {unmapped:?} — using the mapped subset"
-            ));
+        match lower_stack(&stack, source_defs, fonts, glyphs_url, id, report) {
+            Some(refs) => refs,
+            None => return,
         }
-        mapped
-            .iter()
-            .map(|name| {
-                let url = fonts
-                    .get(name.as_str())
-                    .expect("partitioned on containment");
-                Value::String(ensure_font_source(source_defs, name, url))
-            })
-            .collect()
+    } else {
+        let value = text_font.expect("non-static text-font is present");
+        let stacks = collect_font_stacks(value);
+        if stacks.is_empty() {
+            report.warn(format!(
+                "layer `{id}`: data-driven `text-font`: no literal stacks found — using the default stack"
+            ));
+            let stack: Vec<String> = DEFAULT_TEXT_FONT.iter().map(|s| s.to_string()).collect();
+            match lower_stack(&stack, source_defs, fonts, glyphs_url, id, report) {
+                Some(refs) => refs,
+                None => return,
+            }
+        } else {
+            // Lower every enumerated stack; the first that lowers is the
+            // default `font`, all that lower populate the registry.
+            let mut default_refs: Option<Vec<String>> = None;
+            for stack in &stacks {
+                let Some(refs) = lower_stack(stack, source_defs, fonts, glyphs_url, id, report)
+                else {
+                    continue;
+                };
+                if default_refs.is_none() {
+                    default_refs = Some(refs.clone());
+                }
+                let key = stack.iter().map(|s| s.trim()).collect::<Vec<_>>().join(",");
+                font_stacks_obj.entry(key).or_insert_with(|| {
+                    Value::Array(refs.iter().cloned().map(Value::from).collect())
+                });
+            }
+            match default_refs {
+                Some(refs) => {
+                    font_expr_value = Some(value.clone());
+                    refs
+                }
+                // No stack lowered (no `--font` mapping and no `glyphs`
+                // endpoint) — `lower_stack` already warned per stack.
+                None => return,
+            }
+        }
     };
+    let font_value = Value::Array(font_refs.into_iter().map(Value::from).collect());
 
     // `text-field`: a constant may carry `{token}`s (rewritten to a
     // `concat`-of-`get` expression); expressions / legacy functions pass
@@ -320,8 +338,13 @@ fn convert_text(
     let feat_ref = ensure_feat(nodes);
     let mut spec = serde_json::json!({
         "op": "text", "features": feat_ref,
-        "font": Value::Array(font_refs), "text": text_value
+        "font": font_value, "text": text_value
     });
+    // (A) Data-driven font stack: the raw expression + its enumerated registry.
+    if let Some(expr) = font_expr_value {
+        spec["font-expr"] = expr;
+        spec["font-stacks"] = Value::Object(font_stacks_obj);
+    }
 
     // Paint / size: constant → plain field, expression → `*-expr`.
     let paint = paint_of(layer);
@@ -470,6 +493,120 @@ fn convert_text(
 
 /// Reuse (by URL) or declare a `font` source for one fontstack entry.
 /// Returns the source id, derived from the entry name.
+/// Lower one MapLibre font stack to ezu `font`/`glyphs` source names.
+/// Mapped entries (present in the `--font` table) become `font` sources; if
+/// none are mapped, the whole stack becomes one `glyphs` source over
+/// `glyphs_url` (its `fontstack` = names joined `", "`, MapLibre's server
+/// convention). Neither available → `None` (warned). Shared by the static
+/// `text-font` path and each enumerated dynamic stack.
+fn lower_stack(
+    stack: &[String],
+    source_defs: &mut Map<String, Value>,
+    fonts: &HashMap<String, String>,
+    glyphs_url: Option<&str>,
+    id: &str,
+    report: &mut Report,
+) -> Option<Vec<String>> {
+    let (mapped, unmapped): (Vec<&String>, Vec<&String>) =
+        stack.iter().partition(|name| fonts.contains_key(*name));
+    if mapped.is_empty() {
+        // Zero-config compat: serve the stack from the style's glyph
+        // endpoint as SDF ranges (server-side fallback, as in MapLibre).
+        let Some(glyphs_url) = glyphs_url else {
+            report.warn(format!(
+                "layer `{id}`: `symbol` text: no font mapping for {stack:?} and the style has no `glyphs` endpoint — pass `--font \"NAME=URL\"`; text skipped"
+            ));
+            return None;
+        };
+        Some(vec![ensure_glyphs_source(
+            source_defs,
+            glyphs_url,
+            &stack.join(", "),
+        )])
+    } else {
+        // An explicit mapping wins over the `glyphs` endpoint.
+        if !unmapped.is_empty() {
+            report.warn(format!(
+                "layer `{id}`: `symbol` text: no font mapping for {unmapped:?} — using the mapped subset"
+            ));
+        }
+        Some(
+            mapped
+                .iter()
+                .map(|name| {
+                    let url = fonts
+                        .get(name.as_str())
+                        .expect("partitioned on containment");
+                    ensure_font_source(source_defs, name, url)
+                })
+                .collect(),
+        )
+    }
+}
+
+/// A JSON array all of whose elements are strings → the owned name list.
+fn as_string_array(v: &Value) -> Option<Vec<String>> {
+    let a = v.as_array()?;
+    let mut names = Vec::with_capacity(a.len());
+    for x in a {
+        names.push(x.as_str()?.to_string());
+    }
+    Some(names)
+}
+
+/// Enumerate the literal font stacks a data-driven `text-font` value can
+/// yield, in document order, deduped: every `["literal", [<strings>]]` in the
+/// expression tree, plus a legacy function's `stops` outputs and `default`
+/// (both string arrays). MapLibre likewise requires data-driven `text-font`
+/// outputs to be literals, so a syntactic scan is faithful; anything it misses
+/// falls back to the default stack at eval.
+fn collect_font_stacks(v: &Value) -> Vec<Vec<String>> {
+    fn push_unique(out: &mut Vec<Vec<String>>, names: Vec<String>) {
+        if !names.is_empty() && !out.contains(&names) {
+            out.push(names);
+        }
+    }
+    fn rec(v: &Value, out: &mut Vec<Vec<String>>) {
+        match v {
+            Value::Array(a) => {
+                // `["literal", <data>]` — the operand is data, not a
+                // sub-expression: collect a string array, never recurse in.
+                if a.len() == 2 && a[0].as_str() == Some("literal") {
+                    if let Some(names) = as_string_array(&a[1]) {
+                        push_unique(out, names);
+                    }
+                    return;
+                }
+                for x in a {
+                    rec(x, out);
+                }
+            }
+            Value::Object(m) => {
+                // Legacy `{stops}` function: each stop is `[input, output]`.
+                if let Some(Value::Array(stops)) = m.get("stops") {
+                    for stop in stops {
+                        if let Some(output) = stop.as_array().and_then(|p| p.get(1)) {
+                            if let Some(names) = as_string_array(output) {
+                                push_unique(out, names);
+                            }
+                        }
+                    }
+                }
+                if let Some(names) = m.get("default").and_then(as_string_array) {
+                    push_unique(out, names);
+                }
+                for val in m.values() {
+                    rec(val, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    rec(v, &mut out);
+    out
+}
+
 fn ensure_font_source(source_defs: &mut Map<String, Value>, name: &str, url: &str) -> String {
     // One source per distinct URL, shared across layers and stacks.
     if let Some((id, _)) = source_defs

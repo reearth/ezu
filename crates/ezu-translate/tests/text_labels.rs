@@ -525,3 +525,122 @@ fn legacy_stops_text_field_expands_tokens_into_a_step_expression() {
     // Token-free legacy stops keep the raw passthrough.
     assert!(nodes["plainstops__text"]["text"].is_object());
 }
+
+#[test]
+fn data_driven_text_font_emits_font_expr_and_registry() {
+    // A `case` over two `["literal", [...]]` stacks (MapLibre data-driven
+    // `text-font`). Both stacks map via `--font`, so the node emits `font-expr`
+    // (raw), a `font-stacks` registry keyed by the canonical `,`-joined names,
+    // and `font` = the first enumerated stack.
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "ddf",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "places", "type": "symbol", "source": "s", "source-layer": "place",
+          "layout": {
+            "text-field": ["get", "name"],
+            "text-font": ["case", ["==", ["get", "script"], "Devanagari"],
+                          ["literal", ["Noto Sans Devanagari Regular"]],
+                          ["literal", ["Noto Sans Regular"]]]
+          } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let opts = opts_with_fonts(&[
+        ("Noto Sans Regular", "https://fonts.example/NotoSans.ttf"),
+        (
+            "Noto Sans Devanagari Regular",
+            "https://fonts.example/NotoSansDevanagari.ttf",
+        ),
+    ]);
+    let (recipe, report) = convert(&style, &opts).unwrap();
+
+    let nodes = recipe["nodes"].as_object().unwrap();
+    let text = nodes
+        .values()
+        .find(|n| n["op"] == "text")
+        .expect("text node");
+
+    // `font` is the first enumerated stack (document order → the Devanagari
+    // branch appears first in the `case`).
+    assert_eq!(
+        text["font"],
+        serde_json::json!(["noto-sans-devanagari-regular"])
+    );
+    // `font-expr` is the raw MapLibre expression, passed through verbatim.
+    assert_eq!(
+        text["font-expr"],
+        serde_json::json!([
+            "case",
+            ["==", ["get", "script"], "Devanagari"],
+            ["literal", ["Noto Sans Devanagari Regular"]],
+            ["literal", ["Noto Sans Regular"]]
+        ])
+    );
+    // Registry keyed by canonical `,`-joined stack names.
+    let stacks = text["font-stacks"].as_object().expect("font-stacks object");
+    assert_eq!(
+        stacks["Noto Sans Devanagari Regular"],
+        serde_json::json!(["noto-sans-devanagari-regular"])
+    );
+    assert_eq!(
+        stacks["Noto Sans Regular"],
+        serde_json::json!(["noto-sans-regular"])
+    );
+
+    // Both fonts declared as sources; no "text skipped" warning.
+    let sources = recipe["sources"].as_object().unwrap();
+    assert_eq!(sources["noto-sans-regular"]["type"], "font");
+    assert_eq!(sources["noto-sans-devanagari-regular"]["type"], "font");
+    assert!(
+        !report.warnings.iter().any(|w| w.contains("text skipped")),
+        "unexpected warnings: {:?}",
+        report.warnings
+    );
+
+    let doc_text = serde_json::to_string(&recipe).unwrap();
+    ezu_style::Document::from_json(&doc_text).expect("recipe parses as ezu Document");
+}
+
+#[test]
+fn data_driven_text_font_without_literals_falls_back_to_default() {
+    // A `text-font` expression with no enumerable literal stacks: no
+    // `font-expr` is emitted, the default stack is used, and the layer's text
+    // is *not* skipped (renders more of the map than the old behaviour).
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "ddf-nolit",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "places", "type": "symbol", "source": "s", "source-layer": "place",
+          "layout": {
+            "text-field": ["get", "name"],
+            "text-font": ["coalesce", ["get", "font_a"], ["get", "font_b"]]
+          } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let opts = opts_with_fonts(&[("Open Sans Regular", "https://fonts.example/OpenSans.ttf")]);
+    let (recipe, report) = convert(&style, &opts).unwrap();
+
+    let nodes = recipe["nodes"].as_object().unwrap();
+    let text = nodes
+        .values()
+        .find(|n| n["op"] == "text")
+        .expect("text node");
+    assert!(
+        text.get("font-expr").is_none(),
+        "no font-expr for unenumerable text-font"
+    );
+    assert!(text.get("font-stacks").is_none());
+    assert!(text["font"].is_array());
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("no literal stacks found")),
+        "expected a no-literal-stacks warning: {:?}",
+        report.warnings
+    );
+}

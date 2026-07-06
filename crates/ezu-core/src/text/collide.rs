@@ -139,6 +139,13 @@ pub struct Candidate {
     /// The evaluated label text, part of the dedup key and the final
     /// order tie-break.
     pub text: String,
+    /// Resolved label-style identity (e.g. the font stack's `font_id`).
+    /// Two features with the same text in the same quantized cell but
+    /// different styles have different collision boxes, so the style joins
+    /// the dedup key and the order tie-break — otherwise a tile and its
+    /// neighbour, which see those features in different insertion orders,
+    /// could pick different survivors and diverge at the seam.
+    pub style_id: u64,
     /// Collision box in the shared world-pixel frame, already inflated by
     /// `padding-px`.
     pub aabb: Aabb,
@@ -178,16 +185,17 @@ pub fn place(candidates: &[Candidate], cell_px: f32) -> Vec<usize> {
             .then_with(|| ca.quant().1.cmp(&cb.quant().1))
             .then_with(|| ca.quant().0.cmp(&cb.quant().0))
             .then_with(|| ca.text.cmp(&cb.text))
+            .then_with(|| ca.style_id.cmp(&cb.style_id))
     });
 
     let mut grid = Grid::new(cell_px);
-    let mut seen: HashSet<(i64, i64, &str)> = HashSet::new();
+    let mut seen: HashSet<(i64, i64, &str, u64)> = HashSet::new();
     let mut placed = Vec::new();
     for i in order {
         let c = &candidates[i];
         // Dedup: keep the first candidate (in total order) per key.
         let (qx, qy) = c.quant();
-        if !seen.insert((qx, qy, c.text.as_str())) {
+        if !seen.insert((qx, qy, c.text.as_str(), c.style_id)) {
             continue;
         }
         // Collision: allow-overlap always shows; otherwise it must not
@@ -222,6 +230,9 @@ pub struct LineCandidate {
     /// The evaluated label text, part of the dedup key and order
     /// tie-break.
     pub text: String,
+    /// Resolved label-style identity (e.g. the font stack's `font_id`);
+    /// joins the dedup key and order tie-break (see [`Candidate::style_id`]).
+    pub style_id: u64,
     /// Per-glyph collision boxes in the shared world-pixel frame.
     pub boxes: Vec<Aabb>,
     pub allow_overlap: bool,
@@ -250,15 +261,16 @@ pub fn place_lines(candidates: &[LineCandidate], cell_px: f32) -> Vec<usize> {
             .then_with(|| ca.quant().1.cmp(&cb.quant().1))
             .then_with(|| ca.quant().0.cmp(&cb.quant().0))
             .then_with(|| ca.text.cmp(&cb.text))
+            .then_with(|| ca.style_id.cmp(&cb.style_id))
     });
 
     let mut grid = Grid::new(cell_px);
-    let mut seen: HashSet<(i64, i64, &str)> = HashSet::new();
+    let mut seen: HashSet<(i64, i64, &str, u64)> = HashSet::new();
     let mut placed = Vec::new();
     for i in order {
         let c = &candidates[i];
         let (qx, qy) = c.quant();
-        if !seen.insert((qx, qy, c.text.as_str())) {
+        if !seen.insert((qx, qy, c.text.as_str(), c.style_id)) {
             continue;
         }
         let shown = c.allow_overlap || c.boxes.iter().all(|b| !grid.intersects_any(b));
@@ -294,6 +306,7 @@ mod tests {
             world_ax: ax,
             world_ay: ay,
             text: text.into(),
+            style_id: 0,
             aabb: boxed(x, y, 10.0),
             allow_overlap: false,
             ignore_placement: false,
