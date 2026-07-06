@@ -644,3 +644,51 @@ fn data_driven_text_font_without_literals_falls_back_to_default() {
         report.warnings
     );
 }
+
+#[test]
+fn all_string_array_expression_text_font_is_treated_as_dynamic() {
+    // `["get", "x"]` is syntactically an all-string array but semantically an
+    // expression. It must NOT be mistaken for a static stack named `get`/`x`
+    // (which maps to nothing and would skip the layer's text); it takes the
+    // data-driven path, finds no literal stacks, and falls back to the default
+    // stack — the layer's text still renders.
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "ddf-getexpr",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "places", "type": "symbol", "source": "s", "source-layer": "place",
+          "layout": {
+            "text-field": ["get", "name"],
+            "text-font": ["get", "font_prop"]
+          } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let opts = opts_with_fonts(&[("Open Sans Regular", "https://fonts.example/OpenSans.ttf")]);
+    let (recipe, report) = convert(&style, &opts).unwrap();
+
+    let nodes = recipe["nodes"].as_object().unwrap();
+    let text = nodes
+        .values()
+        .find(|n| n["op"] == "text")
+        .expect("text node");
+    assert!(
+        text.get("font-expr").is_none(),
+        "no enumerable stacks → no font-expr"
+    );
+    assert!(text["font"].is_array(), "falls back to the default stack");
+    assert!(
+        !report.warnings.iter().any(|w| w.contains("text skipped")),
+        "the layer's text must not be skipped: {:?}",
+        report.warnings
+    );
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("no literal stacks found")),
+        "expected a no-literal-stacks warning: {:?}",
+        report.warnings
+    );
+}

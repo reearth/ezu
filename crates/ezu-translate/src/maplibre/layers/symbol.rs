@@ -246,9 +246,14 @@ fn convert_text(
     // default `font`. Unenumerable expressions fall back to the default stack
     // (renders more of the map than the old "skip whole layer").
     let text_font = get("text-font");
+    // A static stack is a literal font-name array; an expression (even one
+    // that is syntactically an all-string array, e.g. `["get", "x"]`) is
+    // data-driven. `is_expression` is a head check against the operator set,
+    // matching how MapLibre itself disambiguates the two. A legacy function
+    // object also takes the data-driven path (its stacks come from `stops`).
     let is_static_stack = match text_font {
         None => true,
-        Some(Value::Array(a)) => a.iter().all(Value::is_string),
+        Some(v @ Value::Array(_)) => !maplibre_expr::is_expression(v),
         _ => false,
     };
     let mut font_expr_value: Option<Value> = None;
