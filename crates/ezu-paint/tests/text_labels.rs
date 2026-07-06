@@ -277,3 +277,51 @@ fn text_expression_renders_per_feature_labels() {
         "wide right label ({right} px) should dwarf the left one ({left} px)"
     );
 }
+
+/// A `format` (multi-section) `text-field` — as emitted for MapLibre
+/// `["format", …]` labels (e.g. Protomaps' multi-script place names) —
+/// builds and renders. The sections are flattened to one string, so an
+/// embedded `"\n"` section stacks the label exactly like the equivalent
+/// plain two-line string.
+#[test]
+fn formatted_text_field_renders_like_the_flattened_string() {
+    let recipe = |text: &str| {
+        format!(
+            r##"{{
+          "name": "text-formatted",
+          "tile-size": 64,
+          "sources": {{
+            "src":  {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
+            "body": {{ "type": "font", "url": "{font}" }}
+          }},
+          "nodes": {{
+            "feats": {{ "op": "features", "source": "src", "layer": "pts" }},
+            "out":   {{ "op": "text", "features": "@feats", "font": ["body"],
+                        "text": {text}, "size": 20 }}
+          }},
+          "output": "@out"
+        }}"##,
+            font = font_url(),
+            text = text
+        )
+    };
+
+    // `["format", "AB", {}, "\n", {}, "CD", {}]` → the sections flatten to
+    // "AB\nCD"; `layout` turns the newline into a line break.
+    let formatted = render(
+        &recipe(r##"["format", "AB", {}, "\n", {}, "CD", {}]"##),
+        layer(vec![point_feature("x", 2048, 2048)]),
+    );
+    let plain = render(&recipe(r##""AB\nCD""##), layer(vec![point_feature("x", 2048, 2048)]));
+
+    let formatted_ink = opaque_in(&formatted, 0, formatted.width);
+    let plain_ink = opaque_in(&plain, 0, plain.width);
+    assert!(
+        formatted_ink > 30,
+        "the formatted label should render ink, got {formatted_ink}"
+    );
+    assert_eq!(
+        formatted_ink, plain_ink,
+        "flattened `format` label ({formatted_ink} px) should match the plain two-line string ({plain_ink} px)"
+    );
+}

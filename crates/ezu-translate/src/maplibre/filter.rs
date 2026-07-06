@@ -1,16 +1,20 @@
 //! MapLibre layer filters → ezu.
 //!
-//! A layer's `filter` is routed by [`layer_filter_expr`]:
+//! A layer's `filter` is routed by [`layer_filter_expr`] through
+//! `maplibre_expr::convert_legacy_filter`, which:
 //!
-//! - **expression-form** filters (per `maplibre_expr::is_expression_filter`)
-//!   pass through verbatim as a raw `filter-expr`, which ezu-paint evaluates
-//!   via the `maplibre-expr` crate — full fidelity, including `any`,
-//!   `has`/`!has`, `<`/`>`, `geometry-type`/`$type`, etc.
-//! - **legacy-form** filters (bare property names, `!in`/`!has`/`none`) are
-//!   converted to the equivalent expression by
-//!   `maplibre_expr::convert_legacy_filter` — the same conversion MapLibre
-//!   itself applies before compiling — and emitted as `filter-expr` too. Only
-//!   a structurally malformed legacy filter is reported and left unfiltered.
+//! - passes **expression-form** filters through verbatim as a raw `filter-expr`
+//!   (ezu-paint evaluates them via the `maplibre-expr` crate — full fidelity,
+//!   including `any`, `has`/`!has`, `<`/`>`, `geometry-type`/`$type`, etc.);
+//! - converts **legacy-form** filters (bare property names, `!in`/`!has`/`none`)
+//!   to the equivalent expression — the same conversion MapLibre itself applies
+//!   before compiling;
+//! - and rewrites the legacy leaves of a **mixed** `all`/`any`/`none` combiner
+//!   (one MapLibre would reject) so real-world styles such as the Protomaps
+//!   basemap still render, rather than leaving a raw legacy operator for the
+//!   evaluator to reject.
+//!
+//! Only a structurally malformed legacy filter is reported and left unfiltered.
 
 use serde_json::Value;
 
@@ -27,9 +31,11 @@ pub(crate) fn layer_filter_expr(
     id: &str,
 ) -> Option<Value> {
     let f = layer.get("filter")?;
-    if maplibre_expr::is_expression_filter(f) {
-        return Some(f.clone());
-    }
+    // `convert_legacy_filter` passes genuine expressions through unchanged,
+    // converts legacy filters, and rewrites the legacy leaves of a *mixed*
+    // `all`/`any`/`none` combiner (which `is_expression_filter` would otherwise
+    // classify as an expression and leave a raw `!has` / three-arg `==` for the
+    // evaluator to choke on — Protomaps basemap hits exactly this).
     match maplibre_expr::convert_legacy_filter(f) {
         Ok(expr) => Some(expr),
         Err(e) => {
