@@ -355,6 +355,46 @@ fn collision_properties_route_to_the_text_node() {
 }
 
 #[test]
+fn expression_text_padding_routes_to_padding_expr() {
+    // A zoom-curve `text-padding` becomes the text node's `padding-expr`
+    // (evaluated per feature), not a dropped constant.
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "dd-padding",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "places", "type": "symbol", "source": "s", "source-layer": "place",
+          "layout": {
+            "text-field": "{name}",
+            "text-font": ["F"],
+            "text-padding": ["interpolate", ["linear"], ["zoom"], 6, 2, 16, 12]
+          } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let opts = opts_with_fonts(&[("F", "https://fonts.example/F.ttf")]);
+    let (recipe, report) = convert(&style, &opts).unwrap();
+
+    let text = &recipe["nodes"]["places__text"];
+    assert_eq!(
+        text["padding-expr"],
+        serde_json::json!(["interpolate", ["linear"], ["zoom"], 6, 2, 16, 12])
+    );
+    assert!(
+        text.get("padding-px").is_none(),
+        "no constant padding: {text}"
+    );
+    assert!(
+        !report.warnings.iter().any(|w| w.contains("text-padding")),
+        "data-driven text-padding should not warn: {:?}",
+        report.warnings
+    );
+
+    let doc_text = serde_json::to_string(&recipe).unwrap();
+    ezu_style::Document::from_json(&doc_text).expect("recipe parses as ezu Document");
+}
+
+#[test]
 fn text_variable_anchor_routes_to_anchor_variants() {
     // A `text-variable-anchor` list + `text-radial-offset` become the text
     // node's `anchor-variants` / `radial-offset`, with no unsupported warning.
