@@ -44,7 +44,56 @@ Flags: `--style <path|url>`, `--tiles z/x/y,…`, `--out <dir>`,
 `--ref-dir <dir>` (use precomputed references instead of the Node
 renderer), `--refgen-dir <dir>` (default `tools/mlgl-ref`),
 `--threshold <0-255>` (per-channel delta counted as "visibly different",
-default 16), `--stitch` (see below).
+default 16), `--stitch` (see below), `--bench` (timing only, no reference —
+see below), `--repeat <N>` (bench: render each tile N times, keep the fastest).
+
+### `--bench` — timing only, no reference
+
+For a performance pass you often just want to know **where ezu spends its
+time**, without setting up the Node reference renderer. `--bench` converts the
+style, renders each tile in-process, and prints a per-op and per-node timing
+breakdown — reference fetch and pixel comparison are skipped entirely.
+
+```sh
+cargo run --release -p ezu-compare -- \
+  --style crates/ezu-compare/samples/protomaps-basemap.json \
+  --tiles 14/14550/6452,12/3637/1613 \
+  --bench --repeat 5
+```
+
+Per-node timings come from ezu-graph's `ezu_graph::eval` tracing stream (each
+node reports its op and eval time on a cache miss), captured by a tracing
+layer — so nothing about ezu's public API changes.
+
+`--repeat N` (default 1) renders each tile N times and keeps the **fastest**
+run (lowest wall-clock). Every pass uses a fresh cache, so each node stays a
+cache miss and the numbers reflect real work rather than memoised lookups.
+
+For each tile the output has:
+
+- a header with total eval time, wall-clock, and node count;
+- an **op table**: op / count / total ms / avg ms / share%;
+- the **slowest 15 nodes**: ms / op / node id.
+
+With more than one tile, a combined op table across all tiles is printed at the
+end. Sample:
+
+```
+=== 14/14550/6452 ===  eval 985.8 ms  wall 986.0 ms  (25 nodes)
+op                  count   total ms    avg ms   share%
+stroke                  3     516.86   172.286    52.4%
+fill-solid              5     428.34    85.668    43.5%
+blend                   8      38.99     4.874     4.0%
+features                8       1.48     0.185     0.1%
+solid                   1       0.13     0.128     0.0%
+
+slowest nodes (top 15):
+        ms op                 node
+   413.455 fill-solid         landuse__fill
+   297.482 stroke             roads_minor__stroke
+   169.955 stroke             roads_major__stroke
+   ...
+```
 
 ### `--stitch` — 3×3 tile neighbourhood
 

@@ -9,6 +9,10 @@
 //! ```
 //! For each tile it writes `<out>/<z>_<x>_<y>.{ezu,ref,diff}.png` and the
 //! converted `<out>/<z>_<x>_<y>.recipe.json`, then prints a summary table.
+//!
+//! `--bench` skips the reference and pixel compare entirely: it only times
+//! ezu's render and prints a per-op / per-node eval-time breakdown (`--repeat
+//! N` renders each tile N times and keeps the fastest run).
 
 use std::error::Error;
 use std::path::{Path, PathBuf};
@@ -24,6 +28,8 @@ use ezu::paint::nodes::default_registry;
 use ezu::style::Document;
 use ezu_compare::{compare_rgba8, diff_image, Metrics};
 
+mod bench;
+
 type R<T> = Result<T, Box<dyn Error>>;
 
 struct Args {
@@ -34,6 +40,11 @@ struct Args {
     refgen_dir: PathBuf,
     threshold: u8,
     stitch: bool,
+    /// Skip the reference render + pixel compare; only time ezu and print a
+    /// per-op / per-node timing breakdown.
+    bench: bool,
+    /// Render each tile this many times, keeping the fastest run.
+    repeat: usize,
 }
 
 fn parse_args() -> R<Args> {
@@ -44,12 +55,16 @@ fn parse_args() -> R<Args> {
     let mut refgen_dir = PathBuf::from("tools/mlgl-ref");
     let mut threshold = 16u8;
     let mut stitch = false;
+    let mut bench = false;
+    let mut repeat = 1usize;
 
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
             "--style" => style = it.next(),
             "--stitch" => stitch = true,
+            "--bench" => bench = true,
+            "--repeat" => repeat = it.next().ok_or("--repeat needs a value")?.parse()?,
             "--tiles" => {
                 let s = it.next().ok_or("--tiles needs a value")?;
                 for t in s.split(',') {
@@ -79,11 +94,16 @@ fn parse_args() -> R<Args> {
         refgen_dir,
         threshold,
         stitch,
+        bench,
+        repeat: repeat.max(1),
     })
 }
 
 fn main() -> R<()> {
     let args = parse_args()?;
+    if args.bench {
+        return run_bench(&args);
+    }
     std::fs::create_dir_all(&args.out)?;
 
     // The reference renderer wants the original style; load its text once
@@ -198,8 +218,39 @@ fn render_ezu(
     let graph = build_graph(&doc, &registry)?;
     let mut loader = BrushBankLoader::new();
     loader.register_builtins();
-    // Sprite sources: fetch the atlas PNG + index JSON and register the sheet
-    // so `icon` nodes can crop named icons for symbol / fill-pattern layers.
+    load_sprites(client, &doc, &mut loader);
+
+    let cache = Cache::new();
+    let tile_id = TileId { z, x, y };
+    let canvas = CanvasInfo { tile_size, pad };
+
+    let mut tile_loader = TileLoader::new(&loader, tile_id);
+    bind_tile_data(
+        client,
+        recipe,
+        &doc,
+        &mut tile_loader,
+        tile_id,
+        canvas,
+        stitch,
+    )?;
+
+    let params = ParamValues::new();
+    let ev = Evaluator::new(&graph, &cache, &tile_loader);
+    let start = Instant::now();
+    let out = ev.render(tile_id, canvas, &params, tile_seed(z, x, y))?;
+    let ezu_ms = start.elapsed().as_secs_f64() * 1000.0;
+
+    let raster = match out {
+        PortValue::Raster(r) => r,
+        other => return Err(format!("expected Raster output, got {:?}", other.kind()).into()),
+    };
+    Ok((raster_to_rgba8(&raster, tile_size, pad), tile_size, ezu_ms))
+}
+
+/// Register sprite sources (atlas PNG + index) on the brush-bank loader so
+/// `icon` nodes can crop named icons for symbol / fill-pattern layers.
+fn load_sprites(client: &reqwest::blocking::Client, doc: &Document, loader: &mut BrushBankLoader) {
     for (name, decl) in &doc.sources {
         if let ezu::style::SourceDecl::Sprite(sprite) = decl {
             match load_sprite_sheet(client, sprite) {
@@ -208,18 +259,28 @@ fn render_ezu(
             }
         }
     }
-    let cache = Cache::new();
-    let tile_id = TileId { z, x, y };
+}
 
-    let mut tile_loader = TileLoader::new(&loader, tile_id);
-
-    // Fetch + bind the vector source. With `--stitch`, merge the 3×3 tile
-    // neighbourhood into the centre tile's frame so geometry near the edges
-    // fills ezu's pad ring — matching how maplibre-gl-js renders a viewport
-    // that spans tile borders (mirrors the host's DEM/raster stitch). This
-    // only affects pad-sampling ops (blur / warp / dab) at tile edges, since
-    // the output is cropped to the tile; it multiplies decode/render cost, so
-    // it's opt-in. Plain fill/line output is unchanged.
+/// Fetch and bind a tile's vector / GeoJSON / DEM sources onto `tile_loader`.
+/// This is data prep (network + decode) and is not part of the timed render.
+///
+/// With `--stitch`, MVT sources merge the 3×3 tile neighbourhood into the
+/// centre tile's frame so geometry near the edges fills ezu's pad ring —
+/// matching how maplibre-gl-js renders a viewport that spans tile borders
+/// (mirrors the host's DEM/raster stitch). This only affects pad-sampling ops
+/// (blur / warp / dab) at tile edges, since the output is cropped to the tile;
+/// it multiplies decode/render cost, so it's opt-in. Plain fill/line output is
+/// unchanged.
+fn bind_tile_data(
+    client: &reqwest::blocking::Client,
+    recipe: &serde_json::Value,
+    doc: &Document,
+    tile_loader: &mut TileLoader,
+    tile_id: TileId,
+    canvas: CanvasInfo,
+    stitch: bool,
+) -> R<()> {
+    let TileId { z, x, y } = tile_id;
     for (src_name, url) in mvt_sources(recipe) {
         let template = resolve_tile_template(client, &url)?;
         let decoded = if stitch {
@@ -232,10 +293,10 @@ fn render_ezu(
         }
     }
 
-    // Fetch/parse + bind GeoJSON sources. The data is WGS84 lon/lat, so it's
-    // projected into this tile's local frame (extent 4096) and bound as a
-    // single feature layer under `<source>.<source>` — matching the recipe's
-    // `features` node, which targets `(source, source)` for geojson layers.
+    // GeoJSON is WGS84 lon/lat, so it's projected into this tile's local frame
+    // (extent 4096) and bound as a single feature layer under
+    // `<source>.<source>` — matching the recipe's `features` node, which
+    // targets `(source, source)` for geojson layers.
     for (src_name, data) in geojson_sources(client, recipe)? {
         match ezu::features::geojson::decode_projected(&data, z, x, y, 4096) {
             Ok(features) => {
@@ -250,34 +311,122 @@ fn render_ezu(
         }
     }
 
-    // Fetch + bind DEM sources (for hillshade/terrain). The binder is async
-    // (stitches the 3×3 neighbourhood over HTTP); run it on a scratch
-    // runtime — this is data prep, outside the timed render below.
-    let canvas = CanvasInfo { tile_size, pad };
-    let dem_sources = build_dem_sources(&doc);
+    // DEM sources (for hillshade/terrain). The binder is async (stitches the
+    // 3×3 neighbourhood over HTTP); run it on a scratch runtime.
+    let dem_sources = build_dem_sources(doc);
     if !dem_sources.is_empty() {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
-        rt.block_on(bind_dem_sources(
-            &mut tile_loader,
-            &dem_sources,
-            tile_id,
-            canvas,
-        ))?;
+        rt.block_on(bind_dem_sources(tile_loader, &dem_sources, tile_id, canvas))?;
+    }
+    Ok(())
+}
+
+/// Bench mode: convert once, then time ezu's render per tile with no reference
+/// and no pixel compare. Prints an eval-time breakdown per op and per node,
+/// plus a combined per-op table when several tiles are given.
+fn run_bench(args: &Args) -> R<()> {
+    let style_text = read_style(&args.style)?;
+    let style_json: serde_json::Value = serde_json::from_str(&style_text)?;
+
+    let opts = ezu_translate::maplibre::ConvertOptions::default();
+    let (recipe, _report) = ezu_translate::maplibre::convert(&style_json, &opts)?;
+    let recipe_text = serde_json::to_string_pretty(&recipe)?;
+
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("ezu-compare")
+        .build()?;
+    let collector = bench::EvalCollector::install();
+
+    println!(
+        "bench: {} tile(s), {} repeat(s), keeping the fastest run",
+        args.tiles.len(),
+        args.repeat,
+    );
+
+    let mut all_records = Vec::new();
+    for &(z, x, y) in &args.tiles {
+        match bench_tile(&client, &recipe, &recipe_text, &collector, args, (z, x, y)) {
+            Ok(records) => {
+                bench::print_op_table(&records);
+                println!("\nslowest nodes (top 15):");
+                bench::print_slow_nodes(&records, 15);
+                all_records.extend(records);
+            }
+            Err(e) => println!("\n=== {z}/{x}/{y} ===  ERROR: {e}"),
+        }
     }
 
-    let params = ParamValues::new();
-    let ev = Evaluator::new(&graph, &cache, &tile_loader);
-    let start = Instant::now();
-    let out = ev.render(tile_id, canvas, &params, tile_seed(z, x, y))?;
-    let ezu_ms = start.elapsed().as_secs_f64() * 1000.0;
+    if args.tiles.len() > 1 && !all_records.is_empty() {
+        println!("\n=== all tiles ===  eval {:.1} ms", {
+            bench::eval_total_us(&all_records) as f64 / 1000.0
+        });
+        bench::print_op_table(&all_records);
+    }
+    Ok(())
+}
 
-    let raster = match out {
-        PortValue::Raster(r) => r,
-        other => return Err(format!("expected Raster output, got {:?}", other.kind()).into()),
+/// Render one tile `repeat` times with a fresh cache each pass, returning the
+/// per-node records from the fastest run (lowest wall-clock).
+fn bench_tile(
+    client: &reqwest::blocking::Client,
+    recipe: &serde_json::Value,
+    recipe_text: &str,
+    collector: &bench::EvalCollector,
+    args: &Args,
+    (z, x, y): (u8, u32, u32),
+) -> R<Vec<bench::EvalRecord>> {
+    let doc = Document::from_json(recipe_text)?;
+    let registry = default_registry();
+    let graph = build_graph(&doc, &registry)?;
+    let mut loader = BrushBankLoader::new();
+    loader.register_builtins();
+    load_sprites(client, &doc, &mut loader);
+
+    let tile_id = TileId { z, x, y };
+    let canvas = CanvasInfo {
+        tile_size: doc.tile_size,
+        pad: doc.pad,
     };
-    Ok((raster_to_rgba8(&raster, tile_size, pad), tile_size, ezu_ms))
+
+    // Prep (fetch + decode + bind) happens once; only the render is repeated.
+    let mut tile_loader = TileLoader::new(&loader, tile_id);
+    bind_tile_data(
+        client,
+        recipe,
+        &doc,
+        &mut tile_loader,
+        tile_id,
+        canvas,
+        args.stitch,
+    )?;
+
+    let params = ParamValues::new();
+    let seed = tile_seed(z, x, y);
+    let mut best: Option<(f64, Vec<bench::EvalRecord>)> = None;
+    for _ in 0..args.repeat {
+        // A fresh cache each pass keeps every node a cache miss, so the timing
+        // reflects real work rather than memoised lookups.
+        let cache = Cache::new();
+        let ev = Evaluator::new(&graph, &cache, &tile_loader);
+        collector.clear();
+        let start = Instant::now();
+        let _ = ev.render(tile_id, canvas, &params, seed)?;
+        let wall_ms = start.elapsed().as_secs_f64() * 1000.0;
+        let records = collector.take();
+        if best.as_ref().is_none_or(|(w, _)| wall_ms < *w) {
+            best = Some((wall_ms, records));
+        }
+    }
+
+    let (wall_ms, records) = best.expect("at least one repeat");
+    let eval_ms = bench::eval_total_us(&records) as f64 / 1000.0;
+    println!(
+        "\n=== {z}/{x}/{y} ===  eval {eval_ms:.1} ms  wall {wall_ms:.1} ms  ({} nodes)",
+        records.len(),
+    );
+    Ok(records)
 }
 
 /// Find the first MVT source `(name, url)` in a recipe's `sources` block.
