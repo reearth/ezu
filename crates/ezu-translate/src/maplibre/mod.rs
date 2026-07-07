@@ -349,15 +349,116 @@ fn fold_blend(nodes: &mut Map<String, Value>, outputs: &[String]) -> String {
         }
         Some((first, rest)) => {
             let mut cur = first.clone();
-            for (i, over) in rest.iter().enumerate() {
+            let mut i = 0;
+            for over in rest {
+                // Compositing a fully opaque solid over itself is a no-op
+                // (source-over with alpha 1 replaces the base with identical
+                // pixels). This happens when a style seeds the layer list with
+                // a redundant background layer, so start the chain from that
+                // node directly instead of emitting `blend(@bg, @bg)`. A
+                // translucent duplicate is *not* skipped: source-over stacks
+                // alpha (C = Cs + Cb·(1−αs)), so drawing it twice darkens the
+                // result, matching MapLibre's behaviour of rendering duplicate
+                // layers twice.
+                if *over == cur && is_opaque_solid(nodes, &cur) {
+                    continue;
+                }
                 let bid = format!("blend_{i}");
                 nodes.insert(
                     bid.clone(),
                     serde_json::json!({ "op": "blend", "base": format!("@{cur}"), "over": format!("@{over}") }),
                 );
                 cur = bid;
+                i += 1;
             }
             cur
         }
+    }
+}
+
+/// True when `id` names a `solid` node that is certainly fully opaque: a hex
+/// colour with no alpha channel (`#rgb` / `#rrggbb`) or an explicit `ff`
+/// alpha, and no `opacity` dial below 1. Only such a node is safe to drop
+/// from a self-blend — blending a translucent solid over itself changes the
+/// result.
+fn is_opaque_solid(nodes: &Map<String, Value>, id: &str) -> bool {
+    let Some(node) = nodes.get(id).and_then(Value::as_object) else {
+        return false;
+    };
+    if node.get("op").and_then(Value::as_str) != Some("solid") {
+        return false;
+    }
+    if let Some(opacity) = node.get("opacity") {
+        if opacity.as_f64() != Some(1.0) {
+            return false;
+        }
+    }
+    let Some(hex) = node
+        .get("color")
+        .and_then(Value::as_str)
+        .and_then(|c| c.strip_prefix('#'))
+    else {
+        return false;
+    };
+    match hex.len() {
+        3 | 6 => true,
+        4 => hex.ends_with(['f', 'F']),
+        8 => hex[6..].eq_ignore_ascii_case("ff"),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn solid(color: &str) -> Value {
+        serde_json::json!({ "op": "solid", "color": color })
+    }
+
+    #[test]
+    fn self_blend_of_an_opaque_solid_is_skipped() {
+        let mut nodes = Map::new();
+        nodes.insert("bg".into(), solid("#cccccc"));
+        nodes.insert("fill".into(), solid("#112233"));
+        let outputs = ["bg".to_string(), "bg".to_string(), "fill".to_string()];
+        let out = fold_blend(&mut nodes, &outputs);
+        assert_eq!(out, "blend_0");
+        assert_eq!(nodes["blend_0"]["base"], "@bg");
+        assert_eq!(nodes["blend_0"]["over"], "@fill");
+    }
+
+    #[test]
+    fn self_blend_of_a_translucent_solid_is_kept() {
+        // source-over stacks alpha, so a duplicated translucent layer must
+        // still be composited twice to match MapLibre.
+        let mut nodes = Map::new();
+        nodes.insert("bg".into(), solid("#33333380"));
+        let outputs = ["bg".to_string(), "bg".to_string()];
+        let out = fold_blend(&mut nodes, &outputs);
+        assert_eq!(out, "blend_0");
+        assert_eq!(nodes["blend_0"]["base"], "@bg");
+        assert_eq!(nodes["blend_0"]["over"], "@bg");
+    }
+
+    #[test]
+    fn opaque_solid_detection() {
+        let mut nodes = Map::new();
+        nodes.insert("rgb".into(), solid("#abcdef"));
+        nodes.insert("short".into(), solid("#abc"));
+        nodes.insert("alpha_ff".into(), solid("#abcdefFF"));
+        nodes.insert("alpha_80".into(), solid("#abcdef80"));
+        nodes.insert(
+            "dimmed".into(),
+            serde_json::json!({ "op": "solid", "color": "#abcdef", "opacity": 0.5 }),
+        );
+        nodes.insert("not_solid".into(), serde_json::json!({ "op": "blur" }));
+        assert!(is_opaque_solid(&nodes, "rgb"));
+        assert!(is_opaque_solid(&nodes, "short"));
+        assert!(is_opaque_solid(&nodes, "alpha_ff"));
+        assert!(!is_opaque_solid(&nodes, "alpha_80"));
+        assert!(!is_opaque_solid(&nodes, "dimmed"));
+        assert!(!is_opaque_solid(&nodes, "not_solid"));
+        assert!(!is_opaque_solid(&nodes, "missing"));
     }
 }
