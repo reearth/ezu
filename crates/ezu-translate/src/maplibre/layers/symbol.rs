@@ -316,15 +316,14 @@ fn convert_text(
     // `text-field`: a constant may carry `{token}`s (rewritten to a
     // `concat`-of-`get` expression); expressions / legacy functions pass
     // through raw. A `format` expression passes through too: the `text` node
-    // renders its sections natively, so we register each section's `text-font`
-    // in the stack registry (below) and warn once about `vertical-align`.
+    // renders its sections natively (font / scale / colour / vertical-align),
+    // so we only register each section's `text-font` in the stack registry.
     let text_value = match get("text-field") {
         Some(Value::String(s)) => match rewrite_field_tokens(s) {
             Some(expr) => expr,
             None => Value::String(s.clone()),
         },
         Some(v @ Value::Array(_)) => {
-            let mut has_valign = false;
             register_format_section_fonts(
                 v,
                 &mut font_stacks_obj,
@@ -332,13 +331,7 @@ fn convert_text(
                 fonts,
                 glyphs_url,
                 id,
-                &mut has_valign,
             );
-            if has_valign {
-                report.warn(format!(
-                    "layer `{id}`: `format` `vertical-align` not supported — ignored"
-                ));
-            }
             v.clone()
         }
         // Legacy `{stops}` function: its output strings may carry
@@ -627,10 +620,9 @@ fn collect_font_stacks(v: &Value) -> Vec<Vec<String>> {
     out
 }
 
-/// Walk a `text-field` value, register every `format` section's `text-font`
+/// Walk a `text-field` value and register every `format` section's `text-font`
 /// in `font_stacks` (keyed by its canonical `,`-joined name, resolved through
-/// [`lower_stack`]), and set `has_valign` if any section uses `vertical-align`
-/// (unsupported). Descends the whole tree, so `format`s nested in `case` /
+/// [`lower_stack`]). Descends the whole tree, so `format`s nested in `case` /
 /// `match` (as the Protomaps multi-script labels use) are found too.
 ///
 /// Section-font lowering is best-effort and quiet: a stack that can't be
@@ -645,7 +637,6 @@ fn register_format_section_fonts(
     fonts: &HashMap<String, String>,
     glyphs_url: Option<&str>,
     id: &str,
-    has_valign: &mut bool,
 ) {
     match v {
         Value::Array(arr) => {
@@ -686,36 +677,17 @@ fn register_format_section_fonts(
                                 }
                             }
                         }
-                        if obj.contains_key("vertical-align") {
-                            *has_valign = true;
-                        }
                     }
                     i += 2;
                 }
             }
             for x in arr {
-                register_format_section_fonts(
-                    x,
-                    font_stacks,
-                    source_defs,
-                    fonts,
-                    glyphs_url,
-                    id,
-                    has_valign,
-                );
+                register_format_section_fonts(x, font_stacks, source_defs, fonts, glyphs_url, id);
             }
         }
         Value::Object(m) => {
             for val in m.values() {
-                register_format_section_fonts(
-                    val,
-                    font_stacks,
-                    source_defs,
-                    fonts,
-                    glyphs_url,
-                    id,
-                    has_valign,
-                );
+                register_format_section_fonts(val, font_stacks, source_defs, fonts, glyphs_url, id);
             }
         }
         _ => {}

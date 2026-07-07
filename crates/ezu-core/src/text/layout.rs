@@ -188,13 +188,42 @@ pub struct PlacedGlyph {
     pub section: u16,
 }
 
+/// MapLibre `format` per-section `vertical-align`: how a section's glyphs sit
+/// against a line's baseline when the line mixes `font-scale`s. `Baseline`
+/// (the default) keeps every section on the shared baseline; the others align
+/// a smaller section's top / centre / bottom to the tallest section's. With a
+/// single scale per line every option is a no-op.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VerticalAlign {
+    #[default]
+    Baseline,
+    Top,
+    Center,
+    Bottom,
+}
+
+impl VerticalAlign {
+    /// Parse the MapLibre `vertical-align` name; unknown → `None`.
+    pub fn parse(s: &str) -> Option<VerticalAlign> {
+        Some(match s {
+            "baseline" => VerticalAlign::Baseline,
+            "top" | "text-top" => VerticalAlign::Top,
+            "center" => VerticalAlign::Center,
+            "bottom" | "text-bottom" => VerticalAlign::Bottom,
+            _ => return None,
+        })
+    }
+}
+
 /// One `format` section to lay out: its text, the subrange of `fonts` that is
-/// its fallback stack, and its MapLibre `font-scale` (`1.0` = none).
+/// its fallback stack, its MapLibre `font-scale` (`1.0` = none), and its
+/// `vertical-align` within a mixed-scale line.
 #[derive(Debug, Clone)]
 pub struct SectionSpec<'a> {
     pub text: &'a str,
     pub fonts: std::ops::Range<usize>,
     pub scale: f32,
+    pub valign: VerticalAlign,
 }
 
 /// Axis-aligned box in em, relative to the anchor point (y down).
@@ -248,6 +277,7 @@ pub fn layout(text: &str, fonts: &[StackEntry], params: &LayoutParams) -> TextBl
             text,
             fonts: 0..fonts.len(),
             scale: 1.0,
+            valign: VerticalAlign::Baseline,
         }],
         fonts,
         params,
@@ -298,21 +328,44 @@ pub fn layout_sections(
     let lines = split_lines(&shaped, &breaks);
 
     let lh = params.line_height_em;
-    // First-baseline offset from the block top, and total block height.
-    let (first_baseline, block_h) = match primary {
-        StackEntry::Outline(f) => (
-            f.ascent_em(),
-            f.ascent_em() + f.descent_em() + (lines.len() - 1) as f32 * lh,
-        ),
-        // MapLibre metrics: each line is a `line-height` slot with its
-        // baseline pinned `0.5·line-height − 17px` from the slot top
-        // (`shaping.ts` — the align() half-line shift plus the fixed
-        // SHAPING_DEFAULT_OFFSET baseline offset).
-        StackEntry::Sdf(_) => (
-            0.5 * lh + SDF_Y_OFFSET_PX / SDF_EM_PX,
-            lines.len() as f32 * lh,
-        ),
+    // Unscaled ascent above / descent below the baseline (em), from the
+    // primary entry. An outline font uses its real metrics; an SDF stack uses
+    // MapLibre's fixed 24 px-em constants — a line whose baseline sits
+    // `0.5·line-height − 17px` from its slot top, so ascent/descent split the
+    // `line-height` slot around that point.
+    let (base_asc, base_desc) = match primary {
+        StackEntry::Outline(f) => (f.ascent_em(), f.descent_em()),
+        StackEntry::Sdf(_) => {
+            let asc = 0.5 * lh + SDF_Y_OFFSET_PX / SDF_EM_PX;
+            (asc, lh - asc)
+        }
     };
+
+    // Each line's metrics scale by its largest `font-scale` (a bigger glyph
+    // needs a taller slot); an empty line keeps scale 1. Baselines accumulate,
+    // the gap between two lines scaling by the larger of the pair so neither
+    // overlaps. All-`1.0` scales reproduce the fixed `first + i·lh` spacing.
+    let line_scale: Vec<f32> = lines
+        .iter()
+        .map(|l| {
+            l.glyphs
+                .iter()
+                .map(|g| g.scale)
+                .reduce(f32::max)
+                .unwrap_or(1.0)
+        })
+        .collect();
+    let mut baselines = Vec::with_capacity(lines.len());
+    for i in 0..lines.len() {
+        let b = if i == 0 {
+            base_asc * line_scale[0]
+        } else {
+            baselines[i - 1] + lh * line_scale[i - 1].max(line_scale[i])
+        };
+        baselines.push(b);
+    }
+    let last = lines.len() - 1;
+    let block_h = baselines[last] + base_desc * line_scale[last];
     let block_w = lines.iter().map(|l| l.width).fold(0.0f32, f32::max);
 
     let justify = params.justify.fraction(params.anchor);
@@ -322,16 +375,24 @@ pub fn layout_sections(
 
     let mut glyphs = Vec::new();
     for (line_ix, line) in lines.iter().enumerate() {
+        let s_line = line_scale[line_ix];
         let line_x = (block_w - line.width) * justify + shift_x;
-        let baseline = first_baseline + line_ix as f32 * lh + shift_y;
+        let baseline = baselines[line_ix] + shift_y;
         let mut pen = 0.0f32;
         for g in line.glyphs {
+            // A section smaller than the line's tallest is shifted within the
+            // line box per its `vertical-align`; equal scales shift by 0.
+            let valign = sections
+                .get(g.section as usize)
+                .map(|s| s.valign)
+                .unwrap_or_default();
+            let dy = valign_shift(valign, base_asc, base_desc, s_line, g.scale);
             glyphs.push(PlacedGlyph {
                 font: g.font,
                 glyph_id: g.glyph_id,
                 x: line_x + pen + g.x_offset,
                 // Shaping offsets are y-up; block coordinates are y-down.
-                y: baseline - g.y_offset,
+                y: baseline + dy - g.y_offset,
                 advance: g.x_advance,
                 scale: g.scale,
                 section: g.section,
@@ -350,6 +411,23 @@ pub fn layout_sections(
         },
         dropped_chars: shaped.dropped,
         missing_range_chars: shaped.missing_range,
+    }
+}
+
+/// Baseline shift (em, y-down) that places a section of scale `s_g` within a
+/// line whose tallest section has scale `s_line`, per `vertical-align`. Zero
+/// when the scales match, so a single-scale line is never perturbed.
+fn valign_shift(v: VerticalAlign, base_asc: f32, base_desc: f32, s_line: f32, s_g: f32) -> f32 {
+    let (asc_line, desc_line) = (base_asc * s_line, base_desc * s_line);
+    let (asc_g, desc_g) = (base_asc * s_g, base_desc * s_g);
+    match v {
+        VerticalAlign::Baseline => 0.0,
+        // Glyph bottom to the line bottom (down is +).
+        VerticalAlign::Bottom => desc_line - desc_g,
+        // Glyph top to the line top (up is −).
+        VerticalAlign::Top => -(asc_line - asc_g),
+        // Glyph vertical centre to the line's.
+        VerticalAlign::Center => ((desc_line - desc_g) - (asc_line - asc_g)) / 2.0,
     }
 }
 
