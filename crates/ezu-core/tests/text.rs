@@ -305,7 +305,7 @@ fn halo_sits_behind_the_fill() {
 
 #[test]
 fn single_section_equals_plain_layout() {
-    use ezu_core::text::{layout_sections, SectionSpec};
+    use ezu_core::text::{layout_sections, SectionSpec, VerticalAlign};
     let fonts = [latin(), digits()];
     let params = no_wrap();
     let plain = layout("A1B", &fonts, &params);
@@ -314,6 +314,7 @@ fn single_section_equals_plain_layout() {
             text: "A1B",
             fonts: 0..fonts.len(),
             scale: 1.0,
+            valign: VerticalAlign::Baseline,
         }],
         &fonts,
         &params,
@@ -333,7 +334,7 @@ fn single_section_equals_plain_layout() {
 
 #[test]
 fn each_section_shapes_against_its_own_font_subrange() {
-    use ezu_core::text::{layout_sections, SectionSpec};
+    use ezu_core::text::{layout_sections, SectionSpec, VerticalAlign};
     // Flat stack [latin, digits]; section 0 ("AB") may use only latin,
     // section 1 ("12") only digits.
     let fonts = [latin(), digits()];
@@ -343,11 +344,13 @@ fn each_section_shapes_against_its_own_font_subrange() {
                 text: "AB",
                 fonts: 0..1,
                 scale: 1.0,
+                valign: VerticalAlign::Baseline,
             },
             SectionSpec {
                 text: "12",
                 fonts: 1..2,
                 scale: 1.0,
+                valign: VerticalAlign::Baseline,
             },
         ],
         &fonts,
@@ -369,7 +372,7 @@ fn each_section_shapes_against_its_own_font_subrange() {
 
 #[test]
 fn font_scale_grows_a_sections_advances() {
-    use ezu_core::text::{layout_sections, SectionSpec};
+    use ezu_core::text::{layout_sections, SectionSpec, VerticalAlign};
     let fonts = [latin(), digits()];
     let width = |scale: f32| {
         layout_sections(
@@ -377,6 +380,7 @@ fn font_scale_grows_a_sections_advances() {
                 text: "AB",
                 fonts: 0..1,
                 scale,
+                valign: VerticalAlign::Baseline,
             }],
             &fonts,
             &no_wrap(),
@@ -390,4 +394,120 @@ fn font_scale_grows_a_sections_advances() {
         (w2 - 2.0 * w1).abs() < 0.05 * w1,
         "2x section width {w2} should be ~2x the 1x width {w1}"
     );
+}
+
+#[test]
+fn mixed_scale_line_grows_by_the_max_section_scale() {
+    use ezu_core::text::{layout_sections, SectionSpec, VerticalAlign};
+    // Two sections on one line; the second is 2×. The block must be taller
+    // than an all-1× line (the tall section enlarges the line's metrics),
+    // and matches a uniformly-2× line's height.
+    let fonts = [latin()];
+    let sec = |text, scale| SectionSpec {
+        text,
+        fonts: 0..1,
+        scale,
+        valign: VerticalAlign::Baseline,
+    };
+    let uniform1 = layout_sections(&[sec("AB", 1.0)], &fonts, &no_wrap());
+    let mixed = layout_sections(&[sec("A", 1.0), sec("B", 2.0)], &fonts, &no_wrap());
+    let uniform2 = layout_sections(&[sec("AB", 2.0)], &fonts, &no_wrap());
+    assert!(
+        mixed.bbox.height() > uniform1.bbox.height() + 1e-3,
+        "a 2x section should raise the line height: mixed={} 1x={}",
+        mixed.bbox.height(),
+        uniform1.bbox.height()
+    );
+    assert!(
+        (mixed.bbox.height() - uniform2.bbox.height()).abs() < 1e-3,
+        "line height should follow the max scale: mixed={} 2x={}",
+        mixed.bbox.height(),
+        uniform2.bbox.height()
+    );
+}
+
+#[test]
+fn vertical_align_shifts_a_smaller_section_within_the_line() {
+    use ezu_core::text::{layout_sections, SectionSpec, VerticalAlign};
+    // A big 2× section and a small 1× section on one line. The small
+    // section's glyph baseline sits lower for `Bottom` than for `Top`;
+    // `Baseline` keeps it on the shared baseline (between the two).
+    let fonts = [latin()];
+    let block = |valign| {
+        layout_sections(
+            &[
+                SectionSpec {
+                    text: "A",
+                    fonts: 0..1,
+                    scale: 2.0,
+                    valign: VerticalAlign::Baseline,
+                },
+                SectionSpec {
+                    text: "b",
+                    fonts: 0..1,
+                    scale: 1.0,
+                    valign,
+                },
+            ],
+            &fonts,
+            &no_wrap(),
+        )
+    };
+    // The small section is the second glyph (section 1).
+    let small_y =
+        |b: &ezu_core::text::TextBlock| b.glyphs.iter().find(|g| g.section == 1).unwrap().y;
+    let top = small_y(&block(VerticalAlign::Top));
+    let base = small_y(&block(VerticalAlign::Baseline));
+    let bottom = small_y(&block(VerticalAlign::Bottom));
+    // y is down: top-aligned sits highest (smallest y), bottom lowest.
+    assert!(
+        top < base - 1e-3,
+        "top should sit above baseline: top={top} base={base}"
+    );
+    assert!(
+        bottom > base + 1e-3,
+        "bottom should sit below baseline: bottom={bottom} base={base}"
+    );
+}
+
+#[test]
+fn vertical_align_is_a_noop_for_a_single_scale_line() {
+    use ezu_core::text::{layout_sections, SectionSpec, VerticalAlign};
+    // All sections share scale 1.0, so every vertical-align lays out
+    // identically to Baseline.
+    let fonts = [latin()];
+    let block = |valign| {
+        layout_sections(
+            &[
+                SectionSpec {
+                    text: "A",
+                    fonts: 0..1,
+                    scale: 1.0,
+                    valign: VerticalAlign::Baseline,
+                },
+                SectionSpec {
+                    text: "b",
+                    fonts: 0..1,
+                    scale: 1.0,
+                    valign,
+                },
+            ],
+            &fonts,
+            &no_wrap(),
+        )
+    };
+    let ys =
+        |b: &ezu_core::text::TextBlock| b.glyphs.iter().map(|g| g.y.to_bits()).collect::<Vec<_>>();
+    let baseline = ys(&block(VerticalAlign::Baseline));
+    for v in [
+        VerticalAlign::Top,
+        VerticalAlign::Center,
+        VerticalAlign::Bottom,
+    ] {
+        assert_eq!(
+            ys(&block(v)),
+            baseline,
+            "single-scale line must ignore {v:?}"
+        );
+    }
 }

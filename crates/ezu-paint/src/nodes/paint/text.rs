@@ -47,7 +47,7 @@ use ezu_core::text::{
     collide::{self, Aabb, Candidate, LineCandidate},
     draw, draw_line, generate_anchors, layout_sections, place_glyphs, Anchor, Font, GlyphPlacement,
     Justify, LayoutParams, LinePlacement, SdfFontStack, SectionPaint, SectionSpec, StackEntry,
-    TextBlock, TextPaint, TextTransform,
+    TextBlock, TextPaint, TextTransform, VerticalAlign,
 };
 use ezu_features::FeatureLayer;
 
@@ -216,6 +216,7 @@ struct LabelSection {
     font_id: u32,
     scale: f32,
     color: Option<[f32; 4]>,
+    valign: VerticalAlign,
 }
 
 /// Resolve an evaluated `text` value into label sections, or `None` to skip
@@ -238,6 +239,7 @@ fn label_sections(
             font_id: base_font_id,
             scale: 1.0,
             color: None,
+            valign: VerticalAlign::Baseline,
         }])
     };
     match value {
@@ -260,6 +262,11 @@ fn label_sections(
                         .text_color
                         .as_ref()
                         .map(|c| [c.r as f32, c.g as f32, c.b as f32, c.a as f32]),
+                    valign: s
+                        .vertical_align
+                        .as_deref()
+                        .and_then(VerticalAlign::parse)
+                        .unwrap_or_default(),
                 })
                 .collect();
             (!sections.is_empty()).then_some(sections)
@@ -569,6 +576,7 @@ impl TextNode {
                         font_id: base_font_id,
                         scale: 1.0,
                         color: None,
+                        valign: VerticalAlign::Baseline,
                     }],
                     _ => return,
                 },
@@ -606,6 +614,7 @@ impl TextNode {
                             text: &s.text,
                             fonts: r.clone(),
                             scale: s.scale,
+                            valign: s.valign,
                         })
                         .collect();
                     Arc::new(layout_sections(&specs, &flat_fonts, &params))
@@ -963,6 +972,7 @@ impl Node for TextNode {
                         font_id: base_font_id,
                         scale: 1.0,
                         color: None,
+                        valign: VerticalAlign::Baseline,
                     }],
                     _ => return,
                 },
@@ -1001,6 +1011,7 @@ impl Node for TextNode {
                             text: &s.text,
                             fonts: r.clone(),
                             scale: s.scale,
+                            valign: s.valign,
                         })
                         .collect();
                     Arc::new(layout_sections(&specs, &flat_fonts, &params))

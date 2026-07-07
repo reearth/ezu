@@ -24,10 +24,10 @@
 //!    at a given origin and font size, with fill color and optional halo.
 //!
 //! MapLibre `format` sections are supported: [`layout_sections`] lays out
-//! per-section font (a subrange of the stack) and `font-scale`, and [`draw`]
-//! takes a per-section fill table (see [`SectionPaint`]). Per-section
-//! `vertical-align` is not applied, and mixed-scale line metrics step by the
-//! constant line height rather than the per-line max scale.
+//! per-section font (a subrange of the stack), `font-scale`, and
+//! `vertical-align` (see [`VerticalAlign`]); a line's metrics scale by its
+//! tallest section. [`draw`] takes a per-section fill table (see
+//! [`SectionPaint`]).
 //!
 //! # Scope
 //!
@@ -54,7 +54,7 @@ pub use draw::{draw, draw_line, GlyphPlacement, SectionPaint, TextPaint};
 pub use font::{Font, FontError, StackEntry};
 pub use layout::{
     char_allows_ideographic_breaking, layout, layout_sections, Anchor, EmBox, Justify,
-    LayoutParams, PlacedGlyph, SectionSpec, TextBlock, TextTransform,
+    LayoutParams, PlacedGlyph, SectionSpec, TextBlock, TextTransform, VerticalAlign,
 };
 pub use line::{generate_anchors, place_glyphs, Anchor as LineAnchor, GlyphOnLine, LinePlacement};
 pub use pbf::{decode_glyph_range, GlyphPbfError, GlyphRange};

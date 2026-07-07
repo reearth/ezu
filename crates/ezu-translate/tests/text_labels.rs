@@ -736,10 +736,11 @@ fn format_text_field_passes_through_and_registers_section_fonts() {
         text["font-stacks"]["Noto Sans Devanagari Regular"],
         serde_json::json!(["noto-sans-devanagari-regular"])
     );
-    // `vertical-align` is warned about, and `format` is not "dropped".
+    // `vertical-align` is rendered natively now, so it no longer warns, and
+    // `format` is not "dropped" / flattened.
     assert!(
-        report.warnings.iter().any(|w| w.contains("vertical-align")),
-        "expected a vertical-align warning: {:?}",
+        !report.warnings.iter().any(|w| w.contains("vertical-align")),
+        "vertical-align should render without a warning: {:?}",
         report.warnings
     );
     assert!(
