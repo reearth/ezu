@@ -48,7 +48,8 @@ pub mod sdf;
 mod shape;
 
 pub use collide::{
-    place, place_lines, Aabb, Candidate, Grid, LineCandidate, COLLISION_CELL_PX, DEDUP_QUANTUM,
+    place, place_lines, Aabb, Candidate, Grid, LineCandidate, Placement, COLLISION_CELL_PX,
+    DEDUP_QUANTUM,
 };
 pub use draw::{draw, draw_line, GlyphPlacement, SectionPaint, TextPaint};
 pub use font::{Font, FontError, StackEntry};

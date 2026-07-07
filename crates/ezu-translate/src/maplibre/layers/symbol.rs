@@ -239,11 +239,6 @@ fn convert_text(
             "point"
         }
     };
-    if get("text-variable-anchor").is_some() {
-        report.warn(format!(
-            "layer `{id}`: `text-variable-anchor` not supported — using `text-anchor`"
-        ));
-    }
 
     // `text-font`: a static string array (or absent → default) lowers to a
     // single stack. A data-driven expression / legacy function (A) is
@@ -408,6 +403,16 @@ fn convert_text(
     // expression here falls back to the default with a warning.
     if let Some(anchor) = const_string(get("text-anchor"), "text-anchor", id, report) {
         spec["anchor"] = Value::from(anchor);
+    }
+    // `text-variable-anchor`: an ordered list of anchors the renderer tries on
+    // collision. Emitted as `anchor-variants`, which overrides `anchor`.
+    if let Some(variants) = const_anchor_list(get("text-variable-anchor"), id, report) {
+        spec["anchor-variants"] = serde_json::json!(variants);
+        // `text-radial-offset` pairs with variable anchors: the em distance
+        // each anchor pushes the label away from the point.
+        if let Some(r) = const_number(get("text-radial-offset"), "text-radial-offset", id, report) {
+            spec["radial-offset"] = Value::from(r);
+        }
     }
     if let Some(justify) = const_string(get("text-justify"), "text-justify", id, report) {
         spec["justify"] = Value::from(justify);
@@ -866,6 +871,26 @@ fn const_number(v: Option<&Value>, prop: &str, id: &str, report: &mut Report) ->
         Some(_) => {
             report.warn(format!(
                 "layer `{id}`: expression `{prop}` not supported — using the default"
+            ));
+            None
+        }
+    }
+}
+
+/// A constant `text-variable-anchor` (an array of anchor-name strings); an
+/// expression or a non-string entry warns and yields `None`. An empty array
+/// yields `None` (no variants).
+fn const_anchor_list(v: Option<&Value>, id: &str, report: &mut Report) -> Option<Vec<String>> {
+    match v {
+        None => None,
+        Some(Value::Array(a)) if !a.is_empty() && a.iter().all(Value::is_string) => Some(
+            a.iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .collect(),
+        ),
+        Some(_) => {
+            report.warn(format!(
+                "layer `{id}`: expression `text-variable-anchor` not supported — using `text-anchor`"
             ));
             None
         }
