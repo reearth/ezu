@@ -2,7 +2,7 @@
 
 use ezu_graph::{
     build_graph, AssetLoader, Cache, CanvasInfo, Evaluator, NoAssets, ParamValues, PortValue,
-    RasterBuf, TileId,
+    RasterBuf, SpriteSheet, TileId,
 };
 use ezu_paint::host::BrushBankLoader;
 use ezu_paint::nodes::default_registry;
@@ -180,6 +180,41 @@ pub fn render_with_features_and_images(
     for (name, img) in images {
         bank.insert_image(name.to_string(), img.clone());
     }
+    let mut loader = TileLoader::new(&bank, tile);
+    for (name, layer) in features {
+        loader.bind_features(name.to_string(), layer.clone());
+    }
+    let ev = Evaluator::new(&graph, &cache, &loader);
+    let out = ev
+        .render(tile, CanvasInfo { tile_size, pad }, &ParamValues::new(), 0)
+        .expect("render");
+    match out {
+        PortValue::Raster(r) => r,
+        other => panic!("expected raster output, got {:?}", other.kind()),
+    }
+}
+
+/// Render with tile-scoped feature layers and a bound sprite sheet, the
+/// combination a data-driven `icon-image` (`features` → `stamp` with a
+/// `name-expr` cropping a per-feature icon from `sheet`) needs. `sprite_key`
+/// is the sprite source's `image` key the stamp resolves against.
+#[allow(dead_code)]
+pub fn render_with_features_and_sprite(
+    json: &str,
+    tile_size: u32,
+    pad: u32,
+    tile: TileId,
+    features: &[(&str, ezu_features::FeatureLayer)],
+    sprite_key: &str,
+    sheet: SpriteSheet,
+) -> std::sync::Arc<ezu_graph::RasterBuf> {
+    use ezu_paint::host::TileLoader;
+    let doc = Document::from_json(json).expect("parse");
+    let registry = default_registry();
+    let graph = build_graph(&doc, &registry).expect("build");
+    let cache = Cache::new();
+    let mut bank = BrushBankLoader::new();
+    bank.insert_sprite(sprite_key.to_string(), sheet);
     let mut loader = TileLoader::new(&bank, tile);
     for (name, layer) in features {
         loader.bind_features(name.to_string(), layer.clone());

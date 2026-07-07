@@ -21,6 +21,17 @@ pub(crate) struct Sources {
 }
 
 impl Sources {
+    /// The `default`/first sprite source key, if the style declares one. Used
+    /// for a data-driven `icon-image`, where the icon name is chosen per
+    /// feature but all icons come from one sheet.
+    pub(crate) fn default_sprite(&self) -> Option<&str> {
+        self.sprites
+            .iter()
+            .find(|s| *s == "default")
+            .or_else(|| self.sprites.first())
+            .map(String::as_str)
+    }
+
     /// Resolve an icon/pattern reference to `(sprite source key, icon name)`.
     /// A `sheet:icon` name selects that sheet; an unprefixed name (or an
     /// unknown prefix) falls back to the `default`/first sheet.

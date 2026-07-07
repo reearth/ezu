@@ -121,33 +121,40 @@ fn convert_icon(
     ensure_feat: &mut impl FnMut(&mut Map<String, Value>) -> String,
     report: &mut Report,
 ) {
-    let Some(icon_name) = icon_image.as_str() else {
-        report.warn(format!(
-            "layer `{id}`: data-driven `icon-image` not supported — skipped"
-        ));
-        return;
-    };
-    let Some((sprite_src, sprite_icon)) = sources.resolve_icon(icon_name) else {
-        report.warn(format!(
-            "layer `{id}`: icon `{icon_name}` needs a `sprite`, but the style declares none — skipped"
-        ));
-        return;
-    };
-
     let feat_ref = ensure_feat(nodes);
-    let icon_id = format!("{id}__icon");
-    nodes.insert(
-        icon_id.clone(),
-        serde_json::json!({ "op": "icon", "sprite": format!("@{sprite_src}"), "name": sprite_icon }),
-    );
-
-    // `stamp` scale / rotation / opacity each carry a constant literal on the
-    // plain field, or a data-driven expression / legacy `{stops}` object on
-    // the matching `*-expr` sibling.
     let stamp_id = format!("{id}__stamp");
-    let mut spec = serde_json::json!({
-        "op": "stamp", "features": feat_ref, "image": format!("@{icon_id}")
-    });
+    // A constant `icon-image` crops one named icon up front (`icon` node →
+    // `stamp` image). A data-driven one is passed to `stamp` as a `name-expr`
+    // over the sheet's atlas, cropping each feature's icon at eval time — no
+    // per-icon enumeration, since any icon in the bound sheet is croppable.
+    let mut spec = match icon_image.as_str() {
+        Some(icon_name) => {
+            let Some((sprite_src, sprite_icon)) = sources.resolve_icon(icon_name) else {
+                report.warn(format!(
+                    "layer `{id}`: icon `{icon_name}` needs a `sprite`, but the style declares none — skipped"
+                ));
+                return;
+            };
+            let icon_id = format!("{id}__icon");
+            nodes.insert(
+                icon_id.clone(),
+                serde_json::json!({ "op": "icon", "sprite": format!("@{sprite_src}"), "name": sprite_icon }),
+            );
+            serde_json::json!({ "op": "stamp", "features": feat_ref, "image": format!("@{icon_id}") })
+        }
+        None => {
+            let Some(sprite_src) = sources.default_sprite() else {
+                report.warn(format!(
+                    "layer `{id}`: data-driven `icon-image` needs a `sprite`, but the style declares none — skipped"
+                ));
+                return;
+            };
+            serde_json::json!({
+                "op": "stamp", "features": feat_ref,
+                "sprite": format!("@{sprite_src}"), "name-expr": icon_image.clone()
+            })
+        }
+    };
 
     // `layout.icon-size` → `scale` (constant) or `scale-expr`.
     let (size, size_expr) = resolve_number(layout.and_then(|l| l.get("icon-size")));
