@@ -496,8 +496,14 @@ fn convert_text(
     if get("text-ignore-placement").and_then(Value::as_bool) == Some(true) {
         spec["ignore-placement"] = Value::from(true);
     }
-    if let Some(p) = const_number(get("text-padding"), "text-padding", id, report) {
+    // `text-padding`: constant → `padding-px`, expression (e.g. a zoom curve)
+    // → `padding-expr`, evaluated per feature.
+    let (padding, padding_expr) = resolve_number(get("text-padding"));
+    if let Some(p) = padding {
         spec["padding-px"] = Value::from(p);
+    }
+    if let Some(e) = padding_expr {
+        spec["padding-expr"] = e;
     }
     // `symbol-sort-key`: constant or expression — the `text` node parses
     // either on `sort-key-expr`.

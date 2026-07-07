@@ -404,6 +404,10 @@ struct TextNode {
     ignore_placement: bool,
     /// MapLibre `text-padding`: collision box inflation in px.
     padding_px: f32,
+    /// Data-driven `text-padding`: a MapLibre number expression evaluated per
+    /// feature group; overrides the constant `padding_px` for that group.
+    padding_expr: Option<maplibre_expr::Expr>,
+    padding_expr_src: Option<String>,
     /// MapLibre `symbol-sort-key`: per-feature number; lower places
     /// first. Absent = 0.
     sort_key_expr: Option<maplibre_expr::Expr>,
@@ -648,6 +652,7 @@ impl TextNode {
                 None => 0.0,
             };
             let opacity = eval_number(&self.opacity_expr, &ectx, const_opacity).clamp(0.0, 1.0);
+            let padding = eval_number(&self.padding_expr, &ectx, self.padding_px).max(0.0);
             let mut color = eval_color(&self.color_expr, &ectx, const_color);
             let mut halo_color = eval_color(&self.halo_color_expr, &ectx, const_halo_color);
             color[3] *= opacity;
@@ -741,7 +746,7 @@ impl TextNode {
                                 max_x: gp.x + ex,
                                 max_y: gp.y + ey,
                             }
-                            .inflate(self.padding_px),
+                            .inflate(padding),
                         );
                     }
                     // World anchor (extent units) of the label-centre sample.
@@ -1049,6 +1054,7 @@ impl Node for TextNode {
                 None => 0.0,
             };
             let opacity = eval_number(&self.opacity_expr, &ectx, const_opacity).clamp(0.0, 1.0);
+            let padding = eval_number(&self.padding_expr, &ectx, self.padding_px).max(0.0);
             let mut color = eval_color(&self.color_expr, &ectx, const_color);
             let mut halo_color = eval_color(&self.halo_color_expr, &ectx, const_halo_color);
             color[3] *= opacity;
@@ -1126,7 +1132,7 @@ impl Node for TextNode {
                     max_x: lpx + bb.max_x * size,
                     max_y: lpy + bb.max_y * size,
                 }
-                .inflate(self.padding_px)
+                .inflate(padding)
             };
             for &(x, y) in &group.points {
                 let world_ax = (tx + dx) * extent_i + x as i64;
@@ -1299,6 +1305,7 @@ impl Node for TextNode {
             (b"halocolorexpr".as_slice(), &self.halo_color_expr_src),
             (b"halowidthexpr".as_slice(), &self.halo_width_expr_src),
             (b"opacityexpr".as_slice(), &self.opacity_expr_src),
+            (b"paddingexpr".as_slice(), &self.padding_expr_src),
             (b"sortkeyexpr".as_slice(), &self.sort_key_expr_src),
             (b"filterexpr".as_slice(), &self.filter_expr_src),
         ] {
@@ -1575,6 +1582,8 @@ impl NodeFactory for TextFactory {
         let allow_overlap = read_bool_or(fields, "allow-overlap", ctx, false)?;
         let ignore_placement = read_bool_or(fields, "ignore-placement", ctx, false)?;
         let padding_px = read_number_or(fields, "padding-px", ctx, 2.0)? as f32;
+        let (padding_expr, padding_expr_src) =
+            parse_expr_field(fields, "padding-expr", &maplibre_expr::Type::Number)?;
         let (sort_key_expr, sort_key_expr_src) =
             parse_expr_field(fields, "sort-key-expr", &maplibre_expr::Type::Number)?;
         // Neighbour candidate gathering: the upstream `<source>.<layer>`
@@ -1654,6 +1663,8 @@ impl NodeFactory for TextFactory {
                 allow_overlap,
                 ignore_placement,
                 padding_px,
+                padding_expr,
+                padding_expr_src,
                 sort_key_expr,
                 sort_key_expr_src,
                 neighbor_base,
@@ -1740,6 +1751,9 @@ impl NodeFactory for TextFactory {
                                       "description": "MapLibre `text-ignore-placement`: don't let this label block later ones (skip inserting its collision box). Default false." },
                 "padding-px": { "type": "number", "minimum": 0.0,
                                 "description": "Collision-box inflation in px on every side. Default 2." },
+                "padding-expr": {
+                    "description": "A MapLibre number expression (MapLibre `text-padding`), evaluated per feature group; overrides the constant `padding-px` for that group's collision boxes.",
+                },
                 "sort-key-expr": {
                     "description": "A MapLibre number expression (MapLibre `symbol-sort-key`), evaluated per feature group; lower values place first under collision. Absent = 0.",
                 },
