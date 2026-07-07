@@ -45,8 +45,9 @@ use xxhash_rust::xxh3::Xxh3;
 
 use ezu_core::text::{
     collide::{self, Aabb, Candidate, LineCandidate},
-    draw, draw_line, generate_anchors, layout, place_glyphs, Anchor, Font, GlyphPlacement, Justify,
-    LayoutParams, LinePlacement, SdfFontStack, StackEntry, TextBlock, TextPaint, TextTransform,
+    draw, draw_line, generate_anchors, layout_sections, place_glyphs, Anchor, Font, GlyphPlacement,
+    Justify, LayoutParams, LinePlacement, SdfFontStack, SectionPaint, SectionSpec, StackEntry,
+    TextBlock, TextPaint, TextTransform,
 };
 use ezu_features::FeatureLayer;
 
@@ -114,25 +115,50 @@ fn eval_color(
     }
 }
 
-/// Reduce an evaluated `text` value to the string to lay out.
-///
-/// A `format` expression evaluates to [`maplibre_expr::Value::Formatted`] — a
-/// list of styled sections. We flatten it by concatenating the sections' text
-/// (embedded `"\n"` sections survive as newlines, which [`layout`] treats as
-/// line breaks), rendering the whole label with the layer's font and paint.
-/// Per-section font / colour / scale overrides are not yet applied. Scalars
-/// stringify; `null` and other types yield `None` so the label is skipped.
-fn label_text(value: &maplibre_expr::Value) -> Option<String> {
-    use maplibre_expr::Value as V;
-    match value {
-        V::String(s) => Some(s.clone()),
-        V::Formatted(sections) => {
-            Some(sections.iter().map(|s| s.text.as_str()).collect::<String>())
-        }
-        V::Number(n) => Some(n.to_string()),
-        V::Bool(b) => Some(b.to_string()),
-        _ => None,
+/// Assemble label sections into a flat font stack, per-section font subranges
+/// (aligned with `sections`), and a content hash. Distinct `font_id`s appear
+/// once in the flat stack in first-use order, so a glyph's flat font index and
+/// the layout are a deterministic function of the sections — the hash keys the
+/// layout cache and is reused as the collision `style_id`. The hash folds each
+/// section's text, `font_id`, and scale (colour is draw-only, excluded).
+fn assemble_stacks(
+    sections: &[LabelSection],
+    registry: &FontRegistry,
+) -> (Vec<StackEntry>, Vec<std::ops::Range<usize>>, u64) {
+    let mut flat: Vec<StackEntry> = Vec::new();
+    let mut by_id: HashMap<u32, std::ops::Range<usize>> = HashMap::new();
+    let mut ranges = Vec::with_capacity(sections.len());
+    let mut h = Xxh3::new();
+    for s in sections {
+        let range = match by_id.get(&s.font_id) {
+            Some(r) => r.clone(),
+            None => {
+                let start = flat.len();
+                flat.extend_from_slice(registry.stack_by_id(s.font_id));
+                let r = start..flat.len();
+                by_id.insert(s.font_id, r.clone());
+                r
+            }
+        };
+        ranges.push(range);
+        h.update(s.text.as_bytes());
+        h.update(&[0]);
+        h.update(&s.font_id.to_le_bytes());
+        h.update(&s.scale.to_bits().to_le_bytes());
     }
+    (flat, ranges, h.digest())
+}
+
+/// The per-section fill table for [`draw`], with the group `opacity` folded
+/// into each override's alpha. Sections with no colour override carry `None`
+/// (the glyph then uses the block fill).
+fn section_paints(sections: &[LabelSection], opacity: f32) -> Vec<SectionPaint> {
+    sections
+        .iter()
+        .map(|s| SectionPaint {
+            color: s.color.map(|[r, g, b, a]| [r, g, b, a * opacity]),
+        })
+        .collect()
 }
 
 /// Canonical registry key for a font stack: names trimmed, joined with `,`
@@ -173,6 +199,72 @@ impl FontRegistry {
         } else {
             &self.stacks[(id - 1) as usize]
         }
+    }
+
+    /// The `font_id` for a canonical stack key, or `None` if unregistered.
+    fn id_of(&self, key: &str) -> Option<u32> {
+        self.by_key.get(key).map(|&i| i as u32 + 1)
+    }
+}
+
+/// One resolved `format` section (or a plain label as a single section):
+/// its text, the registry `font_id` for its stack, its `font-scale`, and an
+/// optional per-section fill color (straight sRGB, group opacity not yet
+/// applied).
+struct LabelSection {
+    text: String,
+    font_id: u32,
+    scale: f32,
+    color: Option<[f32; 4]>,
+}
+
+/// Resolve an evaluated `text` value into label sections, or `None` to skip
+/// the label (null/other types, or a `format` of only images/empty text).
+///
+/// A plain string / number / bool becomes a single section on `base_font_id`
+/// (the group's `font-expr`-resolved stack). A `format` value becomes one
+/// section per styled span: its `font-scale`, its per-section `text-color`,
+/// and its `text-font` resolved against the registry (an unlisted or absent
+/// stack falls back to `base_font_id`). Image sections are skipped.
+fn label_sections(
+    value: &maplibre_expr::Value,
+    registry: &FontRegistry,
+    base_font_id: u32,
+) -> Option<Vec<LabelSection>> {
+    use maplibre_expr::Value as V;
+    let one = |text: String| {
+        Some(vec![LabelSection {
+            text,
+            font_id: base_font_id,
+            scale: 1.0,
+            color: None,
+        }])
+    };
+    match value {
+        V::String(s) => one(s.clone()),
+        V::Number(n) => one(n.to_string()),
+        V::Bool(b) => one(b.to_string()),
+        V::Formatted(secs) => {
+            let sections: Vec<LabelSection> = secs
+                .iter()
+                .filter(|s| s.image.is_none() && !s.text.is_empty())
+                .map(|s| LabelSection {
+                    text: s.text.clone(),
+                    font_id: s
+                        .font_stack
+                        .as_deref()
+                        .and_then(|k| registry.id_of(k))
+                        .unwrap_or(base_font_id),
+                    scale: s.scale.map(|v| v as f32).unwrap_or(1.0),
+                    color: s
+                        .text_color
+                        .as_ref()
+                        .map(|c| [c.r as f32, c.g as f32, c.b as f32, c.a as f32]),
+                })
+                .collect();
+            (!sections.is_empty()).then_some(sections)
+        }
+        _ => None,
     }
 }
 
@@ -427,24 +519,25 @@ impl TextNode {
         let params = self.line_layout_params();
         let (tx, ty) = (ctx.tile.x as i64, ctx.tile.y as i64);
 
-        // Keyed by `(text, size, font_id)` — a data-driven `font-expr` can lay
-        // the same text/size out against different stacks in one eval.
-        let mut blocks: HashMap<(String, u32, u32), Arc<TextBlock>> = HashMap::new();
+        // Keyed by the content hash (sections' text/font/scale) + size, so a
+        // data-driven `font-expr` or per-section `format` fonts lay the same
+        // text out against different stacks without cache collisions.
+        let mut blocks: HashMap<(u64, u32), Arc<TextBlock>> = HashMap::new();
         let mut dropped_chars = 0usize;
         let mut missing_range_chars = 0usize;
         let mut font_fallbacks = 0usize;
 
         /// One placed line label's draw payload, index-aligned with the
         /// collision candidate list. `placements` are in the local
-        /// world-pixel frame; the pad is added at draw time.
+        /// world-pixel frame; the pad is added at draw time. `fonts`/`paints`
+        /// are the label's flat stack and per-section fill table.
         struct LineDraw {
             block: Arc<TextBlock>,
             placements: Vec<GlyphPlacement>,
             perp_px: f32,
             paint: TextPaint,
-            /// Registry `font_id` of the stack this label was laid out
-            /// against; resolved back to a stack via `stack_by_id` at draw.
-            font_id: u32,
+            fonts: Arc<Vec<StackEntry>>,
+            paints: Arc<Vec<SectionPaint>>,
         }
         let mut cands: Vec<LineCandidate> = Vec::new();
         let mut draws: Vec<LineDraw> = Vec::new();
@@ -458,23 +551,31 @@ impl TextNode {
                 return;
             }
             let ectx = crate::render::group_expr_context(group, z);
-            let text = match &self.text_expr {
+            let base_font_id = registry.resolve(self.group_stack_key(&ectx).as_deref()).0;
+            if dx == 0 && dy == 0 && self.font_expr.is_some() && base_font_id == 0 {
+                font_fallbacks += 1;
+            }
+            let sections = match &self.text_expr {
                 Some(e) => match maplibre_expr::evaluate(e, &ectx) {
-                    Ok(v) => match label_text(&v) {
+                    Ok(v) => match label_sections(&v, &registry, base_font_id) {
                         Some(s) => s,
                         None => return,
                     },
                     _ => return,
                 },
-                None => self.text.clone().unwrap_or_default(),
+                None => match &self.text {
+                    Some(t) if !t.is_empty() => vec![LabelSection {
+                        text: t.clone(),
+                        font_id: base_font_id,
+                        scale: 1.0,
+                        color: None,
+                    }],
+                    _ => return,
+                },
             };
+            let text: String = sections.iter().map(|s| s.text.as_str()).collect();
             if text.is_empty() {
                 return;
-            }
-            // (A) Per-feature font stack. A miss (or no `font-expr`) → default.
-            let (font_id, group_fonts) = registry.resolve(self.group_stack_key(&ectx).as_deref());
-            if dx == 0 && dy == 0 && self.font_expr.is_some() && font_id == 0 {
-                font_fallbacks += 1;
             }
             let size = eval_number(&self.size_expr, &ectx, const_size).max(0.0);
             if size <= 0.0 {
@@ -494,9 +595,21 @@ impl TextNode {
             halo_color[3] *= opacity;
             let halo_width = eval_number(&self.halo_width_expr, &ectx, const_halo_width).max(0.0);
 
+            let (flat_fonts, ranges, hash) = assemble_stacks(&sections, &registry);
             let block = blocks
-                .entry((text.clone(), size.to_bits(), font_id))
-                .or_insert_with(|| Arc::new(layout(&text, group_fonts, &params)))
+                .entry((hash, size.to_bits()))
+                .or_insert_with(|| {
+                    let specs: Vec<SectionSpec<'_>> = sections
+                        .iter()
+                        .zip(&ranges)
+                        .map(|(s, r)| SectionSpec {
+                            text: &s.text,
+                            fonts: r.clone(),
+                            scale: s.scale,
+                        })
+                        .collect();
+                    Arc::new(layout_sections(&specs, &flat_fonts, &params))
+                })
                 .clone();
             if dx == 0 && dy == 0 {
                 dropped_chars += block.dropped_chars;
@@ -505,6 +618,8 @@ impl TextNode {
             if block.is_empty() {
                 return;
             }
+            let fonts = Arc::new(flat_fonts);
+            let paints = Arc::new(section_paints(&sections, opacity));
 
             // Each glyph's horizontal-centre offset (px) from the label
             // centre, plus the along-line (`offset-em[0]`) shift; the
@@ -577,7 +692,7 @@ impl TextNode {
                         world_ax,
                         world_ay,
                         text: text.clone(),
-                        style_id: font_id as u64,
+                        style_id: hash,
                         boxes,
                         allow_overlap: self.allow_overlap,
                         ignore_placement: self.ignore_placement,
@@ -595,7 +710,8 @@ impl TextNode {
                         placements,
                         perp_px: perp,
                         paint,
-                        font_id,
+                        fonts: fonts.clone(),
+                        paints: paints.clone(),
                     });
                 }
             }
@@ -679,12 +795,7 @@ impl TextNode {
                 })
                 .collect();
             draw_line(
-                &d.block,
-                registry.stack_by_id(d.font_id),
-                &mut pm,
-                &shifted,
-                d.perp_px,
-                &d.paint,
+                &d.block, &d.fonts, &mut pm, &shifted, d.perp_px, &d.paint, &d.paints,
             );
         }
 
@@ -794,25 +905,28 @@ impl Node for TextNode {
         let params = self.layout_params();
         let (tx, ty) = (ctx.tile.x as i64, ctx.tile.y as i64);
 
-        // Shaping is the expensive step; the same (text, size) pair is
-        // laid out once per eval no matter how many groups/points repeat
-        // it. Neighbour candidates share this cache (identical exprs →
-        // identical layout across tiles).
-        let mut blocks: HashMap<(String, u32, u32), Arc<TextBlock>> = HashMap::new();
+        // Shaping is the expensive step; a label is laid out once per eval no
+        // matter how many groups/points repeat it. The key is the content hash
+        // (folding each section's text, font, and scale) plus the size, so
+        // neighbour candidates share the cache (identical exprs → identical
+        // layout across tiles) while differently-styled same-text labels stay
+        // distinct.
+        let mut blocks: HashMap<(u64, u32), Arc<TextBlock>> = HashMap::new();
         let mut culled = 0usize;
         let mut dropped_chars = 0usize;
         let mut missing_range_chars = 0usize;
         let mut font_fallbacks = 0usize;
 
         /// One placed label's draw payload, index-aligned with the
-        /// collision candidate list.
+        /// collision candidate list. `fonts` is the label's flat stack (its
+        /// glyphs' `font` indices point into it); `paints` the per-section
+        /// fill table. Both are shared across a group's points via `Arc`.
         struct DrawRec {
             block: Arc<TextBlock>,
             anchor: (f32, f32),
             paint: TextPaint,
-            /// Registry `font_id` of the stack this label was laid out
-            /// against; resolved back to a stack via `stack_by_id` at draw.
-            font_id: u32,
+            fonts: Arc<Vec<StackEntry>>,
+            paints: Arc<Vec<SectionPaint>>,
         }
         let mut cands: Vec<Candidate> = Vec::new();
         let mut draws: Vec<DrawRec> = Vec::new();
@@ -828,23 +942,35 @@ impl Node for TextNode {
                 return;
             }
             let ectx = crate::render::group_expr_context(group, z);
-            let text = match &self.text_expr {
+            // Per-feature default stack (Phase 1) — the fallback for any
+            // `format` section without its own `text-font`, and the whole-label
+            // stack for a plain string.
+            let base_font_id = registry.resolve(self.group_stack_key(&ectx).as_deref()).0;
+            if dx == 0 && dy == 0 && self.font_expr.is_some() && base_font_id == 0 {
+                font_fallbacks += 1;
+            }
+            let sections = match &self.text_expr {
                 Some(e) => match maplibre_expr::evaluate(e, &ectx) {
-                    Ok(v) => match label_text(&v) {
+                    Ok(v) => match label_sections(&v, &registry, base_font_id) {
                         Some(s) => s,
                         None => return,
                     },
                     _ => return,
                 },
-                None => self.text.clone().unwrap_or_default(),
+                None => match &self.text {
+                    Some(t) if !t.is_empty() => vec![LabelSection {
+                        text: t.clone(),
+                        font_id: base_font_id,
+                        scale: 1.0,
+                        color: None,
+                    }],
+                    _ => return,
+                },
             };
+            // Collision text: the sections concatenated (as they lay out).
+            let text: String = sections.iter().map(|s| s.text.as_str()).collect();
             if text.is_empty() {
                 return;
-            }
-            // (A) Per-feature font stack. A miss (or no `font-expr`) → default.
-            let (font_id, group_fonts) = registry.resolve(self.group_stack_key(&ectx).as_deref());
-            if dx == 0 && dy == 0 && self.font_expr.is_some() && font_id == 0 {
-                font_fallbacks += 1;
             }
             let size = eval_number(&self.size_expr, &ectx, const_size).max(0.0);
             if size <= 0.0 {
@@ -864,9 +990,21 @@ impl Node for TextNode {
             halo_color[3] *= opacity;
             let halo_width = eval_number(&self.halo_width_expr, &ectx, const_halo_width).max(0.0);
 
+            let (flat_fonts, ranges, hash) = assemble_stacks(&sections, &registry);
             let block = blocks
-                .entry((text.clone(), size.to_bits(), font_id))
-                .or_insert_with(|| Arc::new(layout(&text, group_fonts, &params)))
+                .entry((hash, size.to_bits()))
+                .or_insert_with(|| {
+                    let specs: Vec<SectionSpec<'_>> = sections
+                        .iter()
+                        .zip(&ranges)
+                        .map(|(s, r)| SectionSpec {
+                            text: &s.text,
+                            fonts: r.clone(),
+                            scale: s.scale,
+                        })
+                        .collect();
+                    Arc::new(layout_sections(&specs, &flat_fonts, &params))
+                })
                 .clone();
             // Count layout warnings once per distinct label (own groups
             // only; neighbours repeat the same strings).
@@ -897,6 +1035,8 @@ impl Node for TextNode {
                 halo_width_px: halo_width,
                 halo_blur_px: 0.0,
             };
+            let fonts = Arc::new(flat_fonts);
+            let paints = Arc::new(section_paints(&sections, opacity));
             for &(x, y) in &group.points {
                 let world_ax = (tx + dx) * extent_i + x as i64;
                 let world_ay = (ty + dy) * extent_i + y as i64;
@@ -918,7 +1058,7 @@ impl Node for TextNode {
                     world_ax,
                     world_ay,
                     text: text.clone(),
-                    style_id: font_id as u64,
+                    style_id: hash,
                     aabb,
                     allow_overlap: self.allow_overlap,
                     ignore_placement: self.ignore_placement,
@@ -927,7 +1067,8 @@ impl Node for TextNode {
                     block: block.clone(),
                     anchor: (lpx + pad, lpy + pad),
                     paint,
-                    font_id,
+                    fonts: fonts.clone(),
+                    paints: paints.clone(),
                 });
             }
         };
@@ -998,13 +1139,7 @@ impl Node for TextNode {
                     continue;
                 }
             }
-            draw(
-                &d.block,
-                registry.stack_by_id(d.font_id),
-                &mut pm,
-                d.anchor,
-                &d.paint,
-            );
+            draw(&d.block, &d.fonts, &mut pm, d.anchor, &d.paint, &d.paints);
         }
         // One summary line per eval, not one per label.
         if culled > 0 {

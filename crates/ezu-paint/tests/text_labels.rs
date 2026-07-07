@@ -430,3 +430,89 @@ fn font_expr_unknown_stack_falls_back() {
         "unknown stack should fall back to the default font and still render"
     );
 }
+
+/// A `format` section with a per-section `text-color` paints that section in
+/// its own colour while the rest uses the block fill.
+#[test]
+fn format_section_text_color_paints_that_section() {
+    let recipe = format!(
+        r##"{{
+      "name": "text-format-color",
+      "tile-size": 64,
+      "sources": {{
+        "src":  {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
+        "body": {{ "type": "font", "url": "{font}" }}
+      }},
+      "nodes": {{
+        "feats": {{ "op": "features", "source": "src", "layer": "pts" }},
+        "out":   {{ "op": "text", "features": "@feats", "font": ["body"], "size": 24,
+                    "color": "#000000",
+                    "text": ["format", "AB", {{}}, "\n", {{}}, "CD",
+                             {{"text-color": ["to-color", "#ff0000"]}}] }}
+      }},
+      "output": "@out"
+    }}"##,
+        font = font_url()
+    );
+    let r = render(&recipe, layer(vec![point_feature("x", 2048, 2048)]));
+    // The second section is red; the first is black. A strongly-red pixel
+    // must exist, and it must sit below the (black) first line.
+    let mut red = 0;
+    for y in 0..r.height {
+        for x in 0..r.width {
+            let p = r.pixel(x, y);
+            if p[3] > 150 && p[0] > 180 && p[1] < 80 && p[2] < 80 {
+                red += 1;
+            }
+        }
+    }
+    assert!(
+        red > 15,
+        "the red section should paint red pixels, got {red}"
+    );
+}
+
+/// A `format` section's `text-font` selects a different registry stack: a
+/// digit-only section renders only because its section font covers digits,
+/// which the default (latin) font does not.
+#[test]
+fn format_section_font_selects_a_different_stack() {
+    let recipe = |section_font: &str| {
+        format!(
+            r##"{{
+          "name": "text-format-font",
+          "tile-size": 64,
+          "sources": {{
+            "src":    {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
+            "latin":  {{ "type": "font", "url": "{latin}" }},
+            "digits": {{ "type": "font", "url": "{digits}" }}
+          }},
+          "nodes": {{
+            "feats": {{ "op": "features", "source": "src", "layer": "pts" }},
+            "out":   {{ "op": "text", "features": "@feats", "font": ["latin"], "size": 24,
+                        "font-stacks": {{ "Digits": ["digits"] }},
+                        "text": ["format", "ab", {{}}, "\n", {{}}, "12", {section_font}] }}
+          }},
+          "output": "@out"
+        }}"##,
+            latin = font_url(),
+            digits = digits_font_url(),
+            section_font = section_font
+        )
+    };
+    let ink = |recipe: &str| {
+        opaque_in(
+            &render(recipe, layer(vec![point_feature("x", 2048, 2048)])),
+            0,
+            64,
+        )
+    };
+    // With the digits section font, "12" renders; without it the digits fall
+    // to the latin font (no digit glyphs) and drop, so there is less ink.
+    let with_digits = ink(&recipe(r##"{"text-font": ["literal", ["Digits"]]}"##));
+    let without = ink(&recipe("{}"));
+    assert!(
+        with_digits > without + 15,
+        "digit section should add ink via its own font: with={with_digits} without={without}"
+    );
+}

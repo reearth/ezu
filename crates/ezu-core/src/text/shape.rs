@@ -11,6 +11,8 @@
 //! glyph stacks map one codepoint to one glyph with the PBF advance —
 //! the MapLibre client behaviour, which has no shaping engine.
 
+use std::ops::Range;
+
 use super::font::StackEntry;
 use super::sdf::{SdfCoverage, SDF_EM_PX};
 
@@ -21,14 +23,31 @@ pub(crate) struct ShapedGlyph {
     /// Outline backend: the font's glyph id. SDF backend: the BMP
     /// codepoint (the glyph protocol's id space).
     pub glyph_id: u16,
-    /// Horizontal advance in em, including letter spacing.
+    /// Horizontal advance in em, including letter spacing. Already
+    /// multiplied by the section's `scale`.
     pub x_advance: f32,
     /// Offset from the pen position, in em (y positive up, as shaped).
+    /// Already multiplied by the section's `scale`.
     pub x_offset: f32,
     pub y_offset: f32,
     /// Index into [`ShapedText::chars`] of the first char of this
     /// glyph's cluster.
     pub char_ix: usize,
+    /// MapLibre `format` per-section `font-scale` baked into this glyph
+    /// (`1.0` for plain text). The draw step multiplies the font size by
+    /// it; layout uses it for per-line metrics.
+    pub scale: f32,
+    /// Index of the `format` section this glyph belongs to (`0` for plain
+    /// text), used to look up the per-section paint at draw time.
+    pub section: u16,
+}
+
+/// One `format` section to shape: its text, the subrange of the flat font
+/// stack that is its fallback chain, and its `font-scale`.
+pub(crate) struct ShapeSection<'a> {
+    pub text: &'a str,
+    pub fonts: Range<usize>,
+    pub scale: f32,
 }
 
 /// A shaped string: the glyph sequence plus the logical char sequence
@@ -52,63 +71,40 @@ struct Run {
     char_start: usize,
 }
 
-/// Itemize `text` over the fallback stack and shape every run.
-pub(crate) fn shape(text: &str, fonts: &[StackEntry], letter_spacing_em: f32) -> ShapedText {
-    let (runs, chars, dropped, missing_range) = itemize(text, fonts);
+/// Shape a sequence of `format` sections against a flat font stack. Each
+/// section itemizes over its own subrange (its fallback chain) and its glyphs
+/// carry the section index and `font-scale`; a section boundary always ends a
+/// run (no cross-section shaping — MapLibre behaves the same). The logical
+/// `chars` sequence is the sections concatenated, which the line-break DP and
+/// whitespace trimming index into unchanged.
+pub(crate) fn shape_sections(
+    sections: &[ShapeSection<'_>],
+    fonts: &[StackEntry],
+    letter_spacing_em: f32,
+) -> ShapedText {
     let mut glyphs = Vec::new();
-    for run in &runs {
-        match &fonts[run.font] {
-            StackEntry::Outline(font) => {
-                let scale = 1.0 / font.units_per_em();
-                // Map a cluster (byte offset into the run's text) back to the
-                // logical char index.
-                let char_of_byte: Vec<usize> = {
-                    let mut map = vec![0usize; run.text.len() + 1];
-                    for (char_ix, (byte_ix, _)) in run.text.char_indices().enumerate() {
-                        map[byte_ix] = run.char_start + char_ix;
-                    }
-                    map
-                };
-                font.with_face(|face| {
-                    let mut buffer = rustybuzz::UnicodeBuffer::new();
-                    buffer.push_str(&run.text);
-                    let shaped = rustybuzz::shape(face, &[], buffer);
-                    for (info, pos) in shaped
-                        .glyph_infos()
-                        .iter()
-                        .zip(shaped.glyph_positions().iter())
-                    {
-                        glyphs.push(ShapedGlyph {
-                            font: run.font,
-                            glyph_id: info.glyph_id as u16,
-                            x_advance: pos.x_advance as f32 * scale + letter_spacing_em,
-                            x_offset: pos.x_offset as f32 * scale,
-                            y_offset: pos.y_offset as f32 * scale,
-                            char_ix: char_of_byte[info.cluster as usize],
-                        });
-                    }
-                });
-            }
-            StackEntry::Sdf(stack) => {
-                // 1 codepoint → 1 glyph; the PBF advance is in px at
-                // the 24 px em.
-                for (char_ix, c) in run.text.chars().enumerate() {
-                    // Coverage was checked during itemization; a miss
-                    // here would be a racing range eviction, which the
-                    // grow-only range map rules out.
-                    let Some(glyph) = stack.glyph(c) else {
-                        continue;
-                    };
-                    glyphs.push(ShapedGlyph {
-                        font: run.font,
-                        glyph_id: c as u16,
-                        x_advance: glyph.advance as f32 / SDF_EM_PX + letter_spacing_em,
-                        x_offset: 0.0,
-                        y_offset: 0.0,
-                        char_ix: run.char_start + char_ix,
-                    });
-                }
-            }
+    let mut chars: Vec<char> = Vec::new();
+    let mut dropped = 0usize;
+    let mut missing_range = 0usize;
+    for (sec_ix, sec) in sections.iter().enumerate() {
+        let base = sec.fonts.start;
+        let sub = &fonts[sec.fonts.clone()];
+        let (runs, sec_chars, sec_dropped, sec_missing) = itemize(sec.text, sub);
+        let char_base = chars.len();
+        chars.extend(sec_chars);
+        dropped += sec_dropped;
+        missing_range += sec_missing;
+        for run in &runs {
+            shape_run(
+                run,
+                &fonts[base + run.font],
+                base,
+                sec.scale,
+                sec_ix as u16,
+                char_base,
+                letter_spacing_em,
+                &mut glyphs,
+            );
         }
     }
     ShapedText {
@@ -116,6 +112,79 @@ pub(crate) fn shape(text: &str, fonts: &[StackEntry], letter_spacing_em: f32) ->
         chars,
         dropped,
         missing_range,
+    }
+}
+
+/// Shape one itemized run against `entry` (the stack entry at absolute index
+/// `base + run.font`) and append its glyphs. `char_base` maps the run's
+/// section-local char indices back into the combined `chars` sequence.
+#[allow(clippy::too_many_arguments)]
+fn shape_run(
+    run: &Run,
+    entry: &StackEntry,
+    base: usize,
+    scale: f32,
+    section: u16,
+    char_base: usize,
+    letter_spacing_em: f32,
+    glyphs: &mut Vec<ShapedGlyph>,
+) {
+    let font_ix = base + run.font;
+    match entry {
+        StackEntry::Outline(font) => {
+            let units = 1.0 / font.units_per_em();
+            // Map a cluster (byte offset into the run's text) back to the
+            // logical char index.
+            let char_of_byte: Vec<usize> = {
+                let mut map = vec![0usize; run.text.len() + 1];
+                for (char_ix, (byte_ix, _)) in run.text.char_indices().enumerate() {
+                    map[byte_ix] = char_base + run.char_start + char_ix;
+                }
+                map
+            };
+            font.with_face(|face| {
+                let mut buffer = rustybuzz::UnicodeBuffer::new();
+                buffer.push_str(&run.text);
+                let shaped = rustybuzz::shape(face, &[], buffer);
+                for (info, pos) in shaped
+                    .glyph_infos()
+                    .iter()
+                    .zip(shaped.glyph_positions().iter())
+                {
+                    glyphs.push(ShapedGlyph {
+                        font: font_ix,
+                        glyph_id: info.glyph_id as u16,
+                        x_advance: pos.x_advance as f32 * units * scale + letter_spacing_em,
+                        x_offset: pos.x_offset as f32 * units * scale,
+                        y_offset: pos.y_offset as f32 * units * scale,
+                        char_ix: char_of_byte[info.cluster as usize],
+                        scale,
+                        section,
+                    });
+                }
+            });
+        }
+        StackEntry::Sdf(stack) => {
+            // 1 codepoint → 1 glyph; the PBF advance is in px at the 24 px em.
+            for (char_ix, c) in run.text.chars().enumerate() {
+                // Coverage was checked during itemization; a miss here would be
+                // a racing range eviction, which the grow-only range map rules
+                // out.
+                let Some(glyph) = stack.glyph(c) else {
+                    continue;
+                };
+                glyphs.push(ShapedGlyph {
+                    font: font_ix,
+                    glyph_id: c as u16,
+                    x_advance: glyph.advance as f32 / SDF_EM_PX * scale + letter_spacing_em,
+                    x_offset: 0.0,
+                    y_offset: 0.0,
+                    char_ix: char_base + run.char_start + char_ix,
+                    scale,
+                    section,
+                });
+            }
+        }
     }
 }
 

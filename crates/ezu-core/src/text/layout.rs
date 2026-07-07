@@ -18,7 +18,7 @@
 
 use super::font::StackEntry;
 use super::sdf::{SDF_EM_PX, SDF_Y_OFFSET_PX};
-use super::shape::{shape, ShapedGlyph, ShapedText};
+use super::shape::{shape_sections, ShapeSection, ShapedGlyph, ShapedText};
 
 /// The nine MapLibre text anchors: which part of the block sits on the
 /// anchor point (`Left` = the block's left edge touches the point, so
@@ -176,10 +176,25 @@ pub struct PlacedGlyph {
     pub glyph_id: u16,
     pub x: f32,
     pub y: f32,
-    /// Horizontal advance in em (including letter spacing). Point
-    /// placement ignores it; line placement needs it to find each
-    /// glyph's horizontal centre along the path.
+    /// Horizontal advance in em (including letter spacing, already scaled
+    /// by `scale`). Point placement ignores it; line placement needs it
+    /// to find each glyph's horizontal centre along the path.
     pub advance: f32,
+    /// The glyph's `format` section `font-scale` (`1.0` for plain text).
+    /// The draw step multiplies the font size by it.
+    pub scale: f32,
+    /// Index of the `format` section this glyph belongs to (`0` for plain
+    /// text); indexes the per-section paint table at draw time.
+    pub section: u16,
+}
+
+/// One `format` section to lay out: its text, the subrange of `fonts` that is
+/// its fallback stack, and its MapLibre `font-scale` (`1.0` = none).
+#[derive(Debug, Clone)]
+pub struct SectionSpec<'a> {
+    pub text: &'a str,
+    pub fonts: std::ops::Range<usize>,
+    pub scale: f32,
 }
 
 /// Axis-aligned box in em, relative to the anchor point (y down).
@@ -228,15 +243,49 @@ impl TextBlock {
 /// its real ascender/descender, an SDF stack through MapLibre's fixed
 /// 24 px-em constants.
 pub fn layout(text: &str, fonts: &[StackEntry], params: &LayoutParams) -> TextBlock {
-    let (Some(primary), false) = (fonts.first(), text.is_empty()) else {
+    layout_sections(
+        &[SectionSpec {
+            text,
+            fonts: 0..fonts.len(),
+            scale: 1.0,
+        }],
+        fonts,
+        params,
+    )
+}
+
+/// Lay out a sequence of `format` sections against a flat font stack (each
+/// section's `fonts` a subrange of it). Line metrics come from the primary
+/// entry (`fonts[0]`) as in [`layout`]; a section's `font-scale` is baked into
+/// its glyph advances and carried on each [`PlacedGlyph`] for the draw step.
+/// `layout(text, …)` is the one-section, unscaled case and lays out
+/// bit-identically.
+pub fn layout_sections(
+    sections: &[SectionSpec<'_>],
+    fonts: &[StackEntry],
+    params: &LayoutParams,
+) -> TextBlock {
+    let (Some(primary), false) = (fonts.first(), sections.iter().all(|s| s.text.is_empty())) else {
         return TextBlock::default();
     };
-    let transformed = match params.transform {
-        TextTransform::None => text.to_string(),
-        TextTransform::Uppercase => text.to_uppercase(),
-        TextTransform::Lowercase => text.to_lowercase(),
-    };
-    let shaped = shape(&transformed, fonts, params.letter_spacing_em);
+    let transformed: Vec<String> = sections
+        .iter()
+        .map(|s| match params.transform {
+            TextTransform::None => s.text.to_string(),
+            TextTransform::Uppercase => s.text.to_uppercase(),
+            TextTransform::Lowercase => s.text.to_lowercase(),
+        })
+        .collect();
+    let shape_secs: Vec<ShapeSection<'_>> = sections
+        .iter()
+        .zip(&transformed)
+        .map(|(s, t)| ShapeSection {
+            text: t,
+            fonts: s.fonts.clone(),
+            scale: s.scale,
+        })
+        .collect();
+    let shaped = shape_sections(&shape_secs, fonts, params.letter_spacing_em);
     if shaped.glyphs.is_empty() {
         return TextBlock {
             dropped_chars: shaped.dropped,
@@ -284,6 +333,8 @@ pub fn layout(text: &str, fonts: &[StackEntry], params: &LayoutParams) -> TextBl
                 // Shaping offsets are y-up; block coordinates are y-down.
                 y: baseline - g.y_offset,
                 advance: g.x_advance,
+                scale: g.scale,
+                section: g.section,
             });
             pen += g.x_advance;
         }

@@ -315,22 +315,32 @@ fn convert_text(
 
     // `text-field`: a constant may carry `{token}`s (rewritten to a
     // `concat`-of-`get` expression); expressions / legacy functions pass
-    // through raw, except `format` (rewritten to plain concatenated text
-    // — per-section styling has no ezu counterpart yet).
+    // through raw. A `format` expression passes through too: the `text` node
+    // renders its sections natively, so we register each section's `text-font`
+    // in the stack registry (below) and warn once about `vertical-align`.
     let text_value = match get("text-field") {
         Some(Value::String(s)) => match rewrite_field_tokens(s) {
             Some(expr) => expr,
             None => Value::String(s.clone()),
         },
-        Some(v @ Value::Array(_)) => match rewrite_format_expr(v) {
-            Some(plain) => {
+        Some(v @ Value::Array(_)) => {
+            let mut has_valign = false;
+            register_format_section_fonts(
+                v,
+                &mut font_stacks_obj,
+                source_defs,
+                fonts,
+                glyphs_url,
+                id,
+                &mut has_valign,
+            );
+            if has_valign {
                 report.warn(format!(
-                    "layer `{id}`: `format` text styling dropped — using plain concatenated text"
+                    "layer `{id}`: `format` `vertical-align` not supported — ignored"
                 ));
-                plain
             }
-            None => v.clone(),
-        },
+            v.clone()
+        }
         // Legacy `{stops}` function: its output strings may carry
         // `{token}`s that the raw passthrough would render literally.
         Some(v @ Value::Object(_)) => match rewrite_legacy_stops_tokens(v) {
@@ -345,9 +355,14 @@ fn convert_text(
         "op": "text", "features": feat_ref,
         "font": font_value, "text": text_value
     });
-    // (A) Data-driven font stack: the raw expression + its enumerated registry.
+    // The raw data-driven `text-font` expression, if any …
     if let Some(expr) = font_expr_value {
         spec["font-expr"] = expr;
+    }
+    // … and the stack registry: enumerated `font-expr` stacks and/or `format`
+    // section `text-font`s. Emitted whenever non-empty (a `format` label can
+    // need it without a `font-expr`).
+    if !font_stacks_obj.is_empty() {
         spec["font-stacks"] = Value::Object(font_stacks_obj);
     }
 
@@ -612,6 +627,101 @@ fn collect_font_stacks(v: &Value) -> Vec<Vec<String>> {
     out
 }
 
+/// Walk a `text-field` value, register every `format` section's `text-font`
+/// in `font_stacks` (keyed by its canonical `,`-joined name, resolved through
+/// [`lower_stack`]), and set `has_valign` if any section uses `vertical-align`
+/// (unsupported). Descends the whole tree, so `format`s nested in `case` /
+/// `match` (as the Protomaps multi-script labels use) are found too.
+///
+/// Section-font lowering is best-effort and quiet: a stack that can't be
+/// mapped is simply not registered (the `text` node falls back to the layer's
+/// default stack for that section), so `lower_stack`'s warnings are discarded
+/// rather than spamming one "text skipped" per unmapped section — the label's
+/// text is not skipped.
+fn register_format_section_fonts(
+    v: &Value,
+    font_stacks: &mut Map<String, Value>,
+    source_defs: &mut Map<String, Value>,
+    fonts: &HashMap<String, String>,
+    glyphs_url: Option<&str>,
+    id: &str,
+    has_valign: &mut bool,
+) {
+    match v {
+        Value::Array(arr) => {
+            if arr.first().and_then(Value::as_str) == Some("format") {
+                // `["format", content0, style0, content1, style1, …]` — style
+                // objects sit at the even indices from 2.
+                let mut i = 2;
+                while i < arr.len() {
+                    if let Some(obj) = arr[i].as_object() {
+                        if let Some(tf) = obj.get("text-font") {
+                            // A section `text-font` is a literal stack (bare
+                            // array or `["literal", […]]`) or a small
+                            // expression; enumerate its stacks like the layer's.
+                            let stacks = match as_string_array(tf) {
+                                Some(s) => vec![s],
+                                None => collect_font_stacks(tf),
+                            };
+                            let mut quiet = Report::default();
+                            for stack in &stacks {
+                                if let Some(refs) = lower_stack(
+                                    stack,
+                                    source_defs,
+                                    fonts,
+                                    glyphs_url,
+                                    id,
+                                    &mut quiet,
+                                ) {
+                                    let key = stack
+                                        .iter()
+                                        .map(|s| s.trim())
+                                        .collect::<Vec<_>>()
+                                        .join(",");
+                                    font_stacks.entry(key).or_insert_with(|| {
+                                        Value::Array(
+                                            refs.iter().cloned().map(Value::from).collect(),
+                                        )
+                                    });
+                                }
+                            }
+                        }
+                        if obj.contains_key("vertical-align") {
+                            *has_valign = true;
+                        }
+                    }
+                    i += 2;
+                }
+            }
+            for x in arr {
+                register_format_section_fonts(
+                    x,
+                    font_stacks,
+                    source_defs,
+                    fonts,
+                    glyphs_url,
+                    id,
+                    has_valign,
+                );
+            }
+        }
+        Value::Object(m) => {
+            for val in m.values() {
+                register_format_section_fonts(
+                    val,
+                    font_stacks,
+                    source_defs,
+                    fonts,
+                    glyphs_url,
+                    id,
+                    has_valign,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
 fn ensure_font_source(source_defs: &mut Map<String, Value>, name: &str, url: &str) -> String {
     // One source per distinct URL, shared across layers and stacks.
     if let Some((id, _)) = source_defs
@@ -751,23 +861,6 @@ fn rewrite_legacy_stops_tokens(v: &Value) -> Option<Value> {
         step.push(expand(output));
     }
     Some(Value::Array(step))
-}
-
-/// Rewrite a `["format", …]` expression into the concatenation of its
-/// input sections (dropping the per-section style objects). Returns
-/// `None` for any other expression.
-fn rewrite_format_expr(v: &Value) -> Option<Value> {
-    let arr = v.as_array()?;
-    if arr.first().and_then(Value::as_str) != Some("format") {
-        return None;
-    }
-    // Arguments alternate input, options-object; keep the inputs.
-    let inputs: Vec<&Value> = arr[1..].iter().filter(|a| !a.is_object()).collect();
-    let mut concat = vec![Value::String("concat".into())];
-    for input in inputs {
-        concat.push(serde_json::json!(["to-string", input]));
-    }
-    Some(Value::Array(concat))
 }
 
 /// A constant string layout property; an expression warns and yields
