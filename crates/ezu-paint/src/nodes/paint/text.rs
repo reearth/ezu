@@ -98,6 +98,29 @@ fn eval_number(
     }
 }
 
+/// The block shift (em, y-down) a MapLibre `text-radial-offset` applies for a
+/// given variable anchor: the label is pushed `r` em away from the point in
+/// the anchor's direction (`top` → below the point, `left` → right of it).
+/// Corners split the distance along both axes (MapLibre's radial layout).
+fn radial_offset_em(anchor: Anchor, r: f32) -> [f32; 2] {
+    if r <= 0.0 {
+        return [0.0, 0.0];
+    }
+    let diag = r / std::f32::consts::SQRT_2;
+    let (x, y) = match anchor {
+        Anchor::Center => (0.0, 0.0),
+        Anchor::Left => (r, 0.0),
+        Anchor::Right => (-r, 0.0),
+        Anchor::Top => (0.0, r),
+        Anchor::Bottom => (0.0, -r),
+        Anchor::TopLeft => (diag, diag),
+        Anchor::TopRight => (-diag, diag),
+        Anchor::BottomLeft => (diag, -diag),
+        Anchor::BottomRight => (-diag, -diag),
+    };
+    [x, y]
+}
+
 /// Evaluate a `Color` expression for a group into straight RGBA (`0..=1`
 /// components, the repo color convention), falling back to `fallback`
 /// when absent or non-color.
@@ -356,6 +379,12 @@ struct TextNode {
     keep_upright: bool,
     /// Build-time layout constants (em units except where noted).
     anchor: Anchor,
+    /// MapLibre `text-variable-anchor`: ordered anchor candidates tried on
+    /// collision, the first free one placed. Empty → the fixed `anchor`.
+    anchor_variants: Vec<Anchor>,
+    /// MapLibre `text-radial-offset`: distance in em each variable anchor
+    /// pushes the block away from the point, in the anchor's direction.
+    radial_offset_em: f32,
     justify: Justify,
     transform: TextTransform,
     offset_em: [f32; 2],
@@ -404,6 +433,28 @@ impl TextNode {
             justify: self.justify,
             offset_em: self.offset_em,
             transform: self.transform,
+        }
+    }
+
+    /// Layout params for one variable-anchor candidate: the block is
+    /// re-anchored and pushed `radial_offset_em` away from the point in the
+    /// anchor's direction (MapLibre `text-variable-anchor` + `text-radial-offset`).
+    fn variant_layout_params(&self, anchor: Anchor) -> LayoutParams {
+        let [ox, oy] = radial_offset_em(anchor, self.radial_offset_em);
+        LayoutParams {
+            anchor,
+            offset_em: [self.offset_em[0] + ox, self.offset_em[1] + oy],
+            ..self.layout_params()
+        }
+    }
+
+    /// The anchors to try for a label: the `text-variable-anchor` list, or the
+    /// single fixed `anchor` when none is set.
+    fn anchors(&self) -> &[Anchor] {
+        if self.anchor_variants.is_empty() {
+            std::slice::from_ref(&self.anchor)
+        } else {
+            &self.anchor_variants
         }
     }
 
@@ -911,7 +962,6 @@ impl Node for TextNode {
         let sx = tile_w / extent_i as f32;
         let sy = tile_h / extent_i as f32;
         let z = ctx.tile.z;
-        let params = self.layout_params();
         let (tx, ty) = (ctx.tile.x as i64, ctx.tile.y as i64);
 
         // Shaping is the expensive step; a label is laid out once per eval no
@@ -920,18 +970,23 @@ impl Node for TextNode {
         // neighbour candidates share the cache (identical exprs → identical
         // layout across tiles) while differently-styled same-text labels stay
         // distinct.
-        let mut blocks: HashMap<(u64, u32), Arc<TextBlock>> = HashMap::new();
+        // A label is laid out once per (content, size, anchor); a
+        // `text-variable-anchor` label shares every non-anchor input across its
+        // anchor candidates, so only the anchor varies the layout.
+        let mut blocks: HashMap<(u64, u32, u8), Arc<TextBlock>> = HashMap::new();
         let mut culled = 0usize;
         let mut dropped_chars = 0usize;
         let mut missing_range_chars = 0usize;
         let mut font_fallbacks = 0usize;
 
         /// One placed label's draw payload, index-aligned with the
-        /// collision candidate list. `fonts` is the label's flat stack (its
-        /// glyphs' `font` indices point into it); `paints` the per-section
-        /// fill table. Both are shared across a group's points via `Arc`.
+        /// collision candidate list. `blocks` holds one laid-out block per
+        /// anchor candidate (a single entry for a fixed anchor); the chosen
+        /// one is selected by `Placement::alt`. `fonts` is the label's flat
+        /// stack (its glyphs' `font` indices point into it); `paints` the
+        /// per-section fill table. All shared across a group's points via `Arc`.
         struct DrawRec {
-            block: Arc<TextBlock>,
+            blocks: Vec<Arc<TextBlock>>,
             anchor: (f32, f32),
             paint: TextPaint,
             fonts: Arc<Vec<StackEntry>>,
@@ -1001,34 +1056,47 @@ impl Node for TextNode {
             let halo_width = eval_number(&self.halo_width_expr, &ectx, const_halo_width).max(0.0);
 
             let (flat_fonts, ranges, hash) = assemble_stacks(&sections, &registry);
-            let block = blocks
-                .entry((hash, size.to_bits()))
-                .or_insert_with(|| {
-                    let specs: Vec<SectionSpec<'_>> = sections
-                        .iter()
-                        .zip(&ranges)
-                        .map(|(s, r)| SectionSpec {
-                            text: &s.text,
-                            fonts: r.clone(),
-                            scale: s.scale,
-                            valign: s.valign,
+            // Lay out one block per anchor candidate (a single fixed anchor,
+            // or the `text-variable-anchor` list). Each is cached by anchor so
+            // repeated points/neighbours reuse it.
+            let variants: Vec<Arc<TextBlock>> = self
+                .anchors()
+                .iter()
+                .map(|&anchor| {
+                    blocks
+                        .entry((hash, size.to_bits(), anchor as u8))
+                        .or_insert_with(|| {
+                            let params = self.variant_layout_params(anchor);
+                            let specs: Vec<SectionSpec<'_>> = sections
+                                .iter()
+                                .zip(&ranges)
+                                .map(|(s, r)| SectionSpec {
+                                    text: &s.text,
+                                    fonts: r.clone(),
+                                    scale: s.scale,
+                                    valign: s.valign,
+                                })
+                                .collect();
+                            Arc::new(layout_sections(&specs, &flat_fonts, &params))
                         })
-                        .collect();
-                    Arc::new(layout_sections(&specs, &flat_fonts, &params))
+                        .clone()
                 })
-                .clone();
+                .collect();
+            // The primary anchor drives the warning counts and the cull test;
+            // every variant shares the same glyphs, so it is representative.
+            let primary = &variants[0];
             // Count layout warnings once per distinct label (own groups
             // only; neighbours repeat the same strings).
             if dx == 0 && dy == 0 {
-                dropped_chars += block.dropped_chars;
-                missing_range_chars += block.missing_range_chars;
+                dropped_chars += primary.dropped_chars;
+                missing_range_chars += primary.missing_range_chars;
             }
-            if block.is_empty() {
+            if primary.is_empty() {
                 return;
             }
             // A label reaching past the pad this node requested would clip
             // at tile borders — cull it instead.
-            let b = block.bbox;
+            let b = primary.bbox;
             let half_extent = [b.min_x, b.max_x, b.min_y, b.max_y]
                 .iter()
                 .fold(0.0f32, |m, v| m.max(v.abs()))
@@ -1048,6 +1116,18 @@ impl Node for TextNode {
             };
             let fonts = Arc::new(flat_fonts);
             let paints = Arc::new(section_paints(&sections, opacity));
+            // A variant's collision box at a point: its em bbox scaled to px,
+            // offset to the point, inflated by `padding-px`.
+            let box_at = |block: &TextBlock, lpx: f32, lpy: f32| -> Aabb {
+                let bb = block.bbox;
+                Aabb {
+                    min_x: lpx + bb.min_x * size,
+                    min_y: lpy + bb.min_y * size,
+                    max_x: lpx + bb.max_x * size,
+                    max_y: lpy + bb.max_y * size,
+                }
+                .inflate(self.padding_px)
+            };
             for &(x, y) in &group.points {
                 let world_ax = (tx + dx) * extent_i + x as i64;
                 let world_ay = (ty + dy) * extent_i + y as i64;
@@ -1057,13 +1137,9 @@ impl Node for TextNode {
                 // identical collision decisions.
                 let lpx = (world_ax - tx * extent_i) as f32 * sx;
                 let lpy = (world_ay - ty * extent_i) as f32 * sy;
-                let aabb = Aabb {
-                    min_x: lpx + b.min_x * size,
-                    min_y: lpy + b.min_y * size,
-                    max_x: lpx + b.max_x * size,
-                    max_y: lpy + b.max_y * size,
-                }
-                .inflate(self.padding_px);
+                let aabb = box_at(primary, lpx, lpy);
+                let alt_aabbs: Vec<Aabb> =
+                    variants[1..].iter().map(|v| box_at(v, lpx, lpy)).collect();
                 cands.push(Candidate {
                     sort_key,
                     world_ax,
@@ -1071,11 +1147,12 @@ impl Node for TextNode {
                     text: text.clone(),
                     style_id: hash,
                     aabb,
+                    alt_aabbs,
                     allow_overlap: self.allow_overlap,
                     ignore_placement: self.ignore_placement,
                 });
                 draws.push(DrawRec {
-                    block: block.clone(),
+                    blocks: variants.clone(),
                     anchor: (lpx + pad, lpy + pad),
                     paint,
                     fonts: fonts.clone(),
@@ -1124,22 +1201,27 @@ impl Node for TextNode {
         }
 
         // Deterministic placement (or draw-everything when collision off).
-        let placed: Vec<usize> = if self.collide {
+        // Each entry pairs a candidate with the anchor variant it placed at
+        // (always variant 0 when collision is off or the anchor is fixed).
+        let placed: Vec<collide::Placement> = if self.collide {
             collide::place(&cands, collide::COLLISION_CELL_PX)
         } else {
-            (0..cands.len()).collect()
+            (0..cands.len())
+                .map(|cand| collide::Placement { cand, alt: 0 })
+                .collect()
         };
 
         let padded_w = tile_w + 2.0 * pad;
         let padded_h = tile_h + 2.0 * pad;
         let pm = canvas.pixmap_mut();
         let mut pm = pm.as_mut();
-        for &i in &placed {
-            let d = &draws[i];
+        for p in &placed {
+            let d = &draws[p.cand];
+            let block = &d.blocks[p.alt];
             // Draw only placed labels whose box touches this padded canvas
             // (a neighbour's winner may sit entirely outside it).
             if self.collide {
-                let bb = d.block.bbox;
+                let bb = block.bbox;
                 let s = d.paint.size_px;
                 let (ax, ay) = d.anchor;
                 let min_x = ax + bb.min_x * s - self.padding_px;
@@ -1150,7 +1232,7 @@ impl Node for TextNode {
                     continue;
                 }
             }
-            draw(&d.block, &d.fonts, &mut pm, d.anchor, &d.paint, &d.paints);
+            draw(block, &d.fonts, &mut pm, d.anchor, &d.paint, &d.paints);
         }
         // One summary line per eval, not one per label.
         if culled > 0 {
@@ -1232,6 +1314,11 @@ impl Node for TextNode {
             self.placement as u8,
             self.keep_upright as u8,
         ]);
+        h.update(b"anchorvariants");
+        for a in &self.anchor_variants {
+            h.update(&[*a as u8]);
+        }
+        h.update(&self.radial_offset_em.to_le_bytes());
         for v in [
             self.offset_em[0],
             self.offset_em[1],
@@ -1441,6 +1528,30 @@ impl NodeFactory for TextFactory {
             field: "anchor".into(),
             msg: format!("unknown anchor `{anchor_s}`"),
         })?;
+        // `anchor-variants` (MapLibre `text-variable-anchor`): an ordered list
+        // of anchors tried on collision. Absent → the fixed `anchor`.
+        let anchor_variants = match fields.get("anchor-variants") {
+            Some(v) => {
+                let arr = v.as_array().ok_or_else(|| FactoryError::BadField {
+                    field: "anchor-variants".into(),
+                    msg: "expected an array of anchor names".into(),
+                })?;
+                arr.iter()
+                    .map(|a| {
+                        let s = a.as_str().ok_or_else(|| FactoryError::BadField {
+                            field: "anchor-variants".into(),
+                            msg: "anchor names must be strings".into(),
+                        })?;
+                        Anchor::parse(s).ok_or_else(|| FactoryError::BadField {
+                            field: "anchor-variants".into(),
+                            msg: format!("unknown anchor `{s}`"),
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+            }
+            None => Vec::new(),
+        };
+        let radial_offset_em = read_number_or(fields, "radial-offset", ctx, 0.0)? as f32;
         let justify_s = read_string_or(fields, "justify", ctx, "auto")?;
         let justify = Justify::parse(&justify_s).ok_or_else(|| FactoryError::BadField {
             field: "justify".into(),
@@ -1530,6 +1641,8 @@ impl NodeFactory for TextFactory {
                 max_angle_deg,
                 keep_upright,
                 anchor,
+                anchor_variants,
+                radial_offset_em,
                 justify,
                 transform,
                 offset_em,
@@ -1601,6 +1714,10 @@ impl NodeFactory for TextFactory {
                                   "description": "Flip a right-to-left label so it reads upright (MapLibre `text-keep-upright`). Line placement only. Default true." },
                 "anchor": { "type": "string", "enum": ["center", "left", "right", "top", "bottom", "top-left", "top-right", "bottom-left", "bottom-right"],
                             "description": "Which part of the label block sits on the point (point placement). Default `center`." },
+                "anchor-variants": { "type": "array", "items": { "type": "string", "enum": ["center", "left", "right", "top", "bottom", "top-left", "top-right", "bottom-left", "bottom-right"] },
+                            "description": "MapLibre `text-variable-anchor`: anchors tried in order on collision, the first free one placed (point placement). Overrides `anchor` when set." },
+                "radial-offset": { "type": "number",
+                            "description": "MapLibre `text-radial-offset`: em distance each `anchor-variants` entry pushes the block away from the point in its direction. Default 0." },
                 "offset-em": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2,
                                "description": "Block shift [x, y] in em, applied after anchoring. Default [0, 0]." },
                 "justify": { "type": "string", "enum": ["auto", "left", "center", "right"],

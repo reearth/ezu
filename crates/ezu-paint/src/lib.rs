@@ -15,6 +15,10 @@
 //! **padded** buffer (`tile_size + 2 * pad`). Paint operations work in
 //! the padded space; cropping happens at the host boundary.
 
+// The node `schema()` methods build large `serde_json::json!` literals; the
+// default macro recursion limit is not enough for the biggest of them.
+#![recursion_limit = "256"]
+
 pub mod brush;
 pub mod builtin;
 /// Colour-space stop interpolation (re-exported from `ezu-core` so the
