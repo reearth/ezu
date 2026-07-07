@@ -52,7 +52,7 @@ pub use collide::{
     DEDUP_QUANTUM,
 };
 pub use draw::{draw, draw_line, GlyphPlacement, SectionPaint, TextPaint};
-pub use font::{Font, FontError, StackEntry};
+pub use font::{FaceEntry, Font, FontError, StackEntry};
 pub use layout::{
     char_allows_ideographic_breaking, layout, layout_sections, Anchor, EmBox, Justify,
     LayoutParams, PlacedGlyph, SectionSpec, TextBlock, TextTransform, VerticalAlign,

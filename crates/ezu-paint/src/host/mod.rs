@@ -1358,8 +1358,9 @@ mod tests {
                 let font = opq
                     .downcast::<ezu_core::text::Font>()
                     .expect("payload is ezu_core::text::Font");
-                assert!(font.covers('A'));
-                assert!(!font.covers('0')); // digits live in the other subset
+                let face = font.face();
+                assert!(font.covers(&face, 'A'));
+                assert!(!font.covers(&face, '0')); // digits live in the other subset
             }
             other => panic!("expected a Font asset, got {other:?}"),
         }

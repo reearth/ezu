@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use ezu_core::text::{
-    decode_glyph_range, draw, layout, Font, LayoutParams, SdfFontStack, SdfGlyph, StackEntry,
-    TextPaint,
+    decode_glyph_range, draw, layout, FaceEntry, Font, LayoutParams, SdfFontStack, SdfGlyph,
+    StackEntry, TextPaint,
 };
 
 const REAL_RANGE: &[u8] = include_bytes!("glyphs/0-255.pbf");
@@ -195,6 +195,7 @@ fn vendored_range_decodes() {
 #[test]
 fn shaping_advances_match_the_pbf() {
     let fonts = [StackEntry::Sdf(test_stack())];
+    let fonts = FaceEntry::prepare(&fonts);
     let block = layout("AB", &fonts, &no_wrap());
     assert_eq!(block.glyphs.len(), 2);
     // Pen advance between the glyphs is 'A''s PBF advance at the 24 px em.
@@ -210,6 +211,7 @@ fn sdf_metrics_use_the_fixed_line_slot() {
     // MapLibre metrics: a block is `line-height × lines` tall, however
     // tall the glyphs actually are.
     let fonts = [StackEntry::Sdf(test_stack())];
+    let fonts = FaceEntry::prepare(&fonts);
     let params = no_wrap();
     let block = layout("AB", &fonts, &params);
     assert!(
@@ -222,6 +224,7 @@ fn sdf_metrics_use_the_fixed_line_slot() {
 #[test]
 fn missing_range_without_fetcher_drops_and_counts() {
     let fonts = [StackEntry::Sdf(Arc::new(SdfFontStack::new()))];
+    let fonts = FaceEntry::prepare(&fonts);
     let block = layout("Hi", &fonts, &no_wrap());
     assert!(block.is_empty());
     assert_eq!(block.dropped_chars, 2);
@@ -245,6 +248,7 @@ fn fetcher_pulls_each_range_once() {
         }
     })));
     let fonts = [StackEntry::Sdf(stack.clone())];
+    let fonts = FaceEntry::prepare(&fonts);
 
     // Two layouts over the same range: one fetch.
     assert!(!layout("AB", &fonts, &no_wrap()).is_empty());
@@ -280,6 +284,7 @@ fn outline_and_sdf_entries_mix_in_one_stack() {
     let sdf = Arc::new(SdfFontStack::new());
     sdf.insert_range(REAL_RANGE).unwrap();
     let fonts = [StackEntry::Outline(outline), StackEntry::Sdf(sdf)];
+    let fonts = FaceEntry::prepare(&fonts);
     let block = layout("A1", &fonts, &no_wrap());
     let picked: Vec<usize> = block.glyphs.iter().map(|g| g.font).collect();
     assert_eq!(picked, [0, 1], "'A' shapes outline, '1' falls to the SDF");
@@ -290,6 +295,7 @@ fn outline_and_sdf_entries_mix_in_one_stack() {
 
 fn render_sdf(text: &str, size_px: f32, halo_width_px: f32) -> tiny_skia::Pixmap {
     let fonts = [StackEntry::Sdf(test_stack())];
+    let fonts = FaceEntry::prepare(&fonts);
     let block = layout(text, &fonts, &no_wrap());
     let mut pixmap = tiny_skia::Pixmap::new(96, 64).unwrap();
     draw(
@@ -369,6 +375,7 @@ fn vendored_range_renders_a_word() {
     let sdf = Arc::new(SdfFontStack::new());
     sdf.insert_range(REAL_RANGE).unwrap();
     let fonts = [StackEntry::Sdf(sdf)];
+    let fonts = FaceEntry::prepare(&fonts);
     let block = layout("Word", &fonts, &no_wrap());
     assert_eq!(block.glyphs.len(), 4);
     assert_eq!(block.dropped_chars, 0);

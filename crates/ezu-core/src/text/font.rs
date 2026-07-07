@@ -1,6 +1,8 @@
 //! Font loading, coverage lookup, and glyph outline extraction — plus
 //! the [`StackEntry`] wrapper that lets an outline [`Font`] and an SDF
-//! glyph stack share one fallback stack.
+//! glyph stack share one fallback stack, and the [`FaceEntry`] view that
+//! carries each outline entry's already-built [`rustybuzz::Face`] so
+//! shaping, coverage, and outline lookups reuse it instead of reparsing.
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -22,10 +24,15 @@ pub enum FontError {
 /// The face structs of `ttf-parser` / `rustybuzz` borrow the byte slice
 /// they were parsed from, which would make a struct holding both the
 /// bytes and a parsed face self-referential. Rather than pulling in a
-/// self-referential-struct crate, the face is re-created from the bytes
-/// per operation batch ([`Font::with_face`]) — parsing is only a
-/// table-directory scan (microseconds), negligible next to shaping or
-/// rasterization.
+/// self-referential-struct crate, callers build a [`rustybuzz::Face`]
+/// from the bytes with [`Font::face`] and pass it back in (shaping,
+/// coverage, and outline extraction all take a `&Face`). Building the
+/// face parses the table directory plus the shaping tables — the
+/// dominant cost of a text node — so a caller that lays out many labels
+/// against one stack should build each face once and reuse it (see
+/// [`FaceEntry`]) rather than per operation. `rustybuzz::Face` is cheap
+/// to `clone` (it copies the already-parsed tables, no re-scan), so one
+/// built face can be shared by value across every label that uses it.
 ///
 /// Glyph outlines are extracted once per glyph id into a
 /// [`tiny_skia::Path`] in *font units* (size-independent, y-up) and
@@ -86,23 +93,24 @@ impl Font {
         self.descent_em
     }
 
-    /// Run `f` against a freshly parsed `rustybuzz::Face` (which derefs
-    /// to `ttf_parser::Face`). Re-created per batch — see the type docs.
-    pub(crate) fn with_face<R>(&self, f: impl FnOnce(&rustybuzz::Face<'_>) -> R) -> R {
-        let face = rustybuzz::Face::from_slice(&self.bytes, self.face_index)
-            .expect("face validated in Font::from_bytes");
-        f(&face)
+    /// Build a `rustybuzz::Face` (which derefs to `ttf_parser::Face`)
+    /// borrowing this font's bytes. Validated in [`Font::from_bytes`], so
+    /// it cannot fail here. See the type docs on reusing one built face.
+    pub fn face(&self) -> rustybuzz::Face<'_> {
+        rustybuzz::Face::from_slice(&self.bytes, self.face_index)
+            .expect("face validated in Font::from_bytes")
     }
 
-    /// Whether this font's cmap covers `c`.
-    pub fn covers(&self, c: char) -> bool {
-        self.with_face(|face| face.glyph_index(c).is_some())
+    /// Whether this font's cmap covers `c`, using a caller-built `face` so
+    /// no reparse happens per lookup.
+    pub fn covers(&self, face: &rustybuzz::Face<'_>, c: char) -> bool {
+        face.glyph_index(c).is_some()
     }
 
     /// The glyph's outline as a `tiny_skia::Path` in font units (y-up),
     /// or `None` for glyphs without an outline (whitespace). Cached per
-    /// glyph id.
-    pub fn glyph_path(&self, glyph_id: u16) -> Option<Arc<Path>> {
+    /// glyph id; the caller-built `face` is only touched on a cache miss.
+    pub fn glyph_path(&self, face: &rustybuzz::Face<'_>, glyph_id: u16) -> Option<Arc<Path>> {
         if let Some(cached) = self
             .glyph_paths
             .read()
@@ -111,13 +119,13 @@ impl Font {
         {
             return cached.clone();
         }
-        let path = self.with_face(|face| {
+        let path = {
             let mut builder = PathOutline {
                 pb: PathBuilder::new(),
             };
-            face.outline_glyph(ttf_parser::GlyphId(glyph_id), &mut builder)?;
-            builder.pb.finish().map(Arc::new)
-        });
+            face.outline_glyph(ttf_parser::GlyphId(glyph_id), &mut builder)
+                .and_then(|_| builder.pb.finish().map(Arc::new))
+        };
         self.glyph_paths
             .write()
             .expect("glyph cache poisoned")
@@ -137,17 +145,6 @@ pub enum StackEntry {
     Sdf(Arc<SdfFontStack>),
 }
 
-impl StackEntry {
-    /// Whether this entry can shape `c`. For an SDF stack this may
-    /// fetch the char's range on demand (when a fetcher is present).
-    pub(crate) fn covers(&self, c: char) -> bool {
-        match self {
-            StackEntry::Outline(f) => f.covers(c),
-            StackEntry::Sdf(s) => s.coverage(c) == super::sdf::SdfCoverage::Present,
-        }
-    }
-}
-
 impl From<Arc<Font>> for StackEntry {
     fn from(f: Arc<Font>) -> Self {
         StackEntry::Outline(f)
@@ -157,6 +154,58 @@ impl From<Arc<Font>> for StackEntry {
 impl From<Arc<SdfFontStack>> for StackEntry {
     fn from(s: Arc<SdfFontStack>) -> Self {
         StackEntry::Sdf(s)
+    }
+}
+
+/// A [`StackEntry`] prepared for shaping/drawing: an outline entry with its
+/// [`rustybuzz::Face`] already built, or an SDF stack (which needs no face).
+/// Shaping, coverage, and outline extraction all take a slice of these so
+/// the face is built once and reused, instead of reparsed per call.
+///
+/// The face is held by value; it is a cheap clone of a parsed face (see the
+/// [`Font`] docs), so one built face can be spread across every prepared
+/// stack that references its font.
+///
+/// The outline variant is large because it embeds the parsed face; the size
+/// disparity with the SDF variant is deliberate and harmless here — these
+/// live briefly in short (per-label) stacks, and holding the face by value is
+/// what lets it be a plain copy rather than a heap indirection.
+#[allow(clippy::large_enum_variant)]
+pub enum FaceEntry<'a> {
+    Outline {
+        font: &'a Font,
+        face: rustybuzz::Face<'a>,
+    },
+    Sdf(&'a SdfFontStack),
+}
+
+impl<'a> FaceEntry<'a> {
+    /// Prepare a whole fallback stack, building each outline entry's face
+    /// once. Callers that lay out many labels over stacks sharing fonts
+    /// should build faces once (e.g. keyed by font) and assemble views from
+    /// those clones, rather than calling this per label.
+    pub fn prepare(stack: &'a [StackEntry]) -> Vec<FaceEntry<'a>> {
+        stack.iter().map(FaceEntry::from_entry).collect()
+    }
+
+    /// Prepare a single entry, building its face if it is an outline font.
+    pub fn from_entry(entry: &'a StackEntry) -> FaceEntry<'a> {
+        match entry {
+            StackEntry::Outline(f) => FaceEntry::Outline {
+                font: f,
+                face: f.face(),
+            },
+            StackEntry::Sdf(s) => FaceEntry::Sdf(s),
+        }
+    }
+
+    /// Whether this entry can shape `c`. For an SDF stack this may fetch the
+    /// char's range on demand (when a fetcher is present).
+    pub(crate) fn covers(&self, c: char) -> bool {
+        match self {
+            FaceEntry::Outline { font, face } => font.covers(face, c),
+            FaceEntry::Sdf(s) => s.coverage(c) == super::sdf::SdfCoverage::Present,
+        }
     }
 }
 

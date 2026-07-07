@@ -7,8 +7,8 @@
 use std::sync::Arc;
 
 use ezu_core::text::{
-    char_allows_ideographic_breaking, draw, layout, Anchor, Font, LayoutParams, StackEntry,
-    TextBlock, TextPaint, TextTransform,
+    char_allows_ideographic_breaking, draw, layout, Anchor, FaceEntry, Font, LayoutParams,
+    StackEntry, TextBlock, TextPaint, TextTransform,
 };
 
 const LATIN: &[u8] = include_bytes!("fonts/NotoSans-Regular.latin.ttf");
@@ -36,7 +36,9 @@ fn no_wrap() -> LayoutParams {
 }
 
 fn layout_one(text: &str, params: &LayoutParams) -> TextBlock {
-    layout(text, &[latin(), digits()], params)
+    let fonts = [latin(), digits()];
+    let fonts = FaceEntry::prepare(&fonts);
+    layout(text, &fonts, params)
 }
 
 // --- itemization / fallback -------------------------------------------------
@@ -239,6 +241,7 @@ fn offset_shifts_the_block() {
 
 fn render(paint: &TextPaint) -> tiny_skia::Pixmap {
     let fonts = [latin(), digits()];
+    let fonts = FaceEntry::prepare(&fonts);
     let block = layout("Ag", &fonts, &no_wrap());
     let mut pixmap = tiny_skia::Pixmap::new(96, 64).unwrap();
     draw(
@@ -307,6 +310,7 @@ fn halo_sits_behind_the_fill() {
 fn single_section_equals_plain_layout() {
     use ezu_core::text::{layout_sections, SectionSpec, VerticalAlign};
     let fonts = [latin(), digits()];
+    let fonts = FaceEntry::prepare(&fonts);
     let params = no_wrap();
     let plain = layout("A1B", &fonts, &params);
     let sectioned = layout_sections(
@@ -338,6 +342,7 @@ fn each_section_shapes_against_its_own_font_subrange() {
     // Flat stack [latin, digits]; section 0 ("AB") may use only latin,
     // section 1 ("12") only digits.
     let fonts = [latin(), digits()];
+    let fonts = FaceEntry::prepare(&fonts);
     let block = layout_sections(
         &[
             SectionSpec {
@@ -374,6 +379,7 @@ fn each_section_shapes_against_its_own_font_subrange() {
 fn font_scale_grows_a_sections_advances() {
     use ezu_core::text::{layout_sections, SectionSpec, VerticalAlign};
     let fonts = [latin(), digits()];
+    let fonts = FaceEntry::prepare(&fonts);
     let width = |scale: f32| {
         layout_sections(
             &[SectionSpec {
@@ -403,6 +409,7 @@ fn mixed_scale_line_grows_by_the_max_section_scale() {
     // than an all-1× line (the tall section enlarges the line's metrics),
     // and matches a uniformly-2× line's height.
     let fonts = [latin()];
+    let fonts = FaceEntry::prepare(&fonts);
     let sec = |text, scale| SectionSpec {
         text,
         fonts: 0..1,
@@ -433,6 +440,7 @@ fn vertical_align_shifts_a_smaller_section_within_the_line() {
     // section's glyph baseline sits lower for `Bottom` than for `Top`;
     // `Baseline` keeps it on the shared baseline (between the two).
     let fonts = [latin()];
+    let fonts = FaceEntry::prepare(&fonts);
     let block = |valign| {
         layout_sections(
             &[
@@ -476,6 +484,7 @@ fn vertical_align_is_a_noop_for_a_single_scale_line() {
     // All sections share scale 1.0, so every vertical-align lays out
     // identically to Baseline.
     let fonts = [latin()];
+    let fonts = FaceEntry::prepare(&fonts);
     let block = |valign| {
         layout_sections(
             &[
