@@ -355,6 +355,84 @@ fn collision_properties_route_to_the_text_node() {
 }
 
 #[test]
+fn text_variable_anchor_routes_to_anchor_variants() {
+    // A `text-variable-anchor` list + `text-radial-offset` become the text
+    // node's `anchor-variants` / `radial-offset`, with no unsupported warning.
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "variable-anchor",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "pois", "type": "symbol", "source": "s", "source-layer": "poi",
+          "layout": {
+            "text-field": "{name}",
+            "text-font": ["F"],
+            "text-anchor": "center",
+            "text-variable-anchor": ["top", "bottom", "left", "right"],
+            "text-radial-offset": 1.2
+          } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let opts = opts_with_fonts(&[("F", "https://fonts.example/F.ttf")]);
+    let (recipe, report) = convert(&style, &opts).unwrap();
+
+    let text = &recipe["nodes"]["pois__text"];
+    assert_eq!(
+        text["anchor-variants"],
+        serde_json::json!(["top", "bottom", "left", "right"])
+    );
+    assert_eq!(text["radial-offset"], 1.2);
+    assert!(
+        !report
+            .warnings
+            .iter()
+            .any(|w| w.contains("text-variable-anchor")),
+        "variable-anchor should not warn: {:?}",
+        report.warnings
+    );
+
+    let doc_text = serde_json::to_string(&recipe).unwrap();
+    ezu_style::Document::from_json(&doc_text).expect("recipe parses as ezu Document");
+}
+
+#[test]
+fn expression_text_variable_anchor_warns_and_falls_back() {
+    // A data-driven `text-variable-anchor` (not a plain string array) can't be
+    // resolved at build time, so it warns and no `anchor-variants` is emitted.
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "variable-anchor-expr",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "pois", "type": "symbol", "source": "s", "source-layer": "poi",
+          "layout": {
+            "text-field": "{name}",
+            "text-font": ["F"],
+            "text-variable-anchor": ["case", ["get", "big"], ["literal", ["top"]], ["literal", ["bottom"]]]
+          } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let opts = opts_with_fonts(&[("F", "https://fonts.example/F.ttf")]);
+    let (recipe, report) = convert(&style, &opts).unwrap();
+
+    let text = &recipe["nodes"]["pois__text"];
+    assert!(
+        text.get("anchor-variants").is_none(),
+        "an expression variable-anchor should not emit anchor-variants: {text}"
+    );
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("text-variable-anchor")),
+        "expected a variable-anchor warning: {:?}",
+        report.warnings
+    );
+}
+
+#[test]
 fn text_overlap_enum_maps_and_cooperative_warns() {
     const STYLE: &str = r##"{
       "version": 8,

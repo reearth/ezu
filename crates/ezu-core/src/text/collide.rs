@@ -147,8 +147,14 @@ pub struct Candidate {
     /// could pick different survivors and diverge at the seam.
     pub style_id: u64,
     /// Collision box in the shared world-pixel frame, already inflated by
-    /// `padding-px`.
+    /// `padding-px`. For a MapLibre `text-variable-anchor` label this is the
+    /// first anchor's box; the rest are `alt_aabbs`.
     pub aabb: Aabb,
+    /// Fallback collision boxes for MapLibre `text-variable-anchor`, tried in
+    /// order after `aabb`. The label places at the first free box (starting
+    /// with `aabb`); the winning box index is reported as `Placement::alt`.
+    /// Empty for a fixed-anchor label.
+    pub alt_aabbs: Vec<Aabb>,
     /// MapLibre `*-allow-overlap`: place regardless of collision.
     pub allow_overlap: bool,
     /// MapLibre `*-ignore-placement`: don't block later labels (skip
@@ -167,15 +173,26 @@ impl Candidate {
     }
 }
 
+/// One placed label: which candidate it came from, and which of its anchor
+/// boxes was chosen (`0` = the candidate's `aabb`, `k` = `alt_aabbs[k - 1]`).
+/// A fixed-anchor label always reports `alt == 0`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Placement {
+    pub cand: usize,
+    pub alt: usize,
+}
+
 /// Deterministically dedup, order, and greedily place `candidates`.
-/// Returns the indices of the placed candidates, in placement order.
+/// Returns the placed labels (candidate index + chosen anchor box), in
+/// placement order.
 ///
 /// Determinism: the result depends only on world-space quantities that
 /// are identical across every tile sharing the 3×3 window — the total
 /// order and dedup key use the quantized world anchor + text + sort key,
 /// and collision boxes are in the shared world-pixel frame. No tile-local
-/// input enters.
-pub fn place(candidates: &[Candidate], cell_px: f32) -> Vec<usize> {
+/// input enters. A `text-variable-anchor` label tries its anchor boxes in
+/// declaration order (identical on every tile), so the seam stays seamless.
+pub fn place(candidates: &[Candidate], cell_px: f32) -> Vec<Placement> {
     // Total order: sort-key ↑, then quantized anchor (y, x), then text.
     let mut order: Vec<usize> = (0..candidates.len()).collect();
     order.sort_by(|&a, &b| {
@@ -198,18 +215,27 @@ pub fn place(candidates: &[Candidate], cell_px: f32) -> Vec<usize> {
         if !seen.insert((qx, qy, c.text.as_str(), c.style_id)) {
             continue;
         }
-        // Collision: allow-overlap always shows; otherwise it must not
-        // overlap an already-placed, non-ignored box.
-        let shown = c.allow_overlap || !grid.intersects_any(&c.aabb);
-        if !shown {
-            continue;
-        }
-        placed.push(i);
-        // Blocking: a shown label reserves its box unless it ignores
+        // Collision: try the primary anchor box, then each variable-anchor
+        // fallback in order. allow-overlap always shows at the primary box.
+        let alt = if c.allow_overlap {
+            Some(0)
+        } else {
+            std::iter::once(&c.aabb)
+                .chain(c.alt_aabbs.iter())
+                .position(|b| !grid.intersects_any(b))
+        };
+        let Some(alt) = alt else { continue };
+        placed.push(Placement { cand: i, alt });
+        // Blocking: a shown label reserves its chosen box unless it ignores
         // placement (so an allow-overlap + ignore-placement label neither
         // collides nor blocks).
         if !c.ignore_placement {
-            grid.insert(c.aabb);
+            let box_ = if alt == 0 {
+                c.aabb
+            } else {
+                c.alt_aabbs[alt - 1]
+            };
+            grid.insert(box_);
         }
     }
     placed
@@ -308,9 +334,15 @@ mod tests {
             text: text.into(),
             style_id: 0,
             aabb: boxed(x, y, 10.0),
+            alt_aabbs: vec![],
             allow_overlap: false,
             ignore_placement: false,
         }
+    }
+
+    /// Placed-candidate indices, dropping the chosen-anchor detail.
+    fn idxs(placed: &[Placement]) -> Vec<usize> {
+        placed.iter().map(|p| p.cand).collect()
     }
 
     #[test]
@@ -331,7 +363,7 @@ mod tests {
         };
         let b = cand(1.0, 200, 0, "b", 5.0, 0.0); // overlaps a, lower key
         let placed = place(&[a, b], COLLISION_CELL_PX);
-        assert_eq!(placed, vec![1]); // b (index 1) wins
+        assert_eq!(idxs(&placed), vec![1]); // b (index 1) wins
     }
 
     #[test]
@@ -341,7 +373,7 @@ mod tests {
         let a = cand(0.0, 0, 40, "z", 0.0, 10.0); // anchor y higher
         let b = cand(0.0, 0, 0, "a", 0.0, 0.0); // anchor y lower → first
         let placed = place(&[a, b], COLLISION_CELL_PX);
-        assert_eq!(placed, vec![1]);
+        assert_eq!(idxs(&placed), vec![1]);
     }
 
     #[test]
@@ -361,7 +393,7 @@ mod tests {
         a.ignore_placement = true;
         let b = cand(1.0, 40, 0, "b", 5.0, 0.0); // overlaps A
         let placed = place(&[a, b], COLLISION_CELL_PX);
-        assert_eq!(placed, vec![0, 1]);
+        assert_eq!(idxs(&placed), vec![0, 1]);
     }
 
     #[test]
@@ -370,7 +402,7 @@ mod tests {
         let a = cand(0.0, 0, 0, "a", 0.0, 0.0);
         let b = cand(1.0, 40, 0, "b", 5.0, 0.0);
         let placed = place(&[a, b], COLLISION_CELL_PX);
-        assert_eq!(placed, vec![0]);
+        assert_eq!(idxs(&placed), vec![0]);
     }
 
     #[test]
@@ -392,6 +424,47 @@ mod tests {
         b.allow_overlap = true; // avoid collision confusing the count
         let placed = place(&[a, b], COLLISION_CELL_PX);
         assert_eq!(placed.len(), 2);
+    }
+
+    #[test]
+    fn variable_anchor_falls_back_on_collision() {
+        // `a` occupies the primary box. `b`'s primary box overlaps `a`, but its
+        // fallback anchor box is clear, so `b` places there (alt 1) instead of
+        // dropping.
+        let a = cand(0.0, 0, 0, "a", 0.0, 0.0);
+        let mut b = cand(1.0, 40, 0, "b", 5.0, 0.0); // primary overlaps a
+        b.alt_aabbs = vec![boxed(100.0, 0.0, 10.0)]; // fallback is clear
+        let placed = place(&[a, b], COLLISION_CELL_PX);
+        assert_eq!(placed.len(), 2);
+        let b_placed = placed.iter().find(|p| p.cand == 1).unwrap();
+        assert_eq!(b_placed.alt, 1, "b should place at its fallback anchor");
+    }
+
+    #[test]
+    fn variable_anchor_reserves_the_chosen_box() {
+        // `b` falls back to its second anchor; a later `c` overlapping that
+        // chosen box must be blocked (the reserved box is the fallback, not the
+        // primary).
+        let a = cand(0.0, 0, 0, "a", 0.0, 0.0);
+        let mut b = cand(1.0, 40, 0, "b", 5.0, 0.0);
+        b.alt_aabbs = vec![boxed(100.0, 0.0, 10.0)];
+        let c = cand(2.0, 80, 0, "c", 100.0, 0.0); // overlaps b's fallback
+        let placed = place(&[a, b, c], COLLISION_CELL_PX);
+        assert_eq!(
+            idxs(&placed),
+            vec![0, 1],
+            "c collides with b's fallback box"
+        );
+    }
+
+    #[test]
+    fn variable_anchor_drops_when_every_box_blocked() {
+        // Both of `b`'s anchor boxes overlap `a`'s box → `b` drops entirely.
+        let a = cand(0.0, 0, 0, "a", 0.0, 0.0);
+        let mut b = cand(1.0, 40, 0, "b", 5.0, 0.0);
+        b.alt_aabbs = vec![boxed(8.0, 0.0, 10.0)]; // also overlaps a
+        let placed = place(&[a, b], COLLISION_CELL_PX);
+        assert_eq!(idxs(&placed), vec![0]);
     }
 
     #[test]
