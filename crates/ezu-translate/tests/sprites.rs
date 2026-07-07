@@ -125,6 +125,82 @@ fn data_driven_icon_size_becomes_scale_expr() {
 }
 
 #[test]
+fn data_driven_icon_image_becomes_stamp_name_expr() {
+    // A data-driven `icon-image` (an expression, not a constant name) passes
+    // the expression to `stamp` as a `name-expr` over the sheet's atlas, with
+    // no per-icon `icon` node.
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "dd-icon-image",
+      "sprite": "https://example.com/sprites/basemap",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "pois", "type": "symbol", "source": "s", "source-layer": "poi",
+          "layout": { "icon-image": ["concat", ["get", "class"], "-15"] } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let (recipe, _report) = convert(&style, &ConvertOptions::default()).unwrap();
+
+    let nodes = recipe["nodes"].as_object().unwrap();
+    let stamp = nodes
+        .values()
+        .find(|n| n["op"] == "stamp")
+        .expect("a stamp node");
+    // The icon-image expression carries over verbatim as `name-expr`, resolved
+    // against the `default` sprite sheet.
+    assert_eq!(
+        stamp["name-expr"],
+        serde_json::json!(["concat", ["get", "class"], "-15"])
+    );
+    assert_eq!(stamp["sprite"], "@default");
+    // No up-front `icon` node — cropping is per-feature at eval time.
+    assert!(
+        !nodes.values().any(|n| n["op"] == "icon"),
+        "data-driven icon-image should not emit an `icon` node: {nodes:?}"
+    );
+
+    // Valid ezu Document.
+    let text = serde_json::to_string(&recipe).unwrap();
+    ezu_style::Document::from_json(&text).expect("recipe parses as ezu Document");
+}
+
+#[test]
+fn data_driven_icon_image_without_sprite_warns() {
+    // Without a top-level `sprite`, a data-driven `icon-image` has no sheet to
+    // crop from, so the layer is reported and skipped rather than emitting an
+    // unresolvable stamp.
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "dd-icon-no-sprite",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "pois", "type": "symbol", "source": "s", "source-layer": "poi",
+          "layout": { "icon-image": ["get", "maki"] } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let (recipe, report) = convert(&style, &ConvertOptions::default()).unwrap();
+
+    assert!(
+        recipe["nodes"]
+            .as_object()
+            .unwrap()
+            .values()
+            .all(|n| n["op"] != "stamp"),
+        "no stamp should be emitted without a sprite"
+    );
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("icon-image") && w.contains("sprite")),
+        "expected a data-driven icon-image sprite warning: {:?}",
+        report.warnings
+    );
+}
+
+#[test]
 fn inline_sprite_index_parses() {
     // A recipe author can inline the index instead of a URL.
     let recipe = serde_json::json!({

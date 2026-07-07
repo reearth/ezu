@@ -6,12 +6,15 @@
 //! Lines and polygons in the features input are ignored. The output
 //! has the canvas-padded dimensions, matching every other paint node.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    schema_frag, take_input_ref, Asset, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError,
+    FactoryCtx, FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    RasterBuf,
 };
+use ezu_style as spec;
 use serde_json::Value;
 use tiny_skia::{PixmapPaint, PixmapRef, Transform};
 use xxhash_rust::xxh3::Xxh3;
@@ -66,6 +69,18 @@ fn eval_number(
     }
 }
 
+/// Evaluate an expression to the icon name (a string) for a group, or `None`
+/// when it doesn't resolve to a (non-empty) string.
+fn eval_icon_name(
+    expr: &maplibre_expr::Expr,
+    ectx: &maplibre_expr::EvaluationContext,
+) -> Option<String> {
+    match maplibre_expr::evaluate(expr, ectx) {
+        Ok(maplibre_expr::Value::String(s)) if !s.is_empty() => Some(s),
+        _ => None,
+    }
+}
+
 struct StampNode {
     scale: In<f64>,
     rotation_deg: In<f64>,
@@ -82,6 +97,14 @@ struct StampNode {
     scale_expr_src: Option<String>,
     rotation_deg_expr_src: Option<String>,
     opacity_expr_src: Option<String>,
+    /// Data-driven `icon-image`: instead of the `image` port, the sprite
+    /// atlas key plus a MapLibre expression giving each feature's icon name.
+    /// The sheet is cropped per group by the evaluated name (cropping any icon
+    /// the bound sheet contains), so no `image` input is wired. Absent → the
+    /// node stamps its single `image` input.
+    icon_sprite: Option<String>,
+    icon_name_expr: Option<maplibre_expr::Expr>,
+    icon_name_expr_src: Option<String>,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
 }
@@ -109,11 +132,7 @@ impl Node for StampNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
-        let image_in = inputs[1]
-            .as_ref()
-            .ok_or_else(|| EvalError::MissingInput("image".into()))?;
-        let (image, _) = unwrap_raster_or_sprite(image_in, "image")?;
-        if !feats.has_points() || image.width == 0 || image.height == 0 {
+        if !feats.has_points() {
             return Ok(empty_raster(ctx));
         }
 
@@ -124,11 +143,6 @@ impl Node for StampNode {
         let rotation_jitter_deg = self.rotation_jitter_deg.get(ctx, inputs)? as f32;
         let scale_jitter = self.scale_jitter.get(ctx, inputs)? as f32;
         let const_opacity = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
-
-        let img_ref = PixmapRef::from_bytes(&image.pixels, image.width, image.height)
-            .ok_or_else(|| EvalError::Other("stamp: invalid image pixmap bytes".into()))?;
-        let iw = image.width as f32;
-        let ih = image.height as f32;
 
         let mut canvas = make_canvas(ctx)?;
         let pad = canvas.pad() as f32;
@@ -148,14 +162,17 @@ impl Node for StampNode {
         let world_origin_y = ctx.tile.y as f64 / axis_tiles;
         let world_per_px = 1.0 / (axis_tiles * tile_w as f64);
 
-        // Stamp every point in `points` at the given scale / rotation /
-        // opacity. Jitter is keyed by world position, so it does not depend
-        // on the group the point came from.
+        // Stamp every point in `points` with `img` at the given scale /
+        // rotation / opacity. Jitter is keyed by world position, so it does
+        // not depend on the group the point came from.
         let stamp_points = |pm: &mut tiny_skia::Pixmap,
                             points: &[(i32, i32)],
+                            img: PixmapRef,
                             scale: f32,
                             rotation_deg: f32,
                             pix_paint: &PixmapPaint| {
+            let iw = img.width() as f32;
+            let ih = img.height() as f32;
             for &(x, y) in points {
                 let px = x as f32 * sx + pad;
                 let py = y as f32 * sy + pad;
@@ -176,20 +193,44 @@ impl Node for StampNode {
                     .pre_rotate(rotation_deg + rot_off)
                     .pre_scale(s, s)
                     .pre_translate(-iw * 0.5, -ih * 0.5);
-                pm.draw_pixmap(0, 0, img_ref, pix_paint, t, None);
+                pm.draw_pixmap(0, 0, img, pix_paint, t, None);
             }
         };
-
-        let pm = canvas.pixmap_mut();
-        if self.scale_expr.is_some()
+        let has_paint_expr = self.scale_expr.is_some()
             || self.rotation_deg_expr.is_some()
-            || self.opacity_expr.is_some()
-        {
-            // Data-driven: resolve scale / rotation / opacity per feature
-            // group and stamp each group's own points.
-            let z = ctx.tile.z;
+            || self.opacity_expr.is_some();
+        let z = ctx.tile.z;
+        let pm = canvas.pixmap_mut();
+
+        if let Some(name_expr) = &self.icon_name_expr {
+            // Data-driven `icon-image`: crop the feature's icon from the bound
+            // sprite sheet per group. Crops are cached by name, and both the
+            // paint (scale / rotation / opacity) and the icon are resolved per
+            // group from the same feature context.
+            let key = self
+                .icon_sprite
+                .as_deref()
+                .ok_or_else(|| EvalError::Other("stamp: icon mode without a sprite".into()))?;
+            let Asset::Sprite(sheet) = ctx.assets.load(key)? else {
+                return Err(EvalError::Other(format!(
+                    "asset `{key}` is not a sprite sheet"
+                )));
+            };
+            let mut crops: HashMap<String, Option<Arc<RasterBuf>>> = HashMap::new();
             for group in &feats.groups {
                 let ectx = crate::render::group_expr_context(group, z);
+                let Some(name) = eval_icon_name(name_expr, &ectx) else {
+                    continue;
+                };
+                let cropped = crops
+                    .entry(name.clone())
+                    .or_insert_with(|| sheet.crop(&name).map(Arc::new))
+                    .clone();
+                let Some(img) = cropped else { continue };
+                let Some(img_ref) = PixmapRef::from_bytes(&img.pixels, img.width, img.height)
+                else {
+                    continue;
+                };
                 let scale = eval_number(&self.scale_expr, &ectx, const_scale).max(0.0);
                 let rotation_deg = eval_number(&self.rotation_deg_expr, &ectx, const_rotation_deg);
                 let opacity = eval_number(&self.opacity_expr, &ectx, const_opacity).clamp(0.0, 1.0);
@@ -197,18 +238,55 @@ impl Node for StampNode {
                     opacity,
                     ..PixmapPaint::default()
                 };
-                stamp_points(pm, &group.points, scale, rotation_deg, &pix_paint);
+                stamp_points(pm, &group.points, img_ref, scale, rotation_deg, &pix_paint);
             }
         } else {
-            let pix_paint = PixmapPaint {
-                opacity: const_opacity,
-                ..PixmapPaint::default()
-            };
-            let points: Vec<(i32, i32)> = feats.points().collect();
-            stamp_points(pm, &points, const_scale, const_rotation_deg, &pix_paint);
+            // Single `image` input stamped at every point.
+            let image_in = inputs[1]
+                .as_ref()
+                .ok_or_else(|| EvalError::MissingInput("image".into()))?;
+            let (image, _) = unwrap_raster_or_sprite(image_in, "image")?;
+            if image.width == 0 || image.height == 0 {
+                return Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))));
+            }
+            let img_ref = PixmapRef::from_bytes(&image.pixels, image.width, image.height)
+                .ok_or_else(|| EvalError::Other("stamp: invalid image pixmap bytes".into()))?;
+            if has_paint_expr {
+                for group in &feats.groups {
+                    let ectx = crate::render::group_expr_context(group, z);
+                    let scale = eval_number(&self.scale_expr, &ectx, const_scale).max(0.0);
+                    let rotation_deg =
+                        eval_number(&self.rotation_deg_expr, &ectx, const_rotation_deg);
+                    let opacity =
+                        eval_number(&self.opacity_expr, &ectx, const_opacity).clamp(0.0, 1.0);
+                    let pix_paint = PixmapPaint {
+                        opacity,
+                        ..PixmapPaint::default()
+                    };
+                    stamp_points(pm, &group.points, img_ref, scale, rotation_deg, &pix_paint);
+                }
+            } else {
+                let pix_paint = PixmapPaint {
+                    opacity: const_opacity,
+                    ..PixmapPaint::default()
+                };
+                let points: Vec<(i32, i32)> = feats.points().collect();
+                stamp_points(
+                    pm,
+                    &points,
+                    img_ref,
+                    const_scale,
+                    const_rotation_deg,
+                    &pix_paint,
+                );
+            }
         }
 
         Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))))
+    }
+    fn asset_inputs(&self) -> Vec<String> {
+        // In icon mode the sprite sheet is bound here (wasm hosts pre-bind).
+        self.icon_sprite.iter().cloned().collect()
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"stamp");
@@ -221,15 +299,45 @@ impl Node for StampNode {
             (b"scaleexpr".as_slice(), &self.scale_expr_src),
             (b"rotationdegexpr".as_slice(), &self.rotation_deg_expr_src),
             (b"opacityexpr".as_slice(), &self.opacity_expr_src),
+            (b"iconnameexpr".as_slice(), &self.icon_name_expr_src),
         ] {
             if let Some(s) = src {
                 h.update(tag);
                 h.update(s.as_bytes());
             }
         }
+        if let Some(sprite) = &self.icon_sprite {
+            h.update(b"iconsprite");
+            h.update(sprite.as_bytes());
+        }
     }
     fn param_refs(&self) -> Vec<String> {
         self.param_refs.clone()
+    }
+}
+
+/// Resolve a `sprite` field (`@sprite-source` ref or literal atlas key) to the
+/// atlas asset key, matching the `icon` source node.
+fn resolve_sprite_atlas(raw: &str, ctx: &FactoryCtx<'_>) -> Result<String, FactoryError> {
+    match spec::FieldRef::classify(raw) {
+        spec::FieldRef::Node(name) => {
+            let source = ctx
+                .sources
+                .get(name)
+                .ok_or_else(|| FactoryError::UnknownAsset(name.to_string()))?;
+            let spec::SourceDecl::Sprite(sprite) = source else {
+                return Err(FactoryError::BadField {
+                    field: "sprite".into(),
+                    msg: format!("source `{name}` is not a sprite"),
+                });
+            };
+            Ok(sprite.image.clone())
+        }
+        spec::FieldRef::Literal(s) => Ok(s.to_string()),
+        spec::FieldRef::Param(_) => Err(FactoryError::BadField {
+            field: "sprite".into(),
+            msg: "param refs not allowed for the stamp sprite".into(),
+        }),
     }
 }
 
@@ -256,8 +364,42 @@ impl NodeFactory for StampFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let features = take_input_ref(fields, "features")?;
-        let image = take_input_ref(fields, "image")?;
-        let mut r = InReader::new(fields, ctx, 2);
+
+        // Data-driven `icon-image`: a `name-expr` (the icon-image expression)
+        // plus a `sprite` atlas ref replace the `image` input. The sheet is
+        // bound once and any icon in it is cropped per feature, so no `image`
+        // node is wired.
+        let (icon_sprite, icon_name_expr, icon_name_expr_src) = match fields.get("name-expr") {
+            Some(v) => {
+                let raw = fields
+                    .get("sprite")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| FactoryError::MissingField("sprite".into()))?;
+                let atlas = resolve_sprite_atlas(raw, ctx)?;
+                let expr = maplibre_expr::parse(v).map_err(|e| FactoryError::BadField {
+                    field: "name-expr".into(),
+                    msg: e.to_string(),
+                })?;
+                // Prefer a String check (icon names stringify); fall back to
+                // untyped, since `match`/`step` over literals may not narrow.
+                let expr =
+                    maplibre_expr::typecheck(&expr, Some(&maplibre_expr::Type::String), false)
+                        .or_else(|_| maplibre_expr::typecheck(&expr, None, false))
+                        .map_err(|e| FactoryError::BadField {
+                            field: "name-expr".into(),
+                            msg: e.to_string(),
+                        })?;
+                (Some(atlas), Some(expr), Some(v.to_string()))
+            }
+            None => (None, None, None),
+        };
+        // The single-image input, present only when not in icon mode.
+        let image = match icon_name_expr {
+            Some(_) => None,
+            None => Some(take_input_ref(fields, "image")?),
+        };
+
+        let mut r = InReader::new(fields, ctx, if image.is_some() { 2 } else { 1 });
         let scale = r.number_or("scale", 1.0)?;
         let rotation_deg = r.number_or("rotation-deg", 0.0)?;
         let rotation_jitter_deg = r.number_or("rotation-jitter-deg", 0.0)?;
@@ -272,29 +414,27 @@ impl NodeFactory for StampFactory {
         let (opacity_expr, opacity_expr_src) =
             parse_expr_field(fields, "opacity-expr", &maplibre_expr::Type::Number)?;
 
-        let mut ports = vec![
-            PortSpec {
-                name: "features",
-                accepts: &[PortKind::Features],
-                optional: false,
-            },
-            PortSpec {
+        let mut ports = vec![PortSpec {
+            name: "features",
+            accepts: &[PortKind::Features],
+            optional: false,
+        }];
+        let mut connections = vec![Connection {
+            port: "features".into(),
+            src: features,
+        }];
+        if let Some(image) = image {
+            ports.push(PortSpec {
                 name: "image",
                 accepts: ACCEPTS_RASTER_OR_SPRITE,
                 optional: false,
-            },
-        ];
-        ports.extend(parts.ports);
-        let mut connections = vec![
-            Connection {
-                port: "features".into(),
-                src: features,
-            },
-            Connection {
+            });
+            connections.push(Connection {
                 port: "image".into(),
                 src: image,
-            },
-        ];
+            });
+        }
+        ports.extend(parts.ports);
         connections.extend(parts.connections);
 
         Ok(BuiltNode {
@@ -310,6 +450,9 @@ impl NodeFactory for StampFactory {
                 scale_expr_src,
                 rotation_deg_expr_src,
                 opacity_expr_src,
+                icon_sprite,
+                icon_name_expr,
+                icon_name_expr_src,
                 ports,
                 param_refs: parts.param_refs,
             }),
@@ -318,10 +461,14 @@ impl NodeFactory for StampFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Stamp a sprite at every input point. Lines and polygons are ignored. Jitter is world-deterministic — a given point gets the same jitter no matter which tile renders it.",
+            "description": "Stamp a sprite at every input point. Lines and polygons are ignored. Jitter is world-deterministic — a given point gets the same jitter no matter which tile renders it. Provide either an `image` input (one sprite for every point) or, for a data-driven `icon-image`, a `sprite` atlas ref plus a `name-expr` that names each feature's icon.",
             "properties": {
                 "features": schema_frag::node_ref(),
                 "image": schema_frag::node_ref(),
+                "sprite": schema_frag::asset_ref(),
+                "name-expr": {
+                    "description": "A MapLibre expression giving each feature's icon name (MapLibre data-driven `icon-image`), cropped per group from the `sprite` atlas. Used instead of an `image` input; any icon the bound sheet contains is croppable, so no enumeration is needed.",
+                },
                 "scale": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0,
                            "description": "Uniform scale applied to the sprite. Default 1.0 (native size)." })),
                 "scale-expr": {
@@ -341,7 +488,7 @@ impl NodeFactory for StampFactory {
                     "description": "A MapLibre number expression giving opacity, evaluated per feature group; overrides the constant `opacity`.",
                 },
             },
-            "required": ["features", "image"],
+            "required": ["features"],
         })
     }
 }
