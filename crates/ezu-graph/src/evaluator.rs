@@ -54,17 +54,28 @@ impl<'a> Evaluator<'a> {
         let mut values: Vec<Option<PortValue>> = vec![None; n];
 
         for &ix in self.graph.topo_order() {
-            let (value, hash) = self.eval_one(ix, &ctx, &hashes, &values)?;
+            let (value, hash) = {
+                let upstream = |src: NodeIx| -> (Hash128, PortValue) {
+                    (
+                        hashes[src],
+                        values[src]
+                            .clone()
+                            .expect("upstream evaluated earlier in topo order"),
+                    )
+                };
+                self.eval_one(ix, &ctx, &upstream)?
+            };
             hashes[ix] = hash;
             values[ix] = Some(value);
         }
         Ok(values[self.graph.output()].clone().expect("output unset"))
     }
 
-    /// Like [`render`] but evaluates nodes in parallel per topological
-    /// "level" using Rayon. All nodes at the same level have no edges
-    /// between them, so they fan out across the global thread pool with
-    /// no synchronization cost beyond a per-level join.
+    /// Like [`render`] but evaluates nodes concurrently on Rayon, firing
+    /// each node the moment its last input resolves rather than waiting
+    /// on a topological-level barrier. A slow node (e.g. text) no longer
+    /// stalls unrelated branches, so the wall time tracks the graph's
+    /// critical path instead of the sum of per-level maxima.
     ///
     /// Falls back to sequential evaluation transparently when the
     /// `parallel` feature is disabled, so callers don't need to branch.
@@ -81,7 +92,8 @@ impl<'a> Evaluator<'a> {
         }
         #[cfg(feature = "parallel")]
         {
-            use rayon::prelude::*;
+            use std::sync::atomic::AtomicUsize;
+            use std::sync::{Mutex, OnceLock};
 
             let ctx = EvalCtx {
                 tile,
@@ -91,35 +103,101 @@ impl<'a> Evaluator<'a> {
                 rng_seed,
             };
             let n = self.graph.len();
-            let mut hashes: Vec<Hash128> = vec![0; n];
-            let mut values: Vec<Option<PortValue>> = vec![None; n];
+            let state = ParState {
+                slots: (0..n).map(|_| OnceLock::new()).collect(),
+                pending: (0..n)
+                    .map(|ix| AtomicUsize::new(self.graph.indegree(ix)))
+                    .collect(),
+                first_err: Mutex::new(None),
+                ctx,
+            };
 
-            for bucket in self.graph.level_buckets() {
-                let new: Vec<(NodeIx, PortValue, Hash128)> = bucket
-                    .par_iter()
-                    .map(|&ix| -> Result<_, RenderError> {
-                        let (v, h) = self.eval_one(ix, &ctx, &hashes, &values)?;
-                        Ok((ix, v, h))
-                    })
-                    .collect::<Result<_, _>>()?;
-                for (ix, v, h) in new {
-                    values[ix] = Some(v);
-                    hashes[ix] = h;
+            // Bind a reference first: a `move` closure that mentions
+            // `state` would otherwise capture it by value.
+            let state = &state;
+            rayon::scope(|scope| {
+                for ix in 0..n {
+                    if self.graph.indegree(ix) == 0 {
+                        scope.spawn(move |s| self.schedule(s, state, ix));
+                    }
                 }
+            });
+
+            if let Some(e) = state
+                .first_err
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .take()
+            {
+                return Err(e);
             }
-            Ok(values[self.graph.output()].clone().expect("output unset"))
+            Ok(state.slots[self.graph.output()]
+                .get()
+                .expect("output unset")
+                .0
+                .clone())
+        }
+    }
+
+    /// Evaluate one node and, on success, release its downstream nodes:
+    /// each dependent's pending-input count is decremented, and the node
+    /// that drives a count to zero spawns that dependent on the same
+    /// Rayon scope. On error the first failure is recorded and no further
+    /// nodes are released, draining the scope so the caller can surface it.
+    #[cfg(feature = "parallel")]
+    fn schedule<'scope>(
+        &'scope self,
+        scope: &rayon::Scope<'scope>,
+        state: &'scope ParState<'scope>,
+        ix: NodeIx,
+    ) {
+        use std::sync::atomic::Ordering;
+
+        if state
+            .first_err
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_some()
+        {
+            return;
+        }
+
+        let upstream = |src: NodeIx| -> (Hash128, PortValue) {
+            let (v, h) = state.slots[src]
+                .get()
+                .expect("upstream resolved before dependent is scheduled");
+            (*h, v.clone())
+        };
+
+        match self.eval_one(ix, &state.ctx, &upstream) {
+            Ok((v, h)) => {
+                let _ = state.slots[ix].set((v, h));
+            }
+            Err(e) => {
+                let mut slot = state.first_err.lock().unwrap_or_else(|p| p.into_inner());
+                if slot.is_none() {
+                    *slot = Some(e);
+                }
+                return;
+            }
+        }
+
+        for &dst in self.graph.downstream_unique(ix) {
+            if state.pending[dst].fetch_sub(1, Ordering::AcqRel) == 1 {
+                scope.spawn(move |s| self.schedule(s, state, dst));
+            }
         }
     }
 
     /// Evaluate one node given the current intermediate state. Pulled
     /// out so the serial and parallel paths share the cache lookup and
-    /// hashing logic.
+    /// hashing logic; the paths differ only in how upstream results are
+    /// fetched (`upstream(src) -> (input hash, input value)`).
     fn eval_one(
         &self,
         ix: NodeIx,
         ctx: &EvalCtx<'_>,
-        hashes: &[Hash128],
-        values: &[Option<PortValue>],
+        upstream: &dyn Fn(NodeIx) -> (Hash128, PortValue),
     ) -> Result<(PortValue, Hash128), RenderError> {
         let node = self.graph.node(ix);
 
@@ -148,8 +226,9 @@ impl<'a> Evaluator<'a> {
         for port_ix in 0..input_specs.len() {
             match self.graph.incoming(ix, port_ix) {
                 Some(src) => {
-                    input_hashes.push(hashes[src]);
-                    input_vals.push(values[src].clone());
+                    let (h, v) = upstream(src);
+                    input_hashes.push(h);
+                    input_vals.push(Some(v));
                 }
                 None => {
                     input_hashes.push(0);
@@ -194,6 +273,18 @@ impl<'a> Evaluator<'a> {
         self.cache.insert(key, value.clone());
         Ok((value, key.0))
     }
+}
+
+/// Shared, thread-safe scratch for one parallel render: per-node result
+/// slots (written once), per-node remaining-input counters, and the first
+/// error seen. Each field is `Sync`, so `&ParState` is shared freely
+/// across the Rayon scope without further locking of the results.
+#[cfg(feature = "parallel")]
+struct ParState<'a> {
+    slots: Vec<std::sync::OnceLock<(PortValue, Hash128)>>,
+    pending: Vec<std::sync::atomic::AtomicUsize>,
+    first_err: std::sync::Mutex<Option<RenderError>>,
+    ctx: EvalCtx<'a>,
 }
 
 /// One-line human-readable summary of a `PortValue` for debug logs.
