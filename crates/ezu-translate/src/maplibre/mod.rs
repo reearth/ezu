@@ -87,8 +87,10 @@ pub(crate) fn is_expr(v: &Value) -> bool {
 pub struct ConvertOptions {
     /// Emitted `tile-size`. MapLibre uses 512px tiles.
     pub tile_size: u32,
-    /// Emitted `pad` — the buffer around the tile where blurs and
-    /// overflowing geometry land before the crop.
+    /// Emitted `pad` — the buffer around the tile where overflowing
+    /// geometry (label halos, wide strokes) lands before the crop. The
+    /// default suits plain vector recipes; pad-hungry filters (blur, warp,
+    /// dab) want a larger value.
     pub pad: u32,
     /// How to treat `layout.visibility: "none"` layers. `false` (default)
     /// drops them. `true` keeps their nodes in the recipe but gates each
@@ -110,7 +112,7 @@ impl Default for ConvertOptions {
     fn default() -> Self {
         Self {
             tile_size: 512,
-            pad: 64,
+            pad: 16,
             keep_hidden: false,
             fonts: std::collections::HashMap::new(),
         }

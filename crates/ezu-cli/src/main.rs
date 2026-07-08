@@ -156,8 +156,10 @@ struct TranslateCmd {
     /// Emitted `tile-size` (MapLibre uses 512).
     #[arg(long, default_value_t = 512)]
     tile_size: u32,
-    /// Emitted `pad` — the buffer around the tile for blurs/overflow.
-    #[arg(long, default_value_t = 64)]
+    /// Emitted `pad` — the buffer around the tile for overflowing geometry
+    /// (label halos, wide strokes) before the crop. The default suits plain
+    /// vector recipes; raise it for pad-hungry filters (blur, warp, dab).
+    #[arg(long, default_value_t = 16)]
     pad: u32,
     /// Keep `visibility: none` layers in the recipe, gated off behind a
     /// `switch` (instead of dropping them).
