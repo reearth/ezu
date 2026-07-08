@@ -39,6 +39,7 @@ mod saturate;
 mod sharpen;
 mod slope;
 mod solid;
+mod stack;
 mod terrain_common;
 mod threshold;
 mod tiling;

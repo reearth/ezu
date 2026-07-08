@@ -7,8 +7,8 @@
 //! differ deeply, so this converter targets the tractable subset first
 //! (see the crate README / `project_maplibre_conversion` notes):
 //!
-//! - **Layer list → blend chain.** The painter's algorithm (each layer
-//!   drawn over the last) maps to an ezu `blend` fold.
+//! - **Layer list → `stack`.** The painter's algorithm (each layer
+//!   drawn over the last) folds into a single n-ary `stack` node.
 //! - **background / fill / line / raster** layer types.
 //! - **`match` on `["get", prop]`** for fill colour → one filtered
 //!   `fill-solid` per colour bucket (ezu membership filters do this
@@ -306,7 +306,7 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
     Ok((Value::Object(doc), report))
 }
 
-/// Fold the ordered output node ids into a `blend` chain (painter's
+/// Fold the ordered output node ids into a single `stack` (painter's
 /// algorithm) and return the id of the final node.
 /// Gate the outputs a hidden layer pushed (`outputs[from..]`) behind a
 /// `switch` whose default `select: "a"` picks a shared transparent branch,
@@ -350,32 +350,53 @@ fn fold_blend(nodes: &mut Map<String, Value>, outputs: &[String]) -> String {
             "empty".to_string()
         }
         Some((first, rest)) => {
-            let mut cur = first.clone();
-            let mut i = 0;
+            // Painter's algorithm: every layer is composited with plain
+            // source-over onto the ones below, so the whole run collapses
+            // into a single n-ary `stack` (one accumulator, one pass)
+            // instead of a chain of `blend` nodes.
+            let mut layers = vec![first.clone()];
             for over in rest {
                 // Compositing a fully opaque solid over itself is a no-op
                 // (source-over with alpha 1 replaces the base with identical
                 // pixels). This happens when a style seeds the layer list with
-                // a redundant background layer, so start the chain from that
-                // node directly instead of emitting `blend(@bg, @bg)`. A
-                // translucent duplicate is *not* skipped: source-over stacks
-                // alpha (C = Cs + Cb·(1−αs)), so drawing it twice darkens the
-                // result, matching MapLibre's behaviour of rendering duplicate
-                // layers twice.
-                if *over == cur && is_opaque_solid(nodes, &cur) {
+                // a redundant background layer, so drop the duplicate instead
+                // of stacking it again. Only a *leading* run of duplicates of
+                // the bottom layer is collapsed (nothing has been composited
+                // over it yet); a translucent duplicate is never dropped —
+                // source-over stacks alpha (C = Cs + Cb·(1−αs)), so drawing it
+                // twice darkens the result, matching MapLibre's behaviour of
+                // rendering duplicate layers twice.
+                if layers.len() == 1 && *over == *first && is_opaque_solid(nodes, first) {
                     continue;
                 }
-                let bid = format!("blend_{i}");
-                nodes.insert(
-                    bid.clone(),
-                    serde_json::json!({ "op": "blend", "base": format!("@{cur}"), "over": format!("@{over}") }),
-                );
-                cur = bid;
-                i += 1;
+                layers.push(over.clone());
             }
-            cur
+            if layers.len() == 1 {
+                return layers.into_iter().next().expect("one layer");
+            }
+            let id = unique_id(nodes, "stack");
+            let refs: Vec<Value> = layers
+                .iter()
+                .map(|l| Value::String(format!("@{l}")))
+                .collect();
+            nodes.insert(
+                id.clone(),
+                serde_json::json!({ "op": "stack", "layers": Value::Array(refs) }),
+            );
+            id
         }
     }
+}
+
+/// Pick an unused node id: `base`, else `base_1`, `base_2`, …
+fn unique_id(nodes: &Map<String, Value>, base: &str) -> String {
+    if !nodes.contains_key(base) {
+        return base.to_string();
+    }
+    (1..)
+        .map(|n| format!("{base}_{n}"))
+        .find(|id| !nodes.contains_key(id))
+        .expect("an unused id exists")
 }
 
 /// True when `id` names a `solid` node that is certainly fully opaque: a hex
@@ -425,9 +446,13 @@ mod tests {
         nodes.insert("fill".into(), solid("#112233"));
         let outputs = ["bg".to_string(), "bg".to_string(), "fill".to_string()];
         let out = fold_blend(&mut nodes, &outputs);
-        assert_eq!(out, "blend_0");
-        assert_eq!(nodes["blend_0"]["base"], "@bg");
-        assert_eq!(nodes["blend_0"]["over"], "@fill");
+        assert_eq!(out, "stack");
+        // The duplicate opaque `bg` is collapsed away, leaving one stack of
+        // the bottom layer and the fill above it.
+        assert_eq!(
+            nodes["stack"]["layers"],
+            serde_json::json!(["@bg", "@fill"])
+        );
     }
 
     #[test]
@@ -438,9 +463,38 @@ mod tests {
         nodes.insert("bg".into(), solid("#33333380"));
         let outputs = ["bg".to_string(), "bg".to_string()];
         let out = fold_blend(&mut nodes, &outputs);
-        assert_eq!(out, "blend_0");
-        assert_eq!(nodes["blend_0"]["base"], "@bg");
-        assert_eq!(nodes["blend_0"]["over"], "@bg");
+        assert_eq!(out, "stack");
+        assert_eq!(nodes["stack"]["layers"], serde_json::json!(["@bg", "@bg"]));
+    }
+
+    #[test]
+    fn single_layer_needs_no_stack() {
+        // One output composites onto nothing — return it directly, no node.
+        let mut nodes = Map::new();
+        nodes.insert("bg".into(), solid("#cccccc"));
+        let outputs = ["bg".to_string()];
+        let out = fold_blend(&mut nodes, &outputs);
+        assert_eq!(out, "bg");
+        assert!(!nodes.contains_key("stack"));
+    }
+
+    #[test]
+    fn layers_fold_into_one_stack() {
+        let mut nodes = Map::new();
+        for c in ["#111111", "#222222", "#333333"] {
+            nodes.insert(c.into(), solid(c));
+        }
+        let outputs = [
+            "#111111".to_string(),
+            "#222222".to_string(),
+            "#333333".to_string(),
+        ];
+        let out = fold_blend(&mut nodes, &outputs);
+        assert_eq!(out, "stack");
+        assert_eq!(
+            nodes["stack"]["layers"],
+            serde_json::json!(["@#111111", "@#222222", "@#333333"])
+        );
     }
 
     #[test]
