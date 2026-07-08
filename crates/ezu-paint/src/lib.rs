@@ -161,7 +161,6 @@ pub fn paint_polygons(
 ) {
     let w = canvas.width();
     let h = canvas.height();
-    let mut layer = Pixmap::new(w, h).expect("non-zero layer");
 
     let sx = canvas.tile_w as f32 / extent as f32;
     let sy = canvas.tile_h as f32 / extent as f32;
@@ -178,38 +177,45 @@ pub fn paint_polygons(
         edge_paint.anti_alias = true;
     }
 
-    for poly in polygons {
-        let Some(path) = build_polygon_path(poly, sx, sy, ox, oy) else {
-            continue;
-        };
-        layer.fill_path(
-            &path,
-            &fill_paint,
-            FillRule::EvenOdd,
+    let draw = |target: &mut Pixmap| {
+        for poly in polygons {
+            let Some(path) = build_polygon_path(poly, sx, sy, ox, oy) else {
+                continue;
+            };
+            target.fill_path(
+                &path,
+                &fill_paint,
+                FillRule::EvenOdd,
+                Transform::identity(),
+                None,
+            );
+            if style.edge.is_some() {
+                let stroke = Stroke {
+                    width: style.edge_width,
+                    ..Stroke::default()
+                };
+                target.stroke_path(&path, &edge_paint, &stroke, Transform::identity(), None);
+            }
+        }
+    };
+
+    if style.blur_sigma > 0.0 {
+        // Blur needs an isolated layer so it only softens this call's
+        // polygons, not what's already on the canvas.
+        let mut layer = Pixmap::new(w, h).expect("non-zero layer");
+        draw(&mut layer);
+        blur_pixmap(&mut layer, style.blur_sigma);
+        canvas.pixmap.draw_pixmap(
+            0,
+            0,
+            layer.as_ref(),
+            &PixmapPaint::default(),
             Transform::identity(),
             None,
         );
-        if style.edge.is_some() {
-            let stroke = Stroke {
-                width: style.edge_width,
-                ..Stroke::default()
-            };
-            layer.stroke_path(&path, &edge_paint, &stroke, Transform::identity(), None);
-        }
+    } else {
+        draw(&mut canvas.pixmap);
     }
-
-    if style.blur_sigma > 0.0 {
-        blur_pixmap(&mut layer, style.blur_sigma);
-    }
-
-    canvas.pixmap.draw_pixmap(
-        0,
-        0,
-        layer.as_ref(),
-        &PixmapPaint::default(),
-        Transform::identity(),
-        None,
-    );
 }
 
 /// Style for a crisp vector stroke (contrast with `paint_lines`, which is a
@@ -236,9 +242,6 @@ pub fn paint_strokes(
     if lines.is_empty() || style.width <= 0.0 {
         return;
     }
-    let w = canvas.width();
-    let h = canvas.height();
-    let mut layer = Pixmap::new(w, h).expect("non-zero layer");
     let sx = canvas.tile_w as f32 / extent as f32;
     let sy = canvas.tile_h as f32 / extent as f32;
     let ox = canvas.pad as f32;
@@ -275,18 +278,11 @@ pub fn paint_strokes(
             pb.line_to(x as f32 * sx + ox, y as f32 * sy + oy);
         }
         if let Some(path) = pb.finish() {
-            layer.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+            canvas
+                .pixmap
+                .stroke_path(&path, &paint, &stroke, Transform::identity(), None);
         }
     }
-
-    canvas.pixmap.draw_pixmap(
-        0,
-        0,
-        layer.as_ref(),
-        &PixmapPaint::default(),
-        Transform::identity(),
-        None,
-    );
 }
 
 pub(crate) fn build_polygon_path(
