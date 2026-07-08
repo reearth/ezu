@@ -79,19 +79,18 @@ With more than one tile, a combined op table across all tiles is printed at the
 end. Sample:
 
 ```
-=== 14/14550/6452 ===  eval 985.8 ms  wall 986.0 ms  (25 nodes)
+=== z/x/y ===  eval ... ms  wall ... ms  (N nodes)
 op                  count   total ms    avg ms   share%
-stroke                  3     516.86   172.286    52.4%
-fill-solid              5     428.34    85.668    43.5%
-blend                   8      38.99     4.874     4.0%
-features                8       1.48     0.185     0.1%
-solid                   1       0.13     0.128     0.0%
+stroke                ...       ...       ...      ...%
+fill-solid            ...       ...       ...      ...%
+blend                 ...       ...       ...      ...%
+...
 
 slowest nodes (top 15):
         ms op                 node
-   413.455 fill-solid         landuse__fill
-   297.482 stroke             roads_minor__stroke
-   169.955 stroke             roads_major__stroke
+       ... fill-solid         ...
+       ... stroke             ...
+       ... stroke             ...
    ...
 ```
 
@@ -114,8 +113,8 @@ opt-in and off by default.
 ```
 tile        score   ssim     rmse   diff%  maxΔ   ezu(ms)
 ------------------------------------------------------------
-14/14550/6452  93.42  0.798   16.777  22.69%    88     262.9
-15/29101/12904  94.37  0.890   14.363  17.71%    90     138.7
+14/14550/6452    ...    ...      ...     ...%   ...       ...
+15/29101/12904   ...    ...      ...     ...%   ...       ...
 ```
 
 The `diff` PNG (bright = disagreement) makes the residual obvious: at high
