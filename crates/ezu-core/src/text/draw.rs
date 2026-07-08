@@ -9,7 +9,7 @@ use tiny_skia::{
     Transform,
 };
 
-use super::font::StackEntry;
+use super::font::FaceEntry;
 use super::layout::{PlacedGlyph, TextBlock};
 use super::sdf::{SdfGlyph, SDF_BORDER, SDF_EDGE, SDF_EM_PX, SDF_RADIUS_PX};
 
@@ -63,7 +63,7 @@ const EDGE_GAMMA: f32 = 0.105;
 /// MapLibre halo rule).
 pub fn draw(
     block: &TextBlock,
-    fonts: &[StackEntry],
+    fonts: &[FaceEntry<'_>],
     pixmap: &mut PixmapMut<'_>,
     origin: (f32, f32),
     paint: &TextPaint,
@@ -92,8 +92,8 @@ pub fn draw(
             // SDF glyphs are rasterized at the 24 px em, per-glyph scaled.
             let font_scale = paint.size_px * g.scale / SDF_EM_PX;
             match &fonts[g.font] {
-                StackEntry::Outline(font) => {
-                    let Some(path) = font.glyph_path(g.glyph_id) else {
+                FaceEntry::Outline { font, face } => {
+                    let Some(path) = font.glyph_path(face, g.glyph_id) else {
                         continue;
                     };
                     let scale = paint.size_px * g.scale / font.units_per_em();
@@ -108,7 +108,7 @@ pub fn draw(
                     };
                     pixmap.stroke_path(&path, &halo, &stroke, transform_of(g, scale), None);
                 }
-                StackEntry::Sdf(stack) => {
+                FaceEntry::Sdf(stack) => {
                     let Some(glyph) = sdf_glyph_of(stack, g.glyph_id) else {
                         continue;
                     };
@@ -139,8 +139,8 @@ pub fn draw(
         let font_scale = paint.size_px * g.scale / SDF_EM_PX;
         let color = glyph_fill(paint, sections, g.section);
         match &fonts[g.font] {
-            StackEntry::Outline(font) => {
-                let Some(path) = font.glyph_path(g.glyph_id) else {
+            FaceEntry::Outline { font, face } => {
+                let Some(path) = font.glyph_path(face, g.glyph_id) else {
                     continue;
                 };
                 let scale = paint.size_px * g.scale / font.units_per_em();
@@ -155,7 +155,7 @@ pub fn draw(
                     None,
                 );
             }
-            StackEntry::Sdf(stack) => {
+            FaceEntry::Sdf(stack) => {
                 let Some(glyph) = sdf_glyph_of(stack, g.glyph_id) else {
                     continue;
                 };
@@ -338,7 +338,7 @@ fn line_glyph_transform(g: &PlacedGlyph, p: &GlyphPlacement, size: f32, perp: f3
 /// [`draw`], so a glyph's halo never overpaints a neighbour's fill.
 pub fn draw_line(
     block: &TextBlock,
-    fonts: &[StackEntry],
+    fonts: &[FaceEntry<'_>],
     pixmap: &mut PixmapMut<'_>,
     placements: &[GlyphPlacement],
     perp_offset_px: f32,
@@ -358,8 +358,8 @@ pub fn draw_line(
             let font_scale = size * g.scale / SDF_EM_PX;
             let t = line_glyph_transform(g, p, size, perp_offset_px);
             match &fonts[g.font] {
-                StackEntry::Outline(font) => {
-                    let Some(path) = font.glyph_path(g.glyph_id) else {
+                FaceEntry::Outline { font, face } => {
+                    let Some(path) = font.glyph_path(face, g.glyph_id) else {
                         continue;
                     };
                     let scale = size * g.scale / font.units_per_em();
@@ -371,7 +371,7 @@ pub fn draw_line(
                     };
                     pixmap.stroke_path(&path, &halo, &stroke, t.pre_scale(scale, -scale), None);
                 }
-                StackEntry::Sdf(stack) => {
+                FaceEntry::Sdf(stack) => {
                     let Some(glyph) = sdf_glyph_of(stack, g.glyph_id) else {
                         continue;
                     };
@@ -399,8 +399,8 @@ pub fn draw_line(
         let color = glyph_fill(paint, sections, g.section);
         let t = line_glyph_transform(g, p, size, perp_offset_px);
         match &fonts[g.font] {
-            StackEntry::Outline(font) => {
-                let Some(path) = font.glyph_path(g.glyph_id) else {
+            FaceEntry::Outline { font, face } => {
+                let Some(path) = font.glyph_path(face, g.glyph_id) else {
                     continue;
                 };
                 let scale = size * g.scale / font.units_per_em();
@@ -415,7 +415,7 @@ pub fn draw_line(
                     None,
                 );
             }
-            StackEntry::Sdf(stack) => {
+            FaceEntry::Sdf(stack) => {
                 let Some(glyph) = sdf_glyph_of(stack, g.glyph_id) else {
                     continue;
                 };

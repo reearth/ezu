@@ -45,9 +45,9 @@ use xxhash_rust::xxh3::Xxh3;
 
 use ezu_core::text::{
     collide::{self, Aabb, Candidate, LineCandidate},
-    draw, draw_line, generate_anchors, layout_sections, place_glyphs, Anchor, Font, GlyphPlacement,
-    Justify, LayoutParams, LinePlacement, SdfFontStack, SectionPaint, SectionSpec, StackEntry,
-    TextBlock, TextPaint, TextTransform, VerticalAlign,
+    draw, draw_line, generate_anchors, layout_sections, place_glyphs, Anchor, FaceEntry, Font,
+    GlyphPlacement, Justify, LayoutParams, LinePlacement, SdfFontStack, SectionPaint, SectionSpec,
+    StackEntry, TextBlock, TextPaint, TextTransform, VerticalAlign,
 };
 use ezu_features::FeatureLayer;
 
@@ -227,6 +227,56 @@ impl FontRegistry {
     /// The `font_id` for a canonical stack key, or `None` if unregistered.
     fn id_of(&self, key: &str) -> Option<u32> {
         self.by_key.get(key).map(|&i| i as u32 + 1)
+    }
+}
+
+/// One `rustybuzz::Face` per distinct outline font in the registry, built once
+/// per eval. Shaping, coverage, and outline extraction all take a face, so
+/// building each once here (rather than reparsing the ~20 MB font file per
+/// glyph as coverage itemization would) is the dominant win for a text node.
+///
+/// Keyed by the font's `Arc` identity: every assembled flat stack is cloned
+/// from the registry's stacks, so its outline entries share these fonts and
+/// hit the cache. Handing out cheap [`rustybuzz::Face`] clones lets each label
+/// build a [`FaceEntry`] view without reparsing.
+struct FaceCache<'a> {
+    faces: HashMap<*const Font, rustybuzz::Face<'a>>,
+}
+
+impl<'a> FaceCache<'a> {
+    /// Build a face for every distinct outline font across the registry's
+    /// default and named stacks.
+    fn build(registry: &'a FontRegistry) -> FaceCache<'a> {
+        let mut faces: HashMap<*const Font, rustybuzz::Face<'a>> = HashMap::new();
+        for stack in std::iter::once(&registry.default).chain(registry.stacks.iter()) {
+            for entry in stack {
+                if let StackEntry::Outline(font) = entry {
+                    faces
+                        .entry(Arc::as_ptr(font))
+                        .or_insert_with(|| font.face());
+                }
+            }
+        }
+        FaceCache { faces }
+    }
+
+    /// A prepared view of `stack`, aligned index-for-index, whose outline
+    /// entries carry a cheap clone of the pre-built face.
+    fn view<'b>(&'b self, stack: &'b [StackEntry]) -> Vec<FaceEntry<'b>> {
+        stack
+            .iter()
+            .map(|entry| match entry {
+                StackEntry::Outline(font) => FaceEntry::Outline {
+                    font,
+                    face: self
+                        .faces
+                        .get(&Arc::as_ptr(font))
+                        .cloned()
+                        .unwrap_or_else(|| font.face()),
+                },
+                StackEntry::Sdf(s) => FaceEntry::Sdf(s),
+            })
+            .collect()
     }
 }
 
@@ -564,6 +614,10 @@ impl TextNode {
         }
 
         let registry = self.load_registry(ctx)?;
+        // Build each outline font's face once; every label's flat stack shares
+        // these fonts, so shaping/coverage/outline reuse them instead of
+        // reparsing the font file per call.
+        let faces = FaceCache::build(&registry);
         let const_size = (self.size.get(ctx, inputs)? as f32).max(0.0);
         let const_color = self.color.get(ctx, inputs)?;
         let const_halo_color = self.halo_color.get(ctx, inputs)?;
@@ -673,7 +727,8 @@ impl TextNode {
                             valign: s.valign,
                         })
                         .collect();
-                    Arc::new(layout_sections(&specs, &flat_fonts, &params))
+                    let view = faces.view(&flat_fonts);
+                    Arc::new(layout_sections(&specs, &view, &params))
                 })
                 .clone();
             if dx == 0 && dy == 0 {
@@ -859,8 +914,9 @@ impl TextNode {
                     angle: p.angle,
                 })
                 .collect();
+            let view = faces.view(&d.fonts);
             draw_line(
-                &d.block, &d.fonts, &mut pm, &shifted, d.perp_px, &d.paint, &d.paints,
+                &d.block, &view, &mut pm, &shifted, d.perp_px, &d.paint, &d.paints,
             );
         }
 
@@ -950,6 +1006,10 @@ impl Node for TextNode {
         // A per-feature `font-expr` picks among them; the draw path is picked
         // per glyph by each entry's backend.
         let registry = self.load_registry(ctx)?;
+        // Build each outline font's face once; every label's flat stack shares
+        // these fonts, so shaping/coverage/outline reuse them instead of
+        // reparsing the font file per call.
+        let faces = FaceCache::build(&registry);
 
         // Constants, resolved once. Data-driven exprs (if present)
         // override these per feature group.
@@ -1083,7 +1143,8 @@ impl Node for TextNode {
                                     valign: s.valign,
                                 })
                                 .collect();
-                            Arc::new(layout_sections(&specs, &flat_fonts, &params))
+                            let view = faces.view(&flat_fonts);
+                            Arc::new(layout_sections(&specs, &view, &params))
                         })
                         .clone()
                 })
@@ -1238,7 +1299,8 @@ impl Node for TextNode {
                     continue;
                 }
             }
-            draw(block, &d.fonts, &mut pm, d.anchor, &d.paint, &d.paints);
+            let view = faces.view(&d.fonts);
+            draw(block, &view, &mut pm, d.anchor, &d.paint, &d.paints);
         }
         // One summary line per eval, not one per label.
         if culled > 0 {

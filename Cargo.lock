@@ -749,6 +749,7 @@ dependencies = [
  "pmtiles",
  "rayon",
  "reqwest",
+ "rustybuzz",
  "serde_json",
  "thiserror",
  "tiny-skia",

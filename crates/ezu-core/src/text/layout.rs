@@ -16,7 +16,7 @@
 //!   advances (so ligatures/kerning are measured exactly); break
 //!   candidates only exist at cluster boundaries.
 
-use super::font::StackEntry;
+use super::font::FaceEntry;
 use super::sdf::{SDF_EM_PX, SDF_Y_OFFSET_PX};
 use super::shape::{shape_sections, ShapeSection, ShapedGlyph, ShapedText};
 
@@ -271,7 +271,7 @@ impl TextBlock {
 /// is the primary: it sets the line metrics — an outline font through
 /// its real ascender/descender, an SDF stack through MapLibre's fixed
 /// 24 px-em constants.
-pub fn layout(text: &str, fonts: &[StackEntry], params: &LayoutParams) -> TextBlock {
+pub fn layout(text: &str, fonts: &[FaceEntry<'_>], params: &LayoutParams) -> TextBlock {
     layout_sections(
         &[SectionSpec {
             text,
@@ -292,7 +292,7 @@ pub fn layout(text: &str, fonts: &[StackEntry], params: &LayoutParams) -> TextBl
 /// bit-identically.
 pub fn layout_sections(
     sections: &[SectionSpec<'_>],
-    fonts: &[StackEntry],
+    fonts: &[FaceEntry<'_>],
     params: &LayoutParams,
 ) -> TextBlock {
     let (Some(primary), false) = (fonts.first(), sections.iter().all(|s| s.text.is_empty())) else {
@@ -334,8 +334,8 @@ pub fn layout_sections(
     // `0.5·line-height − 17px` from its slot top, so ascent/descent split the
     // `line-height` slot around that point.
     let (base_asc, base_desc) = match primary {
-        StackEntry::Outline(f) => (f.ascent_em(), f.descent_em()),
-        StackEntry::Sdf(_) => {
+        FaceEntry::Outline { font, .. } => (font.ascent_em(), font.descent_em()),
+        FaceEntry::Sdf(_) => {
             let asc = 0.5 * lh + SDF_Y_OFFSET_PX / SDF_EM_PX;
             (asc, lh - asc)
         }

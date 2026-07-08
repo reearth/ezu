@@ -13,7 +13,7 @@
 
 use std::ops::Range;
 
-use super::font::StackEntry;
+use super::font::FaceEntry;
 use super::sdf::{SdfCoverage, SDF_EM_PX};
 
 /// One shaped glyph, in em units.
@@ -79,7 +79,7 @@ struct Run {
 /// whitespace trimming index into unchanged.
 pub(crate) fn shape_sections(
     sections: &[ShapeSection<'_>],
-    fonts: &[StackEntry],
+    fonts: &[FaceEntry<'_>],
     letter_spacing_em: f32,
 ) -> ShapedText {
     let mut glyphs = Vec::new();
@@ -121,7 +121,7 @@ pub(crate) fn shape_sections(
 #[allow(clippy::too_many_arguments)]
 fn shape_run(
     run: &Run,
-    entry: &StackEntry,
+    entry: &FaceEntry<'_>,
     base: usize,
     scale: f32,
     section: u16,
@@ -131,7 +131,7 @@ fn shape_run(
 ) {
     let font_ix = base + run.font;
     match entry {
-        StackEntry::Outline(font) => {
+        FaceEntry::Outline { font, face } => {
             let units = 1.0 / font.units_per_em();
             // Map a cluster (byte offset into the run's text) back to the
             // logical char index.
@@ -142,29 +142,27 @@ fn shape_run(
                 }
                 map
             };
-            font.with_face(|face| {
-                let mut buffer = rustybuzz::UnicodeBuffer::new();
-                buffer.push_str(&run.text);
-                let shaped = rustybuzz::shape(face, &[], buffer);
-                for (info, pos) in shaped
-                    .glyph_infos()
-                    .iter()
-                    .zip(shaped.glyph_positions().iter())
-                {
-                    glyphs.push(ShapedGlyph {
-                        font: font_ix,
-                        glyph_id: info.glyph_id as u16,
-                        x_advance: pos.x_advance as f32 * units * scale + letter_spacing_em,
-                        x_offset: pos.x_offset as f32 * units * scale,
-                        y_offset: pos.y_offset as f32 * units * scale,
-                        char_ix: char_of_byte[info.cluster as usize],
-                        scale,
-                        section,
-                    });
-                }
-            });
+            let mut buffer = rustybuzz::UnicodeBuffer::new();
+            buffer.push_str(&run.text);
+            let shaped = rustybuzz::shape(face, &[], buffer);
+            for (info, pos) in shaped
+                .glyph_infos()
+                .iter()
+                .zip(shaped.glyph_positions().iter())
+            {
+                glyphs.push(ShapedGlyph {
+                    font: font_ix,
+                    glyph_id: info.glyph_id as u16,
+                    x_advance: pos.x_advance as f32 * units * scale + letter_spacing_em,
+                    x_offset: pos.x_offset as f32 * units * scale,
+                    y_offset: pos.y_offset as f32 * units * scale,
+                    char_ix: char_of_byte[info.cluster as usize],
+                    scale,
+                    section,
+                });
+            }
         }
-        StackEntry::Sdf(stack) => {
+        FaceEntry::Sdf(stack) => {
             // 1 codepoint → 1 glyph; the PBF advance is in px at the 24 px em.
             for (char_ix, c) in run.text.chars().enumerate() {
                 // Coverage was checked during itemization; a miss here would be
@@ -191,7 +189,7 @@ fn shape_run(
 /// Split `text` into runs by coverage. Returns the runs, the surviving
 /// logical char sequence, the dropped-char count, and how many of the
 /// drops were due to unavailable SDF ranges.
-fn itemize(text: &str, fonts: &[StackEntry]) -> (Vec<Run>, Vec<char>, usize, usize) {
+fn itemize(text: &str, fonts: &[FaceEntry<'_>]) -> (Vec<Run>, Vec<char>, usize, usize) {
     let mut runs: Vec<Run> = Vec::new();
     let mut chars: Vec<char> = Vec::new();
     let mut dropped = 0usize;
@@ -214,7 +212,7 @@ fn itemize(text: &str, fonts: &[StackEntry]) -> (Vec<Run>, Vec<char>, usize, usi
             dropped += 1;
             // Was any SDF entry unable to even consult its range?
             if fonts.iter().any(|f| {
-                matches!(f, StackEntry::Sdf(s) if s.coverage(c) == SdfCoverage::RangeUnavailable)
+                matches!(f, FaceEntry::Sdf(s) if s.coverage(c) == SdfCoverage::RangeUnavailable)
             }) {
                 missing_range += 1;
             }
