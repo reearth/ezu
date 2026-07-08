@@ -19,6 +19,7 @@ rustybuzz = { workspace = true, optional = true }
 tiny-skia = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
 tracing = { version = "0.1", optional = true }
+lru = { version = "0.12", optional = true }
 
 [features]
 # Text shaping & layout (the `text` module): pulls in ttf-parser /
@@ -30,4 +31,5 @@ text = [
     "dep:tiny-skia",
     "dep:thiserror",
     "dep:tracing",
+    "dep:lru",
 ]

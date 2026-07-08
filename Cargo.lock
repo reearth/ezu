@@ -705,6 +705,7 @@ dependencies = [
 name = "ezu-core"
 version = "0.3.0"
 dependencies = [
+ "lru",
  "rustybuzz",
  "thiserror",
  "tiny-skia",

@@ -42,6 +42,7 @@ pub mod collide;
 mod draw;
 mod font;
 mod layout;
+pub mod layout_cache;
 pub mod line;
 pub mod outline_sdf;
 pub mod pbf;
@@ -58,6 +59,7 @@ pub use layout::{
     char_allows_ideographic_breaking, layout, layout_sections, Anchor, EmBox, Justify,
     LayoutParams, PlacedGlyph, SectionSpec, TextBlock, TextTransform, VerticalAlign,
 };
+pub use layout_cache::get_or_build_layout;
 pub use line::{generate_anchors, place_glyphs, Anchor as LineAnchor, GlyphOnLine, LinePlacement};
 pub use outline_sdf::{OutlineSdfCache, OutlineSdfStats};
 pub use pbf::{decode_glyph_range, GlyphPbfError, GlyphRange};
