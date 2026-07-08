@@ -637,7 +637,8 @@ impl<'a> TileLoader<'a> {
     pub fn bind_features(&mut self, name: impl Into<String>, layer: FeatureLayer) -> &mut Self {
         let name = name.into();
         let hash = self.binding_hash(&name);
-        let opaque: OpaqueValue = Arc::new(layer) as Arc<dyn Any + Send + Sync>;
+        let opaque: OpaqueValue =
+            Arc::new(crate::render::SharedLayer::new(layer)) as Arc<dyn Any + Send + Sync>;
         self.bindings.insert(
             name,
             Binding {
@@ -1285,8 +1286,8 @@ mod tests {
         let Ok(Asset::Features(opq)) = loader.load("roads.road@1,0") else {
             panic!("neighbour bound");
         };
-        let layer = opq.downcast::<FeatureLayer>().unwrap();
-        assert_eq!(layer.features[0].geometry.points, vec![(30, 40)]);
+        let shared = opq.downcast::<crate::render::SharedLayer>().unwrap();
+        assert_eq!(shared.layer.features[0].geometry.points, vec![(30, 40)]);
     }
 
     #[test]

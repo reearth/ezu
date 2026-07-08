@@ -2,29 +2,120 @@
 //! nodes (`features`).
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
-use ezu_features::{Feature, Value};
+use ezu_features::{Feature, FeatureLayer, Value};
 use maplibre_expr::{EvaluationContext, Expr, Feature as ExprFeature, Value as ExprValue};
+
+use crate::nodes::common::FeatureGroup;
+
+/// A host-bound feature layer paired with a lazily-built, node-shared
+/// conversion of its features into the `maplibre-expr` value form.
+///
+/// A layer is bound once per (tile, source, layer); every `features` node that
+/// references the same `<source>.<layer>` receives the *same*
+/// `Arc<SharedLayer>`. Converting each feature's properties and building its
+/// filter [`EvaluationContext`] therefore happens once per tile — behind a
+/// [`OnceLock`] — instead of once per referencing node. A Protomaps basemap
+/// aims dozens of `features` nodes at the single `roads` layer (each with its
+/// own filter), so sharing collapses that many redundant conversions to one.
+pub struct SharedLayer {
+    pub layer: FeatureLayer,
+    prepared: OnceLock<PreparedLayer>,
+}
+
+impl SharedLayer {
+    pub fn new(layer: FeatureLayer) -> SharedLayer {
+        SharedLayer {
+            layer,
+            prepared: OnceLock::new(),
+        }
+    }
+
+    /// The per-feature converted view, built on first use at tile zoom `z`.
+    /// A `SharedLayer` is bound per tile, so `z` is constant across the calls
+    /// that reach one instance.
+    fn prepared(&self, z: u8) -> &PreparedLayer {
+        self.prepared
+            .get_or_init(|| PreparedLayer::build(&self.layer, z))
+    }
+}
+
+/// Per-feature conversions shared across every node that reads a layer: the
+/// properties in `maplibre-expr` value form (behind an `Arc`, reused directly
+/// as a surviving group's `properties`) and a ready-to-borrow filter
+/// [`EvaluationContext`]. Indexed parallel to [`SharedLayer::layer`]'s
+/// `features`.
+struct PreparedLayer {
+    features: Vec<PreparedFeature>,
+}
+
+struct PreparedFeature {
+    props: Arc<BTreeMap<String, ExprValue>>,
+    ctx: EvaluationContext,
+}
+
+impl PreparedLayer {
+    fn build(layer: &FeatureLayer, z: u8) -> PreparedLayer {
+        let features = layer
+            .features
+            .iter()
+            .map(|f| {
+                let props: BTreeMap<String, ExprValue> = f
+                    .properties
+                    .iter()
+                    .map(|(k, v)| (k.clone(), value_to_expr(v)))
+                    .collect();
+                let ctx = ctx_from_props(&props, geometry_type(f), z);
+                PreparedFeature {
+                    props: Arc::new(props),
+                    ctx,
+                }
+            })
+            .collect();
+        PreparedLayer { features }
+    }
+}
 
 /// Walk a layer's features and return one [`FeatureGroup`] per surviving
 /// feature, preserving its properties alongside its own geometry. This is the
 /// only representation of a `Features` payload; consumers that want the flat
-/// geometry view walk the groups. Each feature's properties are converted
-/// into the `maplibre-expr` value form exactly once here and shared via `Arc`,
-/// so downstream data-driven paint pays no per-evaluation conversion cost.
-/// Features that contribute no geometry at all are skipped (they'd paint
-/// nothing).
+/// geometry view walk the groups. Each feature's properties are converted into
+/// the `maplibre-expr` value form once per tile (see [`SharedLayer`]) and
+/// shared via `Arc`, so both the per-feature filter here and downstream
+/// data-driven paint pay no re-conversion cost. Features that contribute no
+/// geometry at all are skipped (they'd paint nothing).
 pub fn collect_groups(
-    features: &[Feature],
+    shared: &SharedLayer,
     filter_expr: Option<&Expr>,
     min_zoom_field: &Option<String>,
     z: u8,
-) -> Vec<crate::nodes::common::FeatureGroup> {
+) -> Vec<FeatureGroup> {
+    let prepared = shared.prepared(z);
     let mut out = Vec::new();
-    for f in features {
-        if !feature_passes(f, filter_expr, min_zoom_field, z) {
-            continue;
+    for (f, pf) in shared.layer.features.iter().zip(&prepared.features) {
+        // A MapLibre filter expression (full expression language: `any`,
+        // `has`, comparisons, `geometry-type`, …), evaluated per feature
+        // against the shared context. A feature passes only if the expression
+        // is truthy; an eval error excludes it.
+        if let Some(expr) = filter_expr {
+            let ok = maplibre_expr::evaluate(expr, &pf.ctx)
+                .map(|v| v.is_truthy())
+                .unwrap_or(false);
+            if !ok {
+                continue;
+            }
+        }
+        if let Some(field) = min_zoom_field.as_ref() {
+            let ok = f
+                .properties
+                .get(field)
+                .and_then(value_as_i64)
+                .map(|mz| mz <= z as i64)
+                .unwrap_or(true); // missing field → assume visible
+            if !ok {
+                continue;
+            }
         }
         if f.geometry.polygons.is_empty()
             && f.geometry.lines.is_empty()
@@ -32,13 +123,8 @@ pub fn collect_groups(
         {
             continue;
         }
-        let properties: BTreeMap<String, ExprValue> = f
-            .properties
-            .iter()
-            .map(|(k, v)| (k.clone(), value_to_expr(v)))
-            .collect();
-        out.push(crate::nodes::common::FeatureGroup {
-            properties: Arc::new(properties),
+        out.push(FeatureGroup {
+            properties: pf.props.clone(),
             polygons: f.geometry.polygons.clone(),
             lines: f.geometry.lines.clone(),
             points: f.geometry.points.clone(),
@@ -47,51 +133,18 @@ pub fn collect_groups(
     out
 }
 
-fn feature_passes(
-    f: &Feature,
-    filter_expr: Option<&Expr>,
-    min_zoom_field: &Option<String>,
+/// Build a maplibre-expr evaluation context from already-converted properties,
+/// a geometry-type string, and the tile zoom.
+fn ctx_from_props(
+    props: &BTreeMap<String, ExprValue>,
+    geometry_type: &str,
     z: u8,
-) -> bool {
-    // A MapLibre filter expression (full expression language: `any`, `has`,
-    // comparisons, `geometry-type`, …), evaluated per feature. A feature
-    // passes only if the expression is truthy; an eval error excludes it.
-    if let Some(expr) = filter_expr {
-        let ctx = expr_context(f, z);
-        let ok = maplibre_expr::evaluate(expr, &ctx)
-            .map(|v| v.is_truthy())
-            .unwrap_or(false);
-        if !ok {
-            return false;
-        }
-    }
-    if let Some(field) = min_zoom_field.as_ref() {
-        let ok = f
-            .properties
-            .get(field)
-            .and_then(value_as_i64)
-            .map(|mz| mz <= z as i64)
-            .unwrap_or(true); // missing field → assume visible
-        if !ok {
-            return false;
-        }
-    }
-    true
-}
-
-/// Build a maplibre-expr evaluation context for one feature: its
-/// properties, geometry type, and the tile zoom.
-pub(crate) fn expr_context(f: &Feature, z: u8) -> EvaluationContext {
-    let properties: BTreeMap<String, ExprValue> = f
-        .properties
-        .iter()
-        .map(|(k, v)| (k.clone(), value_to_expr(v)))
-        .collect();
+) -> EvaluationContext {
     EvaluationContext::new()
         .with_zoom(z as f64)
         .with_feature(ExprFeature {
-            properties,
-            geometry_type: Some(geometry_type(f).to_string()),
+            properties: props.clone(),
+            geometry_type: Some(geometry_type.to_string()),
             ..Default::default()
         })
 }
@@ -190,7 +243,13 @@ mod tests {
     }
 
     fn passes(f: &Feature, e: &Expr) -> bool {
-        feature_passes(f, Some(e), &None, 14)
+        let layer = ezu_features::FeatureLayer {
+            name: "t".into(),
+            extent: 4096,
+            features: vec![f.clone()],
+        };
+        let shared = SharedLayer::new(layer);
+        !collect_groups(&shared, Some(e), &None, 14).is_empty()
     }
 
     #[test]
