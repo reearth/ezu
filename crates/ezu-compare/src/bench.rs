@@ -133,7 +133,7 @@ pub fn op_table(records: &[EvalRecord]) -> Vec<(String, usize, u128)> {
         .into_iter()
         .map(|(op, (count, total))| (op.to_string(), count, total))
         .collect();
-    rows.sort_by(|a, b| b.2.cmp(&a.2));
+    rows.sort_by_key(|r| std::cmp::Reverse(r.2));
     rows
 }
 
@@ -163,7 +163,7 @@ pub fn print_op_table(records: &[EvalRecord]) {
 /// Print the slowest `top` nodes (ms / op / node id).
 pub fn print_slow_nodes(records: &[EvalRecord], top: usize) {
     let mut sorted: Vec<&EvalRecord> = records.iter().collect();
-    sorted.sort_by(|a, b| b.elapsed_us.cmp(&a.elapsed_us));
+    sorted.sort_by_key(|r| std::cmp::Reverse(r.elapsed_us));
     println!("{:>10} {:<18} node", "ms", "op");
     for r in sorted.into_iter().take(top) {
         println!("{:>10.3} {:<18} {}", us_to_ms(r.elapsed_us), r.op, r.node);
