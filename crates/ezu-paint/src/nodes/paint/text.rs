@@ -43,19 +43,17 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
+use crate::nodes::common::{
+    canvas_into_raster, downcast_features, empty_raster, make_canvas, read_bool_or, read_number_or,
+    read_optional_string, read_string_or, read_xy, FeatureGroup,
+};
+use crate::render::{collect_groups, SharedLayer};
 use ezu_core::text::{
     collide::{self, Aabb, Candidate, LineCandidate},
     draw, draw_line, generate_anchors, layout_sections, place_glyphs, Anchor, FaceEntry, Font,
     GlyphPlacement, Justify, LayoutParams, LinePlacement, OutlineSdfCache, SdfFontStack,
     SectionPaint, SectionSpec, StackEntry, TextBlock, TextPaint, TextTransform, VerticalAlign,
 };
-use ezu_features::FeatureLayer;
-
-use crate::nodes::common::{
-    canvas_into_raster, downcast_features, empty_raster, make_canvas, read_bool_or, read_number_or,
-    read_optional_string, read_string_or, read_xy, FeatureGroup,
-};
-use crate::render::collect_groups;
 
 /// Parse an optional raw MapLibre expression field, type-checked against
 /// `expect`. Returns `(parsed, raw_json_text)` for a stable cache hash.
@@ -785,20 +783,16 @@ impl TextNode {
                     continue;
                 }
                 let name = ezu_graph::neighbor_binding(base, dx, dy);
-                let layer = match ctx.assets.load(&name) {
-                    Ok(Asset::Features(opq)) => opq.downcast::<FeatureLayer>().ok(),
+                let shared = match ctx.assets.load(&name) {
+                    Ok(Asset::Features(opq)) => opq.downcast::<SharedLayer>().ok(),
                     _ => None,
                 };
-                let Some(layer) = layer else { continue };
-                if layer.extent.max(1) as i64 != extent_i {
+                let Some(shared) = shared else { continue };
+                if shared.layer.extent.max(1) as i64 != extent_i {
                     continue;
                 }
-                let groups = collect_groups(
-                    &layer.features,
-                    self.filter_expr.as_ref(),
-                    &self.min_zoom_field,
-                    z,
-                );
+                let groups =
+                    collect_groups(&shared, self.filter_expr.as_ref(), &self.min_zoom_field, z);
                 out.push((groups, dx as i64, dy as i64));
             }
         }

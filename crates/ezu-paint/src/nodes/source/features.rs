@@ -12,7 +12,6 @@
 //! A missing binding is treated as "no features for this tile" and
 //! yields an empty result.
 
-use ezu_features::FeatureLayer;
 use ezu_graph::{
     Asset, AssetError, BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, Node,
     NodeFactory, PortKind, PortSpec, PortValue,
@@ -21,7 +20,7 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{features_value, read_optional_string};
-use crate::render::collect_groups;
+use crate::render::{collect_groups, SharedLayer};
 
 struct FeaturesNode {
     name: String,
@@ -74,12 +73,12 @@ impl Node for FeaturesNode {
                 self.name
             )));
         };
-        let layer = opq.downcast::<FeatureLayer>().map_err(|_| {
-            EvalError::Other(format!("`{}` payload is not FeatureLayer", self.name))
+        let shared = opq.downcast::<SharedLayer>().map_err(|_| {
+            EvalError::Other(format!("`{}` payload is not a feature layer", self.name))
         })?;
         let fe = self.filter_expr.as_ref();
-        let groups = collect_groups(&layer.features, fe, &self.min_zoom_field, z);
-        Ok(features_value(layer.extent, groups))
+        let groups = collect_groups(&shared, fe, &self.min_zoom_field, z);
+        Ok(features_value(shared.layer.extent, groups))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"features");
