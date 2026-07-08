@@ -251,6 +251,7 @@ fn render(paint: &TextPaint) -> tiny_skia::Pixmap {
         (48.0, 32.0),
         paint,
         &[],
+        None,
     );
     pixmap
 }
@@ -302,6 +303,142 @@ fn halo_sits_behind_the_fill() {
         .filter(|p| p.alpha() == 255 && p.green() > 200 && p.blue() > 200)
         .count();
     assert!(white > 20, "expected white halo pixels, got {white}");
+}
+
+// --- outline → SDF generation -----------------------------------------------
+
+/// The generated SDF's zero-crossing (the 0.75 iso-line the shader treats
+/// as the glyph edge) must track the glyph's rasterized outline: a pixel
+/// solidly inside the ink reads above the edge value, one solidly outside
+/// reads below it. This is the invariant the field-sampling draw path
+/// relies on to reproduce the vector fill.
+#[test]
+fn outline_sdf_zero_crossing_tracks_the_outline() {
+    use ezu_core::text::outline_sdf;
+    use ezu_core::text::sdf::{SDF_BORDER, SDF_EDGE, SDF_EM_PX};
+    use tiny_skia::{Color, FillRule, Paint, Pixmap, Transform};
+
+    let font = latin_font();
+    let face = font.face();
+    let gid = face.glyph_index('A').expect("latin subset covers 'A'").0;
+
+    let glyph = outline_sdf::build(&font, &face, gid).expect("'A' has an outline");
+    assert!(!glyph.bitmap.is_empty());
+    let bw = glyph.width + 2 * SDF_BORDER;
+    let bh = glyph.height + 2 * SDF_BORDER;
+    assert_eq!(glyph.bitmap.len(), (bw * bh) as usize);
+
+    // Re-rasterize the coverage on exactly the grid the SDF was built on
+    // (the metrics expose its ink corner: `left`/`-top` are `ix0`/`iy0`).
+    let path = font.glyph_path(&face, gid).unwrap();
+    let scale = SDF_EM_PX / font.units_per_em();
+    let (ix0, iy0) = (glyph.left as f32, -glyph.top as f32);
+    let b = SDF_BORDER as f32;
+    let mut mask = Pixmap::new(bw, bh).unwrap();
+    let mut paint = Paint::default();
+    paint.set_color(Color::WHITE);
+    paint.anti_alias = true;
+    mask.fill_path(
+        &path,
+        &paint,
+        FillRule::Winding,
+        Transform::from_row(scale, 0.0, 0.0, -scale, b - ix0, b - iy0),
+        None,
+    );
+
+    let edge = (SDF_EDGE * 255.0) as u8; // 191
+    let mut inside_ok = 0usize;
+    let mut inside_total = 0usize;
+    let mut outside_ok = 0usize;
+    let mut outside_total = 0usize;
+    for (cov, &v) in mask.pixels().iter().zip(&glyph.bitmap) {
+        let a = cov.alpha();
+        if a >= 242 {
+            // solidly inside the ink → above the edge iso-value
+            inside_total += 1;
+            inside_ok += usize::from(v >= edge);
+        } else if a <= 12 {
+            // solidly outside → below it
+            outside_total += 1;
+            outside_ok += usize::from(v <= edge);
+        }
+    }
+    assert!(inside_total > 20 && outside_total > 20);
+    // Allow a couple of stragglers where a thin stroke sits sub-pixel, but
+    // the field must agree with the outline almost everywhere.
+    assert!(
+        inside_ok as f32 >= 0.99 * inside_total as f32,
+        "interior below the edge value: {inside_ok}/{inside_total}"
+    );
+    assert!(
+        outside_ok as f32 >= 0.99 * outside_total as f32,
+        "exterior above the edge value: {outside_ok}/{outside_total}"
+    );
+
+    // The field is signed: the deep interior saturates high, the padded
+    // corner (far outside) saturates low.
+    let corner = glyph.bitmap[0];
+    assert!(corner < edge, "bitmap corner should read as outside");
+}
+
+/// Drawing an outline glyph through the SDF cache lands ink in the same
+/// place as the vector fill (the metrics reference the same baseline pen),
+/// so the two inked regions overlap heavily rather than sitting offset.
+#[test]
+fn outline_sdf_draw_overlaps_the_vector_fill() {
+    use ezu_core::text::OutlineSdfCache;
+
+    let fonts = [latin(), digits()];
+    let fonts = FaceEntry::prepare(&fonts);
+    let block = layout("Ag", &fonts, &no_wrap());
+    let paint = TextPaint {
+        size_px: 32.0,
+        color: [0.0, 0.0, 0.0, 1.0],
+        halo_color: [1.0, 1.0, 1.0, 1.0],
+        halo_width_px: 0.0,
+        halo_blur_px: 0.0,
+    };
+    let render = |cache: Option<&OutlineSdfCache>| {
+        let mut pm = tiny_skia::Pixmap::new(96, 64).unwrap();
+        draw(
+            &block,
+            &fonts,
+            &mut pm.as_mut(),
+            (24.0, 40.0),
+            &paint,
+            &[],
+            cache,
+        );
+        pm
+    };
+    let vector = render(None);
+    let cache = OutlineSdfCache::new();
+    let sdf = render(Some(&cache));
+
+    let inked = |p: &tiny_skia::Pixmap, i: usize| p.pixels()[i].alpha() > 128;
+    let (mut both, mut either) = (0usize, 0usize);
+    for i in 0..vector.pixels().len() {
+        let (a, b) = (inked(&vector, i), inked(&sdf, i));
+        both += usize::from(a && b);
+        either += usize::from(a || b);
+    }
+    assert!(either > 100, "expected inked glyphs in both renders");
+    let iou = both as f32 / either as f32;
+    assert!(
+        iou > 0.8,
+        "vector/SDF ink should overlap heavily, IoU = {iou:.3}"
+    );
+
+    // Re-rendering reuses the cache instead of rebuilding.
+    let _ = render(Some(&cache));
+    // Each unique outline glyph is built once; "Ag" has two.
+    let stats = cache.stats();
+    assert_eq!(stats.built, 2, "one SDF per unique glyph");
+    assert!(
+        stats.hits >= 2,
+        "later draws reuse the cache: {}",
+        stats.hits
+    );
 }
 
 // --- format sections (per-section font / scale) -----------------------------

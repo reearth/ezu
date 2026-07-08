@@ -3,6 +3,13 @@
 //! Outline glyphs fill/stroke their vector paths; SDF glyphs evaluate
 //! the maplibre-gl-js `symbol_sdf` fragment math per pixel (see
 //! [`super::sdf`] for the encoding constants and compat quirks).
+//!
+//! An outline glyph can also be drawn through the SDF path: passing an
+//! [`OutlineSdfCache`] to [`draw`] / [`draw_line`] routes outline glyphs
+//! through the same field-sampling code as glyph-PBF text, matching
+//! maplibre-gl-js (which renders every glyph from an SDF). Its halo then
+//! comes free from a distance threshold rather than a `2 × halo` stroke.
+//! Passing `None` keeps the vector fill / stroke path.
 
 use tiny_skia::{
     Color, FillRule, LineCap, LineJoin, Paint, PixmapMut, Point, PremultipliedColorU8, Stroke,
@@ -11,6 +18,7 @@ use tiny_skia::{
 
 use super::font::FaceEntry;
 use super::layout::{PlacedGlyph, TextBlock};
+use super::outline_sdf::OutlineSdfCache;
 use super::sdf::{SdfGlyph, SDF_BORDER, SDF_EDGE, SDF_EM_PX, SDF_RADIUS_PX};
 
 /// How to paint a block: font size in device px plus fill / halo
@@ -53,6 +61,17 @@ fn glyph_fill(paint: &TextPaint, sections: &[SectionPaint], section: u16) -> [f3
 /// ratio 1 — ezu tiles are 1:1).
 const EDGE_GAMMA: f32 = 0.105;
 
+/// The `(buff, gamma)` a halo field pass uses: the edge pulled out by
+/// `halo_width_px` (in SDF px, saturating where the field runs out of
+/// encoded distance), with `halo_blur_px` widening the AA ramp. Shared by
+/// the glyph-PBF and outline-via-SDF halo passes.
+fn sdf_halo_params(halo_width_px: f32, halo_blur_px: f32, font_scale: f32) -> (f32, f32) {
+    let width_sdf_px = (halo_width_px / font_scale).min(SDF_RADIUS_PX * SDF_EDGE);
+    let buff = SDF_EDGE - width_sdf_px / SDF_RADIUS_PX;
+    let gamma = (halo_blur_px * 1.19 / SDF_RADIUS_PX + EDGE_GAMMA) / font_scale;
+    (buff, gamma)
+}
+
 /// Draw `block` onto `pixmap` with its anchor point at `origin`
 /// (device px), anti-aliased.
 ///
@@ -61,6 +80,10 @@ const EDGE_GAMMA: f32 = 0.105;
 /// field pass), then *every* glyph's fill — never interleaved per
 /// glyph, so one glyph's halo cannot overpaint a neighbour's fill (the
 /// MapLibre halo rule).
+///
+/// `outline` optionally routes outline glyphs through the SDF path (see
+/// the module docs); `None` keeps the vector fill / stroke.
+#[allow(clippy::too_many_arguments)]
 pub fn draw(
     block: &TextBlock,
     fonts: &[FaceEntry<'_>],
@@ -68,6 +91,7 @@ pub fn draw(
     origin: (f32, f32),
     paint: &TextPaint,
     sections: &[SectionPaint],
+    outline: Option<&OutlineSdfCache>,
 ) {
     if block.is_empty() || paint.size_px <= 0.0 {
         return;
@@ -92,22 +116,42 @@ pub fn draw(
             // SDF glyphs are rasterized at the 24 px em, per-glyph scaled.
             let font_scale = paint.size_px * g.scale / SDF_EM_PX;
             match &fonts[g.font] {
-                FaceEntry::Outline { font, face } => {
-                    let Some(path) = font.glyph_path(face, g.glyph_id) else {
-                        continue;
-                    };
-                    let scale = paint.size_px * g.scale / font.units_per_em();
-                    // The stroke runs in path (font-unit) space; the transform
-                    // scales it back to `2 × halo-width` px (a fixed px width,
-                    // independent of the glyph's `font-scale`).
-                    let stroke = Stroke {
-                        width: 2.0 * paint.halo_width_px / scale,
-                        line_cap: LineCap::Round,
-                        line_join: LineJoin::Round,
-                        ..Stroke::default()
-                    };
-                    pixmap.stroke_path(&path, &halo, &stroke, transform_of(g, scale), None);
-                }
+                FaceEntry::Outline { font, face } => match outline
+                    .and_then(|c| c.get(font, face, g.glyph_id))
+                {
+                    // Outline glyph through the SDF halo threshold (free
+                    // halo), same field math as glyph-PBF text.
+                    Some(glyph) => {
+                        let (buff, gamma) =
+                            sdf_halo_params(paint.halo_width_px, paint.halo_blur_px, font_scale);
+                        draw_sdf_glyph(
+                            pixmap,
+                            &glyph,
+                            sdf_pen(origin, g, paint.size_px),
+                            font_scale,
+                            paint.halo_color,
+                            buff,
+                            gamma,
+                        );
+                    }
+                    // Vector halo: the path stroked at `2 × halo-width`.
+                    None => {
+                        let Some(path) = font.glyph_path(face, g.glyph_id) else {
+                            continue;
+                        };
+                        let scale = paint.size_px * g.scale / font.units_per_em();
+                        // The stroke runs in path (font-unit) space; the
+                        // transform scales it back to `2 × halo-width` px (a
+                        // fixed px width, independent of `font-scale`).
+                        let stroke = Stroke {
+                            width: 2.0 * paint.halo_width_px / scale,
+                            line_cap: LineCap::Round,
+                            line_join: LineJoin::Round,
+                            ..Stroke::default()
+                        };
+                        pixmap.stroke_path(&path, &halo, &stroke, transform_of(g, scale), None);
+                    }
+                },
                 FaceEntry::Sdf(stack) => {
                     let Some(glyph) = sdf_glyph_of(stack, g.glyph_id) else {
                         continue;
@@ -116,11 +160,8 @@ pub fn draw(
                     // `halo-width` (in SDF px), saturating where the field
                     // runs out of encoded distance (6 px outside the edge);
                     // blur widens the AA ramp.
-                    let width_sdf_px =
-                        (paint.halo_width_px / font_scale).min(SDF_RADIUS_PX * SDF_EDGE);
-                    let buff = SDF_EDGE - width_sdf_px / SDF_RADIUS_PX;
-                    let gamma =
-                        (paint.halo_blur_px * 1.19 / SDF_RADIUS_PX + EDGE_GAMMA) / font_scale;
+                    let (buff, gamma) =
+                        sdf_halo_params(paint.halo_width_px, paint.halo_blur_px, font_scale);
                     draw_sdf_glyph(
                         pixmap,
                         &glyph,
@@ -140,20 +181,35 @@ pub fn draw(
         let color = glyph_fill(paint, sections, g.section);
         match &fonts[g.font] {
             FaceEntry::Outline { font, face } => {
-                let Some(path) = font.glyph_path(face, g.glyph_id) else {
-                    continue;
-                };
-                let scale = paint.size_px * g.scale / font.units_per_em();
-                let mut fill = Paint::default();
-                fill.set_color(color_of(color));
-                fill.anti_alias = true;
-                pixmap.fill_path(
-                    &path,
-                    &fill,
-                    FillRule::Winding,
-                    transform_of(g, scale),
-                    None,
-                );
+                match outline.and_then(|c| c.get(font, face, g.glyph_id)) {
+                    // Outline glyph through the SDF fill threshold.
+                    Some(glyph) => draw_sdf_glyph(
+                        pixmap,
+                        &glyph,
+                        sdf_pen(origin, g, paint.size_px),
+                        font_scale,
+                        color,
+                        SDF_EDGE,
+                        EDGE_GAMMA / font_scale,
+                    ),
+                    // Vector fill of the glyph path.
+                    None => {
+                        let Some(path) = font.glyph_path(face, g.glyph_id) else {
+                            continue;
+                        };
+                        let scale = paint.size_px * g.scale / font.units_per_em();
+                        let mut fill = Paint::default();
+                        fill.set_color(color_of(color));
+                        fill.anti_alias = true;
+                        pixmap.fill_path(
+                            &path,
+                            &fill,
+                            FillRule::Winding,
+                            transform_of(g, scale),
+                            None,
+                        );
+                    }
+                }
             }
             FaceEntry::Sdf(stack) => {
                 let Some(glyph) = sdf_glyph_of(stack, g.glyph_id) else {
@@ -336,6 +392,7 @@ fn line_glyph_transform(g: &PlacedGlyph, p: &GlyphPlacement, size: f32, perp: f3
 /// the label's perpendicular (`offset-em[1]`) shift in device px. Halo
 /// then fill, both over every glyph — the same two-pass order as
 /// [`draw`], so a glyph's halo never overpaints a neighbour's fill.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_line(
     block: &TextBlock,
     fonts: &[FaceEntry<'_>],
@@ -344,6 +401,7 @@ pub fn draw_line(
     perp_offset_px: f32,
     paint: &TextPaint,
     sections: &[SectionPaint],
+    outline: Option<&OutlineSdfCache>,
 ) {
     if block.is_empty() || paint.size_px <= 0.0 || placements.len() != block.glyphs.len() {
         return;
@@ -358,28 +416,42 @@ pub fn draw_line(
             let font_scale = size * g.scale / SDF_EM_PX;
             let t = line_glyph_transform(g, p, size, perp_offset_px);
             match &fonts[g.font] {
-                FaceEntry::Outline { font, face } => {
-                    let Some(path) = font.glyph_path(face, g.glyph_id) else {
-                        continue;
-                    };
-                    let scale = size * g.scale / font.units_per_em();
-                    let stroke = Stroke {
-                        width: 2.0 * paint.halo_width_px / scale,
-                        line_cap: LineCap::Round,
-                        line_join: LineJoin::Round,
-                        ..Stroke::default()
-                    };
-                    pixmap.stroke_path(&path, &halo, &stroke, t.pre_scale(scale, -scale), None);
-                }
+                FaceEntry::Outline { font, face } => match outline
+                    .and_then(|c| c.get(font, face, g.glyph_id))
+                {
+                    Some(glyph) => {
+                        let (buff, gamma) =
+                            sdf_halo_params(paint.halo_width_px, paint.halo_blur_px, font_scale);
+                        draw_sdf_glyph_rotated(
+                            pixmap,
+                            &glyph,
+                            t,
+                            font_scale,
+                            paint.halo_color,
+                            buff,
+                            gamma,
+                        );
+                    }
+                    None => {
+                        let Some(path) = font.glyph_path(face, g.glyph_id) else {
+                            continue;
+                        };
+                        let scale = size * g.scale / font.units_per_em();
+                        let stroke = Stroke {
+                            width: 2.0 * paint.halo_width_px / scale,
+                            line_cap: LineCap::Round,
+                            line_join: LineJoin::Round,
+                            ..Stroke::default()
+                        };
+                        pixmap.stroke_path(&path, &halo, &stroke, t.pre_scale(scale, -scale), None);
+                    }
+                },
                 FaceEntry::Sdf(stack) => {
                     let Some(glyph) = sdf_glyph_of(stack, g.glyph_id) else {
                         continue;
                     };
-                    let width_sdf_px =
-                        (paint.halo_width_px / font_scale).min(SDF_RADIUS_PX * SDF_EDGE);
-                    let buff = SDF_EDGE - width_sdf_px / SDF_RADIUS_PX;
-                    let gamma =
-                        (paint.halo_blur_px * 1.19 / SDF_RADIUS_PX + EDGE_GAMMA) / font_scale;
+                    let (buff, gamma) =
+                        sdf_halo_params(paint.halo_width_px, paint.halo_blur_px, font_scale);
                     draw_sdf_glyph_rotated(
                         pixmap,
                         &glyph,
@@ -400,20 +472,33 @@ pub fn draw_line(
         let t = line_glyph_transform(g, p, size, perp_offset_px);
         match &fonts[g.font] {
             FaceEntry::Outline { font, face } => {
-                let Some(path) = font.glyph_path(face, g.glyph_id) else {
-                    continue;
-                };
-                let scale = size * g.scale / font.units_per_em();
-                let mut fill = Paint::default();
-                fill.set_color(color_of(color));
-                fill.anti_alias = true;
-                pixmap.fill_path(
-                    &path,
-                    &fill,
-                    FillRule::Winding,
-                    t.pre_scale(scale, -scale),
-                    None,
-                );
+                match outline.and_then(|c| c.get(font, face, g.glyph_id)) {
+                    Some(glyph) => draw_sdf_glyph_rotated(
+                        pixmap,
+                        &glyph,
+                        t,
+                        font_scale,
+                        color,
+                        SDF_EDGE,
+                        EDGE_GAMMA / font_scale,
+                    ),
+                    None => {
+                        let Some(path) = font.glyph_path(face, g.glyph_id) else {
+                            continue;
+                        };
+                        let scale = size * g.scale / font.units_per_em();
+                        let mut fill = Paint::default();
+                        fill.set_color(color_of(color));
+                        fill.anti_alias = true;
+                        pixmap.fill_path(
+                            &path,
+                            &fill,
+                            FillRule::Winding,
+                            t.pre_scale(scale, -scale),
+                            None,
+                        );
+                    }
+                }
             }
             FaceEntry::Sdf(stack) => {
                 let Some(glyph) = sdf_glyph_of(stack, g.glyph_id) else {

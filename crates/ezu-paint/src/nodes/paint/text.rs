@@ -46,8 +46,8 @@ use xxhash_rust::xxh3::Xxh3;
 use ezu_core::text::{
     collide::{self, Aabb, Candidate, LineCandidate},
     draw, draw_line, generate_anchors, layout_sections, place_glyphs, Anchor, FaceEntry, Font,
-    GlyphPlacement, Justify, LayoutParams, LinePlacement, SdfFontStack, SectionPaint, SectionSpec,
-    StackEntry, TextBlock, TextPaint, TextTransform, VerticalAlign,
+    GlyphPlacement, Justify, LayoutParams, LinePlacement, OutlineSdfCache, SdfFontStack,
+    SectionPaint, SectionSpec, StackEntry, TextBlock, TextPaint, TextTransform, VerticalAlign,
 };
 use ezu_features::FeatureLayer;
 
@@ -79,6 +79,23 @@ fn parse_expr_field(
             Ok((Some(expr), Some(v.to_string())))
         }
         None => Ok((None, None)),
+    }
+}
+
+/// Emit a debug summary of the per-eval outline→SDF cache: unique glyphs
+/// rasterized, reuse count, and the bytes their bitmaps hold. Nothing is
+/// logged when the SDF path is off.
+fn log_outline_sdf_stats(cache: Option<&OutlineSdfCache>) {
+    if let Some(cache) = cache {
+        let s = cache.stats();
+        if s.built > 0 || s.hits > 0 {
+            tracing::debug!(
+                built = s.built,
+                hits = s.hits,
+                bitmap_bytes = s.bitmap_bytes,
+                "text: outline glyphs rendered through the SDF path"
+            );
+        }
     }
 }
 
@@ -548,6 +565,10 @@ struct TextNode {
     /// Labels whose rendered bbox half-extent exceeds this many px are
     /// culled (they'd overflow the canvas pad this node requested).
     max_extent_px: f32,
+    /// Render outline-font glyphs through the SDF field-sampling path
+    /// (maplibre-gl-js style) rather than a per-glyph vector fill / stroke.
+    /// SDF glyph stacks are unaffected — they always sample the field.
+    outline_sdf: bool,
     // --- Collision (deterministic cross-tile placement) ---
     /// Whether to run collision. MapLibre's default is on; `false`
     /// restores the draw-everything behaviour (every label draws).
@@ -890,6 +911,9 @@ impl TextNode {
         // these fonts, so shaping/coverage/outline reuse them instead of
         // reparsing the font file per call.
         let faces = FaceCache::build(&registry);
+        // Per-eval SDF glyph cache for outline fonts (`None` keeps the vector
+        // path). Outline glyphs are rasterized to an SDF once and reused.
+        let sdf_cache = self.outline_sdf.then(OutlineSdfCache::new);
         let const_size = (self.size.get(ctx, inputs)? as f32).max(0.0);
         let const_color = self.color.get(ctx, inputs)?;
         let const_halo_color = self.halo_color.get(ctx, inputs)?;
@@ -1240,9 +1264,17 @@ impl TextNode {
                 .collect();
             let view = faces.view(&d.fonts);
             draw_line(
-                &d.block, &view, &mut pm, &shifted, d.perp_px, &d.paint, &d.paints,
+                &d.block,
+                &view,
+                &mut pm,
+                &shifted,
+                d.perp_px,
+                &d.paint,
+                &d.paints,
+                sdf_cache.as_ref(),
             );
         }
+        log_outline_sdf_stats(sdf_cache.as_ref());
 
         if dropped_chars > 0 {
             tracing::warn!(
@@ -1334,6 +1366,9 @@ impl Node for TextNode {
         // these fonts, so shaping/coverage/outline reuse them instead of
         // reparsing the font file per call.
         let faces = FaceCache::build(&registry);
+        // Per-eval SDF glyph cache for outline fonts (`None` keeps the vector
+        // path). Outline glyphs are rasterized to an SDF once and reused.
+        let sdf_cache = self.outline_sdf.then(OutlineSdfCache::new);
 
         // Constants, resolved once. Data-driven exprs (if present)
         // override these per feature group.
@@ -1622,8 +1657,17 @@ impl Node for TextNode {
                 }
             }
             let view = faces.view(&d.fonts);
-            draw(block, &view, &mut pm, d.anchor, &d.paint, &d.paints);
+            draw(
+                block,
+                &view,
+                &mut pm,
+                d.anchor,
+                &d.paint,
+                &d.paints,
+                sdf_cache.as_ref(),
+            );
         }
+        log_outline_sdf_stats(sdf_cache.as_ref());
         // One summary line per eval, not one per label.
         if culled > 0 {
             tracing::warn!(
@@ -1959,6 +2003,9 @@ impl NodeFactory for TextFactory {
         let line_height = read_number_or(fields, "line-height", ctx, 1.2)? as f32;
         let letter_spacing_em = read_number_or(fields, "letter-spacing-em", ctx, 0.0)? as f32;
         let max_extent_px = read_number_or(fields, "max-extent-px", ctx, 128.0)? as f32;
+        // Route outline glyphs through the SDF path for maplibre-gl-js
+        // parity (it renders every glyph from an SDF). Default on.
+        let outline_sdf = read_bool_or(fields, "outline-sdf", ctx, true)?;
 
         // Collision. Default on (MapLibre's default); `collide: false`
         // restores the draw-everything behaviour.
@@ -2043,6 +2090,7 @@ impl NodeFactory for TextFactory {
                 line_height,
                 letter_spacing_em,
                 max_extent_px,
+                outline_sdf,
                 collide,
                 allow_overlap,
                 ignore_placement,
@@ -2127,6 +2175,8 @@ impl NodeFactory for TextFactory {
                                "description": "Case transform applied before shaping. Default `none`." },
                 "max-extent-px": { "type": "number", "minimum": 0.0,
                                    "description": "Canvas pad this node requests; labels whose bbox half-extent exceeds it are culled with a warning. Default 128." },
+                "outline-sdf": { "type": "boolean",
+                                 "description": "Render outline-font glyphs through the SDF field-sampling path (maplibre-gl-js style, which draws every glyph from an SDF) instead of a per-glyph vector fill / stroke. The halo then comes from a distance threshold rather than a stroke, matching MapLibre's halo shape and cost. SDF glyph (`glyphs`) stacks are unaffected. Default true." },
                 "collide": { "type": "boolean",
                              "description": "Whether to run deterministic label collision. Default true (MapLibre's default). Set false to draw every label (the pre-collision behaviour)." },
                 "allow-overlap": { "type": "boolean",

@@ -311,6 +311,7 @@ fn render_sdf(text: &str, size_px: f32, halo_width_px: f32) -> tiny_skia::Pixmap
             halo_blur_px: 0.0,
         },
         &[],
+        None,
     );
     pixmap
 }
@@ -393,6 +394,7 @@ fn vendored_range_renders_a_word() {
             halo_blur_px: 0.0,
         },
         &[],
+        None,
     );
     let ink = pixmap.pixels().iter().filter(|p| p.alpha() > 100).count();
     assert!(ink > 100, "expected a rendered word, got {ink} inked px");
