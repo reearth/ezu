@@ -199,6 +199,23 @@ impl<'a> FaceEntry<'a> {
         }
     }
 
+    /// The nominal horizontal advance (em) this entry uses for `c`, taken
+    /// straight from cmap+hmtx (outline) or the glyph PBF (SDF), or `None` when
+    /// the entry does not cover `c`. This is the pre-shaping per-glyph advance,
+    /// before kerning or ligature adjustment, so summed across a label it
+    /// over-estimates the shaped width — a caller can scale it down into a
+    /// cheap, shaping-free lower bound on the label's extent.
+    pub fn advance_em(&self, c: char) -> Option<f32> {
+        match self {
+            FaceEntry::Outline { font, face } => {
+                let gid = face.glyph_index(c)?;
+                let adv = face.glyph_hor_advance(gid)?;
+                Some(adv as f32 / font.units_per_em())
+            }
+            FaceEntry::Sdf(s) => Some(s.glyph(c)?.advance as f32 / super::sdf::SDF_EM_PX),
+        }
+    }
+
     /// Whether this entry can shape `c`. For an SDF stack this may fetch the
     /// char's range on demand (when a fetcher is present).
     pub(crate) fn covers(&self, c: char) -> bool {
