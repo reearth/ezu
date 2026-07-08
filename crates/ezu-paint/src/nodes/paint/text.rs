@@ -209,6 +209,61 @@ fn section_paints(sections: &[LabelSection], opacity: f32) -> Vec<SectionPaint> 
         .collect()
 }
 
+/// Whitespace MapLibre trims at the ends of a laid-out line (mirrors the
+/// private set in `ezu_core::text::layout`).
+fn is_layout_whitespace(c: char) -> bool {
+    matches!(c, '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ')
+}
+
+/// A safe lower bound (em) on the shaped width of a single-line label, computed
+/// from nominal font advances without shaping. Each covered char contributes
+/// its first-covering font's cmap+hmtx advance times its section `font-scale`;
+/// an uncovered char contributes 0 (it may fall back to a wider font, so 0 is
+/// the safe side). Leading and trailing whitespace is trimmed to match the
+/// single-line layout, while interior whitespace counts as it does there.
+///
+/// The nominal advance ignores kerning and ligatures — both only shrink the
+/// shaped width — so the sum over-estimates it; `SHRINK` scales it back under
+/// the true width. Negative letter spacing (which the layout adds per glyph,
+/// and glyphs never outnumber chars) is charged per char so the bound stays
+/// below the shaped width. The result is `≤ block.bbox.width()` for every
+/// real label (asserted while validating `SHRINK`).
+fn line_lower_bound_width_em(
+    sections: &[LabelSection],
+    ranges: &[std::ops::Range<usize>],
+    view: &[FaceEntry<'_>],
+    transform: TextTransform,
+    letter_spacing_em: f32,
+) -> f32 {
+    /// Fraction of the nominal advance sum kept as the lower bound; the
+    /// headroom absorbs kerning / ligature shrink.
+    const SHRINK: f32 = 0.8;
+    // Per-char nominal advances (em, section-scaled) plus a whitespace flag,
+    // in layout order, so leading/trailing whitespace can be trimmed.
+    let mut advances: Vec<(f32, bool)> = Vec::new();
+    for (s, r) in sections.iter().zip(ranges) {
+        let sub = &view[r.clone()];
+        let transformed = match transform {
+            TextTransform::None => s.text.clone(),
+            TextTransform::Uppercase => s.text.to_uppercase(),
+            TextTransform::Lowercase => s.text.to_lowercase(),
+        };
+        for c in transformed.chars() {
+            let adv = sub.iter().find_map(|fe| fe.advance_em(c)).unwrap_or(0.0) * s.scale;
+            advances.push((adv, is_layout_whitespace(c)));
+        }
+    }
+    let first = advances.iter().position(|&(_, ws)| !ws);
+    let last = advances.iter().rposition(|&(_, ws)| !ws);
+    let (Some(first), Some(last)) = (first, last) else {
+        return 0.0;
+    };
+    let trimmed = &advances[first..=last];
+    let sum: f32 = trimmed.iter().map(|&(a, _)| a).sum();
+    let ls_penalty = letter_spacing_em.min(0.0) * trimmed.len() as f32;
+    SHRINK * sum + ls_penalty
+}
+
 /// Canonical registry key for a font stack: names trimmed, joined with `,`
 /// (no space). Matches `maplibre_expr`'s `FormatSection::font_stack` so a
 /// `format` section's stack and a `font-expr` result look up identically.
@@ -976,9 +1031,51 @@ impl TextNode {
             }
 
             let (flat_fonts, ranges, hash) = assemble_stacks(sections, &registry);
-            let block = blocks
-                .entry((hash, size.to_bits()))
-                .or_insert_with(|| {
+            let key = (hash, size.to_bits());
+            let block = match blocks.get(&key) {
+                Some(b) => b.clone(),
+                None => {
+                    // Geometric prefilter (no shaping): line placement can only
+                    // anchor a label on a polyline at least as long as the label
+                    // (`generate_anchors` yields nothing once the label is longer
+                    // than the line). If even the longest polyline in the group
+                    // is shorter than a lower bound on the label's shaped width,
+                    // no anchor can ever be generated here — skip shaping.
+                    let view = faces.view(&flat_fonts);
+                    let lb_width_px = line_lower_bound_width_em(
+                        sections,
+                        &ranges,
+                        &view,
+                        self.transform,
+                        self.letter_spacing_em,
+                    ) * size;
+                    let mut l_max = 0.0f32;
+                    for line in &group.lines {
+                        if line.len() < 2 {
+                            continue;
+                        }
+                        let (x0, y0) = line[0];
+                        let mut prev = (
+                            (dx * extent_i + x0 as i64) as f32 * sx,
+                            (dy * extent_i + y0 as i64) as f32 * sy,
+                        );
+                        let mut acc = 0.0f32;
+                        for &(x, y) in &line[1..] {
+                            let cur = (
+                                (dx * extent_i + x as i64) as f32 * sx,
+                                (dy * extent_i + y as i64) as f32 * sy,
+                            );
+                            let (ddx, ddy) = (cur.0 - prev.0, cur.1 - prev.1);
+                            acc += (ddx * ddx + ddy * ddy).sqrt();
+                            prev = cur;
+                        }
+                        if acc > l_max {
+                            l_max = acc;
+                        }
+                    }
+                    if lb_width_px > l_max {
+                        continue;
+                    }
                     let specs: Vec<SectionSpec<'_>> = sections
                         .iter()
                         .zip(&ranges)
@@ -989,10 +1086,11 @@ impl TextNode {
                             valign: s.valign,
                         })
                         .collect();
-                    let view = faces.view(&flat_fonts);
-                    Arc::new(layout_sections(&specs, &view, &params))
-                })
-                .clone();
+                    let b = Arc::new(layout_sections(&specs, &view, &params));
+                    blocks.insert(key, b.clone());
+                    b
+                }
+            };
             if dx == 0 && dy == 0 {
                 dropped_chars += block.dropped_chars;
                 missing_range_chars += block.missing_range_chars;
