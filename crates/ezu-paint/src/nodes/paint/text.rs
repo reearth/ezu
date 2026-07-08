@@ -50,9 +50,10 @@ use crate::nodes::common::{
 use crate::render::{collect_groups, SharedLayer};
 use ezu_core::text::{
     collide::{self, Aabb, Candidate, LineCandidate},
-    draw, draw_line, generate_anchors, layout_sections, place_glyphs, Anchor, FaceEntry, Font,
-    GlyphPlacement, Justify, LayoutParams, LinePlacement, OutlineSdfCache, SdfFontStack,
-    SectionPaint, SectionSpec, StackEntry, TextBlock, TextPaint, TextTransform, VerticalAlign,
+    draw, draw_line, generate_anchors, get_or_build_layout, layout_sections, place_glyphs, Anchor,
+    FaceEntry, Font, GlyphPlacement, Justify, LayoutParams, LinePlacement, OutlineSdfCache,
+    SdfFontStack, SectionPaint, SectionSpec, StackEntry, TextBlock, TextPaint, TextTransform,
+    VerticalAlign,
 };
 
 /// Parse an optional raw MapLibre expression field, type-checked against
@@ -95,6 +96,69 @@ fn log_outline_sdf_stats(cache: Option<&OutlineSdfCache>) {
             );
         }
     }
+}
+
+/// Emit a debug summary of the process-wide shaped-layout cache activity for
+/// one eval: blocks laid out fresh (misses) vs served from the shared cache
+/// (hits). Nothing is logged when no outline-stack block was keyed.
+fn log_layout_cache_stats(hits: usize, misses: usize) {
+    if hits > 0 || misses > 0 {
+        tracing::debug!(
+            built = misses,
+            hits,
+            "text: shaped layouts served from the shared cache"
+        );
+    }
+}
+
+/// The process-wide shaped-layout cache key for one laid-out block: a hash of
+/// every input reaching [`layout_sections`] — the flat font stack by each
+/// font's stable content hash, the section specs (text, `font-scale`,
+/// `vertical-align`, and font subrange), the font size, and every
+/// [`LayoutParams`] field that shifts a glyph or the bounding box.
+///
+/// Returns `None` when any stack entry is an SDF glyph stack: an SDF stack's
+/// coverage is mutable (ranges are fetched lazily), so its layout is not
+/// safely content-addressable across evals — such a label falls back to the
+/// per-eval cache only. The pm basemap stacks are all outline fonts, so this
+/// keys every block there.
+fn layout_cache_key(
+    flat_fonts: &[StackEntry],
+    sections: &[LabelSection],
+    ranges: &[std::ops::Range<usize>],
+    size: f32,
+    params: &LayoutParams,
+) -> Option<u64> {
+    let mut h = Xxh3::new();
+    for entry in flat_fonts {
+        match entry {
+            StackEntry::Outline(font) => h.update(&font.content_hash().to_le_bytes()),
+            StackEntry::Sdf(_) => return None,
+        }
+    }
+    // Separate the font list from the section list so a font hash can't be
+    // confused with a range index.
+    h.update(&[0xff]);
+    for (s, r) in sections.iter().zip(ranges) {
+        h.update(s.text.as_bytes());
+        h.update(&[0]);
+        h.update(&s.scale.to_bits().to_le_bytes());
+        h.update(&[s.valign as u8]);
+        h.update(&(r.start as u32).to_le_bytes());
+        h.update(&(r.end as u32).to_le_bytes());
+    }
+    h.update(&size.to_bits().to_le_bytes());
+    h.update(&params.max_width_em.to_bits().to_le_bytes());
+    h.update(&params.line_height_em.to_bits().to_le_bytes());
+    h.update(&params.letter_spacing_em.to_bits().to_le_bytes());
+    h.update(&[
+        params.anchor as u8,
+        params.justify as u8,
+        params.transform as u8,
+    ]);
+    h.update(&params.offset_em[0].to_bits().to_le_bytes());
+    h.update(&params.offset_em[1].to_bits().to_le_bytes());
+    Some(h.digest())
 }
 
 /// Evaluate a `Number` expression for a group, falling back to `fallback`
@@ -932,6 +996,9 @@ impl TextNode {
         let mut dropped_chars = 0usize;
         let mut missing_range_chars = 0usize;
         let mut font_fallbacks = 0usize;
+        // Process-wide layout-cache activity, this eval (outline stacks only).
+        let mut layout_hits = 0usize;
+        let mut layout_misses = 0usize;
 
         /// One placed line label's draw payload, index-aligned with the
         /// collision candidate list. `placements` are in the local
@@ -1094,17 +1161,33 @@ impl TextNode {
                     if lb_width_px > l_max {
                         continue;
                     }
-                    let specs: Vec<SectionSpec<'_>> = sections
-                        .iter()
-                        .zip(&ranges)
-                        .map(|(s, r)| SectionSpec {
-                            text: &s.text,
-                            fonts: r.clone(),
-                            scale: s.scale,
-                            valign: s.valign,
-                        })
-                        .collect();
-                    let b = Arc::new(layout_sections(&specs, &view, &params));
+                    let build = || {
+                        let specs: Vec<SectionSpec<'_>> = sections
+                            .iter()
+                            .zip(&ranges)
+                            .map(|(s, r)| SectionSpec {
+                                text: &s.text,
+                                fonts: r.clone(),
+                                scale: s.scale,
+                                valign: s.valign,
+                            })
+                            .collect();
+                        layout_sections(&specs, &view, &params)
+                    };
+                    // Reuse an identically-laid-out block across tiles via the
+                    // process-wide cache (outline stacks only); otherwise build.
+                    let b = match layout_cache_key(&flat_fonts, sections, &ranges, size, &params) {
+                        Some(gk) => {
+                            let (b, hit) = get_or_build_layout(gk, build);
+                            if hit {
+                                layout_hits += 1;
+                            } else {
+                                layout_misses += 1;
+                            }
+                            b
+                        }
+                        None => Arc::new(build()),
+                    };
                     blocks.insert(key, b.clone());
                     b
                 }
@@ -1269,6 +1352,7 @@ impl TextNode {
             );
         }
         log_outline_sdf_stats(sdf_cache.as_ref());
+        log_layout_cache_stats(layout_hits, layout_misses);
 
         if dropped_chars > 0 {
             tracing::warn!(
@@ -1396,6 +1480,9 @@ impl Node for TextNode {
         let mut dropped_chars = 0usize;
         let mut missing_range_chars = 0usize;
         let mut font_fallbacks = 0usize;
+        // Process-wide layout-cache activity, this eval (outline stacks only).
+        let mut layout_hits = 0usize;
+        let mut layout_misses = 0usize;
 
         /// One placed label's draw payload, index-aligned with the
         /// collision candidate list. `blocks` holds one laid-out block per
@@ -1519,24 +1606,42 @@ impl Node for TextNode {
                 .anchors()
                 .iter()
                 .map(|&anchor| {
-                    blocks
-                        .entry((hash, size.to_bits(), anchor as u8))
-                        .or_insert_with(|| {
-                            let params = self.variant_layout_params(anchor);
-                            let specs: Vec<SectionSpec<'_>> = sections
-                                .iter()
-                                .zip(&ranges)
-                                .map(|(s, r)| SectionSpec {
-                                    text: &s.text,
-                                    fonts: r.clone(),
-                                    scale: s.scale,
-                                    valign: s.valign,
-                                })
-                                .collect();
-                            let view = faces.view(&flat_fonts);
-                            Arc::new(layout_sections(&specs, &view, &params))
-                        })
-                        .clone()
+                    let pkey = (hash, size.to_bits(), anchor as u8);
+                    if let Some(b) = blocks.get(&pkey) {
+                        return b.clone();
+                    }
+                    let params = self.variant_layout_params(anchor);
+                    let build = || {
+                        let specs: Vec<SectionSpec<'_>> = sections
+                            .iter()
+                            .zip(&ranges)
+                            .map(|(s, r)| SectionSpec {
+                                text: &s.text,
+                                fonts: r.clone(),
+                                scale: s.scale,
+                                valign: s.valign,
+                            })
+                            .collect();
+                        let view = faces.view(&flat_fonts);
+                        layout_sections(&specs, &view, &params)
+                    };
+                    // Reuse an identically-laid-out block across tiles via the
+                    // process-wide cache (outline stacks only); otherwise build.
+                    let block =
+                        match layout_cache_key(&flat_fonts, sections, &ranges, size, &params) {
+                            Some(gk) => {
+                                let (b, hit) = get_or_build_layout(gk, build);
+                                if hit {
+                                    layout_hits += 1;
+                                } else {
+                                    layout_misses += 1;
+                                }
+                                b
+                            }
+                            None => Arc::new(build()),
+                        };
+                    blocks.insert(pkey, block.clone());
+                    block
                 })
                 .collect();
             // The primary anchor drives the warning counts and the cull test;
@@ -1662,6 +1767,7 @@ impl Node for TextNode {
             );
         }
         log_outline_sdf_stats(sdf_cache.as_ref());
+        log_layout_cache_stats(layout_hits, layout_misses);
         // One summary line per eval, not one per label.
         if culled > 0 {
             tracing::warn!(

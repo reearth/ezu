@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use tiny_skia::{Path, PathBuilder};
+use xxhash_rust::xxh3::Xxh3;
 
 use super::sdf::SdfFontStack;
 
@@ -44,6 +45,12 @@ pub struct Font {
     units_per_em: f32,
     ascent_em: f32,
     descent_em: f32,
+    /// A stable content fingerprint of `(bytes, face_index)`, computed once
+    /// at construction. Unlike an `Arc<Font>` pointer — stable only for one
+    /// allocation's lifetime and reusable across evals — this keys the two
+    /// fonts loaded from identical bytes to a single entry in the
+    /// process-wide glyph-SDF and shaped-layout caches.
+    content_hash: u64,
     glyph_paths: RwLock<HashMap<u16, Option<Arc<Path>>>>,
 }
 
@@ -68,14 +75,26 @@ impl Font {
                 msg: "rustybuzz rejected the face".into(),
             });
         }
+        let mut hasher = Xxh3::new();
+        hasher.update(&face_index.to_le_bytes());
+        hasher.update(&bytes);
+        let content_hash = hasher.digest();
         Ok(Font {
             bytes,
             face_index,
             units_per_em,
             ascent_em,
             descent_em,
+            content_hash,
             glyph_paths: RwLock::new(HashMap::new()),
         })
+    }
+
+    /// A stable content fingerprint of this font's bytes and face index,
+    /// used to key the process-wide glyph-SDF and shaped-layout caches so
+    /// two `Font`s parsed from identical bytes share cache entries.
+    pub fn content_hash(&self) -> u64 {
+        self.content_hash
     }
 
     /// Font units per em (typically 1000 or 2048).

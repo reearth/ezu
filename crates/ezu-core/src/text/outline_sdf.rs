@@ -12,37 +12,91 @@
 //! backend's baseline pen so [`super::draw::draw`] places it identically
 //! to a vector fill.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 
+use lru::LruCache;
 use tiny_skia::{Color, FillRule, Paint, Pixmap, Transform};
 
 use super::font::Font;
 use super::sdf::{SdfGlyph, SDF_BORDER, SDF_EM_PX, SDF_RADIUS_PX};
 
-/// Memoizes [`build`] per `(font identity, glyph id)` for the span of one
-/// text-node eval, so an outline glyph is SDF-rasterized once no matter how
-/// many labels or placements repeat it. SDF bitmaps are size-independent,
-/// so size is not part of the key.
-///
-/// The key's font component is the `Arc<Font>`'s pointer identity: every
-/// label's flat stack is cloned from the registry's shared fonts, so the
-/// same glyph across labels hits one entry. Interior-mutable so the shared
-/// `&self` draw path can fill it; a `None` value memoizes "this glyph has
-/// no outline" so it is not re-attempted.
-/// Cache key: the `Arc<Font>`'s pointer identity paired with a glyph id.
-type GlyphKey = (usize, u16);
+/// Process-wide cache key: a font's stable content hash (not its `Arc`
+/// pointer, which is only stable within one allocation's lifetime) paired
+/// with a glyph id. SDF bitmaps are size-independent, so size is not part
+/// of the key. A `None` value memoizes "this glyph has no outline" so a
+/// whitespace / degenerate glyph is not re-attempted.
+type GlyphKey = (u64, u16);
 
-#[derive(Default)]
-pub struct OutlineSdfCache {
-    glyphs: RwLock<HashMap<GlyphKey, Option<Arc<SdfGlyph>>>>,
-    hits: AtomicU64,
-    misses: AtomicU64,
+/// Bookkeeping overhead charged per cache entry on top of the bitmap bytes:
+/// the `SdfGlyph` struct, its `Arc`, the `LruCache` node, and the key. A
+/// coarse constant — it only needs to keep the byte budget from
+/// under-counting small / inkless glyphs, not be exact.
+const ENTRY_OVERHEAD_BYTES: usize = 96;
+
+/// Byte budget for the shared glyph-SDF cache. A 24 px-em outline glyph
+/// rasterizes to a `(w+6)×(h+6)` coverage-derived SDF — a few hundred bytes
+/// of bitmap for typical Latin/CJK ink, ~600 B once the per-entry overhead
+/// is added — so ~8 MiB holds on the order of 14 000 distinct glyphs. That
+/// comfortably covers the working set of a multi-tile pan/zoom session
+/// (a basemap's label glyphs number in the low thousands) while bounding
+/// steady-state memory. Eviction is pure-LRU and never changes output.
+const GLYPH_SDF_CAP_BYTES: usize = 8 * 1024 * 1024;
+
+/// A byte-bounded LRU of built glyph SDFs, keyed by [`GlyphKey`]. Shared by
+/// every text node in the process behind a [`Mutex`]; content-addressed keys
+/// make cross-node/cross-tile sharing safe (no aliasing), and the values are
+/// pure functions of the key so eviction is output-invariant.
+struct GlyphSdfStore {
+    cache: LruCache<GlyphKey, Option<Arc<SdfGlyph>>>,
+    bytes: usize,
 }
 
-/// Cache tallies: unique glyphs built (misses), reuse count (hits), and the
-/// bytes held by the built SDF bitmaps.
+impl GlyphSdfStore {
+    fn entry_bytes(v: &Option<Arc<SdfGlyph>>) -> usize {
+        ENTRY_OVERHEAD_BYTES + v.as_ref().map_or(0, |g| g.bitmap.len())
+    }
+
+    fn insert(&mut self, key: GlyphKey, val: Option<Arc<SdfGlyph>>) {
+        let add = Self::entry_bytes(&val);
+        if let Some(old) = self.cache.put(key, val) {
+            self.bytes = self.bytes.saturating_sub(Self::entry_bytes(&old));
+        }
+        self.bytes += add;
+        while self.bytes > GLYPH_SDF_CAP_BYTES && self.cache.len() > 1 {
+            match self.cache.pop_lru() {
+                Some((_, old)) => self.bytes = self.bytes.saturating_sub(Self::entry_bytes(&old)),
+                None => break,
+            }
+        }
+    }
+}
+
+/// The process-wide glyph-SDF cache. `LazyLock` so it initializes on first
+/// use; a plain `Mutex` (not sharded) since the build happens outside the
+/// lock, so the lock is only held for the map lookup / insert — negligible
+/// even under rayon, and a no-op contention-wise on single-threaded wasm.
+static GLYPH_SDF: LazyLock<Mutex<GlyphSdfStore>> = LazyLock::new(|| {
+    Mutex::new(GlyphSdfStore {
+        cache: LruCache::unbounded(),
+        bytes: 0,
+    })
+});
+
+/// A per-eval handle onto the process-wide glyph-SDF cache. Holds only this
+/// eval's hit / miss / built-bytes tallies (for the per-node debug summary);
+/// the built SDFs themselves live in the shared [`GLYPH_SDF`] store and
+/// persist across tiles, so a glyph rasterized for one tile is reused by
+/// every later tile that repeats it.
+#[derive(Default)]
+pub struct OutlineSdfCache {
+    hits: AtomicU64,
+    misses: AtomicU64,
+    built_bytes: AtomicUsize,
+}
+
+/// Cache tallies for one eval: glyphs built (misses), reuse count (hits),
+/// and the bytes the freshly-built SDF bitmaps added.
 #[derive(Debug, Clone, Copy)]
 pub struct OutlineSdfStats {
     pub built: u64,
@@ -55,41 +109,46 @@ impl OutlineSdfCache {
         Self::default()
     }
 
-    /// The SDF for `glyph_id` of `font`, building and caching it on first
-    /// use. `None` for a glyph with no outline (whitespace / degenerate).
+    /// The SDF for `glyph_id` of `font`, from the shared cache — building and
+    /// inserting it on the first process-wide use. `None` for a glyph with no
+    /// outline (whitespace / degenerate).
     pub fn get(
         &self,
         font: &Font,
         face: &rustybuzz::Face<'_>,
         glyph_id: u16,
     ) -> Option<Arc<SdfGlyph>> {
-        let key: GlyphKey = (font as *const Font as usize, glyph_id);
-        if let Some(hit) = self.glyphs.read().expect("sdf cache poisoned").get(&key) {
+        let key: GlyphKey = (font.content_hash(), glyph_id);
+        if let Some(hit) = GLYPH_SDF
+            .lock()
+            .expect("sdf cache poisoned")
+            .cache
+            .get(&key)
+        {
             self.hits.fetch_add(1, Ordering::Relaxed);
             return hit.clone();
         }
-        // Built outside the write lock; a race just rebuilds identically.
+        // Built outside the lock; a race just rebuilds identically, and the
+        // second insert overwrites with an equal value.
         let built = build(font, face, glyph_id).map(Arc::new);
         self.misses.fetch_add(1, Ordering::Relaxed);
-        self.glyphs
-            .write()
+        self.built_bytes.fetch_add(
+            built.as_ref().map_or(0, |g| g.bitmap.len()),
+            Ordering::Relaxed,
+        );
+        GLYPH_SDF
+            .lock()
             .expect("sdf cache poisoned")
             .insert(key, built.clone());
         built
     }
 
-    /// A snapshot of cache activity for reporting.
+    /// A snapshot of this eval's cache activity for reporting.
     pub fn stats(&self) -> OutlineSdfStats {
-        let map = self.glyphs.read().expect("sdf cache poisoned");
-        let bitmap_bytes = map
-            .values()
-            .filter_map(|g| g.as_ref())
-            .map(|g| g.bitmap.len())
-            .sum();
         OutlineSdfStats {
             built: self.misses.load(Ordering::Relaxed),
             hits: self.hits.load(Ordering::Relaxed),
-            bitmap_bytes,
+            bitmap_bytes: self.built_bytes.load(Ordering::Relaxed),
         }
     }
 }
