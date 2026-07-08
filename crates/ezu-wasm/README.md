@@ -11,6 +11,13 @@ binding buffer that mirrors the style's `sources` block.
 
 ```ts
 function simdEnabled(): boolean;
+// True when compiled with the `threads` feature. When true and the page
+// is cross-origin isolated, `initThreadPool` is available and rendering
+// can run in parallel; otherwise the renderer is single-threaded.
+function threadsEnabled(): boolean;
+// Present only in `threads` builds. Spins up the Web Worker pool; await
+// it once after `init()`, then pass `{ parallel: true }` to `renderTile`.
+function initThreadPool(numThreads: number): Promise<void>;
 
 class Renderer {
   constructor(styleJson: string);
@@ -51,6 +58,9 @@ class Renderer {
     tileSize?: number;                       // override style canvas
     pad?: number;
     png?: { compression?: "fast" | "default" | "best" };
+    parallel?: boolean;                      // threads build: use the
+                                             // parallel evaluator (set
+                                             // once initThreadPool is up)
   }): Uint8Array;
 
   free(): void;
@@ -245,6 +255,89 @@ RUSTFLAGS="-C target-feature=+simd128" \
 Each output directory contains `ezu_wasm.js` (ES module + glue),
 `ezu_wasm_bg.wasm`, and TypeScript declarations.
 
+### Threads (multithreaded rendering)
+
+An optional third flavor renders tiles across Web Workers using
+[`wasm-bindgen-rayon`](https://github.com/RReverser/wasm-bindgen-rayon)
+and ezu's ready-set parallel evaluator. It is **off by default** and has
+extra requirements — a nightly toolchain and a cross-origin-isolated
+page — so the scalar/SIMD builds above stay on stable and run anywhere.
+
+Requirements:
+
+- **Nightly Rust with `rust-src`** — the build rebuilds `std` with
+  atomics (`-Z build-std`), which is nightly-only:
+  ```sh
+  rustup toolchain install nightly --component rust-src
+  ```
+- **`wasm-bindgen` CLI** on `PATH` (matching the crate's `wasm-bindgen`
+  version), and optionally `wasm-opt`.
+- **A cross-origin-isolated page** at runtime: the HTML document must be
+  served with `Cross-Origin-Opener-Policy: same-origin` and
+  `Cross-Origin-Embedder-Policy: require-corp`, which requires HTTPS (or
+  localhost). Without isolation, `SharedArrayBuffer` — and therefore the
+  worker pool — is unavailable, and the renderer stays single-threaded.
+
+Build it (drops into `target/wasm/threads/` next to the other two):
+
+```sh
+./scripts/build-wasm-threads.sh
+```
+
+The script runs, in effect:
+
+```sh
+RUSTFLAGS="-C target-feature=+atomics,+bulk-memory,+mutable-globals \
+  -C link-arg=--shared-memory -C link-arg=--import-memory \
+  -C link-arg=--max-memory=1073741824 \
+  -C link-arg=--export=__heap_base -C link-arg=--export=__wasm_init_tls \
+  -C link-arg=--export=__tls_size -C link-arg=--export=__tls_align \
+  -C link-arg=--export=__tls_base" \
+  cargo +nightly build -p ezu-wasm --release \
+    --target wasm32-unknown-unknown --features threads \
+    -Z build-std=panic_abort,std
+
+wasm-bindgen target/wasm32-unknown-unknown/release/ezu_wasm.wasm \
+  --target web --out-dir target/wasm/threads --out-name ezu_wasm
+
+wasm-opt -O3 --enable-threads --enable-bulk-memory --enable-mutable-globals \
+  target/wasm/threads/ezu_wasm_bg.wasm -o target/wasm/threads/ezu_wasm_bg.wasm
+```
+
+The output includes a `snippets/` directory with the worker bootstrap —
+serve it alongside `ezu_wasm.js`.
+
+Usage from JS:
+
+```js
+import init, { Renderer, threadsEnabled, initThreadPool } from "./ezu_wasm.js";
+
+await init();
+let parallel = false;
+// Spin up the pool once, only when the page is cross-origin isolated.
+if (threadsEnabled() && self.crossOriginIsolated) {
+  await initThreadPool(navigator.hardwareConcurrency);
+  parallel = true;
+}
+
+const r = new Renderer(styleJson);
+r.bindSource("basemap", mvt);
+// The renderer uses the parallel evaluator only when `parallel` is set —
+// pass it exactly when the pool is up. Output is byte-for-byte identical
+// to the single-threaded path (the evaluator is deterministic).
+const rgba = r.renderTile(z, x, y, { format: "rgba", parallel });
+```
+
+`threadsEnabled()` reports whether this build has thread support, so one
+codebase can load whichever flavor the environment allows.
+
+> **Deployment note.** Cross-origin isolation is not available
+> everywhere. Static hosts that can't set COOP/COEP response headers —
+> or edge runtimes such as Cloudflare Workers/Pages without extra
+> configuration — can't run the threads build; ship the scalar or SIMD
+> flavor there and use `threadsEnabled()` / `self.crossOriginIsolated`
+> to pick at load time.
+
 ## Demo page
 
 A self-contained demo lives at [`examples/wasm-demo/index.html`](examples/wasm-demo/index.html). It picks
@@ -257,8 +350,15 @@ It needs the routes that the `ezu serve` subcommand of
 |---|---|
 | `GET /style` | Current Ezu Style JSON |
 | `GET /mvt/{z}/{x}/{y}` | Raw decompressed MVT bytes |
-| `GET /wasm/{scalar\|simd}/ezu_wasm.js` | This crate's wasm-pack outputs |
+| `GET /wasm/{scalar\|simd\|threads}/ezu_wasm.js` | This crate's build outputs |
 | `GET /wasm-demo/` | This `examples/wasm-demo/` directory |
+
+`ezu serve` sets `COOP: same-origin` + `COEP: require-corp` on the
+`/wasm-demo/` and `/wasm/*` routes only, so the demo page is
+cross-origin isolated (the threads flavor needs it) while the editor and
+tile endpoints are untouched. The `threads` build appears in the demo's
+build picker when `target/wasm/threads/` exists; on a page that isn't
+isolated it labels itself and falls back to single-threaded rendering.
 
 To run end-to-end from a clean tree:
 

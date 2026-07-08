@@ -32,5 +32,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # `serve` subcommand only.
 axum = "0.8"
-tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "fs", "set-header"] }
 dashmap = "6"

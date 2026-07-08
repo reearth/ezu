@@ -26,6 +26,7 @@
   .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
   .badge.simd { background: #d6e2c8; color: #345122; }
   .badge.scalar { background: #efd9b4; color: #6a4f3a; }
+  .badge.threads { background: #c8d8e2; color: #22415a; }
 </style>
 </head>
 <body>
@@ -40,6 +41,7 @@
       <select id="build">
         <option value="simd">SIMD (+simd128)</option>
         <option value="scalar">Scalar</option>
+        <option value="threads">Threads (SharedArrayBuffer)</option>
       </select>
     </div>
     <div class="row"><label>Output</label>
@@ -64,6 +66,10 @@
       mvt:&nbsp;<span class="v" id="mvt-ms">—</span>&nbsp;ms ·
       render:&nbsp;<span class="v" id="render-ms">—</span>&nbsp;ms
     </div>
+    <div class="stat">
+      threads:&nbsp;<span class="v" id="threads">—</span> ·
+      isolated:&nbsp;<span class="v" id="isolated">—</span>
+    </div>
     <div class="stat" id="bench-stats"></div>
     <div class="log" id="log"></div>
   </aside>
@@ -80,6 +86,11 @@
   let renderer = null;
   let activeBuild = null;
   let styleJson = null;
+  // Whether the active build should render with the parallel evaluator —
+  // true only once a `threads` build's worker pool is up.
+  let parallel = false;
+  // One rayon thread pool per module instance; re-initializing throws.
+  const pooled = new Set();
 
   async function loadStyle() {
     if (!styleJson) styleJson = await (await fetch("/style")).text();
@@ -87,19 +98,43 @@
   }
 
   async function loadBuild(name) {
+    $("isolated").textContent = self.crossOriginIsolated ? "yes" : "no";
     if (activeBuild === name && renderer) return;
     if (renderer) renderer.free();
     const t = performance.now();
     log(`loading ${name}…`);
     const mod = await import(`/wasm/${name}/ezu_wasm.js?build=${name}`);
     await mod.default();
+
+    // Multithreaded build: spin up the rayon pool once, if the page is
+    // cross-origin isolated. Otherwise fall back to single-threaded.
+    parallel = false;
+    let threadInfo = "1 (serial)";
+    if (mod.threadsEnabled?.()) {
+      if (self.crossOriginIsolated) {
+        const n = navigator.hardwareConcurrency || 4;
+        if (!pooled.has(name)) {
+          await mod.initThreadPool(n);
+          pooled.add(name);
+        }
+        parallel = true;
+        threadInfo = `${n} (parallel)`;
+        log(`  thread pool: ${n} workers`);
+      } else {
+        threadInfo = "1 (not isolated)";
+        log("  not cross-origin isolated (need COOP/COEP) — running serial");
+      }
+    }
+    $("threads").textContent = threadInfo;
+
     renderer = new mod.Renderer(await loadStyle());
     activeBuild = name;
     $("mod-ms").textContent = (performance.now() - t).toFixed(1);
-    const cls = mod.simdEnabled() ? "simd" : "scalar";
+    const cls = mod.threadsEnabled?.() ? "threads" : (mod.simdEnabled() ? "simd" : "scalar");
+    const label = mod.threadsEnabled?.() ? "Threads" : (mod.simdEnabled() ? "SIMD" : "Scalar");
     $("badge").className = "badge " + cls;
-    $("badge").textContent = mod.simdEnabled() ? "SIMD" : "Scalar";
-    log(`  ${name}: ${renderer.brushCount()} brushes, ${mod.simdEnabled() ? "+simd128 ✓" : "no SIMD"}`);
+    $("badge").textContent = label;
+    log(`  ${name}: ${label}${mod.simdEnabled() ? " +simd128" : ""}`);
   }
 
   function drawRgba(buf) {
@@ -144,7 +179,7 @@
     // names with `renderer.boundSources()` after binding.)
     renderer.clearSources();
     if (bytes) renderer.bindSource("basemap", bytes);
-    const out = renderer.renderTile(z, x, y, { format });
+    const out = renderer.renderTile(z, x, y, { format, parallel });
     const tRender = performance.now() - t1;
     $("render-ms").textContent = tRender.toFixed(1);
 
@@ -165,7 +200,7 @@
     const call = (b) => {
       renderer.clearSources();
       if (b) renderer.bindSource("basemap", b);
-      return renderer.renderTile(z, x, y, { format: fmt });
+      return renderer.renderTile(z, x, y, { format: fmt, parallel });
     };
 
     call(bytes); // warm
