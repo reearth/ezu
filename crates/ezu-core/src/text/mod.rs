@@ -43,6 +43,7 @@ mod draw;
 mod font;
 mod layout;
 pub mod line;
+pub mod outline_sdf;
 pub mod pbf;
 pub mod sdf;
 mod shape;
@@ -58,5 +59,6 @@ pub use layout::{
     LayoutParams, PlacedGlyph, SectionSpec, TextBlock, TextTransform, VerticalAlign,
 };
 pub use line::{generate_anchors, place_glyphs, Anchor as LineAnchor, GlyphOnLine, LinePlacement};
+pub use outline_sdf::{OutlineSdfCache, OutlineSdfStats};
 pub use pbf::{decode_glyph_range, GlyphPbfError, GlyphRange};
 pub use sdf::{RangeFetcher, SdfCoverage, SdfFontStack, SdfGlyph};
