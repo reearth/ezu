@@ -76,6 +76,40 @@ jobs:
         env:
           RUSTFLAGS: -C target-feature=+simd128 -Dwarnings
 
+  wasm-threads:
+    name: wasm32 threads build (ezu-wasm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      # The multithreaded build rebuilds std with atomics (`-Z build-std`),
+      # which needs a nightly toolchain and the `rust-src` component.
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: nightly
+          targets: wasm32-unknown-unknown
+          components: rust-src
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+      # Compile-only: validates the `threads` feature and the atomics /
+      # shared-memory link flags. wasm-bindgen / wasm-opt (packaging) are a
+      # separate local step (see crates/ezu-wasm/README.md).
+      - name: Build threads flavor
+        run: |
+          cargo build -p ezu-wasm --release \
+            --target wasm32-unknown-unknown \
+            --features threads \
+            -Z build-std=panic_abort,std
+        env:
+          RUSTFLAGS: >-
+            -C target-feature=+atomics,+bulk-memory,+mutable-globals
+            -C link-arg=--shared-memory
+            -C link-arg=--import-memory
+            -C link-arg=--max-memory=1073741824
+            -C link-arg=--export=__heap_base
+            -C link-arg=--export=__wasm_init_tls
+            -C link-arg=--export=__tls_size
+            -C link-arg=--export=__tls_align
+            -C link-arg=--export=__tls_base
+
   msrv:
     name: MSRV (1.89)
     runs-on: ubuntu-latest

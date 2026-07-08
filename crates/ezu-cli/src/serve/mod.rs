@@ -14,9 +14,11 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use axum::http::{header::HeaderName, HeaderValue};
 use clap::Args;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
+use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::source::{SourceSpec, TileSource};
@@ -131,15 +133,47 @@ pub async fn run(args: ServeCmd) -> Result<(), Box<dyn std::error::Error>> {
         tokio::spawn(watch_style_file(path, state_for_watch));
     }
 
+    // The multithreaded WASM build (wasm-bindgen-rayon) needs the page to
+    // be cross-origin isolated, which requires these two headers on the
+    // *document* — otherwise `SharedArrayBuffer` (and the worker pool) is
+    // unavailable. Scoped to the demo and the WASM asset dirs only, so
+    // the editor and tile endpoints are untouched; the demo's own
+    // subresources (`/style`, `/mvt`, `/wasm/*`) are all same-origin and
+    // satisfy COEP without extra headers. Harmless for the scalar/SIMD
+    // builds, which simply don't use SharedArrayBuffer.
+    let coop = SetResponseHeaderLayer::overriding(
+        HeaderName::from_static("cross-origin-opener-policy"),
+        HeaderValue::from_static("same-origin"),
+    );
+    let coep = SetResponseHeaderLayer::overriding(
+        HeaderName::from_static("cross-origin-embedder-policy"),
+        HeaderValue::from_static("require-corp"),
+    );
+    // Let the cross-origin-isolated document embed these same-origin
+    // assets (belt-and-suspenders under COEP: require-corp).
+    let corp = SetResponseHeaderLayer::overriding(
+        HeaderName::from_static("cross-origin-resource-policy"),
+        HeaderValue::from_static("same-origin"),
+    );
+
     let mut app = handlers::router().with_state(state);
     for (route, dir) in [
         ("/wasm-demo", "crates/ezu-wasm/examples/wasm-demo"),
         ("/wasm/scalar", "target/wasm/scalar"),
         ("/wasm/simd", "target/wasm/simd"),
+        ("/wasm/threads", "target/wasm/threads"),
     ] {
         if Path::new(dir).is_dir() {
             tracing::info!("serving {} from {}", route, dir);
-            app = app.nest_service(route, ServeDir::new(dir));
+            let svc = ServeDir::new(dir);
+            app = app.nest_service(
+                route,
+                tower::ServiceBuilder::new()
+                    .layer(coop.clone())
+                    .layer(coep.clone())
+                    .layer(corp.clone())
+                    .service(svc),
+            );
         }
     }
 

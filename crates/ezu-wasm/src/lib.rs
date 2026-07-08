@@ -524,8 +524,7 @@ impl Renderer {
             &tile_loader,
             tile_id,
             canvas,
-            opts.format,
-            opts.png_compression,
+            opts,
         )
     }
 }
@@ -537,18 +536,25 @@ fn encode_render(
     tile_loader: &TileLoader<'_>,
     tile_id: TileId,
     canvas: CanvasInfo,
-    format: OutputFormat,
-    png_compression: PngCompression,
+    opts: RenderOptions,
 ) -> Result<Vec<u8>, JsValue> {
     let ev = Evaluator::new(graph, cache, tile_loader);
-    let out = ev
-        .render(
-            tile_id,
-            canvas,
-            &ParamValues::new(),
-            tile_seed(tile_id.z, tile_id.x, tile_id.y),
-        )
-        .map_err(|e| named_err(ERR_RENDER, e))?;
+    let params = ParamValues::new();
+    let seed = tile_seed(tile_id.z, tile_id.x, tile_id.y);
+    // The parallel evaluator is used only when the caller opts in with
+    // `{ parallel: true }`, which the host does exactly when it has
+    // initialized a thread pool (`initThreadPool` resolved). Before that
+    // — and in every single-threaded build, where `render_parallel`
+    // transparently falls back to `render` — we stay sequential:
+    // `render_parallel` would otherwise touch rayon's global pool, which
+    // can't be built on wasm without workers. Both paths are
+    // deterministic and produce identical output.
+    let out = if opts.parallel {
+        ev.render_parallel(tile_id, canvas, &params, seed)
+    } else {
+        ev.render(tile_id, canvas, &params, seed)
+    }
+    .map_err(|e| named_err(ERR_RENDER, e))?;
     let raster = match out {
         PortValue::Raster(r) => r,
         other => {
@@ -558,9 +564,9 @@ fn encode_render(
             ))
         }
     };
-    Ok(match format {
+    Ok(match opts.format {
         OutputFormat::Png => {
-            raster_to_png_with(&raster, canvas.tile_size, canvas.pad, png_compression)
+            raster_to_png_with(&raster, canvas.tile_size, canvas.pad, opts.png_compression)
                 .map_err(|e| named_err(ERR_PNG, e))?
         }
         OutputFormat::Webp => raster_to_webp(&raster, canvas.tile_size, canvas.pad)
@@ -576,6 +582,10 @@ struct RenderOptions {
     tile_size: Option<u32>,
     pad: Option<u32>,
     png_compression: PngCompression,
+    /// Opt into the parallel evaluator. Only meaningful in `threads`
+    /// builds once `initThreadPool` has resolved; otherwise ignored
+    /// (`render_parallel` falls back to sequential evaluation).
+    parallel: bool,
 }
 
 impl Default for RenderOptions {
@@ -585,6 +595,7 @@ impl Default for RenderOptions {
             tile_size: None,
             pad: None,
             png_compression: PngCompression::Default,
+            parallel: false,
         }
     }
 }
@@ -618,6 +629,12 @@ fn parse_render_options(obj: Option<&js_sys::Object>) -> RenderOptions {
         .and_then(|v| v.as_f64())
     {
         out.pad = Some(n as u32);
+    }
+    if let Some(b) = js_sys::Reflect::get(obj, &"parallel".into())
+        .ok()
+        .and_then(|v| v.as_bool())
+    {
+        out.parallel = b;
     }
     let png = js_sys::Reflect::get(obj, &"png".into()).unwrap_or(JsValue::UNDEFINED);
     if let Some(png_obj) = png.dyn_ref::<js_sys::Object>() {
@@ -728,6 +745,37 @@ fn tile_seed(z: u8, x: u32, y: u32) -> u64 {
 pub fn simd_enabled() -> bool {
     cfg!(target_feature = "simd128")
 }
+
+/// Whether this build supports multithreaded rendering (compiled with
+/// the `threads` feature). When `false`, `initThreadPool` is absent and
+/// `renderTile`'s `parallel` option is a no-op. Mirrors `simdEnabled` so
+/// the host can label the build.
+#[wasm_bindgen(js_name = threadsEnabled)]
+pub fn threads_enabled() -> bool {
+    cfg!(feature = "threads")
+}
+
+/// Initialize the rayon thread pool backing multithreaded rendering.
+///
+/// `initThreadPool(num_threads)` — usually `navigator.hardwareConcurrency`
+/// — is re-exported from `wasm-bindgen-rayon`. Call it once after
+/// `init()`, `await` the returned promise, then pass `{ parallel: true }`
+/// to `renderTile`. It requires a cross-origin-isolated page (COOP:
+/// same-origin + COEP: require-corp) so `SharedArrayBuffer` is available.
+///
+/// ```js
+/// import init, { initThreadPool, threadsEnabled, Renderer } from "./ezu_wasm.js";
+/// await init();
+/// let parallel = false;
+/// if (threadsEnabled() && self.crossOriginIsolated) {
+///   await initThreadPool(navigator.hardwareConcurrency);
+///   parallel = true;
+/// }
+/// const r = new Renderer(styleJson);
+/// r.renderTile(z, x, y, { format: "rgba", parallel });
+/// ```
+#[cfg(feature = "threads")]
+pub use wasm_bindgen_rayon::init_thread_pool;
 
 /// Build a JS `Error` whose `.name` discriminates the failure kind so callers
 /// can dispatch on it.

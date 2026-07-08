@@ -1,5 +1,6 @@
 //! Walk the DAG and evaluate one tile.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
 use xxhash_rust::xxh3::Xxh3;
@@ -257,9 +258,16 @@ impl<'a> Evaluator<'a> {
             );
             return Ok((v, key.0));
         }
+        // `wasm32-unknown-unknown` has no monotonic clock — `Instant::now()`
+        // panics ("time not implemented") — so the per-node timing is
+        // host-only. Traces there report `elapsed_us = 0`.
+        #[cfg(not(target_arch = "wasm32"))]
         let t0 = Instant::now();
         let value = node.eval(ctx, &input_vals)?;
+        #[cfg(not(target_arch = "wasm32"))]
         let elapsed_us = t0.elapsed().as_micros();
+        #[cfg(target_arch = "wasm32")]
+        let elapsed_us = 0u128;
         tracing::debug!(
             target: "ezu_graph::eval",
             node = self.graph.node_id(ix),

@@ -27,9 +27,17 @@ use wasm_bindgen::prelude::*;
 const DEFAULT_CAPACITY: usize = 4096;
 
 /// Shared between the global Layer and every `LogSink` handle JS holds.
+///
+/// The live per-event JS `callback` only exists in single-threaded
+/// builds. Under the `threads` feature the tracing subscriber is global
+/// and events may be emitted from rayon worker threads, where a JS
+/// `Function` (owned by the main thread's realm) is neither callable nor
+/// `Send`/`Sync`. Those builds keep the pull-based buffer — `drain` /
+/// `drainLines` still capture every event — and drop live forwarding.
 #[derive(Clone)]
 struct LogState {
     buffer: Arc<Mutex<VecDeque<LogRecord>>>,
+    #[cfg(not(feature = "threads"))]
     callback: Arc<Mutex<Option<js_sys::Function>>>,
     capacity: Arc<Mutex<usize>>,
 }
@@ -38,6 +46,7 @@ impl LogState {
     fn new() -> Self {
         Self {
             buffer: Arc::new(Mutex::new(VecDeque::with_capacity(DEFAULT_CAPACITY))),
+            #[cfg(not(feature = "threads"))]
             callback: Arc::new(Mutex::new(None)),
             capacity: Arc::new(Mutex::new(DEFAULT_CAPACITY)),
         }
@@ -46,6 +55,7 @@ impl LogState {
     fn push(&self, record: LogRecord) {
         // Invoke callback first so live consumers see events even if
         // the ring buffer is being aggressively drained elsewhere.
+        #[cfg(not(feature = "threads"))]
         if let Ok(cb) = self.callback.lock() {
             if let Some(cb) = &*cb {
                 let js = record_to_js(&record);
@@ -165,11 +175,18 @@ impl LogSink {
 
     /// Set (or clear with `null` / `undefined`) the per-event JS
     /// callback. The callback receives a structured record object.
+    ///
+    /// No-op in multithreaded (`threads`) builds — events can originate
+    /// on rayon worker threads, so live forwarding to a main-thread JS
+    /// callback isn't available. Use `drain` / `drainLines` instead.
     #[wasm_bindgen(js_name = onEvent)]
     pub fn on_event(&self, callback: Option<js_sys::Function>) {
+        #[cfg(not(feature = "threads"))]
         if let Ok(mut cb) = self.state.callback.lock() {
             *cb = callback;
         }
+        #[cfg(feature = "threads")]
+        let _ = callback;
     }
 
     /// Drain every buffered record. Returns a JS array of structured
