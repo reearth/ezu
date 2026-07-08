@@ -35,6 +35,18 @@ impl RasterBuf {
         s
     }
 
+    /// Whether every byte is zero — i.e. fully transparent everywhere.
+    /// For premultiplied RGBA this means no coverage and no color at all
+    /// (a valid premultiplied pixel with `a == 0` also has `rgb == 0`).
+    /// Scans in `u128`-wide chunks, so a canvas-sized buffer costs only
+    /// tens of microseconds.
+    pub fn is_blank(&self) -> bool {
+        // SAFETY: `align_to` only reinterprets the byte slice; `u128` has
+        // no invalid bit patterns, so every reading is a valid value.
+        let (head, mid, tail) = unsafe { self.pixels.align_to::<u128>() };
+        head.iter().all(|&b| b == 0) && mid.iter().all(|&w| w == 0) && tail.iter().all(|&b| b == 0)
+    }
+
     pub fn pixel(&self, x: u32, y: u32) -> [u8; 4] {
         let i = ((y * self.width + x) * 4) as usize;
         [

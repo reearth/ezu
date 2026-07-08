@@ -172,60 +172,35 @@ impl Node for BlendNode {
                 return Err(EvalError::Other("blend: mask size mismatch".into()));
             }
         }
-        let mut out = RasterBuf::new(base.width, base.height);
         let op = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
         let clip = self.clip.get(ctx, inputs)?;
-        for i in (0..base.pixels.len()).step_by(4) {
-            // Demultiply base + over to [0,1] RGB + alpha.
-            let (br, bg, bb, ba) = demul(&base.pixels[i..i + 4]);
-            let (sr, sg, sb, sa_raw) = demul(&over.pixels[i..i + 4]);
-            // Source effective alpha = sa * opacity * mask.alpha (mask
-            // contributes coverage, not color).
-            let mask_a = match mask_ref {
-                Some(m) => m.pixels[i + 3] as f32 / 255.0,
-                None => 1.0,
-            };
-            let sa = sa_raw * op * mask_a;
-            // Short-circuit Porter-Duff destination-out (eraser): the
-            // blend math is irrelevant — base is kept where over is
-            // transparent, removed where over is opaque.
-            if self.composite == Composite::DestinationOut {
-                let inv = 1.0 - sa;
-                out.pixels[i] = to_u8(br * ba * inv);
-                out.pixels[i + 1] = to_u8(bg * ba * inv);
-                out.pixels[i + 2] = to_u8(bb * ba * inv);
-                out.pixels[i + 3] = to_u8(ba * inv);
-                continue;
-            }
-            // Apply blend function to non-premultiplied colors.
-            let (mr, mg, mb) = blend_color(self.mode, [br, bg, bb], [sr, sg, sb]);
-            // Blended source per W3C: Cs' = (1 - αb) * Cs + αb * B(Cb, Cs).
-            let bsr = (1.0 - ba) * sr + ba * mr;
-            let bsg = (1.0 - ba) * sg + ba * mg;
-            let bsb = (1.0 - ba) * sb + ba * mb;
-            // Composite. `clip` switches source-over -> source-atop.
-            let (or, og, ob, oa) = if clip {
-                // source-atop: αo = αb, co = αs*αb*Cs' + (1-αs)*αb*Cb
-                let oa = ba;
-                let or = sa * ba * bsr + (1.0 - sa) * ba * br;
-                let og = sa * ba * bsg + (1.0 - sa) * ba * bg;
-                let ob = sa * ba * bsb + (1.0 - sa) * ba * bb;
-                (or, og, ob, oa)
-            } else {
-                // source-over: αo = αs + αb*(1-αs)
-                let oa = sa + ba * (1.0 - sa);
-                let or = sa * bsr + (1.0 - sa) * ba * br;
-                let og = sa * bsg + (1.0 - sa) * ba * bg;
-                let ob = sa * bsb + (1.0 - sa) * ba * bb;
-                (or, og, ob, oa)
-            };
-            // `or`/`og`/`ob` are already premultiplied (multiplied by
-            // alphas in the composite step). Pack back into u8.
-            out.pixels[i] = to_u8(or);
-            out.pixels[i + 1] = to_u8(og);
-            out.pixels[i + 2] = to_u8(ob);
-            out.pixels[i + 3] = to_u8(oa);
+
+        // Fast path: `over` is fully transparent (all bytes zero), so
+        // there is nothing to composite. Every mode/composite reduces to
+        // "keep base" when the source alpha is zero (mask and opacity only
+        // scale that already-zero alpha), so the result is `base` verbatim.
+        if over.is_blank() {
+            return Ok(base_in.clone());
         }
+
+        // Fast path: plain source-over of premultiplied bytes — the common
+        // Normal / over / no-clip / no-mask case. Skip the demultiply →
+        // W3C blend → recomposite round-trip and work in integer space.
+        if self.mode == BlendMode::Normal
+            && self.composite == Composite::Over
+            && !clip
+            && mask_ref.is_none()
+        {
+            // Base is transparent everywhere: source-over onto nothing is
+            // just the (opacity-1) source. Reuse its buffer directly.
+            if op >= 1.0 && base.is_blank() {
+                return Ok(wrap_raster_like(over.clone(), kind));
+            }
+            let out = normal_over(&base, &over, op);
+            return Ok(wrap_raster_like(Arc::new(out), kind));
+        }
+
+        let out = blend_general(&base, &over, mask_ref, self.mode, self.composite, op, clip);
         Ok(wrap_raster_like(Arc::new(out), kind))
     }
     fn param_hash(&self, h: &mut Xxh3) {
@@ -239,6 +214,117 @@ impl Node for BlendNode {
     fn param_refs(&self) -> Vec<String> {
         self.param_refs.clone()
     }
+}
+
+/// General blend loop: demultiply, apply the W3C blend function in
+/// non-premultiplied space, then recomposite with source-over (or
+/// source-atop when `clip` is set, or destination-out for the eraser).
+fn blend_general(
+    base: &RasterBuf,
+    over: &RasterBuf,
+    mask: Option<&RasterBuf>,
+    mode: BlendMode,
+    composite: Composite,
+    op: f32,
+    clip: bool,
+) -> RasterBuf {
+    let mut out = RasterBuf::new(base.width, base.height);
+    for i in (0..base.pixels.len()).step_by(4) {
+        // Demultiply base + over to [0,1] RGB + alpha.
+        let (br, bg, bb, ba) = demul(&base.pixels[i..i + 4]);
+        let (sr, sg, sb, sa_raw) = demul(&over.pixels[i..i + 4]);
+        // Source effective alpha = sa * opacity * mask.alpha (mask
+        // contributes coverage, not color).
+        let mask_a = match mask {
+            Some(m) => m.pixels[i + 3] as f32 / 255.0,
+            None => 1.0,
+        };
+        let sa = sa_raw * op * mask_a;
+        // Short-circuit Porter-Duff destination-out (eraser): the
+        // blend math is irrelevant — base is kept where over is
+        // transparent, removed where over is opaque.
+        if composite == Composite::DestinationOut {
+            let inv = 1.0 - sa;
+            out.pixels[i] = to_u8(br * ba * inv);
+            out.pixels[i + 1] = to_u8(bg * ba * inv);
+            out.pixels[i + 2] = to_u8(bb * ba * inv);
+            out.pixels[i + 3] = to_u8(ba * inv);
+            continue;
+        }
+        // Apply blend function to non-premultiplied colors.
+        let (mr, mg, mb) = blend_color(mode, [br, bg, bb], [sr, sg, sb]);
+        // Blended source per W3C: Cs' = (1 - αb) * Cs + αb * B(Cb, Cs).
+        let bsr = (1.0 - ba) * sr + ba * mr;
+        let bsg = (1.0 - ba) * sg + ba * mg;
+        let bsb = (1.0 - ba) * sb + ba * mb;
+        // Composite. `clip` switches source-over -> source-atop.
+        let (or, og, ob, oa) = if clip {
+            // source-atop: αo = αb, co = αs*αb*Cs' + (1-αs)*αb*Cb
+            let oa = ba;
+            let or = sa * ba * bsr + (1.0 - sa) * ba * br;
+            let og = sa * ba * bsg + (1.0 - sa) * ba * bg;
+            let ob = sa * ba * bsb + (1.0 - sa) * ba * bb;
+            (or, og, ob, oa)
+        } else {
+            // source-over: αo = αs + αb*(1-αs)
+            let oa = sa + ba * (1.0 - sa);
+            let or = sa * bsr + (1.0 - sa) * ba * br;
+            let og = sa * bsg + (1.0 - sa) * ba * bg;
+            let ob = sa * bsb + (1.0 - sa) * ba * bb;
+            (or, og, ob, oa)
+        };
+        // `or`/`og`/`ob` are already premultiplied (multiplied by
+        // alphas in the composite step). Pack back into u8.
+        out.pixels[i] = to_u8(or);
+        out.pixels[i + 1] = to_u8(og);
+        out.pixels[i + 2] = to_u8(ob);
+        out.pixels[i + 3] = to_u8(oa);
+    }
+    out
+}
+
+/// Plain source-over of premultiplied RGBA8, done entirely in integer
+/// space: `out_c = s_c + d_c * (255 - s_a) / 255`. When `op < 1`, the
+/// premultiplied source is first scaled by `op` (scaling every channel,
+/// alpha included, keeps it premultiplied). Matches [`blend_general`] for
+/// `mode = Normal`, `composite = Over`, no clip and no mask, to within a
+/// rounding step per channel.
+fn normal_over(base: &RasterBuf, over: &RasterBuf, op: f32) -> RasterBuf {
+    let mut out = RasterBuf::new(base.width, base.height);
+    // Fixed-point opacity in [0, 255]; `op >= 1` skips the scale entirely.
+    let sf = if op >= 1.0 {
+        255
+    } else {
+        (op * 255.0).round() as u32
+    };
+    for (o, (d, s)) in out
+        .pixels
+        .chunks_exact_mut(4)
+        .zip(base.pixels.chunks_exact(4).zip(over.pixels.chunks_exact(4)))
+    {
+        let sa = if sf == 255 {
+            s[3] as u32
+        } else {
+            div255(s[3] as u32 * sf)
+        };
+        let inv = 255 - sa;
+        for c in 0..4 {
+            let sc = if sf == 255 {
+                s[c] as u32
+            } else {
+                div255(s[c] as u32 * sf)
+            };
+            o[c] = (sc + div255(d[c] as u32 * inv)) as u8;
+        }
+    }
+    out
+}
+
+/// Rounded division by 255 for `x` in `[0, 65025]` (= 255 × 255).
+#[inline]
+fn div255(x: u32) -> u32 {
+    let t = x + 128;
+    (t + (t >> 8)) >> 8
 }
 
 pub(super) struct BlendFactory;
@@ -493,3 +579,99 @@ fn set_sat(c: [f32; 3], s: f32) -> [f32; 3] {
 }
 
 ezu_graph::submit_node!(BlendFactory);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Tiny deterministic LCG so tests need no `rand` dependency.
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> u32 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1);
+            (self.0 >> 33) as u32
+        }
+        fn byte(&mut self) -> u8 {
+            (self.next() & 0xff) as u8
+        }
+    }
+
+    /// A random raster with valid premultiplied pixels (`rgb <= a`).
+    fn random_premul(w: u32, h: u32, seed: u64) -> RasterBuf {
+        let mut rng = Lcg(seed);
+        let mut buf = RasterBuf::new(w, h);
+        for px in buf.pixels.chunks_exact_mut(4) {
+            let a = rng.byte();
+            px[0] = rng.byte().min(a);
+            px[1] = rng.byte().min(a);
+            px[2] = rng.byte().min(a);
+            px[3] = a;
+        }
+        buf
+    }
+
+    fn assert_close(fast: &RasterBuf, reference: &RasterBuf, tol: i32) {
+        assert_eq!(fast.pixels.len(), reference.pixels.len());
+        for (i, (&f, &r)) in fast.pixels.iter().zip(reference.pixels.iter()).enumerate() {
+            let d = (f as i32 - r as i32).abs();
+            assert!(
+                d <= tol,
+                "byte {i}: fast={f} reference={r} diff={d} > {tol}"
+            );
+        }
+    }
+
+    #[test]
+    fn normal_over_matches_general_opacity_1() {
+        let base = random_premul(31, 17, 0x1234);
+        let over = random_premul(31, 17, 0x9abc);
+        let fast = normal_over(&base, &over, 1.0);
+        let reference = blend_general(
+            &base,
+            &over,
+            None,
+            BlendMode::Normal,
+            Composite::Over,
+            1.0,
+            false,
+        );
+        assert_close(&fast, &reference, 1);
+    }
+
+    #[test]
+    fn normal_over_matches_general_opacity_half() {
+        let base = random_premul(31, 17, 0x5555);
+        let over = random_premul(31, 17, 0xaaaa);
+        let fast = normal_over(&base, &over, 0.5);
+        let reference = blend_general(
+            &base,
+            &over,
+            None,
+            BlendMode::Normal,
+            Composite::Over,
+            0.5,
+            false,
+        );
+        assert_close(&fast, &reference, 1);
+    }
+
+    #[test]
+    fn blank_over_is_base_exactly() {
+        let base = random_premul(23, 29, 0xfeed);
+        let over = RasterBuf::new(23, 29); // all zero = fully transparent
+        assert!(over.is_blank());
+        assert!(!base.is_blank());
+        // General blend with a transparent `over` reproduces `base` byte for
+        // byte — the property the eval fast path relies on.
+        let out = blend_general(
+            &base,
+            &over,
+            None,
+            BlendMode::Normal,
+            Composite::Over,
+            1.0,
+            false,
+        );
+        assert_eq!(out.pixels, base.pixels);
+    }
+}
