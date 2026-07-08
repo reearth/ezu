@@ -121,6 +121,31 @@ fn radial_offset_em(anchor: Anchor, r: f32) -> [f32; 2] {
     [x, y]
 }
 
+/// Neighbour prefilter band width, in multiples of the node's widest label
+/// reach. A label reaches at most one reach from its anchor, so a chain of
+/// colliding labels advances one reach per hop; this many hops is the depth at
+/// which a dropped neighbour can no longer perturb a label the tile draws. Wide
+/// enough that filtering leaves the render bit-identical to gathering every
+/// neighbour; a tighter band starts to disturb dense collision chains.
+const NEIGHBOR_BAND_HOPS: f32 = 3.0;
+
+/// Whether a neighbour feature's geometry — its bounding box in the local
+/// world-pixel frame — comes within `band` px of this tile's rectangle
+/// `[0, tile_w] × [0, tile_h]`. Only such features can host a label (or sit
+/// in a collision chain) that changes what this tile draws; the rest are
+/// dropped before shaping.
+fn bbox_within_band(
+    min_x: f32,
+    min_y: f32,
+    max_x: f32,
+    max_y: f32,
+    tile_w: f32,
+    tile_h: f32,
+    band: f32,
+) -> bool {
+    max_x + band >= 0.0 && min_x - band <= tile_w && max_y + band >= 0.0 && min_y - band <= tile_h
+}
+
 /// Evaluate a `Color` expression for a group into straight RGBA (`0..=1`
 /// components, the repo color convention), falling back to `fallback`
 /// when absent or non-color.
@@ -290,6 +315,30 @@ struct LabelSection {
     scale: f32,
     color: Option<[f32; 4]>,
     valign: VerticalAlign,
+}
+
+/// A feature group evaluated once and ready to shape: its label sections and
+/// per-group paint/layout scalars (group opacity already folded into the fill
+/// and halo alpha), plus the source group and its neighbour offset. Built by
+/// [`TextNode::prep_group`] so the neighbour prefilter can size its band from
+/// `reach` — the widest a label can lay out — without a second evaluation pass.
+struct GroupPrep<'g> {
+    group: &'g FeatureGroup,
+    dx: i64,
+    dy: i64,
+    sections: Vec<LabelSection>,
+    /// The sections concatenated, as they lay out — the collision dedup text.
+    text: String,
+    size: f32,
+    sort_key: f64,
+    opacity: f32,
+    padding: f32,
+    color: [f32; 4],
+    halo_color: [f32; 4],
+    halo_width: f32,
+    reach: f32,
+    /// A `font-expr` was set but resolved to the default stack (warned, own only).
+    font_fallback: bool,
 }
 
 /// Resolve an evaluated `text` value into label sections, or `None` to skip
@@ -512,6 +561,174 @@ impl TextNode {
         }
     }
 
+    /// Upper bound (px) on how far a label reaches from its anchor, estimated
+    /// before shaping. The widest an unshaped label can lay out is 2 em of
+    /// advance per char — above any real glyph advance, ligatures and wide
+    /// scripts included. Added on top: the collision `padding`, the halo (drawn
+    /// beyond the collision box), and any `radial-offset` an `anchor-variants`
+    /// candidate applies.
+    ///
+    /// `cap` bounds the advance by `max-extent-px` for point placement, where
+    /// labels reaching past it are culled; line placement passes `false`, since
+    /// a line label lays out along the path un-wrapped and legitimately extends
+    /// half its length from each anchor, well past `max-extent-px`.
+    fn label_reach(
+        &self,
+        sections: &[LabelSection],
+        size: f32,
+        padding: f32,
+        halo: f32,
+        cap: bool,
+    ) -> f32 {
+        let advance: f32 = sections
+            .iter()
+            .map(|s| s.text.chars().count() as f32 * 2.0 * size * s.scale)
+            .sum();
+        let advance = if cap {
+            advance.min(self.max_extent_px)
+        } else {
+            advance
+        };
+        advance + padding + halo + self.radial_offset_em * size
+    }
+
+    /// Resolve a feature group's evaluated `text` into label sections against
+    /// `base_font_id`, or `None` to skip (null/other types, empty label, or a
+    /// constant with no text). Shared by the reach pre-scan and the main build.
+    fn eval_sections(
+        &self,
+        ectx: &maplibre_expr::EvaluationContext,
+        registry: &FontRegistry,
+        base_font_id: u32,
+    ) -> Option<Vec<LabelSection>> {
+        match &self.text_expr {
+            Some(e) => match maplibre_expr::evaluate(e, ectx) {
+                Ok(v) => label_sections(&v, registry, base_font_id),
+                _ => None,
+            },
+            None => match &self.text {
+                Some(t) if !t.is_empty() => Some(vec![LabelSection {
+                    text: t.clone(),
+                    font_id: base_font_id,
+                    scale: 1.0,
+                    color: None,
+                    valign: VerticalAlign::Baseline,
+                }]),
+                _ => None,
+            },
+        }
+    }
+
+    /// Evaluate a feature group once into a [`GroupPrep`] — its label sections
+    /// and per-group paint/layout scalars, ready to shape — or `None` if it
+    /// produces no label. `cap` matches [`Self::label_reach`]. Evaluating here
+    /// (rather than in the shaping loop) lets the neighbour prefilter size its
+    /// band from the widest label without a second evaluation pass.
+    #[allow(clippy::too_many_arguments)]
+    fn prep_group<'g>(
+        &self,
+        group: &'g FeatureGroup,
+        dx: i64,
+        dy: i64,
+        registry: &FontRegistry,
+        z: u8,
+        const_size: f32,
+        const_color: [f32; 4],
+        const_halo_color: [f32; 4],
+        const_halo_width: f32,
+        const_opacity: f32,
+        cap: bool,
+    ) -> Option<GroupPrep<'g>> {
+        let ectx = crate::render::group_expr_context(group, z);
+        let base_font_id = registry.resolve(self.group_stack_key(&ectx).as_deref()).0;
+        let font_fallback = self.font_expr.is_some() && base_font_id == 0;
+        let sections = self.eval_sections(&ectx, registry, base_font_id)?;
+        let text: String = sections.iter().map(|s| s.text.as_str()).collect();
+        if text.is_empty() {
+            return None;
+        }
+        let size = eval_number(&self.size_expr, &ectx, const_size).max(0.0);
+        if size <= 0.0 {
+            return None;
+        }
+        let sort_key = match &self.sort_key_expr {
+            Some(e) => match maplibre_expr::evaluate(e, &ectx) {
+                Ok(maplibre_expr::Value::Number(n)) => n,
+                _ => 0.0,
+            },
+            None => 0.0,
+        };
+        let opacity = eval_number(&self.opacity_expr, &ectx, const_opacity).clamp(0.0, 1.0);
+        let padding = eval_number(&self.padding_expr, &ectx, self.padding_px).max(0.0);
+        let mut color = eval_color(&self.color_expr, &ectx, const_color);
+        let mut halo_color = eval_color(&self.halo_color_expr, &ectx, const_halo_color);
+        color[3] *= opacity;
+        halo_color[3] *= opacity;
+        let halo_width = eval_number(&self.halo_width_expr, &ectx, const_halo_width).max(0.0);
+        let reach = self.label_reach(&sections, size, padding, halo_width, cap);
+        Some(GroupPrep {
+            group,
+            dx,
+            dy,
+            sections,
+            text,
+            size,
+            sort_key,
+            opacity,
+            padding,
+            color,
+            halo_color,
+            halo_width,
+            reach,
+            font_fallback,
+        })
+    }
+
+    /// Gather the 8 neighbour tiles' feature groups for cross-tile collision:
+    /// each bound `<source>.<layer>@dx,dy` layer, filtered exactly like this
+    /// tile's own features, paired with its `(dx, dy)` offset. Empty when
+    /// collision is off, no upstream source is set, or nothing is bound;
+    /// extent-mismatched layers (which would break the shared world frame) are
+    /// skipped. Decoded once and reused by the reach pre-scan and the build.
+    fn neighbor_groups(
+        &self,
+        ctx: &EvalCtx<'_>,
+        z: u8,
+        extent_i: i64,
+    ) -> Vec<(Vec<FeatureGroup>, i64, i64)> {
+        let mut out = Vec::new();
+        if !self.collide {
+            return out;
+        }
+        let Some(base) = &self.neighbor_base else {
+            return out;
+        };
+        for dy in -1i32..=1 {
+            for dx in -1i32..=1 {
+                if dx == 0 && dy == 0 {
+                    continue;
+                }
+                let name = ezu_graph::neighbor_binding(base, dx, dy);
+                let layer = match ctx.assets.load(&name) {
+                    Ok(Asset::Features(opq)) => opq.downcast::<FeatureLayer>().ok(),
+                    _ => None,
+                };
+                let Some(layer) = layer else { continue };
+                if layer.extent.max(1) as i64 != extent_i {
+                    continue;
+                }
+                let groups = collect_groups(
+                    &layer.features,
+                    self.filter_expr.as_ref(),
+                    &self.min_zoom_field,
+                    z,
+                );
+                out.push((groups, dx as i64, dy as i64));
+            }
+        }
+        out
+    }
+
     /// Layout params for line placement: a single un-wrapped line,
     /// centred so each glyph's `x` is measured from the label centre. The
     /// `offset-em` shift is applied during the walk (along + perpendicular
@@ -658,62 +875,107 @@ impl TextNode {
         let mut cands: Vec<LineCandidate> = Vec::new();
         let mut draws: Vec<LineDraw> = Vec::new();
 
-        // Turn one feature group's polylines into placement candidates,
-        // evaluated at neighbour offset `(dx, dy)`. Every collision input is
-        // in the local world-pixel frame (current tile origin subtracted),
-        // so a neighbour tile agrees on each straddling label.
-        let mut add_group = |group: &FeatureGroup, dx: i64, dy: i64| {
-            if group.lines.is_empty() {
-                return;
-            }
-            let ectx = crate::render::group_expr_context(group, z);
-            let base_font_id = registry.resolve(self.group_stack_key(&ectx).as_deref()).0;
-            if dx == 0 && dy == 0 && self.font_expr.is_some() && base_font_id == 0 {
-                font_fallbacks += 1;
-            }
-            let sections = match &self.text_expr {
-                Some(e) => match maplibre_expr::evaluate(e, &ectx) {
-                    Ok(v) => match label_sections(&v, &registry, base_font_id) {
-                        Some(s) => s,
-                        None => return,
-                    },
-                    _ => return,
-                },
-                None => match &self.text {
-                    Some(t) if !t.is_empty() => vec![LabelSection {
-                        text: t.clone(),
-                        font_id: base_font_id,
-                        scale: 1.0,
-                        color: None,
-                        valign: VerticalAlign::Baseline,
-                    }],
-                    _ => return,
-                },
-            };
-            let text: String = sections.iter().map(|s| s.text.as_str()).collect();
-            if text.is_empty() {
-                return;
-            }
-            let size = eval_number(&self.size_expr, &ectx, const_size).max(0.0);
-            if size <= 0.0 {
-                return;
-            }
-            let sort_key = match &self.sort_key_expr {
-                Some(e) => match maplibre_expr::evaluate(e, &ectx) {
-                    Ok(maplibre_expr::Value::Number(n)) => n,
-                    _ => 0.0,
-                },
-                None => 0.0,
-            };
-            let opacity = eval_number(&self.opacity_expr, &ectx, const_opacity).clamp(0.0, 1.0);
-            let padding = eval_number(&self.padding_expr, &ectx, self.padding_px).max(0.0);
-            let mut color = eval_color(&self.color_expr, &ectx, const_color);
-            let mut halo_color = eval_color(&self.halo_color_expr, &ectx, const_halo_color);
-            color[3] *= opacity;
-            halo_color[3] *= opacity;
-            let halo_width = eval_number(&self.halo_width_expr, &ectx, const_halo_width).max(0.0);
+        // Gather the neighbour feature groups once (collision only), decoded
+        // here and reused by the single evaluation pass below.
+        let nbr_groups = self.neighbor_groups(ctx, z, extent_i);
 
-            let (flat_fonts, ranges, hash) = assemble_stacks(&sections, &registry);
+        // Evaluate every own and neighbour group once, up front — label sections
+        // and per-group paint scalars, never the shaping — tracking the widest
+        // label reach for the neighbour band and the per-own-label warnings.
+        let mut preps: Vec<GroupPrep> = Vec::new();
+        let mut reach_max = 0.0f32;
+        for group in &feats.groups {
+            if group.lines.is_empty() {
+                continue;
+            }
+            if let Some(prep) = self.prep_group(
+                group,
+                0,
+                0,
+                &registry,
+                z,
+                const_size,
+                const_color,
+                const_halo_color,
+                const_halo_width,
+                const_opacity,
+                false,
+            ) {
+                reach_max = reach_max.max(prep.reach);
+                if prep.font_fallback {
+                    font_fallbacks += 1;
+                }
+                preps.push(prep);
+            }
+        }
+        for (groups, dx, dy) in &nbr_groups {
+            for group in groups {
+                if group.lines.is_empty() {
+                    continue;
+                }
+                if let Some(prep) = self.prep_group(
+                    group,
+                    *dx,
+                    *dy,
+                    &registry,
+                    z,
+                    const_size,
+                    const_color,
+                    const_halo_color,
+                    const_halo_width,
+                    const_opacity,
+                    false,
+                ) {
+                    reach_max = reach_max.max(prep.reach);
+                    preps.push(prep);
+                }
+            }
+        }
+
+        // Neighbour prefilter band: this many multiples of the widest label
+        // reach — a collision chain advances one reach per hop. A neighbour line
+        // whose geometry stays outside this band of the tile cannot change what
+        // it draws, so shaping it is wasted; skip it.
+        let band = NEIGHBOR_BAND_HOPS * reach_max;
+
+        // Shape the surviving groups into placement candidates. Every collision
+        // input is in the local world-pixel frame (current tile origin
+        // subtracted), so a neighbour tile agrees on each straddling label.
+        for prep in &preps {
+            let dx = prep.dx;
+            let dy = prep.dy;
+            let group = prep.group;
+            let sections = &prep.sections;
+            let text = &prep.text;
+            let size = prep.size;
+            let sort_key = prep.sort_key;
+            let opacity = prep.opacity;
+            let padding = prep.padding;
+            let color = prep.color;
+            let halo_color = prep.halo_color;
+            let halo_width = prep.halo_width;
+            // Neighbour prefilter: skip a neighbour line whose geometry lies
+            // outside the collision band — its anchors slide along the path, so
+            // the whole polyline bbox is the reach reference.
+            if dx != 0 || dy != 0 {
+                let (mut min_x, mut min_y, mut max_x, mut max_y) =
+                    (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+                for line in &group.lines {
+                    for &(x, y) in line {
+                        let lpx = (dx * extent_i + x as i64) as f32 * sx;
+                        let lpy = (dy * extent_i + y as i64) as f32 * sy;
+                        min_x = min_x.min(lpx);
+                        max_x = max_x.max(lpx);
+                        min_y = min_y.min(lpy);
+                        max_y = max_y.max(lpy);
+                    }
+                }
+                if !bbox_within_band(min_x, min_y, max_x, max_y, tile_w, tile_h, band) {
+                    continue;
+                }
+            }
+
+            let (flat_fonts, ranges, hash) = assemble_stacks(sections, &registry);
             let block = blocks
                 .entry((hash, size.to_bits()))
                 .or_insert_with(|| {
@@ -736,10 +998,10 @@ impl TextNode {
                 missing_range_chars += block.missing_range_chars;
             }
             if block.is_empty() {
-                return;
+                continue;
             }
             let fonts = Arc::new(flat_fonts);
-            let paints = Arc::new(section_paints(&sections, opacity));
+            let paints = Arc::new(section_paints(sections, opacity));
 
             // Each glyph's horizontal-centre offset (px) from the label
             // centre, plus the along-line (`offset-em[0]`) shift; the
@@ -753,7 +1015,7 @@ impl TextNode {
                 .collect();
             let total_len = block.bbox.width() * size;
             if total_len <= 0.0 {
-                return;
+                continue;
             }
             // A glyph's collision half-height spans the line box plus the
             // perpendicular offset.
@@ -833,42 +1095,6 @@ impl TextNode {
                         fonts: fonts.clone(),
                         paints: paints.clone(),
                     });
-                }
-            }
-        };
-
-        for group in &feats.groups {
-            add_group(group, 0, 0);
-        }
-        // Neighbour candidates: re-read each bound neighbour layer, re-apply
-        // the same filter, evaluate the same expressions — so both tiles
-        // sharing a border produce identical candidates.
-        if self.collide {
-            if let Some(base) = &self.neighbor_base {
-                for dy in -1i32..=1 {
-                    for dx in -1i32..=1 {
-                        if dx == 0 && dy == 0 {
-                            continue;
-                        }
-                        let name = ezu_graph::neighbor_binding(base, dx, dy);
-                        let layer = match ctx.assets.load(&name) {
-                            Ok(Asset::Features(opq)) => opq.downcast::<FeatureLayer>().ok(),
-                            _ => None,
-                        };
-                        let Some(layer) = layer else { continue };
-                        if layer.extent.max(1) as i64 != extent_i {
-                            continue;
-                        }
-                        let groups = collect_groups(
-                            &layer.features,
-                            self.filter_expr.as_ref(),
-                            &self.min_zoom_field,
-                            z,
-                        );
-                        for group in &groups {
-                            add_group(group, dx as i64, dy as i64);
-                        }
-                    }
                 }
             }
         }
@@ -1060,68 +1286,105 @@ impl Node for TextNode {
         let mut cands: Vec<Candidate> = Vec::new();
         let mut draws: Vec<DrawRec> = Vec::new();
 
-        // Turn one feature group's points into placement candidates,
-        // evaluated at neighbour offset `(dx, dy)` (`(0, 0)` for the
-        // tile's own features). Everything that feeds the collision
-        // decision is derived from the world anchor (exact integer
-        // tile-frame coordinate) and the em box × size — never from
-        // tile-local floats — so adjacent tiles agree.
-        let mut add_group = |group: &FeatureGroup, dx: i64, dy: i64| {
-            if group.points.is_empty() {
-                return;
-            }
-            let ectx = crate::render::group_expr_context(group, z);
-            // Per-feature default stack (Phase 1) — the fallback for any
-            // `format` section without its own `text-font`, and the whole-label
-            // stack for a plain string.
-            let base_font_id = registry.resolve(self.group_stack_key(&ectx).as_deref()).0;
-            if dx == 0 && dy == 0 && self.font_expr.is_some() && base_font_id == 0 {
-                font_fallbacks += 1;
-            }
-            let sections = match &self.text_expr {
-                Some(e) => match maplibre_expr::evaluate(e, &ectx) {
-                    Ok(v) => match label_sections(&v, &registry, base_font_id) {
-                        Some(s) => s,
-                        None => return,
-                    },
-                    _ => return,
-                },
-                None => match &self.text {
-                    Some(t) if !t.is_empty() => vec![LabelSection {
-                        text: t.clone(),
-                        font_id: base_font_id,
-                        scale: 1.0,
-                        color: None,
-                        valign: VerticalAlign::Baseline,
-                    }],
-                    _ => return,
-                },
-            };
-            // Collision text: the sections concatenated (as they lay out).
-            let text: String = sections.iter().map(|s| s.text.as_str()).collect();
-            if text.is_empty() {
-                return;
-            }
-            let size = eval_number(&self.size_expr, &ectx, const_size).max(0.0);
-            if size <= 0.0 {
-                return;
-            }
-            let sort_key = match &self.sort_key_expr {
-                Some(e) => match maplibre_expr::evaluate(e, &ectx) {
-                    Ok(maplibre_expr::Value::Number(n)) => n,
-                    _ => 0.0,
-                },
-                None => 0.0,
-            };
-            let opacity = eval_number(&self.opacity_expr, &ectx, const_opacity).clamp(0.0, 1.0);
-            let padding = eval_number(&self.padding_expr, &ectx, self.padding_px).max(0.0);
-            let mut color = eval_color(&self.color_expr, &ectx, const_color);
-            let mut halo_color = eval_color(&self.halo_color_expr, &ectx, const_halo_color);
-            color[3] *= opacity;
-            halo_color[3] *= opacity;
-            let halo_width = eval_number(&self.halo_width_expr, &ectx, const_halo_width).max(0.0);
+        // Gather the neighbour feature groups once (collision only): each bound
+        // neighbour layer, filtered exactly like this tile's own features.
+        let nbr_groups = self.neighbor_groups(ctx, z, extent_i);
 
-            let (flat_fonts, ranges, hash) = assemble_stacks(&sections, &registry);
+        // Evaluate every own and neighbour group once, up front — label sections
+        // and per-group paint scalars, never the shaping — tracking the widest
+        // label reach for the neighbour band and the per-own-label warnings.
+        let mut preps: Vec<GroupPrep> = Vec::new();
+        let mut reach_max = 0.0f32;
+        for group in &feats.groups {
+            if group.points.is_empty() {
+                continue;
+            }
+            if let Some(prep) = self.prep_group(
+                group,
+                0,
+                0,
+                &registry,
+                z,
+                const_size,
+                const_color,
+                const_halo_color,
+                const_halo_width,
+                const_opacity,
+                true,
+            ) {
+                reach_max = reach_max.max(prep.reach);
+                if prep.font_fallback {
+                    font_fallbacks += 1;
+                }
+                preps.push(prep);
+            }
+        }
+        for (groups, dx, dy) in &nbr_groups {
+            for group in groups {
+                if group.points.is_empty() {
+                    continue;
+                }
+                if let Some(prep) = self.prep_group(
+                    group,
+                    *dx,
+                    *dy,
+                    &registry,
+                    z,
+                    const_size,
+                    const_color,
+                    const_halo_color,
+                    const_halo_width,
+                    const_opacity,
+                    true,
+                ) {
+                    reach_max = reach_max.max(prep.reach);
+                    preps.push(prep);
+                }
+            }
+        }
+
+        // Neighbour prefilter band: this many multiples of the widest label
+        // reach — a collision chain advances one reach per hop. A neighbour
+        // feature whose geometry stays outside this band of the tile cannot
+        // change what it draws, so shaping it is wasted; skip it.
+        let band = NEIGHBOR_BAND_HOPS * reach_max;
+
+        // Shape the surviving groups into placement candidates. Everything that
+        // feeds the collision decision is derived from the world anchor (exact
+        // integer tile-frame coordinate) and the em box × size — never from
+        // tile-local floats — so adjacent tiles agree.
+        for prep in &preps {
+            let dx = prep.dx;
+            let dy = prep.dy;
+            let group = prep.group;
+            let sections = &prep.sections;
+            let text = &prep.text;
+            let size = prep.size;
+            let sort_key = prep.sort_key;
+            let opacity = prep.opacity;
+            let padding = prep.padding;
+            let color = prep.color;
+            let halo_color = prep.halo_color;
+            let halo_width = prep.halo_width;
+            // Neighbour prefilter: skip a neighbour feature whose geometry lies
+            // outside the collision band — it cannot change what this tile draws.
+            if dx != 0 || dy != 0 {
+                let (mut min_x, mut min_y, mut max_x, mut max_y) =
+                    (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+                for &(x, y) in &group.points {
+                    let lpx = (dx * extent_i + x as i64) as f32 * sx;
+                    let lpy = (dy * extent_i + y as i64) as f32 * sy;
+                    min_x = min_x.min(lpx);
+                    max_x = max_x.max(lpx);
+                    min_y = min_y.min(lpy);
+                    max_y = max_y.max(lpy);
+                }
+                if !bbox_within_band(min_x, min_y, max_x, max_y, tile_w, tile_h, band) {
+                    continue;
+                }
+            }
+
+            let (flat_fonts, ranges, hash) = assemble_stacks(sections, &registry);
             // Lay out one block per anchor candidate (a single fixed anchor,
             // or the `text-variable-anchor` list). Each is cached by anchor so
             // repeated points/neighbours reuse it.
@@ -1159,7 +1422,7 @@ impl Node for TextNode {
                 missing_range_chars += primary.missing_range_chars;
             }
             if primary.is_empty() {
-                return;
+                continue;
             }
             // A label reaching past the pad this node requested would clip
             // at tile borders — cull it instead.
@@ -1172,7 +1435,7 @@ impl Node for TextNode {
                 if dx == 0 && dy == 0 {
                     culled += group.points.len();
                 }
-                return;
+                continue;
             }
             let paint = TextPaint {
                 size_px: size,
@@ -1182,7 +1445,7 @@ impl Node for TextNode {
                 halo_blur_px: 0.0,
             };
             let fonts = Arc::new(flat_fonts);
-            let paints = Arc::new(section_paints(&sections, opacity));
+            let paints = Arc::new(section_paints(sections, opacity));
             // A variant's collision box at a point: its em bbox scaled to px,
             // offset to the point, inflated by `padding-px`.
             let box_at = |block: &TextBlock, lpx: f32, lpy: f32| -> Aabb {
@@ -1225,45 +1488,6 @@ impl Node for TextNode {
                     fonts: fonts.clone(),
                     paints: paints.clone(),
                 });
-            }
-        };
-
-        // The tile's own features.
-        for group in &feats.groups {
-            add_group(group, 0, 0);
-        }
-        // Neighbour candidates (cross-tile placement): re-read each bound
-        // neighbour layer, re-apply the same filter, and evaluate the same
-        // expressions — so both tiles sharing a border produce identical
-        // candidates. Unbound neighbours simply contribute nothing.
-        if self.collide {
-            if let Some(base) = &self.neighbor_base {
-                for dy in -1i32..=1 {
-                    for dx in -1i32..=1 {
-                        if dx == 0 && dy == 0 {
-                            continue;
-                        }
-                        let name = ezu_graph::neighbor_binding(base, dx, dy);
-                        let layer = match ctx.assets.load(&name) {
-                            Ok(Asset::Features(opq)) => opq.downcast::<FeatureLayer>().ok(),
-                            _ => None,
-                        };
-                        let Some(layer) = layer else { continue };
-                        // Mismatched extent would break the shared world frame.
-                        if layer.extent.max(1) as i64 != extent_i {
-                            continue;
-                        }
-                        let groups = collect_groups(
-                            &layer.features,
-                            self.filter_expr.as_ref(),
-                            &self.min_zoom_field,
-                            z,
-                        );
-                        for group in &groups {
-                            add_group(group, dx as i64, dy as i64);
-                        }
-                    }
-                }
             }
         }
 
