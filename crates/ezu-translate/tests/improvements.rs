@@ -86,8 +86,8 @@ fn zoom_range_becomes_features_gate() {
 }
 
 /// A style that seeds the layer list with a redundant duplicate background
-/// must not produce a self-blend (`blend(@bg, @bg)`) at the head of the chain;
-/// the chain starts from the background node directly.
+/// must not stack the background twice; the composite starts from the
+/// background node directly.
 #[test]
 fn redundant_leading_background_does_not_emit_a_self_blend() {
     const DUP_BG: &str = r##"{
@@ -105,14 +105,11 @@ fn redundant_leading_background_does_not_emit_a_self_blend() {
     let (recipe, _) = convert(&style, &ConvertOptions::default()).unwrap();
 
     let nodes = recipe["nodes"].as_object().unwrap();
-    // No blend has an identical `base` and `over` reference.
-    for (id, n) in nodes {
-        if n["op"] == "blend" {
-            assert_ne!(n["base"], n["over"], "self-blend emitted at `{id}`");
-        }
-    }
-    // The one real blend composes the fill over the background directly.
-    assert_eq!(recipe["nodes"]["blend_0"]["base"], "@bg__bg");
-    assert_eq!(recipe["nodes"]["blend_0"]["over"], "@shown__fill");
-    assert_eq!(recipe["output"], "blend_0");
+    // The composite stacks the background once, then the fill on top — the
+    // duplicate opaque background is collapsed away, not stacked twice.
+    assert_eq!(recipe["output"], "stack");
+    assert_eq!(
+        nodes["stack"]["layers"],
+        serde_json::json!(["@bg__bg", "@shown__fill"])
+    );
 }

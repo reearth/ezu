@@ -12,6 +12,7 @@ fn registry_emits_document_schema_with_all_ops() {
         "circle",
         "blur",
         "blend",
+        "stack",
         "gradient-linear",
         "gradient-radial",
         "gradient-conic",

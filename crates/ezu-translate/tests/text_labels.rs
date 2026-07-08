@@ -293,13 +293,26 @@ fn icon_and_text_layer_emits_both_nodes() {
     assert_eq!(text["op"], "text");
     // Both halves share the layer's features node.
     assert_eq!(stamp["features"], text["features"]);
-    // Painter's algorithm: text blends over the icon.
-    let blend = nodes
+    // Painter's algorithm: the composite stacks the icon below the text.
+    let stack = nodes
         .values()
-        .find(|n| n["op"] == "blend")
-        .expect("a blend node");
-    assert!(blend["base"].as_str().unwrap().contains("__stamp"));
-    assert!(blend["over"].as_str().unwrap().contains("__text"));
+        .find(|n| n["op"] == "stack")
+        .expect("a stack node");
+    let layers: Vec<&str> = stack["layers"]
+        .as_array()
+        .expect("stack layers array")
+        .iter()
+        .map(|l| l.as_str().unwrap())
+        .collect();
+    let icon_ix = layers
+        .iter()
+        .position(|l| l.contains("__stamp"))
+        .expect("icon layer in stack");
+    let text_ix = layers
+        .iter()
+        .position(|l| l.contains("__text"))
+        .expect("text layer in stack");
+    assert!(icon_ix < text_ix, "text must stack above the icon");
     // The old "text not supported" warning is gone.
     assert!(
         !report

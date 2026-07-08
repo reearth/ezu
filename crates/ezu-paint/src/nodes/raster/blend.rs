@@ -322,7 +322,7 @@ fn normal_over(base: &RasterBuf, over: &RasterBuf, op: f32) -> RasterBuf {
 
 /// Rounded division by 255 for `x` in `[0, 65025]` (= 255 × 255).
 #[inline]
-fn div255(x: u32) -> u32 {
+pub(super) fn div255(x: u32) -> u32 {
     let t = x + 128;
     (t + (t >> 8)) >> 8
 }
