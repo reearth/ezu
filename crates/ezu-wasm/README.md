@@ -162,10 +162,10 @@ import init, { Renderer, simdEnabled } from "./ezu_wasm.js";
 await init();
 console.log("SIMD?", simdEnabled());
 
-// `new Renderer(...)` pre-registers every built-in brush bundled
-// with `ezu-paint` (the watercolor + pencil set, CC0). Styles can
-// reference these with `"src": "builtin:NAME"`; bring your own by
-// declaring a `brush` source in the style and calling `bindSource`.
+// `new Renderer(...)` starts with an empty asset bank — nothing is
+// bundled. Declare each brush/image as a source in the style and supply
+// its bytes with `bindSource` (keyed by the source's `src`) before you
+// render.
 const r = new Renderer(await (await fetch("/style")).text());
 
 const z = 13, x = 7276, y = 3225;

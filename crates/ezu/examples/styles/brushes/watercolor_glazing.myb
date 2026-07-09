@@ -1,12 +1,12 @@
 {
     "comment": "MyPaint brush file", 
-    "description": "A brush with sensitivity on size while producing a fringe to simulate watercolor", 
+    "description": "A watercolor brush preset to glaze area", 
     "group": "", 
     "notes": "A brush preset part of the Brushkit v0.6 \n created in october 2012 by David Revoy ( aka Deevad ) \n source: http://www.davidrevoy.com/article142/ressource-mypaint-brushes \n license: CC-Zero/Public-Domain", 
-    "parent_brush_name": "deevad/watercolor_expressive", 
+    "parent_brush_name": "deevad/watercolor_glazing", 
     "settings": {
         "anti_aliasing": {
-            "base_value": 0.0, 
+            "base_value": 1.0, 
             "inputs": {}
         }, 
         "change_color_h": {
@@ -54,7 +54,7 @@
             "inputs": {}
         }, 
         "dabs_per_actual_radius": {
-            "base_value": 2.0, 
+            "base_value": 6.0, 
             "inputs": {}
         }, 
         "dabs_per_basic_radius": {
@@ -85,30 +85,20 @@
             }
         }, 
         "elliptical_dab_ratio": {
-            "base_value": 4.0, 
+            "base_value": 10.0, 
             "inputs": {
-                "pressure": [
-                    [
-                        0.0, 
-                        -0.0
-                    ], 
-                    [
-                        0.75, 
-                        -0.0
-                    ], 
-                    [
-                        1.0, 
-                        -2.7
-                    ]
-                ], 
                 "speed1": [
                     [
                         0.0, 
-                        -0.37
+                        -3.34
+                    ], 
+                    [
+                        0.962963, 
+                        -0.9045833333333331
                     ], 
                     [
                         4.0, 
-                        0.37
+                        0.0
                     ]
                 ]
             }
@@ -118,27 +108,8 @@
             "inputs": {}
         }, 
         "hardness": {
-            "base_value": 0.23, 
-            "inputs": {
-                "pressure": [
-                    [
-                        0.0, 
-                        -0.0
-                    ], 
-                    [
-                        0.746914, 
-                        -0.0
-                    ], 
-                    [
-                        0.884375, 
-                        -0.0
-                    ], 
-                    [
-                        1.0, 
-                        -0.032083
-                    ]
-                ]
-            }
+            "base_value": 0.41, 
+            "inputs": {}
         }, 
         "lock_alpha": {
             "base_value": 0.0, 
@@ -146,22 +117,7 @@
         }, 
         "offset_by_random": {
             "base_value": 0.0, 
-            "inputs": {
-                "pressure": [
-                    [
-                        0.0, 
-                        0.0
-                    ], 
-                    [
-                        0.75, 
-                        0.0
-                    ], 
-                    [
-                        1.0, 
-                        0.8
-                    ]
-                ]
-            }
+            "inputs": {}
         }, 
         "offset_by_speed": {
             "base_value": 0.0, 
@@ -172,16 +128,24 @@
             "inputs": {}
         }, 
         "opaque": {
-            "base_value": 2.0, 
+            "base_value": 1.44, 
             "inputs": {
-                "random": [
+                "pressure": [
                     [
                         0.0, 
-                        1.0
+                        -0.43125
+                    ], 
+                    [
+                        0.258721, 
+                        -0.277917
+                    ], 
+                    [
+                        0.540698, 
+                        0.0
                     ], 
                     [
                         1.0, 
-                        1.0
+                        0.92
                     ]
                 ]
             }
@@ -199,12 +163,8 @@
                         0.0
                     ], 
                     [
-                        0.040123, 
-                        0.885417
-                    ], 
-                    [
-                        0.138889, 
-                        1.0
+                        0.058642, 
+                        0.604167
                     ], 
                     [
                         1.0, 
@@ -222,16 +182,16 @@
             "inputs": {}
         }, 
         "radius_logarithmic": {
-            "base_value": 3.5, 
+            "base_value": 2.6, 
             "inputs": {
                 "pressure": [
                     [
                         0.0, 
-                        -2.9
+                        -0.653333
                     ], 
                     [
                         1.0, 
-                        0.845833
+                        0.98
                     ]
                 ]
             }
@@ -249,40 +209,11 @@
             "inputs": {}
         }, 
         "smudge": {
-            "base_value": 0.71, 
-            "inputs": {
-                "pressure": [
-                    [
-                        0.0, 
-                        -0.65
-                    ], 
-                    [
-                        0.5, 
-                        -0.358854
-                    ], 
-                    [
-                        0.796875, 
-                        -0.094792
-                    ], 
-                    [
-                        1.0, 
-                        0.24375
-                    ]
-                ], 
-                "speed1": [
-                    [
-                        0.0, 
-                        -0.01
-                    ], 
-                    [
-                        4.0, 
-                        0.01
-                    ]
-                ]
-            }
+            "base_value": 0.9, 
+            "inputs": {}
         }, 
         "smudge_length": {
-            "base_value": 0.1, 
+            "base_value": 0.5, 
             "inputs": {}
         }, 
         "smudge_radius_log": {
@@ -306,11 +237,11 @@
             "inputs": {}
         }, 
         "speed2_slowness": {
-            "base_value": 0.8, 
+            "base_value": 0.9, 
             "inputs": {}
         }, 
         "stroke_duration_logarithmic": {
-            "base_value": 6.5, 
+            "base_value": 4.0, 
             "inputs": {}
         }, 
         "stroke_holdtime": {

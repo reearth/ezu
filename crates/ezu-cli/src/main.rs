@@ -864,7 +864,7 @@ async fn render_one(
     // so the blocking path doesn't have to juggle async fetches.
     let mut dem_bindings: Vec<(String, ezu::graph::ScalarField)> = Vec::new();
     if !dem_sources.is_empty() {
-        let base_loader = BrushBankLoader::empty();
+        let base_loader = BrushBankLoader::new();
         let mut tmp = TileLoader::new(&base_loader, tile_id);
         bind_dem_sources(&mut tmp, &dem_sources, tile_id, canvas).await?;
         for name in dem_sources.names() {
@@ -879,7 +879,7 @@ async fn render_one(
     // the blocking render path receives ready-to-bind buffers.
     let mut raster_bindings: Vec<(String, RasterBuf)> = Vec::new();
     if !raster_sources.is_empty() {
-        let base_loader = BrushBankLoader::empty();
+        let base_loader = BrushBankLoader::new();
         let mut tmp = TileLoader::new(&base_loader, tile_id);
         bind_raster_sources(&mut tmp, &raster_sources, tile_id, canvas).await?;
         for name in raster_sources.names() {
