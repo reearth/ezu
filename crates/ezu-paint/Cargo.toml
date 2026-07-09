@@ -40,6 +40,12 @@ parallel = ["ezu-graph/parallel", "dep:rayon"]
 # the JS host.
 http = ["dep:reqwest", "dep:pmtiles", "dep:tokio"]
 
+# System-font resolution (`system:` font scheme) queries the OS font
+# database. There is no such database in a browser, so keep `fontdb`
+# off the wasm build — the `system:` path errors at runtime there.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+fontdb = { workspace = true }
+
 [dependencies.rayon]
 version = "1"
 optional = true

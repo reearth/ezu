@@ -331,11 +331,26 @@ impl SourceDecl {
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct FontSource {
-    /// Font file `url` — `http(s)://`, `file:PATH`, or a `data:` URL,
-    /// like [`FileSource::src`].
+    /// Font source `url`. Either a font *file* — `http(s)://`,
+    /// `file:PATH`, or a `data:` URL, like [`FileSource::src`] — or an
+    /// installed-font reference:
+    ///
+    /// - `system:<family>[?weight=<100..900>&style=<normal|italic|oblique>]`
+    ///   resolves a face by family name from the host's installed fonts
+    ///   (e.g. `system:Arial Unicode MS`, `system:Helvetica?weight=700`).
+    ///   The family may be written with literal spaces or percent-encoded.
+    ///   `weight` defaults to `400`, `style` to `normal`.
+    ///
+    /// A `system:` reference makes the recipe **machine-dependent**: the
+    /// same family resolves to whatever face that machine has installed,
+    /// so glyph shapes and character coverage can differ across
+    /// environments (and it is unavailable in the browser/wasm host,
+    /// where font bytes must be supplied directly). Reference a font file
+    /// for a fully portable, reproducible recipe.
     pub url: String,
     /// Face index within a TrueType collection (`.ttc`); 0 (the
-    /// default) for single-face files.
+    /// default) for single-face files. Ignored for `system:` urls — the
+    /// installed-font database reports the matched face's own index.
     #[serde(default)]
     pub index: u32,
     #[serde(default)]
