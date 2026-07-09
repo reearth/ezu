@@ -86,6 +86,38 @@ fn text_only_symbol_layer_converts_to_a_text_node() {
 }
 
 #[test]
+fn system_font_source_passes_through_as_a_font_url() {
+    // A `--font "NAME=system:..."` mapping lowers to a `font` source
+    // whose `url` is the `system:` reference verbatim (with its query).
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "system-font",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "places", "type": "symbol", "source": "s", "source-layer": "place",
+          "layout": { "text-field": "{name}", "text-font": ["Helvetica"] } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let opts = opts_with_fonts(&[("Helvetica", "system:Helvetica?weight=700")]);
+    let (recipe, report) = convert(&style, &opts).unwrap();
+
+    let sources = recipe["sources"].as_object().unwrap();
+    assert_eq!(sources["helvetica"]["type"], "font");
+    assert_eq!(sources["helvetica"]["url"], "system:Helvetica?weight=700");
+
+    assert!(
+        !report.warnings.iter().any(|w| w.contains("text skipped")),
+        "unexpected warnings: {:?}",
+        report.warnings
+    );
+
+    // The `system:` url is accepted by the `font` source schema.
+    let doc_text = serde_json::to_string(&recipe).unwrap();
+    ezu_style::Document::from_json(&doc_text).expect("recipe parses as ezu Document");
+}
+
+#[test]
 fn token_text_field_rewrites_to_an_expression() {
     const STYLE: &str = r##"{
       "version": 8,

@@ -165,13 +165,16 @@ struct TranslateCmd {
     /// `switch` (instead of dropping them).
     #[arg(long)]
     keep_hidden: bool,
-    /// Map a MapLibre fontstack entry to a font file URL, as
-    /// `NAME=URL` (repeatable) — e.g.
+    /// Map a MapLibre fontstack entry to a font source, as `NAME=SOURCE`
+    /// (repeatable). SOURCE is an installed-font reference
+    /// (`system:Helvetica`, optionally `?weight=700&style=italic`) or a
+    /// font-file URL (`http(s)://…`, `file:…`, `data:…`) — e.g.
+    /// `--font "Noto Sans Regular=system:Noto Sans"` or
     /// `--font "Noto Sans Regular=https://example.com/NotoSans-Regular.ttf"`.
     /// Optional: unmapped `text-font` stacks fall back to the style's
     /// `glyphs` endpoint (SDF glyph ranges); a mapping wins where
-    /// present and renders from the real font file.
-    #[arg(long = "font", value_name = "NAME=URL")]
+    /// present and renders from the real font.
+    #[arg(long = "font", value_name = "NAME=SOURCE")]
     fonts: Vec<String>,
     /// Pretty-print the emitted JSON.
     #[arg(long)]

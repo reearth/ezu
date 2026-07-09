@@ -98,13 +98,16 @@ pub struct ConvertOptions {
     /// layer is off yet present, and flipping the switch's `select` to `b`
     /// turns it on (a build-time toggle, since `switch` resolves at build).
     pub keep_hidden: bool,
-    /// MapLibre fontstack entry name → font file URL, used to lower
+    /// MapLibre fontstack entry name → font source, used to lower
     /// `symbol` text (`text-font`) to ezu `font` sources (CLI:
-    /// repeatable `--font NAME=URL`). Optional: a stack with no mapped
-    /// entry falls back to the style's top-level `glyphs` endpoint as
-    /// an SDF `glyphs` source (MapLibre's own rendering path); a
-    /// mapping wins where present and renders from the real font file.
-    /// No mapping *and* no `glyphs` skips the text with a warning.
+    /// repeatable `--font NAME=SOURCE`). The source is passed straight
+    /// through as the `font` source's `url`, so it may be an
+    /// installed-font reference (`system:Helvetica`) or a font-file URL
+    /// (`http(s)://…`, `file:…`, `data:…`). Optional: a stack with no
+    /// mapped entry falls back to the style's top-level `glyphs`
+    /// endpoint as an SDF `glyphs` source (MapLibre's own rendering
+    /// path); a mapping wins where present and renders from the real
+    /// font. No mapping *and* no `glyphs` skips the text with a warning.
     pub fonts: std::collections::HashMap<String, String>,
 }
 

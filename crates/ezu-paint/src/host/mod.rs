@@ -259,6 +259,19 @@ impl AssetLoader for BrushBankLoader {
                 }
                 Err(AssetError::NotFound(src.to_string()))
             }
+            SrcScheme::System(spec) => {
+                // A host may pre-populate the bank under the full
+                // `system:…` key (CLI `prefetch_doc_assets`, or a wasm
+                // `bindSource` supplying the bytes directly); use that
+                // first so no re-scan/parse happens per load.
+                if let Some(f) = self.fonts.get(src) {
+                    return Ok(font_asset(f));
+                }
+                let query = parse_system_font(spec)?;
+                Ok(Asset::Font(
+                    Arc::new(load_system_font(&query)?) as OpaqueValue
+                ))
+            }
             SrcScheme::Data(_) => {
                 // Decoded up front by `prefetch_doc_assets` into the bank; fall
                 // back to decoding inline (no I/O) for hosts that don't prefetch
@@ -372,6 +385,10 @@ enum SrcScheme<'a> {
     /// asset. Decoded in-process (no I/O), so it works in every host
     /// including wasm.
     Data(#[allow(dead_code)] &'a str),
+    /// `system:<family>[?weight=…&style=…]` — a font resolved by family
+    /// name from the OS-installed font database (see
+    /// [`parse_system_font`]). The payload is the part after `system:`.
+    System(&'a str),
 }
 
 fn parse_src_scheme(src: &str) -> Result<SrcScheme<'_>, AssetError> {
@@ -379,15 +396,199 @@ fn parse_src_scheme(src: &str) -> Result<SrcScheme<'_>, AssetError> {
         Ok(SrcScheme::Builtin(rest))
     } else if let Some(rest) = src.strip_prefix("file:") {
         Ok(SrcScheme::File(rest))
+    } else if let Some(rest) = src.strip_prefix("system:") {
+        Ok(SrcScheme::System(rest))
     } else if src.starts_with("http://") || src.starts_with("https://") {
         Ok(SrcScheme::Http(src))
     } else if src.starts_with("data:") {
         Ok(SrcScheme::Data(src))
     } else {
         Err(AssetError::Other(format!(
-            "src `{src}` is missing a scheme — use `builtin:NAME`, `file:PATH`, `http(s)://URL`, or `data:`"
+            "src `{src}` is missing a scheme — use `builtin:NAME`, `file:PATH`, `system:FAMILY`, `http(s)://URL`, or `data:`"
         )))
     }
+}
+
+/// A parsed `system:` font reference — a family name plus an optional
+/// CSS weight/style to disambiguate among the faces of that family.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SystemFontQuery {
+    family: String,
+    /// CSS numeric weight, `100..=900` (default `400`).
+    weight: u16,
+    style: SystemFontStyle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SystemFontStyle {
+    Normal,
+    Italic,
+    Oblique,
+}
+
+/// Parse the body of a `system:<family>[?weight=…&style=…]` font URI —
+/// the part *after* the `system:` scheme prefix.
+///
+/// Grammar:
+///
+/// ```text
+/// <family>[?<param>&<param>…]
+/// <param> := weight=<100..=900> | style=<normal|italic|oblique>
+/// ```
+///
+/// - `<family>` is the CSS family name (e.g. `Arial Unicode MS`). It may
+///   be written literally with spaces, or percent-encoded
+///   (`Arial%20Unicode%20MS`) — both decode to the same name, so a name
+///   with spaces is natural to write. Only `%XX` escapes are decoded;
+///   `+` is a literal.
+/// - `weight` (optional, default `400`) is a CSS numeric weight, an
+///   integer in `100..=900`.
+/// - `style` (optional, default `normal`) is `normal`, `italic`, or
+///   `oblique`, matched case-insensitively.
+///
+/// Query keys other than `weight`/`style`, a malformed key=value pair,
+/// an out-of-range or non-numeric weight, an unknown style, or an empty
+/// family are all rejected with a descriptive error.
+///
+/// Examples:
+///
+/// ```text
+/// system:Arial Unicode MS
+/// system:Helvetica?weight=700
+/// system:Noto%20Sans?weight=300&style=italic
+/// ```
+fn parse_system_font(spec: &str) -> Result<SystemFontQuery, AssetError> {
+    let (family_raw, query) = match spec.split_once('?') {
+        Some((f, q)) => (f, Some(q)),
+        None => (spec, None),
+    };
+    let family = String::from_utf8_lossy(&percent_decode(family_raw))
+        .trim()
+        .to_string();
+    if family.is_empty() {
+        return Err(AssetError::Other(format!(
+            "system font `{spec}`: empty family name — use `system:FAMILY`"
+        )));
+    }
+    let mut weight = 400u16;
+    let mut style = SystemFontStyle::Normal;
+    if let Some(query) = query {
+        for pair in query.split('&').filter(|p| !p.is_empty()) {
+            let (key, value) = pair.split_once('=').ok_or_else(|| {
+                AssetError::Other(format!(
+                    "system font `{spec}`: malformed query part `{pair}` (expected `key=value`)"
+                ))
+            })?;
+            match key {
+                "weight" => {
+                    let w: u16 = value.parse().map_err(|_| {
+                        AssetError::Other(format!(
+                            "system font `{spec}`: invalid weight `{value}` (expected an integer in 100..=900)"
+                        ))
+                    })?;
+                    if !(100..=900).contains(&w) {
+                        return Err(AssetError::Other(format!(
+                            "system font `{spec}`: weight `{w}` out of range (expected 100..=900)"
+                        )));
+                    }
+                    weight = w;
+                }
+                "style" => {
+                    style = match value.to_ascii_lowercase().as_str() {
+                        "normal" => SystemFontStyle::Normal,
+                        "italic" => SystemFontStyle::Italic,
+                        "oblique" => SystemFontStyle::Oblique,
+                        other => {
+                            return Err(AssetError::Other(format!(
+                                "system font `{spec}`: unknown style `{other}` (expected normal, italic, or oblique)"
+                            )))
+                        }
+                    };
+                }
+                other => {
+                    return Err(AssetError::Other(format!(
+                        "system font `{spec}`: unknown query key `{other}` (expected `weight` or `style`)"
+                    )))
+                }
+            }
+        }
+    }
+    Ok(SystemFontQuery {
+        family,
+        weight,
+        style,
+    })
+}
+
+/// Process-wide OS font database, scanned once on first `system:` font
+/// resolution. Not built on wasm (no OS font database in a browser).
+#[cfg(not(target_arch = "wasm32"))]
+static SYSTEM_FONTS: std::sync::LazyLock<fontdb::Database> = std::sync::LazyLock::new(|| {
+    let mut db = fontdb::Database::new();
+    db.load_system_fonts();
+    db
+});
+
+/// Resolve a `system:` font query against the installed fonts, returning
+/// the matched face as an [`ezu_core::text::Font`].
+///
+/// `fontdb` reports the face's index within its (possibly `.ttc`) file
+/// alongside the bytes; that index is threaded into
+/// [`ezu_core::text::Font::from_bytes`] so a collection's requested face
+/// is the one parsed — mirroring how a `file:`/`http` source honours its
+/// declared TTC `index`.
+#[cfg(not(target_arch = "wasm32"))]
+fn load_system_font(query: &SystemFontQuery) -> Result<ezu_core::text::Font, AssetError> {
+    resolve_system_font(&SYSTEM_FONTS, query)
+}
+
+/// [`load_system_font`] against an explicit database — the seam the unit
+/// tests use to exercise the query→bytes→face path over a fixture font,
+/// independent of whatever fonts the host OS happens to have installed.
+#[cfg(not(target_arch = "wasm32"))]
+fn resolve_system_font(
+    db: &fontdb::Database,
+    query: &SystemFontQuery,
+) -> Result<ezu_core::text::Font, AssetError> {
+    let style = match query.style {
+        SystemFontStyle::Normal => fontdb::Style::Normal,
+        SystemFontStyle::Italic => fontdb::Style::Italic,
+        SystemFontStyle::Oblique => fontdb::Style::Oblique,
+    };
+    let id = db
+        .query(&fontdb::Query {
+            families: &[fontdb::Family::Name(&query.family)],
+            weight: fontdb::Weight(query.weight),
+            stretch: fontdb::Stretch::Normal,
+            style,
+        })
+        .ok_or_else(|| {
+            AssetError::Other(format!("system font family '{}' not found", query.family))
+        })?;
+    let parsed = db
+        .with_face_data(id, |data, face_index| {
+            ezu_core::text::Font::from_bytes(Arc::from(data.to_vec()), face_index)
+        })
+        .ok_or_else(|| {
+            AssetError::Other(format!(
+                "system font family '{}' matched but its font data could not be read",
+                query.family
+            ))
+        })?;
+    parsed.map_err(|e| AssetError::Decode {
+        src: format!("system:{}", query.family),
+        msg: e.to_string(),
+    })
+}
+
+/// wasm has no OS font database: the JS host must supply font bytes via
+/// `bindSource` instead. A `system:` reference that reaches here (no
+/// bytes were bound for it) fails with a clear runtime error.
+#[cfg(target_arch = "wasm32")]
+fn load_system_font(_query: &SystemFontQuery) -> Result<ezu_core::text::Font, AssetError> {
+    Err(AssetError::Other(
+        "system: fonts are not available on wasm; supply font bytes instead".to_string(),
+    ))
 }
 
 /// A decoded `data:` URL — its media type (lowercased, e.g. `image/png`;
@@ -1104,6 +1305,17 @@ pub async fn prefetch_doc_assets(
                 if loader.fonts.contains_key(&font.url) {
                     continue;
                 }
+                // `system:` resolves by family name from the OS font
+                // database (which reports its own face index), not by
+                // fetching bytes — handle it here and skip the URL read.
+                if let Some(spec) = font.url.strip_prefix("system:") {
+                    let query =
+                        parse_system_font(spec).map_err(|e| format!("font `{name}`: {e}"))?;
+                    let face =
+                        load_system_font(&query).map_err(|e| format!("font `{name}`: {e}"))?;
+                    loader.fonts.insert(font.url.clone(), Arc::new(face));
+                    continue;
+                }
                 let bytes = read_asset_bytes(&font.url, base_dir)
                     .await
                     .map_err(|e| format!("font `{name}`: {e}"))?;
@@ -1407,6 +1619,97 @@ mod tests {
         assert!(is_font_magic(b"ttcf...."));
         assert!(!is_font_magic(b"\x89PNG\r\n"));
         assert!(!is_font_magic(b"{}"));
+    }
+
+    #[test]
+    fn system_font_parses_family_weight_and_style() {
+        // Bare family, defaults applied.
+        let q = parse_system_font("Arial Unicode MS").unwrap();
+        assert_eq!(q.family, "Arial Unicode MS");
+        assert_eq!(q.weight, 400);
+        assert_eq!(q.style, SystemFontStyle::Normal);
+
+        // Percent-encoded spaces decode to the same family.
+        assert_eq!(
+            parse_system_font("Arial%20Unicode%20MS").unwrap().family,
+            "Arial Unicode MS"
+        );
+
+        // Weight + style, style is case-insensitive.
+        let q = parse_system_font("Helvetica?weight=700&style=Italic").unwrap();
+        assert_eq!(q.family, "Helvetica");
+        assert_eq!(q.weight, 700);
+        assert_eq!(q.style, SystemFontStyle::Italic);
+
+        assert_eq!(
+            parse_system_font("Noto%20Sans?style=oblique")
+                .unwrap()
+                .style,
+            SystemFontStyle::Oblique
+        );
+    }
+
+    #[test]
+    fn system_font_rejects_bad_input() {
+        // Empty family.
+        assert!(parse_system_font("").is_err());
+        assert!(parse_system_font("?weight=400").is_err());
+
+        // Non-numeric / out-of-range weight.
+        assert!(parse_system_font("Helvetica?weight=bold").is_err());
+        assert!(parse_system_font("Helvetica?weight=50").is_err());
+        assert!(parse_system_font("Helvetica?weight=1000").is_err());
+
+        // Unknown style value and unknown query key.
+        assert!(parse_system_font("Helvetica?style=slanted").is_err());
+        assert!(parse_system_font("Helvetica?size=12").is_err());
+
+        // Malformed query part (no `=`).
+        assert!(parse_system_font("Helvetica?weight").is_err());
+    }
+
+    /// Resolution goes through a `fontdb::Database` seeded with a fixture
+    /// font (not the host's system fonts), so the query→bytes→face path
+    /// is exercised deterministically on every platform.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn system_font_resolves_from_a_seeded_fontdb() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../ezu-core/tests/fonts/NotoSans-Regular.latin.ttf");
+        let bytes = std::fs::read(&path).expect("fixture font readable");
+        let mut db = fontdb::Database::new();
+        db.load_font_data(bytes);
+
+        // The fixture's name-table family (as `fontdb` sees it).
+        let family = db
+            .faces()
+            .next()
+            .and_then(|f| f.families.first().map(|(name, _)| name.clone()))
+            .expect("one seeded face");
+
+        let query = parse_system_font(&family).unwrap();
+        let font = resolve_system_font(&db, &query).expect("fixture family resolves");
+        let face = font.face();
+        assert!(font.covers(&face, 'A'));
+
+        // A family that isn't installed is a clean, described miss.
+        let missing = parse_system_font("No Such Family 12345").unwrap();
+        match resolve_system_font(&db, &missing) {
+            Err(AssetError::Other(msg)) => assert!(msg.contains("not found"), "{msg}"),
+            other => panic!("expected a not-found error, got {other:?}"),
+        }
+    }
+
+    /// A real system font, off by default (installed set is host-specific).
+    /// Run with `cargo test -- --ignored` on a machine that has the family.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    #[ignore = "depends on host-installed fonts"]
+    fn system_font_resolves_from_installed_fonts() {
+        let query = parse_system_font("Arial Unicode MS").unwrap();
+        let font = load_system_font(&query).expect("Arial Unicode MS is installed");
+        let face = font.face();
+        assert!(font.covers(&face, 'A'));
     }
 
     #[test]
