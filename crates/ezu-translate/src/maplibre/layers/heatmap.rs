@@ -14,6 +14,11 @@ use crate::maplibre::{Report, ZoomRange};
 /// The `density` node clamps evaluated radii to it.
 const RADIUS_BOUND_CAP: f64 = 100.0;
 
+/// The MapLibre style spec's default `heatmap-radius`, matching the
+/// `density` node's own default when the field is absent. The kernel
+/// reaches this far, so an unconfigured heatmap still needs this much pad.
+const DEFAULT_HEATMAP_RADIUS: f64 = 30.0;
+
 /// The MapLibre style spec's default `heatmap-color` ramp. `royalblue` is
 /// hex-encoded because maplibre-expr's named-colour table only carries the
 /// basic CSS names.
@@ -42,6 +47,10 @@ fn default_heatmap_color() -> Value {
 /// `heatmap-intensity` route constant-vs-expression onto the `density` node;
 /// `heatmap-color` passes through raw as the ramp's `ramp-expr` (the spec's
 /// default ramp when absent).
+///
+/// Returns the canvas pad (px) this layer's `density` kernel needs — the
+/// upper bound on its radius, ceiled. The caller lifts the document `pad`
+/// to cover it so the kernel isn't clipped at tile borders.
 pub(crate) fn convert_heatmap(
     id: &str,
     layer: &Map<String, Value>,
@@ -50,9 +59,9 @@ pub(crate) fn convert_heatmap(
     zoom_range: ZoomRange,
     sources: &Sources,
     report: &mut Report,
-) {
+) -> u32 {
     let Some((source, source_layer)) = resolve_layer_source(id, layer, sources, report) else {
-        return;
+        return 0;
     };
     let (min_zoom, max_zoom) = zoom_range;
     let base_filter_expr = filter::layer_filter_expr(layer, report, id);
@@ -75,8 +84,14 @@ pub(crate) fn convert_heatmap(
     // expression-only radius still needs one: the expression's own
     // maximum when its outputs are plain literals, else a capped default.
     let (radius, radius_expr) = resolve_number(paint.get("heatmap-radius"));
+    // The kernel radius the `density` node will actually use, which drives
+    // its build-time pad. Absent `heatmap-radius` falls through to the node
+    // default; a constant sets `radius`; an expression sets its own bound.
+    let mut radius_bound = DEFAULT_HEATMAP_RADIUS;
     if let Some(r) = radius {
-        spec["radius"] = Value::from(r.max(0.0));
+        let r = r.max(0.0);
+        spec["radius"] = Value::from(r);
+        radius_bound = r;
     }
     if let Some(e) = radius_expr {
         let bound = radius_bound_from_expr(&e).unwrap_or_else(|| {
@@ -88,6 +103,7 @@ pub(crate) fn convert_heatmap(
         });
         spec["radius"] = Value::from(bound);
         spec["radius-expr"] = e;
+        radius_bound = bound;
     }
 
     // `heatmap-weight` → `weight-expr`. The node has no constant weight
@@ -143,6 +159,10 @@ pub(crate) fn convert_heatmap(
     }
     nodes.insert(ramp_id.clone(), ramp_spec);
     outputs.push(ramp_id);
+
+    // The `density` node grows upstream pad by `ceil(radius_bound)`; the
+    // document pad must cover it or the kernel is clipped at tile borders.
+    radius_bound.ceil().max(0.0) as u32
 }
 
 /// Derive a safe constant upper bound for a `heatmap-radius` expression.

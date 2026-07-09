@@ -187,6 +187,10 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
     // Ordered list of the top raster node id each layer contributes; folded
     // into a blend chain at the end (painter's algorithm).
     let mut outputs: Vec<String> = Vec::new();
+    // Largest canvas pad (px) any layer's pad-hungry kernel needs. The
+    // document `pad` is lifted to cover this so kernels aren't clipped at
+    // tile borders; today only `heatmap` → `density` reports a requirement.
+    let mut required_pad: u32 = 0;
 
     for layer in layers {
         let Some(layer) = layer.as_object() else {
@@ -240,15 +244,17 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
                 &sources,
                 &mut report,
             ),
-            "heatmap" => convert_heatmap(
-                id,
-                layer,
-                &mut nodes,
-                &mut outputs,
-                zoom_range,
-                &sources,
-                &mut report,
-            ),
+            "heatmap" => {
+                required_pad = required_pad.max(convert_heatmap(
+                    id,
+                    layer,
+                    &mut nodes,
+                    &mut outputs,
+                    zoom_range,
+                    &sources,
+                    &mut report,
+                ));
+            }
             "hillshade" => convert_hillshade(id, layer, &mut nodes, &mut outputs, &mut report),
             "fill-extrusion" => convert_fill_extrusion(
                 id,
@@ -298,7 +304,20 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
         ),
     );
     doc.insert("tile-size".into(), Value::from(opts.tile_size));
-    doc.insert("pad".into(), Value::from(opts.pad));
+    // The requested `pad` is a floor: honour a user's larger value, but lift
+    // it when a kernel (heatmap radius) needs more buffer than requested,
+    // otherwise the kernel is clipped and tiles seam at their borders.
+    let pad = if required_pad > opts.pad {
+        report.warn(format!(
+            "raised the recipe pad from {} to {required_pad}px to cover the heatmap \
+             kernel radius (pass a larger `pad` to override)",
+            opts.pad
+        ));
+        required_pad
+    } else {
+        opts.pad
+    };
+    doc.insert("pad".into(), Value::from(pad));
     doc.insert("sources".into(), Value::Object(source_defs));
     doc.insert("nodes".into(), Value::Object(nodes));
     doc.insert("output".into(), Value::String(output));
