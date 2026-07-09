@@ -61,8 +61,8 @@ fn synth_lines(count: u32, points_per_line: u32) -> Vec<Vec<(i32, i32)>> {
 }
 
 fn fixture_brush() -> hokusai::Brush {
-    let json = include_str!("../src/builtin/watercolor_glazing.myb");
-    hokusai::myb::from_str(json).expect("parse builtin watercolor_glazing.myb")
+    let json = include_str!("../fixtures/watercolor_glazing.myb");
+    hokusai::myb::from_str(json).expect("parse fixture watercolor_glazing.myb")
 }
 
 // ---------------------------------------------------------------------------

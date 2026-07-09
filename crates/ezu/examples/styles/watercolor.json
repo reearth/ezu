@@ -20,7 +20,7 @@
                        "description": "Gaussian blur over the finished tile, in px." }
   },
   "sources": {
-    "glazing": { "type": "brush", "src": "builtin:watercolor_glazing" },
+    "glazing": { "type": "brush", "src": "file:brushes/watercolor_glazing.myb" },
     "basemap": { "type": "mvt", "url": "https://papers.reearth.land/protomaps/tilejson.json" }
   },
   "nodes": {

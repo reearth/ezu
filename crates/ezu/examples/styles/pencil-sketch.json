@@ -72,8 +72,8 @@
     }
   },
   "sources": {
-    "pencil_hard":  { "type": "brush", "src": "builtin:4H_pencil" },
-    "pencil_soft":  { "type": "brush", "src": "builtin:2B_pencil" },
+    "pencil_hard":  { "type": "brush", "src": "file:brushes/4H_pencil.myb" },
+    "pencil_soft":  { "type": "brush", "src": "file:brushes/2B_pencil.myb" },
     "basemap":      { "type": "mvt", "url": "https://papers.reearth.land/protomaps/tilejson.json" }
   },
   "nodes": {

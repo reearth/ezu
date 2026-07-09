@@ -15,7 +15,7 @@ evaluator. To execute a document, feed it to
   "tile-size": 512,
   "pad": 24,
   "sources": {
-    "glazing": { "type": "brush", "src": "builtin:watercolor_glazing" }
+    "glazing": { "type": "brush", "src": "file:brushes/watercolor_glazing.myb" }
   },
   "nodes": {
     "bg":            { "op": "solid", "color": "#fbf6e6" },
@@ -53,8 +53,8 @@ carry a `src` URI, tile-scoped variants a `url` template.
 
 `src` URIs are explicit-scheme — pick one of:
 
-- `builtin:NAME` — bundled brush / image included in `ezu-paint`'s
-  built-in bank, or a host-registered resource of the same name.
+- `builtin:NAME` — a resource the host registered in the in-memory
+  bank at runtime under `NAME` (nothing is bundled into the library).
 - `file:PATH` — local file resolved against `--assets-dir` (or
   absolute). `.myb` / `.png` / `.webp` extensions are inferred from
   the source `type` if omitted.

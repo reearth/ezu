@@ -413,8 +413,8 @@ mod parallel_tests {
     use ezu_core::TileId;
 
     fn fixture_brush() -> Brush {
-        let json = include_str!("builtin/watercolor_glazing.myb");
-        hokusai::myb::from_str(json).expect("parse builtin watercolor_glazing.myb")
+        let json = include_str!("../fixtures/watercolor_glazing.myb");
+        hokusai::myb::from_str(json).expect("parse fixture watercolor_glazing.myb")
     }
 
     fn synth_lines() -> Vec<Vec<(i32, i32)>> {

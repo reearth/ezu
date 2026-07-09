@@ -47,8 +47,10 @@ pub struct ServeCmd {
     )]
     style_flag: String,
     /// Base directory for resolving asset `src` paths (brushes, images).
-    #[arg(long, default_value = "assets/brushes", env = "EZU_ASSETS")]
-    assets_dir: PathBuf,
+    /// Defaults to the style file's parent directory (or the current
+    /// directory when the style is a URL).
+    #[arg(long, env = "EZU_ASSETS")]
+    assets_dir: Option<PathBuf>,
     /// Bind address.
     #[arg(long, default_value = "127.0.0.1:8080", env = "EZU_BIND")]
     bind: SocketAddr,
@@ -72,8 +74,23 @@ pub async fn run(args: ServeCmd) -> Result<(), Box<dyn std::error::Error>> {
         .as_deref()
         .unwrap_or(args.style_flag.as_str());
     tracing::info!("loading style from {style_src}");
+
+    // Resolve relative asset `src` paths against the style file's parent
+    // directory by default (the current directory when the style is a
+    // URL), matching the `tile`/`check` commands. `--assets-dir` overrides.
+    let assets_dir = args.assets_dir.clone().unwrap_or_else(|| {
+        if is_url(style_src) {
+            PathBuf::from(".")
+        } else {
+            Path::new(style_src)
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| PathBuf::from("."))
+        }
+    });
+
     let style_text = crate::fetch_text(style_src).await?;
-    let snapshot = StyleSnapshot::build(style_text, 1, &args.assets_dir).await?;
+    let snapshot = StyleSnapshot::build(style_text, 1, &assets_dir).await?;
     tracing::info!(
         "loaded style {} ({} nodes, tile={}, pad={}, {} brushes, {} images, {} dem source(s))",
         snapshot.doc.name,
@@ -119,7 +136,7 @@ pub async fn run(args: ServeCmd) -> Result<(), Box<dyn std::error::Error>> {
         source,
         source_name,
         snapshot,
-        args.assets_dir.clone(),
+        assets_dir,
         args.overzoom_levels,
     );
 

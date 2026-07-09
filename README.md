@@ -261,7 +261,7 @@ earth-tone background.
   "tile-size": 512,
   "pad": 24,
   "sources": {
-    "glazing":  { "type": "brush", "src": "builtin:watercolor_glazing" },
+    "glazing":  { "type": "brush", "src": "file:brushes/watercolor_glazing.myb" },
     "basemap":  { "type": "mvt", "url": "https://papers.reearth.land/protomaps/tilejson.json" }
   },
   "nodes": {
@@ -368,14 +368,17 @@ validation in the live editor) out of the box.
 
 ## Brushes
 
-The reference styles consume CC0 brushes by David Revoy from
-[`mypaint/mypaint-brushes`](https://github.com/mypaint/mypaint-brushes),
-bundled into `ezu-paint` at compile time
-([`crates/ezu-paint/src/builtin/`](https://github.com/reearth/ezu/tree/main/crates/ezu-paint/src/builtin/),
-attribution in
-[`builtin/CREDITS.md`](https://github.com/reearth/ezu/tree/main/crates/ezu-paint/src/builtin/CREDITS.md)). Any
-MyPaint `.myb` brush works — declare it in the style's `assets` block
-and the host loads it from disk or HTTP.
+Nothing is bundled into the library — a style references every brush it
+uses through a `src` in its `sources` block. The example styles ship
+their brushes alongside the style JSON in
+[`crates/ezu/examples/styles/brushes/`](https://github.com/reearth/ezu/tree/main/crates/ezu/examples/styles/brushes/)
+and reference them by relative `file:` path (resolved against the style
+file's directory); those are CC0 brushes by David Revoy from
+[`mypaint/mypaint-brushes`](https://github.com/mypaint/mypaint-brushes)
+(attribution in
+[`brushes/CREDITS.md`](https://github.com/reearth/ezu/tree/main/crates/ezu/examples/styles/brushes/CREDITS.md)).
+Any MyPaint `.myb` brush works — declare it in the style's `sources`
+block and the host loads it from disk or HTTP.
 
 ## License
 

@@ -217,7 +217,6 @@ fn render_ezu(
     let registry = default_registry();
     let graph = build_graph(&doc, &registry)?;
     let mut loader = BrushBankLoader::new();
-    loader.register_builtins();
     load_sprites(client, &doc, &mut loader);
 
     let cache = Cache::new();
@@ -381,7 +380,6 @@ fn bench_tile(
     let registry = default_registry();
     let graph = build_graph(&doc, &registry)?;
     let mut loader = BrushBankLoader::new();
-    loader.register_builtins();
     load_sprites(client, &doc, &mut loader);
 
     let tile_id = TileId { z, x, y };

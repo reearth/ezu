@@ -46,10 +46,9 @@ use crate::PaintError;
 /// `<images_dir>` on disk for PNGs. The brush-bank/-dir pair is kept
 /// for backwards compatibility with the original brush-only API.
 ///
-/// Every loader is pre-populated with the built-in brushes listed in
-/// [`crate::builtin::BUILTIN_BRUSHES`] (CC0, bundled into the binary
-/// via `include_str!`). Use [`BrushBankLoader::empty`] for a loader
-/// without them.
+/// A new loader starts empty. Populate it by inserting assets directly,
+/// pointing it at a directory, or staging a document's declared sources
+/// with [`prefetch_doc_assets`].
 pub struct BrushBankLoader {
     pub bank: HashMap<String, Arc<Brush>>,
     pub brushes_dir: Option<PathBuf>,
@@ -72,15 +71,11 @@ pub struct BrushBankLoader {
 }
 
 impl BrushBankLoader {
-    /// New loader with the bundled built-in brushes pre-registered.
+    /// New loader with an empty bank. Register assets with the `insert*`
+    /// methods, point it at a directory with [`with_dir`](Self::with_dir) /
+    /// [`with_images_dir`](Self::with_images_dir), or stage a document's
+    /// declared sources with [`prefetch_doc_assets`].
     pub fn new() -> Self {
-        let mut this = Self::empty();
-        this.register_builtins();
-        this
-    }
-
-    /// New loader with no brushes registered — caller manages the bank.
-    pub fn empty() -> Self {
         Self {
             bank: HashMap::new(),
             brushes_dir: None,
@@ -90,19 +85,6 @@ impl BrushBankLoader {
             fonts: HashMap::new(),
             glyphs: RwLock::new(HashMap::new()),
         }
-    }
-
-    /// Register every entry in [`crate::builtin::BUILTIN_BRUSHES`].
-    /// Entries that fail to parse are silently skipped — the brushes
-    /// are bundled at compile time, so a parse failure is a bug in this
-    /// crate rather than a runtime condition callers can recover from.
-    pub fn register_builtins(&mut self) -> &mut Self {
-        for (name, myb_json) in crate::builtin::BUILTIN_BRUSHES {
-            if let Ok(brush) = hokusai::myb::from_str(myb_json) {
-                self.bank.insert((*name).to_string(), Arc::new(brush));
-            }
-        }
-        self
     }
 
     pub fn with_dir(mut self, dir: PathBuf) -> Self {
@@ -191,9 +173,9 @@ impl AssetLoader for BrushBankLoader {
         }
         match parse_src_scheme(src)? {
             SrcScheme::Builtin(key) => {
-                // Two-step lookup: bundled brushes register under bare
-                // names, but a host-driven `bindSource` may insert
-                // under the full `builtin:NAME` key. Try both.
+                // Resolve against the in-memory bank the host populated.
+                // A host may key an entry by the bare name or by the full
+                // `builtin:NAME` src (e.g. a wasm `bindSource`), so try both.
                 if let Some(b) = self.bank.get(key) {
                     return Ok(Asset::Brush(b.clone()));
                 }
@@ -212,7 +194,11 @@ impl AssetLoader for BrushBankLoader {
                 if let Some(img) = self.images.get(src) {
                     return Ok(Asset::Image(img.clone()));
                 }
-                Err(AssetError::NotFound(src.to_string()))
+                Err(AssetError::Other(format!(
+                    "asset `{src}` is not registered in the in-memory bank. There are no \
+                     bundled brushes — declare the asset in `sources` with a `file:`, \
+                     `http(s):`, or `data:` `src`, or register it on the host before rendering."
+                )))
             }
             SrcScheme::File(path) => {
                 // Host may pre-populate the bank under the full
@@ -370,8 +356,9 @@ fn http_bytes_blocking(url: String) -> Result<Vec<u8>, String> {
 /// explicit scheme so built-ins, disk paths, and URLs are unambiguous.
 #[derive(Debug, Clone, Copy)]
 enum SrcScheme<'a> {
-    /// `builtin:NAME` — looked up in the loader's in-memory bank
-    /// (bundled brushes + host-registered resources).
+    /// `builtin:NAME` — looked up in the loader's in-memory bank, which
+    /// the host populates at runtime (e.g. a wasm `bindSource`). Nothing
+    /// is bundled into the library, so an unregistered `NAME` is an error.
     Builtin(&'a str),
     /// `file:PATH` — disk path resolved against `brushes_dir` /
     /// `images_dir`; absolute paths are honoured as-is.
@@ -1246,8 +1233,8 @@ pub async fn prefetch_doc_assets(
         let _ = base_dir; // file:-scheme srcs resolve at load() time
         match decl {
             ezu_style::SourceDecl::Brush(file) => {
-                // Only HTTP brushes need pre-fetching — `builtin:` is
-                // already in the bank, `file:` reads at eval time.
+                // Only HTTP brushes need pre-fetching — `file:` reads at
+                // eval time, `builtin:` is registered by the host.
                 if !is_http_url(&file.src) {
                     continue;
                 }
@@ -1465,7 +1452,7 @@ mod tests {
 
     #[test]
     fn neighbor_mvt_binds_under_offset_names() {
-        let base = BrushBankLoader::empty();
+        let base = BrushBankLoader::new();
         let mut loader = TileLoader::new(&base, TileId { z: 3, x: 4, y: 5 });
         loader.bind_mvt(
             "roads",
@@ -1546,7 +1533,7 @@ mod tests {
     #[test]
     fn data_url_image_loads_through_the_asset_loader() {
         let src = red_green_png_data_url();
-        let loader = BrushBankLoader::empty();
+        let loader = BrushBankLoader::new();
         match loader.load(&src).expect("data url loads") {
             Asset::Image(img) => {
                 assert_eq!((img.width, img.height), (2, 1));
@@ -1565,7 +1552,7 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../ezu-core/tests/fonts/NotoSans-Regular.latin.ttf");
         let src = format!("file:{}", path.display());
-        let loader = BrushBankLoader::empty();
+        let loader = BrushBankLoader::new();
         match loader.load(&src).expect("font loads") {
             Asset::Font(opq) => {
                 let font = opq
@@ -1585,7 +1572,7 @@ mod tests {
         // range (see ../ezu-core/tests/glyphs/README.md).
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../ezu-core/tests/glyphs");
         let src = format!("file:{}/{{range}}.pbf", dir.display()).replace('\\', "/");
-        let loader = BrushBankLoader::empty();
+        let loader = BrushBankLoader::new();
 
         let Asset::Glyphs(opq) = loader.load(&src).expect("template loads") else {
             panic!("expected a Glyphs asset from a {{range}} template");

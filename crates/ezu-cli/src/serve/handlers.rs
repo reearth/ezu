@@ -476,7 +476,7 @@ async fn fetch_dem_bindings(
     if registry.is_empty() {
         return Ok(Vec::new());
     }
-    let base = BrushBankLoader::empty();
+    let base = BrushBankLoader::new();
     let mut tmp = TileLoader::new(&base, tile);
     bind_dem_sources(&mut tmp, registry, tile, canvas).await?;
     let mut out = Vec::new();
@@ -498,7 +498,7 @@ async fn fetch_raster_bindings(
     if registry.is_empty() {
         return Ok(Vec::new());
     }
-    let base = BrushBankLoader::empty();
+    let base = BrushBankLoader::new();
     let mut tmp = TileLoader::new(&base, tile);
     bind_raster_sources(&mut tmp, registry, tile, canvas).await?;
     let mut out = Vec::new();
