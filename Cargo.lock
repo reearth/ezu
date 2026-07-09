@@ -788,6 +788,8 @@ name = "ezu-translate"
 version = "0.3.0"
 dependencies = [
  "ezu-core",
+ "ezu-graph",
+ "ezu-paint",
  "ezu-style",
  "maplibre-expr",
  "serde",
