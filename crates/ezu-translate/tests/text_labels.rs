@@ -297,7 +297,7 @@ fn explicit_font_mapping_wins_over_the_glyphs_endpoint() {
 }
 
 #[test]
-fn icon_and_text_layer_emits_both_nodes() {
+fn icon_and_text_layer_share_one_label_node() {
     const STYLE: &str = r##"{
       "version": 8,
       "name": "icon-text",
@@ -319,32 +319,16 @@ fn icon_and_text_layer_emits_both_nodes() {
     let (recipe, report) = convert(&style, &opts).unwrap();
 
     let nodes = recipe["nodes"].as_object().unwrap();
-    let stamp = &nodes["pois__stamp"];
-    let text = &nodes["pois__labels"];
-    assert_eq!(stamp["op"], "stamp");
-    assert_eq!(text["op"], "text-labels");
-    // Both halves share the layer's features node.
-    assert_eq!(stamp["features"], text["features"]);
-    // Painter's algorithm: the composite stacks the icon below the text.
-    let stack = nodes
-        .values()
-        .find(|n| n["op"] == "stack")
-        .expect("a stack node");
-    let layers: Vec<&str> = stack["layers"]
-        .as_array()
-        .expect("stack layers array")
-        .iter()
-        .map(|l| l.as_str().unwrap())
-        .collect();
-    let icon_ix = layers
-        .iter()
-        .position(|l| l.contains("__stamp"))
-        .expect("icon layer in stack");
-    let text_ix = layers
-        .iter()
-        .position(|l| l.contains("__text"))
-        .expect("text layer in stack");
-    assert!(icon_ix < text_ix, "text must stack above the icon");
+    let labels = &nodes["pois__labels"];
+    assert_eq!(labels["op"], "text-labels");
+    // The icon rides the label node, so the symbol's two halves are placed
+    // together against the shared collision index.
+    assert_eq!(labels["icon-name"], "airport-15");
+    assert_eq!(labels["icon-sprite"], "@default");
+    assert!(
+        !nodes.values().any(|n| n["op"] == "stamp"),
+        "a point-placed icon no longer lowers to a stamp: {nodes:?}"
+    );
     // The old "text not supported" warning is gone.
     assert!(
         !report

@@ -1,12 +1,13 @@
-//! `symbol` layer → icon (`layout.icon-image` → sprite `stamp`) and/or
-//! text (`layout.text-field` → `text-labels` + `text-draw`). Icons are
-//! placed at the layer's point features; text follows `symbol-placement`
-//! (points, or along polylines for `line` / `line-center`). An icon+text
-//! layer emits both, text blended over the icon.
+//! `symbol` layer → one label layer (`text-labels` + `text-draw`) carrying
+//! the `layout.text-field` label and the `layout.icon-image` sprite. Text
+//! follows `symbol-placement` (points, or along polylines for `line` /
+//! `line-center`); the icon is point-placed only.
 //!
 //! Every converted *visible* label layer feeds the recipe's one
-//! `label-placement` node, so labels of different layers collide with each
-//! other as they do in MapLibre; icons are still placed without collision.
+//! `label-placement` node, so a symbol's icon and text place as a unit
+//! against the same index every other layer collides with, as in MapLibre.
+//! A line-placed layer's `icon-image` has no ezu counterpart and falls back
+//! to a collision-free `stamp`.
 
 use std::collections::HashMap;
 
@@ -86,8 +87,15 @@ pub(crate) fn convert_symbol(
         format!("@{feat_id}")
     };
 
-    if let Some(icon_image) = icon_image {
-        convert_icon(
+    // `symbol-placement` decides where both halves go. Point placement puts
+    // the icon on the label pipeline, so it collides with everything else;
+    // a line-placed icon has no such counterpart and keeps the plain stamp.
+    let placement = resolve_placement(layout, id, report);
+    let icon_fields = icon_image
+        .filter(|_| placement == "point")
+        .and_then(|v| icon_fields(id, v, layer, layout, sources, report));
+    if let (Some(icon_image), None) = (icon_image, &icon_fields) {
+        convert_icon_stamp(
             id,
             icon_image,
             layer,
@@ -104,6 +112,8 @@ pub(crate) fn convert_symbol(
             id,
             layer,
             layout,
+            placement,
+            icon_fields,
             zoom_range,
             nodes,
             outputs,
@@ -117,12 +127,241 @@ pub(crate) fn convert_symbol(
             &mut ensure_feat,
             report,
         );
+    } else if let Some(icon_fields) = icon_fields {
+        convert_icon_only(
+            id,
+            icon_fields,
+            zoom_range,
+            nodes,
+            outputs,
+            label_layers,
+            &source,
+            &source_layer,
+            base_filter_expr.clone(),
+            &mut ensure_feat,
+        );
     }
 }
 
-/// The icon half: `layout.icon-image` → `icon` (sprite crop) + `stamp`.
+/// MapLibre `symbol-placement`: `point` labels each point feature; `line` /
+/// `line-center` walk the layer's polylines. Anything else falls back to
+/// point with a warning.
+fn resolve_placement(
+    layout: Option<&Map<String, Value>>,
+    id: &str,
+    report: &mut Report,
+) -> &'static str {
+    match layout
+        .and_then(|l| l.get("symbol-placement"))
+        .and_then(Value::as_str)
+    {
+        None | Some("point") => "point",
+        Some("line") => "line",
+        Some("line-center") => "line-center",
+        Some(other) => {
+            report.warn(format!(
+                "layer `{id}`: unknown `symbol-placement: {other}` — using point placement"
+            ));
+            "point"
+        }
+    }
+}
+
+/// The `icon-*` fields a point-placed `icon-image` contributes to its
+/// layer's label node, or `None` when the style declares no sprite to crop
+/// from (warned).
+fn icon_fields(
+    id: &str,
+    icon_image: &Value,
+    layer: &Map<String, Value>,
+    layout: Option<&Map<String, Value>>,
+    sources: &Sources,
+    report: &mut Report,
+) -> Option<Map<String, Value>> {
+    let get = |key: &str| layout.and_then(|l| l.get(key));
+    let mut f = Map::new();
+    // A constant `icon-image` names one icon of one sheet; a data-driven one
+    // is evaluated per feature against the default sheet, which can crop any
+    // icon it contains.
+    match icon_image.as_str() {
+        Some(icon_name) => {
+            let (sprite_src, sprite_icon) = sources.resolve_icon(icon_name).or_else(|| {
+                report.warn(format!(
+                    "layer `{id}`: icon `{icon_name}` needs a `sprite`, but the style declares none — skipped"
+                ));
+                None
+            })?;
+            f.insert("icon-sprite".into(), Value::from(format!("@{sprite_src}")));
+            f.insert("icon-name".into(), Value::from(sprite_icon));
+        }
+        None => {
+            let sprite_src = sources.default_sprite().or_else(|| {
+                report.warn(format!(
+                    "layer `{id}`: data-driven `icon-image` needs a `sprite`, but the style declares none — skipped"
+                ));
+                None
+            })?;
+            f.insert("icon-sprite".into(), Value::from(format!("@{sprite_src}")));
+            f.insert("icon-name-expr".into(), icon_image.clone());
+        }
+    }
+
+    // Constant → plain field, expression → `*-expr`.
+    for (field, expr_field, value) in [
+        ("icon-size", "icon-size-expr", get("icon-size")),
+        (
+            "icon-rotate-deg",
+            "icon-rotate-deg-expr",
+            get("icon-rotate"),
+        ),
+        ("icon-padding-px", "icon-padding-expr", get("icon-padding")),
+        (
+            "icon-opacity",
+            "icon-opacity-expr",
+            paint_of(layer).get("icon-opacity"),
+        ),
+    ] {
+        let (constant, expr) = resolve_number(value);
+        if let Some(c) = constant {
+            f.insert(field.into(), Value::from(c));
+        }
+        if let Some(e) = expr {
+            f.insert(expr_field.into(), e);
+        }
+    }
+    if let Some(anchor) = const_string(get("icon-anchor"), "icon-anchor", id, report) {
+        f.insert("icon-anchor".into(), Value::from(anchor));
+    }
+    if let Some(offset) = const_offset(get("icon-offset"), id, report) {
+        f.insert("icon-offset".into(), serde_json::json!(offset));
+    }
+
+    // `icon-allow-overlap` (bool), superseded by the newer `icon-overlap`
+    // enum, exactly as the text pair works.
+    let mut allow_overlap = get("icon-allow-overlap").and_then(Value::as_bool);
+    match get("icon-overlap").and_then(Value::as_str) {
+        Some("always") => allow_overlap = Some(true),
+        Some("never") => allow_overlap = Some(false),
+        Some("cooperative") => {
+            report.warn(format!(
+                "layer `{id}`: `icon-overlap: cooperative` has no ezu equivalent — treated as `never`"
+            ));
+            allow_overlap = Some(false);
+        }
+        Some(other) => report.warn(format!(
+            "layer `{id}`: unknown `icon-overlap: {other}` — using collision default"
+        )),
+        None => {}
+    }
+    if allow_overlap == Some(true) {
+        f.insert("icon-allow-overlap".into(), Value::from(true));
+    }
+    if get("icon-ignore-placement").and_then(Value::as_bool) == Some(true) {
+        f.insert("icon-ignore-placement".into(), Value::from(true));
+    }
+    if get("icon-optional").and_then(Value::as_bool) == Some(true) {
+        f.insert("icon-optional".into(), Value::from(true));
+    }
+    if get("icon-text-fit").is_some() {
+        report.warn(format!(
+            "layer `{id}`: `icon-text-fit` not supported — the icon keeps its sprite size"
+        ));
+    }
+    Some(f)
+}
+
+/// A symbol layer with an `icon-image` but no `text-field`: the icon still
+/// goes through the shared placement, as a label with no text.
 #[allow(clippy::too_many_arguments)]
-fn convert_icon(
+fn convert_icon_only(
+    id: &str,
+    icon_fields: Map<String, Value>,
+    zoom_range: ZoomRange,
+    nodes: &mut Map<String, Value>,
+    outputs: &mut Vec<String>,
+    label_layers: Option<&mut Vec<String>>,
+    source: &str,
+    source_layer: &str,
+    base_filter_expr: Option<Value>,
+    ensure_feat: &mut impl FnMut(&mut Map<String, Value>) -> String,
+) {
+    let feat_ref = ensure_feat(nodes);
+    let mut spec = serde_json::json!({ "op": "text", "features": feat_ref });
+    for (k, v) in icon_fields {
+        spec[k] = v;
+    }
+    set_placement_context(
+        &mut spec,
+        source,
+        source_layer,
+        zoom_range,
+        base_filter_expr,
+    );
+    emit_label_nodes(id, spec, nodes, outputs, label_layers);
+}
+
+/// Thread the origin source/layer, the style layer's zoom band and its
+/// filter onto a label spec: the node gathers neighbour candidates straight
+/// from the source, so it has to reproduce the `features` node's gates.
+fn set_placement_context(
+    spec: &mut Value,
+    source: &str,
+    source_layer: &str,
+    zoom_range: ZoomRange,
+    base_filter_expr: Option<Value>,
+) {
+    spec["source"] = Value::from(source);
+    spec["layer"] = Value::from(source_layer);
+    let (min_zoom, max_zoom) = zoom_range;
+    if let Some(z) = min_zoom {
+        spec["min-zoom"] = Value::from(z);
+    }
+    if let Some(z) = max_zoom {
+        spec["max-zoom"] = Value::from(z);
+    }
+    if let Some(f) = base_filter_expr {
+        spec["filter-expr"] = f;
+    }
+}
+
+/// Emit a label spec as the recipe's shared pair — a `text-labels` node
+/// registered in `label_layers` plus the `text-draw` that paints its winners
+/// — or, for a layer kept out of the shared index, as one self-placing
+/// `text` node the caller gates off.
+fn emit_label_nodes(
+    id: &str,
+    mut spec: Value,
+    nodes: &mut Map<String, Value>,
+    outputs: &mut Vec<String>,
+    label_layers: Option<&mut Vec<String>>,
+) {
+    let text_id = format!("{id}__text");
+    let Some(label_layers) = label_layers else {
+        spec["op"] = Value::from("text");
+        nodes.insert(text_id.clone(), spec);
+        outputs.push(text_id);
+        return;
+    };
+    let labels_id = format!("{id}__labels");
+    spec["op"] = Value::from("text-labels");
+    nodes.insert(labels_id.clone(), spec);
+    label_layers.push(labels_id.clone());
+    nodes.insert(
+        text_id.clone(),
+        serde_json::json!({
+            "op": "text-draw",
+            "labels": format!("@{labels_id}"),
+            "placement": format!("@{LABEL_PLACEMENT_ID}"),
+        }),
+    );
+    outputs.push(text_id);
+}
+
+/// The fallback icon half for a line-placed layer (or one whose sprite the
+/// label node can't take): `layout.icon-image` → `icon` (sprite crop) +
+/// `stamp`, placed at every point without collision.
+#[allow(clippy::too_many_arguments)]
+fn convert_icon_stamp(
     id: &str,
     icon_image: &Value,
     layer: &Map<String, Value>,
@@ -199,7 +438,8 @@ fn convert_icon(
         spec["opacity-expr"] = e;
     }
 
-    // Icon collision is not modelled yet (only text collides).
+    // A line-placed icon repeats along the path in MapLibre and is stamped at
+    // the raw feature points here, outside the collision index.
     for prop in [
         "icon-allow-overlap",
         "icon-ignore-placement",
@@ -207,7 +447,7 @@ fn convert_icon(
     ] {
         if layout.and_then(|l| l.get(prop)).is_some() {
             report.warn(format!(
-                "layer `{id}`: `{prop}` not supported — icons are placed without collision"
+                "layer `{id}`: `{prop}` not supported on a line-placed icon — stamped without collision"
             ));
         }
     }
@@ -224,6 +464,8 @@ fn convert_text(
     id: &str,
     layer: &Map<String, Value>,
     layout: Option<&Map<String, Value>>,
+    placement: &str,
+    icon_fields: Option<Map<String, Value>>,
     zoom_range: ZoomRange,
     nodes: &mut Map<String, Value>,
     outputs: &mut Vec<String>,
@@ -238,22 +480,6 @@ fn convert_text(
     report: &mut Report,
 ) {
     let get = |key: &str| layout.and_then(|l| l.get(key));
-
-    // `symbol-placement`: `point` labels each point feature; `line` /
-    // `line-center` walk the layer's polylines with tangent-rotated
-    // glyphs. Anything else falls back to point with a warning.
-    let placement = get("symbol-placement")
-        .and_then(Value::as_str)
-        .unwrap_or("point");
-    let placement = match placement {
-        "point" | "line" | "line-center" => placement,
-        other => {
-            report.warn(format!(
-                "layer `{id}`: unknown `symbol-placement: {other}` — using point placement"
-            ));
-            "point"
-        }
-    };
 
     // `text-font`: a static string array (or absent → default) lowers to a
     // single stack. A data-driven expression / legacy function (A) is
@@ -475,24 +701,25 @@ fn convert_text(
         }
     }
 
+    // The `icon-image` half rides the same node, so the symbol's icon and
+    // text are placed as one unit against the shared index.
+    if let Some(icon_fields) = icon_fields {
+        for (k, v) in icon_fields {
+            spec[k] = v;
+        }
+    }
+
     // Collision (deterministic cross-tile placement). Always thread the
     // origin source/layer (+ the layer filter) through so the `text` node
     // gathers neighbour candidates and filters them exactly like its own
-    // features; collision itself is on by default in the `text` node. The
-    // zoom band comes along too: neighbour candidates bypass the `features`
-    // node, so the layer's gate has to reach the `text` node as well.
-    spec["source"] = Value::from(source);
-    spec["layer"] = Value::from(source_layer);
-    let (min_zoom, max_zoom) = zoom_range;
-    if let Some(z) = min_zoom {
-        spec["min-zoom"] = Value::from(z);
-    }
-    if let Some(z) = max_zoom {
-        spec["max-zoom"] = Value::from(z);
-    }
-    if let Some(f) = base_filter_expr {
-        spec["filter-expr"] = f;
-    }
+    // features; collision itself is on by default in the `text` node.
+    set_placement_context(
+        &mut spec,
+        source,
+        source_layer,
+        zoom_range,
+        base_filter_expr,
+    );
 
     // `text-allow-overlap` (bool), superseded by the newer `text-overlap`
     // enum when present: `always` → allow, `never`/absent → collide,
@@ -534,11 +761,10 @@ fn convert_text(
     if let Some(v) = get("symbol-sort-key") {
         spec["sort-key-expr"] = v.clone();
     }
-    // Text/icon pairing has no ezu counterpart yet.
-    if get("text-optional").is_some() {
-        report.warn(format!(
-            "layer `{id}`: `text-optional` (icon/text pairing) not supported — text placed independently"
-        ));
+    // `text-optional`: the icon may place where the text can't (the icon's
+    // own `icon-optional` is set by `icon_fields`).
+    if get("text-optional").and_then(Value::as_bool) == Some(true) {
+        spec["text-optional"] = Value::from(true);
     }
 
     // Placement is shared by every label layer of the style, the way
@@ -546,32 +772,10 @@ fn convert_text(
     // layer contributes its candidates (`text-labels`), the recipe-wide
     // `label-placement` node decides them all, and `text-draw` paints the
     // winners. `label_layers` records the contribution in style order; the
-    // caller emits the placement node once every layer is known.
-    let Some(label_layers) = label_layers else {
-        // Out of the shared placement: one self-placing `text` node, which
-        // the caller gates off — so the layer neither draws nor collides,
-        // and turning it back on needs no other node.
-        let text_id = format!("{id}__text");
-        spec["op"] = Value::from("text");
-        nodes.insert(text_id.clone(), spec);
-        outputs.push(text_id);
-        return;
-    };
-    let labels_id = format!("{id}__labels");
-    spec["op"] = Value::from("text-labels");
-    nodes.insert(labels_id.clone(), spec);
-    label_layers.push(labels_id.clone());
-
-    let text_id = format!("{id}__text");
-    nodes.insert(
-        text_id.clone(),
-        serde_json::json!({
-            "op": "text-draw",
-            "labels": format!("@{labels_id}"),
-            "placement": format!("@{LABEL_PLACEMENT_ID}"),
-        }),
-    );
-    outputs.push(text_id);
+    // caller emits the placement node once every layer is known. A layer
+    // kept out of it gets one self-placing `text` node instead, which the
+    // caller gates off — so it neither draws nor collides.
+    emit_label_nodes(id, spec, nodes, outputs, label_layers);
 }
 
 /// Node id of the recipe's shared placement node — referenced by every

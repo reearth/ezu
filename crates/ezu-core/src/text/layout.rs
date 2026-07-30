@@ -57,8 +57,9 @@ impl Anchor {
     }
 
     /// The fraction of the block's width/height that sits left/above
-    /// the anchor point.
-    fn fraction(self) -> (f32, f32) {
+    /// the anchor point. Also positions a symbol's icon (MapLibre
+    /// `icon-anchor` shares this enum).
+    pub fn fraction(self) -> (f32, f32) {
         match self {
             Anchor::Center => (0.5, 0.5),
             Anchor::Left => (0.0, 0.5),
