@@ -19,7 +19,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{features_value, read_optional_string};
+use crate::nodes::common::{features_value, read_optional_string, read_optional_zoom};
 use crate::render::{collect_groups, SharedLayer};
 
 struct FeaturesNode {
@@ -219,26 +219,6 @@ fn resolve_feature_source(
             }),
         }
     }
-}
-
-fn read_optional_zoom(
-    fields: &serde_json::Map<String, Value>,
-    key: &str,
-) -> Result<Option<u8>, FactoryError> {
-    let Some(v) = fields.get(key) else {
-        return Ok(None);
-    };
-    let n = v.as_u64().ok_or_else(|| FactoryError::BadField {
-        field: key.into(),
-        msg: "expected non-negative integer".into(),
-    })?;
-    if n > 24 {
-        return Err(FactoryError::BadField {
-            field: key.into(),
-            msg: format!("zoom {n} out of range (0..=24)"),
-        });
-    }
-    Ok(Some(n as u8))
 }
 
 ezu_graph::submit_node!(FeaturesFactory);

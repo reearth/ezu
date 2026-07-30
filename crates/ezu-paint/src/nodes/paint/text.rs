@@ -45,15 +45,15 @@ use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
     canvas_into_raster, downcast_features, empty_raster, make_canvas, read_bool_or, read_number_or,
-    read_optional_string, read_string_or, read_xy, FeatureGroup,
+    read_optional_string, read_optional_zoom, read_string_or, read_xy, FeatureGroup,
 };
 use crate::render::{collect_groups, SharedLayer};
 use ezu_core::text::{
     collide::{self, Aabb, Candidate, LineCandidate},
     draw, draw_line, generate_anchors, get_or_build_layout, layout_sections, place_glyphs, Anchor,
-    FaceEntry, Font, GlyphPlacement, Justify, LayoutParams, LinePlacement, OutlineSdfCache,
-    SdfFontStack, SectionPaint, SectionSpec, StackEntry, TextBlock, TextPaint, TextTransform,
-    VerticalAlign,
+    AnchorParams, FaceEntry, Font, GlyphPlacement, Justify, LayoutParams, LinePlacement,
+    OutlineSdfCache, SdfFontStack, SectionPaint, SectionSpec, StackEntry, TextBlock, TextPaint,
+    TextTransform, VerticalAlign,
 };
 
 /// Parse an optional raw MapLibre expression field, type-checked against
@@ -207,6 +207,10 @@ fn radial_offset_em(anchor: Anchor, r: f32) -> [f32; 2] {
 /// enough that filtering leaves the render bit-identical to gathering every
 /// neighbour; a tighter band starts to disturb dense collision chains.
 const NEIGHBOR_BAND_HOPS: f32 = 3.0;
+
+/// Arc window (in em) the `text-max-angle` bend is summed over for line
+/// placement — MapLibre's 3/5 of the font size.
+const ANGLE_WINDOW_EM: f32 = 0.6;
 
 /// Whether a neighbour feature's geometry — its bounding box in the local
 /// world-pixel frame — comes within `band` px of this tile's rectangle
@@ -660,6 +664,12 @@ struct TextNode {
     filter_expr: Option<maplibre_expr::Expr>,
     filter_expr_src: Option<String>,
     min_zoom_field: Option<String>,
+    /// The style layer's zoom band, mirroring the upstream `features` node.
+    /// Neighbour candidates are gathered from the source directly, so the
+    /// node has to honour the gate itself or a layer that is off at this
+    /// zoom would still spill its neighbours' labels across the seam.
+    min_zoom: Option<u8>,
+    max_zoom: Option<u8>,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
 }
@@ -1073,10 +1083,18 @@ impl TextNode {
         }
 
         // Neighbour prefilter band: this many multiples of the widest label
-        // reach — a collision chain advances one reach per hop. A neighbour line
-        // whose geometry stays outside this band of the tile cannot change what
-        // it draws, so shaping it is wasted; skip it.
-        let band = NEIGHBOR_BAND_HOPS * reach_max;
+        // reach — a collision chain advances one reach per hop, and the repeat
+        // filter reaches half a spacing per hop. A neighbour line whose
+        // geometry stays outside this band of the tile cannot change what it
+        // draws, so shaping it is wasted; skip it.
+        // MapLibre's repeat distance, half the requested spacing: it keeps the
+        // same street name off every branch of its own road. Line-center
+        // places one label per line, so it doesn't apply there.
+        let repeat_px = match mode {
+            LinePlacement::Line => 0.5 * self.spacing_px,
+            LinePlacement::LineCenter => 0.0,
+        };
+        let band = NEIGHBOR_BAND_HOPS * reach_max.max(repeat_px);
 
         // Shape the surviving groups into placement candidates. Every collision
         // input is in the local world-pixel frame (current tile origin
@@ -1226,6 +1244,15 @@ impl TextNode {
                 halo_width_px: halo_width,
                 halo_blur_px: 0.0,
             };
+            let anchor_params = AnchorParams {
+                placement: mode,
+                label_len: total_len,
+                spacing: self.spacing_px,
+                max_angle_deg: self.max_angle_deg,
+                // MapLibre measures the bend over 3/5 of the font size, so a
+                // long gentle curve is fine and only a kink is rejected.
+                angle_window: ANGLE_WINDOW_EM * size,
+            };
 
             for line in &group.lines {
                 if line.len() < 2 {
@@ -1239,9 +1266,7 @@ impl TextNode {
                         (wx as f32 * sx, wy as f32 * sy)
                     })
                     .collect();
-                for mut anchor in
-                    generate_anchors(&poly, mode, total_len, self.spacing_px, self.max_angle_deg)
-                {
+                for mut anchor in generate_anchors(&poly, &anchor_params) {
                     if !self.keep_upright {
                         anchor.reversed = false;
                     }
@@ -1275,6 +1300,9 @@ impl TextNode {
                         text: text.clone(),
                         style_id: hash,
                         boxes,
+                        anchor_x: anchor.x,
+                        anchor_y: anchor.y,
+                        repeat_px,
                         allow_overlap: self.allow_overlap,
                         ignore_placement: self.ignore_placement,
                     });
@@ -1417,6 +1445,14 @@ impl Node for TextNode {
         ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
+        // Style-level zoom gate: outside the band the layer draws nothing,
+        // neighbour candidates included.
+        let tile_z = ctx.tile.z;
+        if self.min_zoom.is_some_and(|mn| tile_z < mn)
+            || self.max_zoom.is_some_and(|mx| tile_z > mx)
+        {
+            return Ok(empty_raster(ctx));
+        }
         let feats = downcast_features(
             inputs[0]
                 .as_ref()
@@ -1880,6 +1916,14 @@ impl Node for TextNode {
             h.update(b"mzf");
             h.update(f.as_bytes());
         }
+        if let Some(z) = self.min_zoom {
+            h.update(b"minz");
+            h.update(&[z]);
+        }
+        if let Some(z) = self.max_zoom {
+            h.update(b"maxz");
+            h.update(&[z]);
+        }
     }
     fn param_refs(&self) -> Vec<String> {
         self.param_refs.clone()
@@ -2139,6 +2183,8 @@ impl NodeFactory for TextFactory {
             None => (None, None),
         };
         let min_zoom_field = read_optional_string(fields, "min-zoom-field")?;
+        let min_zoom = read_optional_zoom(fields, "min-zoom")?;
+        let max_zoom = read_optional_zoom(fields, "max-zoom")?;
 
         let mut ports = vec![PortSpec {
             name: "features",
@@ -2203,6 +2249,8 @@ impl NodeFactory for TextFactory {
                 filter_expr,
                 filter_expr_src,
                 min_zoom_field,
+                min_zoom,
+                max_zoom,
                 ports,
                 param_refs: parts.param_refs,
             }),
@@ -2300,6 +2348,10 @@ impl NodeFactory for TextFactory {
                 },
                 "min-zoom-field": { "type": "string",
                                     "description": "Per-feature `min_zoom` property name, reproduced for neighbour candidate filtering (mirrors the `features` node)." },
+                "min-zoom": { "type": "integer", "minimum": 0, "maximum": 24,
+                              "description": "Style layer zoom gate: draw nothing below this zoom (mirrors the `features` node)." },
+                "max-zoom": { "type": "integer", "minimum": 0, "maximum": 24,
+                              "description": "Style layer zoom gate: draw nothing above this zoom (mirrors the `features` node)." },
             },
             "required": ["features", "font", "text"],
         })

@@ -191,6 +191,27 @@ pub(super) fn read_string_or(
     Ok(s.to_string())
 }
 
+/// Read a zoom-level field (`min-zoom` / `max-zoom`), absent → `None`.
+pub(super) fn read_optional_zoom(
+    fields: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<u8>, FactoryError> {
+    let Some(v) = fields.get(key) else {
+        return Ok(None);
+    };
+    let n = v.as_u64().ok_or_else(|| FactoryError::BadField {
+        field: key.into(),
+        msg: "expected non-negative integer".into(),
+    })?;
+    if n > 24 {
+        return Err(FactoryError::BadField {
+            field: key.into(),
+            msg: format!("zoom {n} out of range (0..=24)"),
+        });
+    }
+    Ok(Some(n as u8))
+}
+
 /// How to read samples outside the source raster's `[0, w) x [0, h)`
 /// extent. The upstream `required_pad` should normally keep us inside,
 /// so this only kicks in for extreme amplitudes or at the very edge of

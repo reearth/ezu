@@ -10,8 +10,8 @@
 //! 1. [`generate_anchors`] — candidate anchor points along the line,
 //!    every `spacing` px starting half a label in (or the single arc
 //!    midpoint for [`LinePlacement::LineCenter`]), each rejected if the
-//!    line bends more than `max_angle` cumulatively over the window the
-//!    label would cover.
+//!    line bends more than `max_angle_deg` within any sliding
+//!    `angle_window` of the arc the label would cover.
 //! 2. keep-upright — [`Anchor::reversed`] flags a label whose reading
 //!    direction would run right-to-left, so the walk flips it once.
 //! 3. [`place_glyphs`] — walk the line from the anchor, sampling each
@@ -102,17 +102,30 @@ fn tangent_at(poly: &[(f32, f32)], cum: &[f32], s: f32) -> f32 {
     0.0
 }
 
-/// The cumulative bend (degrees) of the line over the arc window
-/// `[lo, hi]`: the sum of the absolute turn angles at every vertex
-/// strictly inside the window. `> max_angle` rejects the anchor.
-fn window_bend_deg(poly: &[(f32, f32)], cum: &[f32], lo: f32, hi: f32) -> f32 {
-    let mut total = 0.0f32;
-    // Segment angles; a turn is the delta between adjacent segments whose
-    // shared vertex falls inside the window.
+/// Whether the line stays within `max_angle_deg` over the arc the label
+/// covers (`[lo, hi]`): the turn angles of the vertices inside it are
+/// summed over a window of `window` px sliding forward with each vertex,
+/// and any window sum exceeding the limit rejects the anchor. A short window
+/// therefore tolerates a long gentle curve but not a kink, which is what
+/// MapLibre's `text-max-angle` measures.
+fn max_angle_ok(
+    poly: &[(f32, f32)],
+    cum: &[f32],
+    lo: f32,
+    hi: f32,
+    window: f32,
+    max_angle_deg: f32,
+) -> bool {
+    // Turns inside the current window: (arc-length, turn in degrees).
+    let mut recent: std::collections::VecDeque<(f32, f32)> = std::collections::VecDeque::new();
+    let mut sum = 0.0f32;
     for i in 1..poly.len() - 1 {
         let v = cum[i];
-        if v <= lo || v >= hi {
+        if v <= lo {
             continue;
+        }
+        if v >= hi {
+            break;
         }
         let a0 = {
             let (dx, dy) = (poly[i].0 - poly[i - 1].0, poly[i].1 - poly[i - 1].1);
@@ -126,9 +139,24 @@ fn window_bend_deg(poly: &[(f32, f32)], cum: &[f32], lo: f32, hi: f32) -> f32 {
         if d > std::f32::consts::PI {
             d = 2.0 * std::f32::consts::PI - d;
         }
-        total += d.to_degrees();
+        let d = d.to_degrees();
+        recent.push_back((v, d));
+        sum += d;
+        // Drop turns that fell out of the window behind this vertex; the
+        // vertex itself always stays, so a single kink is still caught.
+        while let Some(&(s0, d0)) = recent.front() {
+            if v - s0 > window.max(0.0) {
+                sum -= d0;
+                recent.pop_front();
+            } else {
+                break;
+            }
+        }
+        if sum > max_angle_deg {
+            return false;
+        }
     }
-    total
+    true
 }
 
 /// Whether the label centred at arc-length `s` (covering `label_len`)
@@ -139,32 +167,47 @@ fn window_reversed(poly: &[(f32, f32)], cum: &[f32], s: f32, label_len: f32) -> 
     b.0 < a.0
 }
 
-/// Generate label anchors along `poly` (frame px). `label_len` is the
-/// label's total advance (px); `spacing` the gap between successive line
-/// anchors (px, ignored for `LineCenter`); `max_angle` the maximum
-/// cumulative bend (degrees) allowed over a label-length window.
+/// Anchor-generation inputs for one label on one polyline, all in frame
+/// px except the angle limit.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AnchorParams {
+    pub placement: LinePlacement,
+    /// The label's total advance.
+    pub label_len: f32,
+    /// MapLibre `symbol-spacing`: gap between successive line anchors
+    /// (ignored for [`LinePlacement::LineCenter`]).
+    pub spacing: f32,
+    /// MapLibre `text-max-angle`, in degrees.
+    pub max_angle_deg: f32,
+    /// Arc window the bend is summed over (MapLibre: 3/5 of the font
+    /// size). Zero measures each vertex's turn on its own.
+    pub angle_window: f32,
+}
+
+/// Generate label anchors along `poly` (frame px).
 ///
 /// A label shorter than the line yields at least one anchor when the
 /// bend allows; a label longer than the line yields none (it can't fit).
-pub fn generate_anchors(
-    poly: &[(f32, f32)],
-    placement: LinePlacement,
-    label_len: f32,
-    spacing: f32,
-    max_angle: f32,
-) -> Vec<Anchor> {
+pub fn generate_anchors(poly: &[(f32, f32)], p: &AnchorParams) -> Vec<Anchor> {
     let cum = cumulative(poly);
     let Some(&total) = cum.last() else {
         return Vec::new();
     };
-    let half = label_len * 0.5;
+    let half = p.label_len * 0.5;
     // A label longer than the line can never fit.
-    if label_len > total || total <= 0.0 {
+    if p.label_len > total || total <= 0.0 {
         return Vec::new();
     }
     let mut anchors = Vec::new();
     let push_if_straight = |s: f32, anchors: &mut Vec<Anchor>| {
-        if window_bend_deg(poly, &cum, s - half, s + half) > max_angle {
+        if !max_angle_ok(
+            poly,
+            &cum,
+            s - half,
+            s + half,
+            p.angle_window,
+            p.max_angle_deg,
+        ) {
             return;
         }
         let (x, y) = point_at(poly, &cum, s);
@@ -172,12 +215,18 @@ pub fn generate_anchors(
             s,
             x,
             y,
-            reversed: window_reversed(poly, &cum, s, label_len),
+            reversed: window_reversed(poly, &cum, s, p.label_len),
         });
     };
-    match placement {
+    match p.placement {
         LinePlacement::LineCenter => push_if_straight(total * 0.5, &mut anchors),
         LinePlacement::Line => {
+            // MapLibre widens the requested spacing so successive labels
+            // keep at least a quarter-spacing gap between their ends.
+            let mut spacing = p.spacing;
+            if spacing - p.label_len < spacing * 0.25 {
+                spacing = p.label_len + spacing * 0.25;
+            }
             let step = spacing.max(1.0);
             // First anchor half a label in, then every `spacing`, while the
             // whole label still fits within the line.
@@ -236,11 +285,31 @@ mod tests {
         vec![(0.0, 0.0), (len, 0.0)]
     }
 
+    /// Anchor params with a generous angle window, so a test that isn't
+    /// about curvature measures the bend over the whole label.
+    fn params(
+        placement: LinePlacement,
+        label_len: f32,
+        spacing: f32,
+        max_angle_deg: f32,
+    ) -> AnchorParams {
+        AnchorParams {
+            placement,
+            label_len,
+            spacing,
+            max_angle_deg,
+            angle_window: f32::MAX,
+        }
+    }
+
     #[test]
     fn line_anchors_are_spaced_from_half_a_label() {
         // A 20 px label on a 100 px line at 30 px spacing: first anchor at
         // half the label (10), then +30 while it still fits (10, 40, 70).
-        let a = generate_anchors(&straight(100.0), LinePlacement::Line, 20.0, 30.0, 45.0);
+        let a = generate_anchors(
+            &straight(100.0),
+            &params(LinePlacement::Line, 20.0, 30.0, 45.0),
+        );
         let ss: Vec<f32> = a.iter().map(|a| a.s).collect();
         assert_eq!(ss, vec![10.0, 40.0, 70.0]);
         // Each anchor sits on the line at (s, 0).
@@ -250,15 +319,24 @@ mod tests {
 
     #[test]
     fn label_longer_than_line_is_dropped() {
-        let a = generate_anchors(&straight(30.0), LinePlacement::Line, 40.0, 20.0, 45.0);
+        let a = generate_anchors(
+            &straight(30.0),
+            &params(LinePlacement::Line, 40.0, 20.0, 45.0),
+        );
         assert!(a.is_empty(), "a label that can't fit yields no anchors");
-        let c = generate_anchors(&straight(30.0), LinePlacement::LineCenter, 40.0, 20.0, 45.0);
+        let c = generate_anchors(
+            &straight(30.0),
+            &params(LinePlacement::LineCenter, 40.0, 20.0, 45.0),
+        );
         assert!(c.is_empty());
     }
 
     #[test]
     fn line_center_places_exactly_one_at_the_midpoint() {
-        let a = generate_anchors(&straight(80.0), LinePlacement::LineCenter, 20.0, 30.0, 45.0);
+        let a = generate_anchors(
+            &straight(80.0),
+            &params(LinePlacement::LineCenter, 20.0, 30.0, 45.0),
+        );
         assert_eq!(a.len(), 1);
         assert!((a[0].s - 40.0).abs() < 1e-3);
     }
@@ -268,12 +346,50 @@ mod tests {
         // A right-angle bend at the midpoint: two 50 px legs meeting at 90°.
         let sharp = vec![(0.0, 0.0), (50.0, 0.0), (50.0, 50.0)];
         // A label long enough that its window spans the corner is rejected.
-        let a = generate_anchors(&sharp, LinePlacement::LineCenter, 60.0, 30.0, 45.0);
+        let a = generate_anchors(&sharp, &params(LinePlacement::LineCenter, 60.0, 30.0, 45.0));
         assert!(a.is_empty(), "a 90° corner exceeds the 45° max angle");
         // A gentle ~10° bend of the same geometry passes.
         let gentle = vec![(0.0, 0.0), (50.0, 0.0), (100.0, 9.0)];
-        let b = generate_anchors(&gentle, LinePlacement::LineCenter, 60.0, 30.0, 45.0);
+        let b = generate_anchors(
+            &gentle,
+            &params(LinePlacement::LineCenter, 60.0, 30.0, 45.0),
+        );
         assert_eq!(b.len(), 1, "a gentle bend is within the max angle");
+    }
+
+    #[test]
+    fn max_angle_is_measured_over_a_sliding_window() {
+        // A quarter circle sampled every 10°: 90° of total bend, but never
+        // more than ~20° within any 20 px of arc.
+        let arc: Vec<(f32, f32)> = (0..=9)
+            .map(|i| {
+                let t = (i as f32) * 10.0f32.to_radians();
+                (100.0 * t.sin(), 100.0 * (1.0 - t.cos()))
+            })
+            .collect();
+        let mut p = params(LinePlacement::LineCenter, 100.0, 250.0, 45.0);
+        p.angle_window = 20.0;
+        assert_eq!(
+            generate_anchors(&arc, &p).len(),
+            1,
+            "a long gentle curve passes: no window exceeds the limit"
+        );
+        // The same span with a kink instead of a curve is rejected even
+        // though the total bend is smaller.
+        let kink = vec![(0.0, 0.0), (60.0, 0.0), (60.0, 60.0), (120.0, 60.0)];
+        assert!(generate_anchors(&kink, &p).is_empty());
+    }
+
+    #[test]
+    fn spacing_widens_to_keep_a_gap_between_long_labels() {
+        // A 220 px label at 250 px spacing would leave only 30 px between
+        // ends, so the step grows to label + spacing/4 = 282.5.
+        let a = generate_anchors(
+            &straight(1000.0),
+            &params(LinePlacement::Line, 220.0, 250.0, 45.0),
+        );
+        let ss: Vec<f32> = a.iter().map(|a| a.s).collect();
+        assert_eq!(ss, vec![110.0, 392.5, 675.0]);
     }
 
     #[test]
@@ -281,10 +397,10 @@ mod tests {
         // A line running right-to-left (decreasing x) reads backwards, so
         // its anchor is flagged reversed; a left-to-right line is not.
         let rtl = vec![(100.0, 0.0), (0.0, 0.0)];
-        let a = generate_anchors(&rtl, LinePlacement::LineCenter, 20.0, 30.0, 45.0);
+        let a = generate_anchors(&rtl, &params(LinePlacement::LineCenter, 20.0, 30.0, 45.0));
         assert!(a[0].reversed, "a right-to-left line is flipped upright");
         let ltr = straight(100.0);
-        let b = generate_anchors(&ltr, LinePlacement::LineCenter, 20.0, 30.0, 45.0);
+        let b = generate_anchors(&ltr, &params(LinePlacement::LineCenter, 20.0, 30.0, 45.0));
         assert!(!b[0].reversed);
     }
 
@@ -294,10 +410,7 @@ mod tests {
         // a horizontal line: they land at x = 40, 50, 60, all angle 0.
         let a = &generate_anchors(
             &straight(100.0),
-            LinePlacement::LineCenter,
-            20.0,
-            30.0,
-            45.0,
+            &params(LinePlacement::LineCenter, 20.0, 30.0, 45.0),
         )[0];
         let g = place_glyphs(&straight(100.0), a, &[-10.0, 0.0, 10.0]).unwrap();
         assert!((g[0].x - 40.0).abs() < 1e-3 && g[0].angle.abs() < 1e-3);
@@ -310,7 +423,7 @@ mod tests {
     fn glyph_walk_rotates_to_a_diagonal_tangent() {
         // A 45° diagonal: every glyph's tangent angle is π/4.
         let diag = vec![(0.0, 0.0), (100.0, 100.0)];
-        let a = &generate_anchors(&diag, LinePlacement::LineCenter, 20.0, 30.0, 90.0)[0];
+        let a = &generate_anchors(&diag, &params(LinePlacement::LineCenter, 20.0, 30.0, 90.0))[0];
         let g = place_glyphs(&diag, a, &[-10.0, 0.0, 10.0]).unwrap();
         assert!(g
             .iter()
@@ -323,7 +436,7 @@ mod tests {
         // decreasing x, and the glyph angle is flipped by π so text is
         // upright.
         let rtl = vec![(100.0, 0.0), (0.0, 0.0)];
-        let a = &generate_anchors(&rtl, LinePlacement::LineCenter, 20.0, 30.0, 45.0)[0];
+        let a = &generate_anchors(&rtl, &params(LinePlacement::LineCenter, 20.0, 30.0, 45.0))[0];
         let g = place_glyphs(&rtl, a, &[-10.0, 10.0]).unwrap();
         // Anchor is at x = 50; reading order runs opposite the polyline so
         // it reads left-to-right: a later glyph (offset +10) lands at the
