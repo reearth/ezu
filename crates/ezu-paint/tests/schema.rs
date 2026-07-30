@@ -34,6 +34,9 @@ fn registry_emits_document_schema_with_all_ops() {
         "tiling",
         "place",
         "text",
+        "text-labels",
+        "text-draw",
+        "label-placement",
     ] {
         assert!(
             s.contains(&format!("\"const\":\"{op}\"")),

@@ -45,8 +45,13 @@ fn converts_and_parses_as_ezu_document() {
         "expected a fill-solid with a fill-expr referencing ADM0_A3"
     );
 
-    // The line-placed geolines label routed through.
-    assert_eq!(nodes["geolines-label__text"]["placement"], "line");
+    // The line-placed geolines label routed through: its candidates carry the
+    // placement mode, and its draw node reads the shared placement.
+    assert_eq!(nodes["geolines-label__labels"]["placement"], "line");
+    assert_eq!(
+        nodes["geolines-label__text"]["placement"],
+        "@__label_placement"
+    );
 
     // The crimea geojson layer resolved to a `(crimea, crimea)` features node.
     let has_geojson_layer = nodes.values().any(|n| {

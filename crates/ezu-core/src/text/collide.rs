@@ -2,26 +2,40 @@
 //! screen-space placement, made tile-independent).
 //!
 //! MapLibre places labels greedily in screen space, "tiles nearest the
-//! viewport centre first", with a global priority order. A per-tile
-//! renderer can't reproduce the viewport-centre part, but everything
-//! else is made **deterministic in world space** so neighbouring tiles
-//! reach identical decisions and borders stay seamless:
+//! viewport centre first", through **one collision index shared by every
+//! symbol layer**. A per-tile renderer can't reproduce the
+//! viewport-centre part, but everything else is made **deterministic in
+//! world space** so neighbouring tiles reach identical decisions and
+//! borders stay seamless:
 //!
 //! 1. Candidates come from the tile's own features **plus the 3×3
 //!    neighbour tiles'** features (all evaluated with the same
 //!    expressions), so every tile sees the same set for any label that
 //!    straddles a border.
 //! 2. **Dedup** — the same feature appears in several tiles (MVT buffer +
-//!    neighbours). The key is `(text, quantized world anchor)`; one
-//!    candidate survives per key.
-//! 3. **Total order** — `(sort-key ↑, quantized anchor y, quantized
-//!    anchor x, text)`. No tile-local quantity enters, so the order is
+//!    neighbours). The key is `(layer, text, quantized world anchor)`;
+//!    one candidate survives per key. Layers dedup separately: two
+//!    layers labelling the same feature are two labels in MapLibre.
+//! 3. **Total order** — `(layer ↑, sort-key ↑, quantized anchor y,
+//!    quantized anchor x, text)`. `layer` is the cross-layer priority
+//!    rank: MapLibre walks the style's symbol layers **top-down**, so a
+//!    layer drawn above another places first and can knock the lower
+//!    layer's labels out (verified against maplibre-gl-js). Its own
+//!    `symbol-sort-key` never crosses a layer boundary — layer rank
+//!    dominates. No tile-local quantity enters, so the order is
 //!    identical on every tile.
-//! 4. **Greedy grid insertion** — each candidate carries a collision box
-//!    in a world-pixel frame; a coarse grid answers overlap queries.
-//!    Winner → placed + inserted; loser → dropped. `allow_overlap`
-//!    always places (and still blocks later labels, unless
+//! 4. **Greedy grid insertion** — each candidate carries one or more
+//!    *variants*: alternative box sets tried in order (a
+//!    `text-variable-anchor` label offers one single-box variant per
+//!    anchor; a line label offers one variant holding a box per glyph).
+//!    A variant places only if every box in it is free, and then
+//!    reserves them all; the first free variant wins, and a candidate
+//!    with no free variant drops. `allow_overlap` always places its
+//!    first variant (and still blocks later labels, unless
 //!    `ignore_placement` skips insertion).
+//!
+//! Point and line labels share this one index, so a POI label and a
+//! street name compete exactly as they do in MapLibre.
 //!
 //! All quantities here are derived from **world-space** inputs — the
 //! world anchor (exact integer tile-frame coordinate) and the em box ×
@@ -126,14 +140,18 @@ impl Grid {
     }
 }
 
-/// One label placement candidate, in world-space terms only.
+/// One label placement candidate, in world-space terms only. Point and
+/// line labels share this shape: they differ only in how their
+/// [`variants`](Self::variants) are built.
 #[derive(Debug, Clone)]
-pub struct Candidate {
-    /// MapLibre `symbol-sort-key`: lower places first. Absent = 0.
+pub struct LabelCandidate {
+    /// MapLibre `symbol-sort-key`: lower places first, within a layer.
+    /// Absent = 0.
     pub sort_key: f64,
     /// World anchor in tile-extent units (exact integer:
     /// `tile_index × extent + local`), identical across the tiles that
-    /// share this feature.
+    /// share this feature. For a line label it is the label-centre sample
+    /// point.
     pub world_ax: i64,
     pub world_ay: i64,
     /// The evaluated label text, part of the dedup key and the final
@@ -146,23 +164,35 @@ pub struct Candidate {
     /// neighbour, which see those features in different insertion orders,
     /// could pick different survivors and diverge at the seam.
     pub style_id: u64,
-    /// Collision box in the shared world-pixel frame, already inflated by
-    /// `padding-px`. For a MapLibre `text-variable-anchor` label this is the
-    /// first anchor's box; the rest are `alt_aabbs`.
-    pub aabb: Aabb,
-    /// Fallback collision boxes for MapLibre `text-variable-anchor`, tried in
-    /// order after `aabb`. The label places at the first free box (starting
-    /// with `aabb`); the winning box index is reported as `Placement::alt`.
-    /// Empty for a fixed-anchor label.
-    pub alt_aabbs: Vec<Aabb>,
+    /// Alternative collision-box sets in the shared world-pixel frame,
+    /// each already inflated by `padding-px`, tried in declaration order.
+    /// A variant places only when *every* box in it is free, and then
+    /// reserves all of them; the winning index is reported as
+    /// [`Placement::variant`].
+    ///
+    /// A fixed-anchor point label carries one single-box variant; a
+    /// MapLibre `text-variable-anchor` label one per anchor; a line label
+    /// one variant holding a box per glyph (MapLibre's along-line
+    /// collision circles, mapped onto the AABB grid).
+    pub variants: Vec<Vec<Aabb>>,
+    /// Label-centre anchor in the shared world-pixel frame — the distance
+    /// reference for the same-label repeat check.
+    pub anchor_x: f32,
+    pub anchor_y: f32,
+    /// MapLibre's line-label repeat distance (px, `symbol-spacing / 2`):
+    /// a candidate whose anchor is nearer than this to an earlier
+    /// same-label anchor is dropped, so a street name doesn't reappear on
+    /// every branch of its own road. Zero disables the check (point
+    /// labels).
+    pub repeat_px: f32,
     /// MapLibre `*-allow-overlap`: place regardless of collision.
     pub allow_overlap: bool,
     /// MapLibre `*-ignore-placement`: don't block later labels (skip
-    /// inserting this box into the grid).
+    /// inserting this candidate's boxes into the grid).
     pub ignore_placement: bool,
 }
 
-impl Candidate {
+impl LabelCandidate {
     /// The quantized anchor cell used for dedup and ordering (floor
     /// division so negative anchors bucket consistently).
     fn quant(&self) -> (i64, i64) {
@@ -173,132 +203,53 @@ impl Candidate {
     }
 }
 
-/// One placed label: which candidate it came from, and which of its anchor
-/// boxes was chosen (`0` = the candidate's `aabb`, `k` = `alt_aabbs[k - 1]`).
-/// A fixed-anchor label always reports `alt == 0`.
+/// Anchors already taken by each `(layer, text, style)` label, in the shared
+/// world-pixel frame — the state the line-label repeat filter consults.
+type RepeatAnchors<'a> = HashMap<(usize, &'a str, u64), Vec<(f32, f32)>>;
+
+/// One placed label: which candidate it came from, and which of its
+/// variants was chosen (an index into [`LabelCandidate::variants`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Placement {
     pub cand: usize,
-    pub alt: usize,
+    pub variant: usize,
 }
 
-/// Deterministically dedup, order, and greedily place `candidates`.
-/// Returns the placed labels (candidate index + chosen anchor box), in
+/// Deterministically dedup, order, and greedily place every label layer of
+/// a recipe against **one** collision index. `layers` holds each layer's
+/// candidates in **priority order** — the first list places first, so a
+/// caller passes its label layers top-down (MapLibre's own order). Returns
+/// one placement list per layer, index-aligned with `layers`, each in
 /// placement order.
+///
+/// The layer index joins the dedup and repeat keys, so layers never merge
+/// each other's labels, and it dominates the total order: a
+/// `symbol-sort-key` orders labels only inside its own layer.
 ///
 /// Determinism: the result depends only on world-space quantities that
 /// are identical across every tile sharing the 3×3 window — the total
-/// order and dedup key use the quantized world anchor + text + sort key,
-/// and collision boxes are in the shared world-pixel frame. No tile-local
-/// input enters. A `text-variable-anchor` label tries its anchor boxes in
-/// declaration order (identical on every tile), so the seam stays seamless.
-pub fn place(candidates: &[Candidate], cell_px: f32) -> Vec<Placement> {
-    // Total order: sort-key ↑, then quantized anchor (y, x), then text.
-    let mut order: Vec<usize> = (0..candidates.len()).collect();
-    order.sort_by(|&a, &b| {
-        let (ca, cb) = (&candidates[a], &candidates[b]);
-        ca.sort_key
-            .total_cmp(&cb.sort_key)
-            .then_with(|| ca.quant().1.cmp(&cb.quant().1))
-            .then_with(|| ca.quant().0.cmp(&cb.quant().0))
-            .then_with(|| ca.text.cmp(&cb.text))
-            .then_with(|| ca.style_id.cmp(&cb.style_id))
-    });
-
-    let mut grid = Grid::new(cell_px);
-    let mut seen: HashSet<(i64, i64, &str, u64)> = HashSet::new();
-    let mut placed = Vec::new();
-    for i in order {
-        let c = &candidates[i];
-        // Dedup: keep the first candidate (in total order) per key.
-        let (qx, qy) = c.quant();
-        if !seen.insert((qx, qy, c.text.as_str(), c.style_id)) {
-            continue;
-        }
-        // Collision: try the primary anchor box, then each variable-anchor
-        // fallback in order. allow-overlap always shows at the primary box.
-        let alt = if c.allow_overlap {
-            Some(0)
-        } else {
-            std::iter::once(&c.aabb)
-                .chain(c.alt_aabbs.iter())
-                .position(|b| !grid.intersects_any(b))
-        };
-        let Some(alt) = alt else { continue };
-        placed.push(Placement { cand: i, alt });
-        // Blocking: a shown label reserves its chosen box unless it ignores
-        // placement (so an allow-overlap + ignore-placement label neither
-        // collides nor blocks).
-        if !c.ignore_placement {
-            let box_ = if alt == 0 {
-                c.aabb
-            } else {
-                c.alt_aabbs[alt - 1]
-            };
-            grid.insert(box_);
-        }
-    }
-    placed
-}
-
-/// A line-placed label candidate. Unlike a point label it carries one
-/// collision box *per glyph* (each already inflated by `padding-px`): the
-/// label places only if every box is free, and reserves all of them —
-/// MapLibre's along-line collision circles, mapped onto the AABB grid.
-#[derive(Debug, Clone)]
-pub struct LineCandidate {
-    /// MapLibre `symbol-sort-key`: lower places first. Absent = 0.
-    pub sort_key: f64,
-    /// World anchor in tile-extent units (the label-centre sample point),
-    /// identical across the tiles that share this line.
-    pub world_ax: i64,
-    pub world_ay: i64,
-    /// The evaluated label text, part of the dedup key and order
-    /// tie-break.
-    pub text: String,
-    /// Resolved label-style identity (e.g. the font stack's `font_id`);
-    /// joins the dedup key and order tie-break (see [`Candidate::style_id`]).
-    pub style_id: u64,
-    /// Per-glyph collision boxes in the shared world-pixel frame.
-    pub boxes: Vec<Aabb>,
-    /// Label-centre anchor in the shared world-pixel frame — the distance
-    /// reference for the same-label repeat check.
-    pub anchor_x: f32,
-    pub anchor_y: f32,
-    /// MapLibre's line-label repeat distance (px, `symbol-spacing / 2`):
-    /// a candidate whose anchor is nearer than this to an earlier
-    /// same-label anchor is dropped, so a street name doesn't reappear on
-    /// every branch of its own road. Zero disables the check.
-    pub repeat_px: f32,
-    pub allow_overlap: bool,
-    pub ignore_placement: bool,
-}
-
-impl LineCandidate {
-    fn quant(&self) -> (i64, i64) {
-        (
-            self.world_ax.div_euclid(DEDUP_QUANTUM),
-            self.world_ay.div_euclid(DEDUP_QUANTUM),
-        )
-    }
-}
-
-/// Deterministically dedup, order, and greedily place line-label
-/// `candidates` (all-or-nothing per label). Same total order and dedup
-/// key as [`place`]; a label shows only when *every* glyph box is free,
-/// and then reserves all of them (unless `ignore_placement`).
+/// order and dedup key use the layer index, quantized world anchor, text
+/// and sort key, and collision boxes are in the shared world-pixel frame.
+/// No tile-local input enters. Variants are tried in declaration order
+/// (identical on every tile), so the seam stays seamless.
 ///
 /// Between the dedup and the collision step comes MapLibre's repeat
-/// filter: a candidate within [`LineCandidate::repeat_px`] of an earlier
+/// filter: a candidate within [`LabelCandidate::repeat_px`] of an earlier
 /// same-label anchor is dropped. Like the reference it consumes the
 /// anchor whether or not the label goes on to win its collision, so a
 /// blocked candidate still keeps its neighbours away.
-pub fn place_lines(candidates: &[LineCandidate], cell_px: f32) -> Vec<usize> {
-    let mut order: Vec<usize> = (0..candidates.len()).collect();
+pub fn place_layers(layers: &[&[LabelCandidate]], cell_px: f32) -> Vec<Vec<Placement>> {
+    // Total order: layer ↑, sort-key ↑, quantized anchor (y, x), text.
+    let mut order: Vec<(usize, usize)> = layers
+        .iter()
+        .enumerate()
+        .flat_map(|(li, cands)| (0..cands.len()).map(move |i| (li, i)))
+        .collect();
+    let at = |(li, i): (usize, usize)| -> &LabelCandidate { &layers[li][i] };
     order.sort_by(|&a, &b| {
-        let (ca, cb) = (&candidates[a], &candidates[b]);
-        ca.sort_key
-            .total_cmp(&cb.sort_key)
+        let (ca, cb) = (at(a), at(b));
+        a.0.cmp(&b.0)
+            .then_with(|| ca.sort_key.total_cmp(&cb.sort_key))
             .then_with(|| ca.quant().1.cmp(&cb.quant().1))
             .then_with(|| ca.quant().0.cmp(&cb.quant().0))
             .then_with(|| ca.text.cmp(&cb.text))
@@ -306,18 +257,21 @@ pub fn place_lines(candidates: &[LineCandidate], cell_px: f32) -> Vec<usize> {
     });
 
     let mut grid = Grid::new(cell_px);
-    let mut seen: HashSet<(i64, i64, &str, u64)> = HashSet::new();
+    let mut seen: HashSet<(usize, i64, i64, &str, u64)> = HashSet::new();
     // Anchors already taken by each label, for the repeat filter.
-    let mut anchors: HashMap<(&str, u64), Vec<(f32, f32)>> = HashMap::new();
-    let mut placed = Vec::new();
-    for i in order {
-        let c = &candidates[i];
+    let mut anchors: RepeatAnchors<'_> = HashMap::new();
+    let mut placed: Vec<Vec<Placement>> = vec![Vec::new(); layers.len()];
+    for (li, i) in order {
+        let c = at((li, i));
+        // Dedup: keep the first candidate (in total order) per key.
         let (qx, qy) = c.quant();
-        if !seen.insert((qx, qy, c.text.as_str(), c.style_id)) {
+        if !seen.insert((li, qx, qy, c.text.as_str(), c.style_id)) {
             continue;
         }
         if c.repeat_px > 0.0 {
-            let taken = anchors.entry((c.text.as_str(), c.style_id)).or_default();
+            let taken = anchors
+                .entry((li, c.text.as_str(), c.style_id))
+                .or_default();
             let r2 = c.repeat_px * c.repeat_px;
             if taken.iter().any(|&(x, y)| {
                 let (dx, dy) = (c.anchor_x - x, c.anchor_y - y);
@@ -327,18 +281,34 @@ pub fn place_lines(candidates: &[LineCandidate], cell_px: f32) -> Vec<usize> {
             }
             taken.push((c.anchor_x, c.anchor_y));
         }
-        let shown = c.allow_overlap || c.boxes.iter().all(|b| !grid.intersects_any(b));
-        if !shown {
-            continue;
-        }
-        placed.push(i);
+        // Collision: the first variant whose every box is free.
+        // allow-overlap always shows at the first variant.
+        let variant = if c.allow_overlap {
+            Some(0)
+        } else {
+            c.variants
+                .iter()
+                .position(|boxes| boxes.iter().all(|b| !grid.intersects_any(b)))
+        };
+        let Some(variant) = variant else { continue };
+        placed[li].push(Placement { cand: i, variant });
+        // Blocking: a shown label reserves its chosen boxes unless it ignores
+        // placement (so an allow-overlap + ignore-placement label neither
+        // collides nor blocks).
         if !c.ignore_placement {
-            for b in &c.boxes {
+            for b in c.variants.get(variant).into_iter().flatten() {
                 grid.insert(*b);
             }
         }
     }
     placed
+}
+
+/// [`place_layers`] for a lone label layer.
+pub fn place(candidates: &[LabelCandidate], cell_px: f32) -> Vec<Placement> {
+    place_layers(&[candidates], cell_px)
+        .pop()
+        .expect("one layer in, one out")
 }
 
 #[cfg(test)]
@@ -354,21 +324,24 @@ mod tests {
         }
     }
 
-    fn cand(sort_key: f64, ax: i64, ay: i64, text: &str, x: f32, y: f32) -> Candidate {
-        Candidate {
+    /// A fixed-anchor point candidate: one variant holding one box.
+    fn cand(sort_key: f64, ax: i64, ay: i64, text: &str, x: f32, y: f32) -> LabelCandidate {
+        LabelCandidate {
             sort_key,
             world_ax: ax,
             world_ay: ay,
             text: text.into(),
             style_id: 0,
-            aabb: boxed(x, y, 10.0),
-            alt_aabbs: vec![],
+            variants: vec![vec![boxed(x, y, 10.0)]],
+            anchor_x: x,
+            anchor_y: y,
+            repeat_px: 0.0,
             allow_overlap: false,
             ignore_placement: false,
         }
     }
 
-    /// Placed-candidate indices, dropping the chosen-anchor detail.
+    /// Placed-candidate indices, dropping the chosen-variant detail.
     fn idxs(placed: &[Placement]) -> Vec<usize> {
         placed.iter().map(|p| p.cand).collect()
     }
@@ -457,15 +430,15 @@ mod tests {
     #[test]
     fn variable_anchor_falls_back_on_collision() {
         // `a` occupies the primary box. `b`'s primary box overlaps `a`, but its
-        // fallback anchor box is clear, so `b` places there (alt 1) instead of
-        // dropping.
+        // fallback anchor box is clear, so `b` places there (variant 1) instead
+        // of dropping.
         let a = cand(0.0, 0, 0, "a", 0.0, 0.0);
         let mut b = cand(1.0, 40, 0, "b", 5.0, 0.0); // primary overlaps a
-        b.alt_aabbs = vec![boxed(100.0, 0.0, 10.0)]; // fallback is clear
+        b.variants.push(vec![boxed(100.0, 0.0, 10.0)]); // fallback is clear
         let placed = place(&[a, b], COLLISION_CELL_PX);
         assert_eq!(placed.len(), 2);
         let b_placed = placed.iter().find(|p| p.cand == 1).unwrap();
-        assert_eq!(b_placed.alt, 1, "b should place at its fallback anchor");
+        assert_eq!(b_placed.variant, 1, "b should place at its fallback anchor");
     }
 
     #[test]
@@ -475,7 +448,7 @@ mod tests {
         // primary).
         let a = cand(0.0, 0, 0, "a", 0.0, 0.0);
         let mut b = cand(1.0, 40, 0, "b", 5.0, 0.0);
-        b.alt_aabbs = vec![boxed(100.0, 0.0, 10.0)];
+        b.variants.push(vec![boxed(100.0, 0.0, 10.0)]);
         let c = cand(2.0, 80, 0, "c", 100.0, 0.0); // overlaps b's fallback
         let placed = place(&[a, b, c], COLLISION_CELL_PX);
         assert_eq!(
@@ -490,21 +463,21 @@ mod tests {
         // Both of `b`'s anchor boxes overlap `a`'s box → `b` drops entirely.
         let a = cand(0.0, 0, 0, "a", 0.0, 0.0);
         let mut b = cand(1.0, 40, 0, "b", 5.0, 0.0);
-        b.alt_aabbs = vec![boxed(8.0, 0.0, 10.0)]; // also overlaps a
+        b.variants.push(vec![boxed(8.0, 0.0, 10.0)]); // also overlaps a
         let placed = place(&[a, b], COLLISION_CELL_PX);
         assert_eq!(idxs(&placed), vec![0]);
     }
 
     /// A one-glyph line candidate anchored at `(x, y)` (world anchor derived
     /// from the same point so the total order follows the geometry).
-    fn line_cand(text: &str, x: f32, y: f32, repeat_px: f32) -> LineCandidate {
-        LineCandidate {
+    fn line_cand(text: &str, x: f32, y: f32, repeat_px: f32) -> LabelCandidate {
+        LabelCandidate {
             sort_key: 0.0,
             world_ax: x as i64,
             world_ay: y as i64,
             text: text.into(),
             style_id: 0,
-            boxes: vec![boxed(x, y, 5.0)],
+            variants: vec![vec![boxed(x, y, 5.0)]],
             anchor_x: x,
             anchor_y: y,
             repeat_px,
@@ -523,19 +496,24 @@ mod tests {
             line_cand("Main St", 60.0, 0.0, 125.0),
             line_cand("Main St", 180.0, 0.0, 125.0),
         ];
-        assert_eq!(place_lines(&cands, COLLISION_CELL_PX), vec![0, 2]);
+        assert_eq!(idxs(&place(&cands, COLLISION_CELL_PX)), vec![0, 2]);
         // A different label at the same distance is unaffected.
         let mixed = [
             line_cand("Main St", 0.0, 0.0, 125.0),
             line_cand("Elm St", 60.0, 0.0, 125.0),
         ];
-        assert_eq!(place_lines(&mixed, COLLISION_CELL_PX), vec![0, 1]);
+        assert_eq!(idxs(&place(&mixed, COLLISION_CELL_PX)), vec![0, 1]);
         // Zero repeat distance keeps every anchor (line-center placement).
         let all = [
             line_cand("Main St", 0.0, 0.0, 0.0),
             line_cand("Main St", 60.0, 0.0, 0.0),
         ];
-        assert_eq!(place_lines(&all, COLLISION_CELL_PX), vec![0, 1]);
+        assert_eq!(idxs(&place(&all, COLLISION_CELL_PX)), vec![0, 1]);
+        // The same street name in another layer keeps its own anchors.
+        let top = [line_cand("Main St", 0.0, 0.0, 125.0)];
+        let below = [line_cand("Main St", 60.0, 0.0, 125.0)];
+        let placed = place_layers(&[&top, &below], COLLISION_CELL_PX);
+        assert_eq!((idxs(&placed[0]), idxs(&placed[1])), (vec![0], vec![0]));
     }
 
     #[test]
@@ -554,7 +532,61 @@ mod tests {
         a.allow_overlap = false;
         let mut b = line_cand("Main St", 60.0, 0.0, 125.0);
         b.allow_overlap = false;
-        assert_eq!(place_lines(&[blocker, a, b], COLLISION_CELL_PX), vec![0]);
+        assert_eq!(idxs(&place(&[blocker, a, b], COLLISION_CELL_PX)), vec![0]);
+    }
+
+    #[test]
+    fn all_glyph_boxes_of_a_line_label_must_be_free() {
+        // A line label is all-or-nothing: one blocked glyph box drops the whole
+        // label, and a placed one reserves every box it carries.
+        let mut long = line_cand("Main St", 0.0, 0.0, 0.0);
+        long.allow_overlap = false;
+        long.ignore_placement = false;
+        long.variants = vec![vec![boxed(0.0, 0.0, 5.0), boxed(40.0, 0.0, 5.0)]];
+        let mut blocker = cand(-1.0, -100, 0, "poi", 40.0, 0.0);
+        blocker.world_ay = -100;
+        let placed = place(&[long.clone(), blocker.clone()], COLLISION_CELL_PX);
+        assert_eq!(
+            idxs(&placed),
+            vec![1],
+            "the blocker takes the second glyph's cell, so the line label drops"
+        );
+        // Without the blocker the label places and reserves both boxes.
+        let late = cand(2.0, 200, 0, "late", 40.0, 0.0);
+        let placed = place(&[long, late], COLLISION_CELL_PX);
+        assert_eq!(
+            idxs(&placed),
+            vec![0],
+            "the reserved glyph box blocks `late`"
+        );
+    }
+
+    #[test]
+    fn earlier_layer_in_priority_order_wins() {
+        // Cross-layer priority: the layer passed first (the one drawn on top,
+        // e.g. POIs over road labels) places and knocks the other out — even
+        // when the loser has the far lower `symbol-sort-key`, which never
+        // crosses a layer boundary (maplibre-gl-js places symbol layers
+        // top-down).
+        let top = [cand(100.0, 40, 0, "poi", 5.0, 0.0)];
+        let below = [cand(-100.0, 0, 0, "road", 0.0, 0.0)]; // overlaps `top`
+        let placed = place_layers(&[&top, &below], COLLISION_CELL_PX);
+        assert_eq!((idxs(&placed[0]), idxs(&placed[1])), (vec![0], vec![]));
+        // Swapping the layer order swaps the winner.
+        let placed = place_layers(&[&below, &top], COLLISION_CELL_PX);
+        assert_eq!((idxs(&placed[0]), idxs(&placed[1])), (vec![0], vec![]));
+    }
+
+    #[test]
+    fn layers_dedup_separately() {
+        // Two layers labelling the same feature are two labels, not a
+        // duplicate: with overlap allowed both place.
+        let mut a = cand(0.0, 1000, 500, "Shibuya", 0.0, 0.0);
+        a.allow_overlap = true;
+        let b = [a.clone()];
+        let a = [a];
+        let placed = place_layers(&[&a, &b], COLLISION_CELL_PX);
+        assert_eq!(placed.iter().map(Vec::len).sum::<usize>(), 2);
     }
 
     #[test]
