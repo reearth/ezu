@@ -5,8 +5,10 @@
 //!
 //! Known divergences from the reference (kept deliberately simple):
 //!
-//! - Chars covered by no font are dropped before shaping instead of
-//!   rendering a missing-glyph box.
+//! - Chars covered by no font draw nothing instead of rendering a
+//!   missing-glyph box. They still count as chars for line breaking, so a
+//!   line of them keeps its slot (contributing no width) exactly as a
+//!   line of glyphless chars does in the reference.
 //! - With an outline primary font, line metrics (first baseline, block
 //!   height) come from its real ascender/descender rather than
 //!   MapLibre's fixed 24px-glyph rectangle constants. An SDF primary
@@ -485,7 +487,11 @@ struct BreakCandidate {
     char_ix: usize,
     x: f32,
     prior: Option<usize>,
-    badness: f32,
+    /// Accumulated badness. `f64` like the reference's numbers: the
+    /// mandatory-break penalty is eight orders of magnitude above a typical
+    /// raggedness term, which `f32` would round away — and with it the
+    /// ordering between two chains that both take a mandatory break.
+    badness: f64,
 }
 
 /// Choose line breaks for the shaped text. Returns the char index each
@@ -506,29 +512,37 @@ fn determine_line_breaks(shaped: &ShapedText, max_width_em: f32) -> Vec<usize> {
     // explicit server-supplied breaks (zero-width spaces).
     let has_zwsp = shaped.chars.contains(&'\u{200b}');
 
+    // Per-char advance (a cluster's total lands on its first char) and which
+    // chars a glyph starts at, so the walk below is over the logical chars
+    // like the reference's — a char that shaped to nothing (uncovered by the
+    // stack) still breaks the line it sits in.
+    let mut advance = vec![0.0f32; end];
+    let mut glyph_start = vec![false; end];
+    for g in &shaped.glyphs {
+        advance[g.char_ix] += g.x_advance;
+        glyph_start[g.char_ix] = true;
+    }
+
     let mut candidates: Vec<BreakCandidate> = Vec::new();
     let mut current_x = 0.0f32;
-    for (i, g) in shaped.glyphs.iter().enumerate() {
-        let c = shaped.chars[g.char_ix];
+    for (i, (&c, &adv)) in shaped.chars.iter().zip(&advance).enumerate() {
         if !is_whitespace(c) {
-            current_x += g.x_advance;
+            current_x += adv;
         }
-        let Some(next) = shaped.glyphs.get(i + 1) else {
+        let next_ix = i + 1;
+        if next_ix >= end {
             break;
-        };
+        }
         // A break can only fall on a cluster boundary (never inside a
-        // ligature).
-        if next.char_ix <= g.char_ix {
+        // ligature): a char that starts a glyph, or one no glyph covers.
+        if !glyph_start[next_ix] && shaped.covered[next_ix] {
             continue;
         }
         let ideographic = char_allows_ideographic_breaking(c);
         if is_breakable(c) || ideographic {
-            let penalty = calculate_penalty(
-                c,
-                shaped.chars.get(next.char_ix).copied(),
-                ideographic && has_zwsp,
-            );
-            let cand = evaluate_break(next.char_ix, current_x, target, &candidates, penalty, false);
+            let penalty =
+                calculate_penalty(c, Some(shaped.chars[next_ix]), ideographic && has_zwsp);
+            let cand = evaluate_break(next_ix, current_x, target, &candidates, penalty, false);
             candidates.push(cand);
         }
     }
@@ -539,8 +553,9 @@ fn determine_line_breaks(shaped: &ShapedText, max_width_em: f32) -> Vec<usize> {
 /// Badness of a line of `line_width` against the target: squared
 /// raggedness plus the (signed-squared) break penalty; a short last
 /// line is half-forgiven.
-fn calculate_badness(line_width: f32, target: f32, penalty: f32, is_last: bool) -> f32 {
-    let raggedness = (line_width - target).powi(2);
+fn calculate_badness(line_width: f32, target: f32, penalty: f32, is_last: bool) -> f64 {
+    let raggedness = f64::from(line_width - target).powi(2);
+    let penalty = f64::from(penalty);
     if is_last && line_width < target {
         return raggedness / 2.0;
     }

@@ -222,6 +222,53 @@ fn sdf_metrics_use_the_fixed_line_slot() {
 }
 
 #[test]
+fn a_newline_splits_the_block_into_two_line_slots() {
+    // The glyph protocol has no glyph for `\n`; the break is structural.
+    let fonts = [StackEntry::Sdf(test_stack())];
+    let fonts = FaceEntry::prepare(&fonts);
+    let params = LayoutParams {
+        max_width_em: 20.0,
+        ..LayoutParams::default()
+    };
+    let one = layout("A", &fonts, &params);
+    let two = layout("A\nA", &fonts, &params);
+    assert_eq!(two.glyphs.len(), 2);
+    assert!(
+        (two.bbox.height() - 2.0 * params.line_height_em).abs() < 1e-5,
+        "two lines should be two line slots tall: {:?}",
+        two.bbox
+    );
+    assert!(
+        (two.bbox.width() - one.bbox.width()).abs() < 1e-5,
+        "the block should be one line wide: {} vs {}",
+        two.bbox.width(),
+        one.bbox.width()
+    );
+}
+
+#[test]
+fn a_second_line_without_glyphs_keeps_its_slot_but_adds_no_width() {
+    // Bilingual label whose local-name range is absent: the first line's
+    // width is the whole block's, and the empty line still occupies a
+    // slot (maplibre-gl-js `shapeLines`).
+    let fonts = [StackEntry::Sdf(test_stack())];
+    let fonts = FaceEntry::prepare(&fonts);
+    let params = LayoutParams {
+        max_width_em: 20.0,
+        ..LayoutParams::default()
+    };
+    let one = layout("A", &fonts, &params);
+    let block = layout("A\n目黒区", &fonts, &params);
+    assert_eq!(block.glyphs.len(), 1);
+    assert!(
+        (block.bbox.width() - one.bbox.width()).abs() < 1e-5,
+        "width should not include the missing line: {:?}",
+        block.bbox
+    );
+    assert!((block.bbox.height() - 2.0 * params.line_height_em).abs() < 1e-5);
+}
+
+#[test]
 fn missing_range_without_fetcher_drops_and_counts() {
     let fonts = [StackEntry::Sdf(Arc::new(SdfFontStack::new()))];
     let fonts = FaceEntry::prepare(&fonts);

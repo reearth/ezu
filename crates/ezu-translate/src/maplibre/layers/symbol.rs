@@ -4,9 +4,9 @@
 //! (points, or along polylines for `line` / `line-center`). An icon+text
 //! layer emits both, text blended over the icon.
 //!
-//! Every converted label layer feeds the recipe's one `label-placement`
-//! node, so labels of different layers collide with each other as they do
-//! in MapLibre; icons are still placed without collision.
+//! Every converted *visible* label layer feeds the recipe's one
+//! `label-placement` node, so labels of different layers collide with each
+//! other as they do in MapLibre; icons are still placed without collision.
 
 use std::collections::HashMap;
 
@@ -29,13 +29,18 @@ const DEFAULT_TEXT_FONT: [&str; 2] = ["Open Sans Regular", "Arial Unicode MS Reg
 /// top-level `glyphs` endpoint (`glyphs_url`) as an SDF `glyphs` source
 /// — zero configuration. No mapping and no `glyphs` skips the text
 /// with a warning.
+///
+/// `label_layers` is the recipe's shared placement roster: `None` keeps this
+/// layer's labels out of it (a `visibility: none` layer contributes no
+/// collision candidates, as in MapLibre), and its text becomes a
+/// self-placing `text` node instead of the `text-labels`/`text-draw` pair.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn convert_symbol(
     id: &str,
     layer: &Map<String, Value>,
     nodes: &mut Map<String, Value>,
     outputs: &mut Vec<String>,
-    label_layers: &mut Vec<String>,
+    label_layers: Option<&mut Vec<String>>,
     zoom_range: ZoomRange,
     sources: &Sources,
     source_defs: &mut Map<String, Value>,
@@ -222,7 +227,7 @@ fn convert_text(
     zoom_range: ZoomRange,
     nodes: &mut Map<String, Value>,
     outputs: &mut Vec<String>,
-    label_layers: &mut Vec<String>,
+    label_layers: Option<&mut Vec<String>>,
     source_defs: &mut Map<String, Value>,
     fonts: &HashMap<String, String>,
     glyphs_url: Option<&str>,
@@ -542,6 +547,16 @@ fn convert_text(
     // `label-placement` node decides them all, and `text-draw` paints the
     // winners. `label_layers` records the contribution in style order; the
     // caller emits the placement node once every layer is known.
+    let Some(label_layers) = label_layers else {
+        // Out of the shared placement: one self-placing `text` node, which
+        // the caller gates off — so the layer neither draws nor collides,
+        // and turning it back on needs no other node.
+        let text_id = format!("{id}__text");
+        spec["op"] = Value::from("text");
+        nodes.insert(text_id.clone(), spec);
+        outputs.push(text_id);
+        return;
+    };
     let labels_id = format!("{id}__labels");
     spec["op"] = Value::from("text-labels");
     nodes.insert(labels_id.clone(), spec);
