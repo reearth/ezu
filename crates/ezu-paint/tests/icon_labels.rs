@@ -63,6 +63,7 @@ fn dot_sheet() -> SpriteSheet {
             width: 16,
             height: 16,
             pixel_ratio: 1.0,
+            ..SpriteRect::default()
         },
     );
     SpriteSheet { atlas, icons }
@@ -327,5 +328,68 @@ fn a_symbol_with_an_icon_is_seamless_across_a_tile_border() {
     assert!(
         matched > 0,
         "expected the symbol's pixels in the seam strip"
+    );
+}
+
+#[test]
+fn icon_text_fit_stretches_the_icon_over_its_label() {
+    // `icon-text-fit: both` sizes the icon to the label's box plus the fit
+    // padding, so a longer name draws a wider icon — and the icon's own
+    // 16 px sprite size stops deciding anything.
+    let fields = format!(
+        r##"{TEXT}, {ICON}, "icon-text-fit": "both",
+            "icon-text-fit-padding": [2, 4, 2, 4]"##
+    );
+    let fitted = recipe(POIS_FIRST, &fields, "pois");
+    let short = counts(&render(&fitted, T0, vec![], vec![point("I", 64.0, 64.0)])).0;
+    let long = counts(&render(
+        &fitted,
+        T0,
+        vec![],
+        vec![point("IIIIII", 64.0, 64.0)],
+    ))
+    .0;
+    assert!(
+        long > short,
+        "a longer label must widen the fitted icon: {long} vs {short}"
+    );
+    // Without the fit both labels get the same 16×16 sprite.
+    let plain = recipe(POIS_FIRST, &format!("{TEXT}, {ICON}"), "pois");
+    let a = counts(&render(&plain, T0, vec![], vec![point("I", 64.0, 64.0)])).0;
+    let b = counts(&render(
+        &plain,
+        T0,
+        vec![],
+        vec![point("IIIIII", 64.0, 64.0)],
+    ))
+    .0;
+    assert_eq!(a, b, "an unfitted icon keeps its sprite size");
+    assert_eq!(a, 16 * 16);
+}
+
+#[test]
+fn a_fitted_icon_reserves_the_box_it_covers() {
+    // The fitted box is the collision box: with a generous fit padding the
+    // icon reaches well past the sprite's 16 px and knocks out a road label
+    // that the unfitted symbol leaves alone.
+    let fitted = recipe(
+        POIS_FIRST,
+        &format!(
+            r##"{TEXT}, {ICON}, "icon-text-fit": "both", "icon-text-fit-padding": [20, 20, 20, 20]"##
+        ),
+        "roads",
+    );
+    let plain = recipe(POIS_FIRST, &format!("{TEXT}, {ICON}"), "roads");
+    // Above and right of the POI: clear of both its 16 px icon and its label.
+    let road = vec![point("M", 76.0, 40.0)];
+    let poi = vec![point("IIIIII", 64.0, 64.0)];
+    assert!(
+        counts(&render(&plain, T0, road.clone(), poi.clone())).1 > 0,
+        "the road label is clear of the unfitted symbol"
+    );
+    assert_eq!(
+        counts(&render(&fitted, T0, road, poi)).1,
+        0,
+        "the fitted icon's box must block the road label"
     );
 }

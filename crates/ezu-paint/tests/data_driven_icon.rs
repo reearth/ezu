@@ -44,6 +44,7 @@ fn two_icon_sheet() -> SpriteSheet {
             width: 8,
             height: 8,
             pixel_ratio: 1.0,
+            ..SpriteRect::default()
         },
     );
     icons.insert(
@@ -54,6 +55,7 @@ fn two_icon_sheet() -> SpriteSheet {
             width: 8,
             height: 8,
             pixel_ratio: 1.0,
+            ..SpriteRect::default()
         },
     );
     SpriteSheet { atlas, icons }

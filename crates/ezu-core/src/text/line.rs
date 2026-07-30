@@ -5,16 +5,19 @@
 //! canvas). The `text` node feeds it a polyline in the shared
 //! world-pixel frame so two tiles walking the same line agree.
 //!
-//! The three primitives, all pure:
+//! The four primitives, all pure:
 //!
-//! 1. [`generate_anchors`] — candidate anchor points along the line,
-//!    every `spacing` px starting half a label in (or the single arc
-//!    midpoint for [`LinePlacement::LineCenter`]), each rejected if the
-//!    line bends more than `max_angle_deg` within any sliding
-//!    `angle_window` of the arc the label would cover.
-//! 2. keep-upright — [`Anchor::reversed`] flags a label whose reading
+//! 1. [`clip_line`] — the parts of a polyline inside one tile, so each
+//!    tile anchors only on the stretch of road it owns.
+//! 2. [`generate_anchors`] — candidate anchor points along the line,
+//!    every `spacing` px from a phase that depends on whether the line
+//!    continues past the tile (or the single arc midpoint for
+//!    [`LinePlacement::LineCenter`]), each rejected if the line bends
+//!    more than `max_angle_deg` within any sliding `angle_window` of the
+//!    arc the label would cover.
+//! 3. keep-upright — [`Anchor::reversed`] flags a label whose reading
 //!    direction would run right-to-left, so the walk flips it once.
-//! 3. [`place_glyphs`] — walk the line from the anchor, sampling each
+//! 4. [`place_glyphs`] — walk the line from the anchor, sampling each
 //!    glyph's horizontal centre to a point + tangent angle.
 //!
 //! Divergences from the reference, kept deliberately simple: the
@@ -167,6 +170,61 @@ fn window_reversed(poly: &[(f32, f32)], cum: &[f32], s: f32, label_len: f32) -> 
     b.0 < a.0
 }
 
+/// The parts of `poly` inside the axis-aligned box `[min_x, max_x) ×
+/// [min_y, max_y)`, as separate runs — MapLibre's `clipLine`, which every
+/// line-placed label goes through before its anchors are generated.
+///
+/// Clipping is what makes a road's label belong to exactly one tile: each
+/// tile anchors only on the run it owns, so the copies of a road in a tile
+/// and in its neighbour's buffer never both produce a label for the same
+/// stretch. A segment leaving and re-entering the box starts a new run.
+pub fn clip_line(
+    poly: &[(f32, f32)],
+    min_x: f32,
+    min_y: f32,
+    max_x: f32,
+    max_y: f32,
+) -> Vec<Vec<(f32, f32)>> {
+    // Where segment p→q crosses `lim` on the x (resp. y) axis.
+    let cross_x = |p: (f32, f32), q: (f32, f32), lim: f32| {
+        let t = (lim - p.0) / (q.0 - p.0);
+        (lim, p.1 + (q.1 - p.1) * t)
+    };
+    let cross_y = |p: (f32, f32), q: (f32, f32), lim: f32| {
+        let t = (lim - p.1) / (q.1 - p.1);
+        (p.0 + (q.0 - p.0) * t, lim)
+    };
+    let mut out: Vec<Vec<(f32, f32)>> = Vec::new();
+    'segments: for w in poly.windows(2) {
+        let (mut p0, mut p1) = (w[0], w[1]);
+        // Each edge in turn: drop the segment when it lies wholly outside,
+        // else pull the outside endpoint onto the edge.
+        for (lim, beyond) in [(min_x, true), (max_x, false)] {
+            let out_of = |v: f32| if beyond { v < lim } else { v >= lim };
+            match (out_of(p0.0), out_of(p1.0)) {
+                (true, true) => continue 'segments,
+                (true, false) => p0 = cross_x(p0, p1, lim),
+                (false, true) => p1 = cross_x(p1, p0, lim),
+                (false, false) => {}
+            }
+        }
+        for (lim, beyond) in [(min_y, true), (max_y, false)] {
+            let out_of = |v: f32| if beyond { v < lim } else { v >= lim };
+            match (out_of(p0.1), out_of(p1.1)) {
+                (true, true) => continue 'segments,
+                (true, false) => p0 = cross_y(p0, p1, lim),
+                (false, true) => p1 = cross_y(p1, p0, lim),
+                (false, false) => {}
+            }
+        }
+        match out.last_mut() {
+            Some(run) if run.last() == Some(&p0) => run.push(p1),
+            _ => out.push(vec![p0, p1]),
+        }
+    }
+    out
+}
+
 /// Anchor-generation inputs for one label on one polyline, all in frame
 /// px except the angle limit.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -182,6 +240,16 @@ pub struct AnchorParams {
     /// Arc window the bend is summed over (MapLibre: 3/5 of the font
     /// size). Zero measures each vertex's turn on its own.
     pub angle_window: f32,
+    /// The label's font size (px). MapLibre phases the first anchor of a
+    /// self-contained line two font sizes past half the label, which keeps
+    /// labels off T-intersections at the line's start.
+    pub glyph_size: f32,
+    /// Whether the polyline runs on past the tile it was clipped to (its
+    /// first vertex sits on the tile edge). A continued line takes its
+    /// phase from the spacing alone — the same phase its continuation in
+    /// the next tile takes — and never falls back to a single centre
+    /// anchor, which would double the label across the seam.
+    pub continued: bool,
 }
 
 /// Generate label anchors along `poly` (frame px).
@@ -228,12 +296,30 @@ pub fn generate_anchors(poly: &[(f32, f32)], p: &AnchorParams) -> Vec<Anchor> {
                 spacing = p.label_len + spacing * 0.25;
             }
             let step = spacing.max(1.0);
-            // First anchor half a label in, then every `spacing`, while the
-            // whole label still fits within the line.
-            let mut s = half;
-            while s <= total - half + 1e-3 {
-                push_if_straight(s, &mut anchors);
-                s += step;
+            // Phase of the first anchor. A line that continues past the tile
+            // takes half a spacing, so both halves of the road sample the
+            // same grid; a self-contained one starts half a label plus two
+            // font sizes in. Both are taken modulo the spacing, so the first
+            // anchor never sits a whole period into the line.
+            let offset = if p.continued {
+                (0.5 * step) % step
+            } else {
+                (half + 2.0 * p.glyph_size.max(0.0)) % step
+            };
+            let resample = |from: f32, anchors: &mut Vec<Anchor>| {
+                let mut s = from;
+                while s < total {
+                    if s - half >= 0.0 && s + half <= total {
+                        push_if_straight(s, anchors);
+                    }
+                    s += step;
+                }
+            };
+            resample(offset, &mut anchors);
+            // Nothing fit on the sampling grid: a self-contained line gets one
+            // more try at its midpoint, so a short road still gets its name.
+            if anchors.is_empty() && !p.continued {
+                resample(total * 0.5, &mut anchors);
             }
         }
     }
@@ -299,6 +385,8 @@ mod tests {
             spacing,
             max_angle_deg,
             angle_window: f32::MAX,
+            glyph_size: 0.0,
+            continued: false,
         }
     }
 
@@ -390,6 +478,68 @@ mod tests {
         );
         let ss: Vec<f32> = a.iter().map(|a| a.s).collect();
         assert_eq!(ss, vec![110.0, 392.5, 675.0]);
+    }
+
+    #[test]
+    fn a_continued_line_is_phased_from_half_a_spacing() {
+        // A road running on past the tile takes its phase from the spacing
+        // alone, so its two halves sample the same grid across the seam.
+        let mut p = params(LinePlacement::Line, 20.0, 30.0, 45.0);
+        p.continued = true;
+        let ss: Vec<f32> = generate_anchors(&straight(100.0), &p)
+            .iter()
+            .map(|a| a.s)
+            .collect();
+        assert_eq!(ss, vec![15.0, 45.0, 75.0]);
+    }
+
+    #[test]
+    fn a_self_contained_line_clears_its_start() {
+        // Two font sizes past half the label, so a label doesn't sit on the
+        // T-intersection the line starts at.
+        let mut p = params(LinePlacement::Line, 20.0, 60.0, 45.0);
+        p.glyph_size = 10.0;
+        let ss: Vec<f32> = generate_anchors(&straight(200.0), &p)
+            .iter()
+            .map(|a| a.s)
+            .collect();
+        assert_eq!(ss, vec![30.0, 90.0, 150.0]);
+    }
+
+    #[test]
+    fn a_short_self_contained_line_falls_back_to_its_middle() {
+        // Nothing fits the spacing grid on a 60 px run at 250 px spacing, so
+        // the label lands at the midpoint instead of vanishing.
+        let mut p = params(LinePlacement::Line, 40.0, 250.0, 45.0);
+        p.glyph_size = 12.0;
+        let a = generate_anchors(&straight(60.0), &p);
+        assert_eq!(a.len(), 1);
+        assert!((a[0].s - 30.0).abs() < 1e-3);
+        // A continued line takes no such fallback — its neighbour tile holds
+        // the rest of the road and would draw the label twice.
+        p.continued = true;
+        assert!(generate_anchors(&straight(60.0), &p).is_empty());
+    }
+
+    #[test]
+    fn clip_line_keeps_only_the_part_inside_the_box() {
+        // A line crossing the box is cut at both edges.
+        let runs = clip_line(&[(-10.0, 5.0), (30.0, 5.0)], 0.0, 0.0, 20.0, 20.0);
+        assert_eq!(runs, vec![vec![(0.0, 5.0), (20.0, 5.0)]]);
+        // Leaving and re-entering starts a second run.
+        let runs = clip_line(
+            &[(5.0, 5.0), (5.0, -10.0), (15.0, -10.0), (15.0, 5.0)],
+            0.0,
+            0.0,
+            20.0,
+            20.0,
+        );
+        assert_eq!(
+            runs,
+            vec![vec![(5.0, 5.0), (5.0, 0.0)], vec![(15.0, 0.0), (15.0, 5.0)],]
+        );
+        // A line wholly outside contributes nothing.
+        assert!(clip_line(&[(-5.0, -5.0), (-1.0, -5.0)], 0.0, 0.0, 20.0, 20.0).is_empty());
     }
 
     #[test]

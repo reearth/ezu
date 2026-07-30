@@ -50,7 +50,8 @@ pub mod sdf;
 mod shape;
 
 pub use collide::{
-    place, place_layers, Aabb, Grid, LabelCandidate, Placement, COLLISION_CELL_PX, DEDUP_QUANTUM,
+    place, place_layers, Aabb, Grid, LabelCandidate, PlaceRank, Placement, COLLISION_CELL_PX,
+    DEDUP_QUANTUM,
 };
 pub use draw::{draw, draw_line, GlyphPlacement, SectionPaint, TextPaint};
 pub use font::{FaceEntry, Font, FontError, StackEntry};
@@ -60,7 +61,8 @@ pub use layout::{
 };
 pub use layout_cache::get_or_build_layout;
 pub use line::{
-    generate_anchors, place_glyphs, Anchor as LineAnchor, AnchorParams, GlyphOnLine, LinePlacement,
+    clip_line, generate_anchors, place_glyphs, Anchor as LineAnchor, AnchorParams, GlyphOnLine,
+    LinePlacement,
 };
 pub use outline_sdf::{OutlineSdfCache, OutlineSdfStats};
 pub use pbf::{decode_glyph_range, GlyphPbfError, GlyphRange};

@@ -171,7 +171,9 @@ fn a_poi_label_knocks_out_an_overlapping_line_label() {
     // blocks a street name whose glyph boxes run through it. (Road labels are
     // line-placed in real basemaps, so this is the case that matters.)
     let recipe = two_layer_recipe(r#", "placement": "line", "spacing-px": 250"#, "", "roads");
-    let road = || vec![line("MMMM", &[(0, 2048), (4096, 2048)])];
+    // The road ends inside the tile, so with no anchor fitting the spacing
+    // grid it falls back to one at the middle of the run — where the POI is.
+    let road = || vec![line("MMMM", &[(200, 2048), (3900, 2048)])];
     let poi = || vec![point("WWWW", 2048, 2048)];
 
     let alone = render(&recipe, T0, road(), vec![]);

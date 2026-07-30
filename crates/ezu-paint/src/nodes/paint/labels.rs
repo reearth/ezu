@@ -68,7 +68,7 @@ pub(super) struct LabelSet {
 /// shared across a group's labels via `Arc`.
 pub(super) enum LabelDraw {
     /// A point symbol: its laid-out text blocks (one per anchor candidate)
-    /// and its icon, selected by the winning variant through `variants`.
+    /// and its icons, selected by the winning variant through `variants`.
     Point {
         blocks: Vec<Arc<TextBlock>>,
         /// What each collision variant draws, index-aligned with the
@@ -78,7 +78,9 @@ pub(super) enum LabelDraw {
         paint: TextPaint,
         fonts: Arc<Vec<StackEntry>>,
         paints: Arc<Vec<SectionPaint>>,
-        icon: Option<Arc<IconDraw>>,
+        /// The symbol's icon: one entry, or one per anchor candidate when
+        /// `icon-text-fit` sizes it to that anchor's label.
+        icons: Vec<Arc<IconDraw>>,
     },
     /// A line label: one block walked along the path, with a per-glyph
     /// placement and the perpendicular `offset-em` shift applied at draw.
@@ -100,8 +102,10 @@ pub(super) struct PointVariant {
     /// suppresses the text (`text-optional` with the text box blocked, or a
     /// symbol with no label at all).
     pub block: Option<usize>,
-    /// Whether the variant draws the symbol's icon.
-    pub icon: bool,
+    /// Index into [`LabelDraw::Point::icons`], or `None` when the variant
+    /// suppresses the icon (`icon-optional` with the icon box blocked, or a
+    /// symbol with no icon at all).
+    pub icon: Option<usize>,
 }
 
 /// A symbol's icon, ready to composite at the label anchor. The image is
@@ -145,6 +149,10 @@ pub(super) fn set_id(param_hash: u64, candidates: &[LabelCandidate]) -> u64 {
         h.update(&[0]);
         h.update(&c.style_id.to_le_bytes());
         h.update(&c.sort_key.to_bits().to_le_bytes());
+        h.update(&c.rank.tile.0.to_le_bytes());
+        h.update(&c.rank.tile.1.to_le_bytes());
+        h.update(&c.rank.feature.to_le_bytes());
+        h.update(&c.rank.symbol.to_le_bytes());
     }
     h.digest()
 }
@@ -245,15 +253,19 @@ pub(super) fn draw_labels(
         let Some(LabelDraw::Point {
             variants,
             anchor,
-            icon: Some(icon),
+            icons,
             ..
         }) = set.draws.get(p.cand)
         else {
             continue;
         };
-        if !variants.get(p.variant).is_some_and(|v| v.icon) {
+        let Some(icon) = variants
+            .get(p.variant)
+            .and_then(|v| v.icon)
+            .and_then(|ix| icons.get(ix))
+        else {
             continue;
-        }
+        };
         let (ax, ay) = (
             anchor.0 + pad + icon.offset.0,
             anchor.1 + pad + icon.offset.1,

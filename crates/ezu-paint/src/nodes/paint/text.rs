@@ -58,12 +58,14 @@ use crate::nodes::common::{
 };
 use crate::render::{collect_groups, SharedLayer};
 use ezu_core::text::{
-    collide::{self, Aabb, LabelCandidate},
+    clip_line,
+    collide::{self, Aabb, LabelCandidate, PlaceRank},
     generate_anchors, get_or_build_layout, layout_sections, place_glyphs, Anchor, AnchorParams,
     FaceEntry, Font, GlyphPlacement, Justify, LayoutParams, LinePlacement, SdfFontStack,
     SectionPaint, SectionSpec, StackEntry, TextBlock, TextPaint, TextTransform, VerticalAlign,
 };
 
+use super::icon_fit::{fitted_content_box, stretch_image, IconTextFit, NineSlice};
 use super::labels::{draw_labels, set_id, FaceCache, IconDraw, LabelDraw, LabelSet, PointVariant};
 
 /// Parse an optional raw MapLibre expression field, type-checked against
@@ -170,25 +172,48 @@ fn eval_number(
     }
 }
 
-/// The block shift (em, y-down) a MapLibre `text-radial-offset` applies for a
-/// given variable anchor: the label is pushed `r` em away from the point in
-/// the anchor's direction (`top` → below the point, `left` → right of it).
-/// Corners split the distance along both axes (MapLibre's radial layout).
-fn radial_offset_em(anchor: Anchor, r: f32) -> [f32; 2] {
-    if r <= 0.0 {
-        return [0.0, 0.0];
+/// The gap (em) MapLibre's shaping leaves between a block's box edge and the
+/// glyph baseline, subtracted from a vertically anchored offset so the visible
+/// text keeps the requested distance from the point.
+const BASELINE_OFFSET_EM: f32 = 7.0 / 24.0;
+
+/// The block shift (em, y-down) an anchor applies — MapLibre's
+/// `evaluateVariableOffset`.
+///
+/// With `text-radial-offset` the label is pushed `r` em away from the point in
+/// the anchor's direction (`top` → below the point, `left` → right of it), and
+/// corners split the distance along both axes. Otherwise `text-offset` is
+/// **mirrored**: its magnitude points away from the anchored edge, so a `right`
+/// anchor shifts left by `|dx|` where a `left` anchor shifts right by it, and
+/// an axis the anchor doesn't name contributes nothing.
+fn anchor_offset_em(anchor: Anchor, offset: [f32; 2], radial: f32) -> [f32; 2] {
+    if radial > 0.0 {
+        let diag = radial / std::f32::consts::SQRT_2;
+        let b = BASELINE_OFFSET_EM;
+        let (x, y) = match anchor {
+            Anchor::Center => (0.0, 0.0),
+            Anchor::Left => (radial, 0.0),
+            Anchor::Right => (-radial, 0.0),
+            Anchor::Top => (0.0, radial - b),
+            Anchor::Bottom => (0.0, -radial + b),
+            Anchor::TopLeft => (diag, diag - b),
+            Anchor::TopRight => (-diag, diag - b),
+            Anchor::BottomLeft => (diag, -diag + b),
+            Anchor::BottomRight => (-diag, -diag + b),
+        };
+        return [x, y];
     }
-    let diag = r / std::f32::consts::SQRT_2;
-    let (x, y) = match anchor {
-        Anchor::Center => (0.0, 0.0),
-        Anchor::Left => (r, 0.0),
-        Anchor::Right => (-r, 0.0),
-        Anchor::Top => (0.0, r),
-        Anchor::Bottom => (0.0, -r),
-        Anchor::TopLeft => (diag, diag),
-        Anchor::TopRight => (-diag, diag),
-        Anchor::BottomLeft => (diag, -diag),
-        Anchor::BottomRight => (-diag, -diag),
+    let (ox, oy) = (offset[0].abs(), offset[1].abs());
+    let b = BASELINE_OFFSET_EM;
+    let x = match anchor {
+        Anchor::Left | Anchor::TopLeft | Anchor::BottomLeft => ox,
+        Anchor::Right | Anchor::TopRight | Anchor::BottomRight => -ox,
+        _ => 0.0,
+    };
+    let y = match anchor {
+        Anchor::Top | Anchor::TopLeft | Anchor::TopRight => oy - b,
+        Anchor::Bottom | Anchor::BottomLeft | Anchor::BottomRight => -oy + b,
+        _ => 0.0,
     };
     [x, y]
 }
@@ -412,6 +437,9 @@ struct GroupPrep<'g> {
     group: &'g FeatureGroup,
     dx: i64,
     dy: i64,
+    /// The group's position in its own tile's filtered layer — MapLibre's
+    /// within-layer placement order.
+    feature: u32,
     sections: Vec<LabelSection>,
     /// The sections concatenated, as they lay out — the collision dedup text.
     /// An icon-only symbol carries its icon name here instead, so two
@@ -550,6 +578,118 @@ struct IconConfig {
     ignore_placement: bool,
     /// MapLibre `icon-optional`: the text may place without the icon.
     optional: bool,
+    /// MapLibre `icon-text-fit`: which axes stretch to the placed label.
+    text_fit: IconTextFit,
+    /// MapLibre `icon-text-fit-padding`, `[top, right, bottom, left]` px.
+    text_fit_padding: [f32; 4],
+}
+
+/// A symbol's icon at its sprite size, anchored by `icon-anchor` — the
+/// no-`icon-text-fit` case. Returns the draw payload and the collision box it
+/// occupies relative to the symbol anchor.
+fn plain_icon(
+    cfg: &IconConfig,
+    gi: &GroupIcon,
+    image: Arc<ezu_graph::RasterBuf>,
+    scale: f32,
+) -> (Arc<IconDraw>, Aabb) {
+    let (w, h) = (image.width as f32 * scale, image.height as f32 * scale);
+    let (fx, fy) = cfg.anchor.fraction();
+    let offset = (
+        (0.5 - fx) * w + cfg.offset[0] * gi.size,
+        (0.5 - fy) * h + cfg.offset[1] * gi.size,
+    );
+    // The collision box is the unrotated rect, as MapLibre's point-placed
+    // icon box is; a rotated icon only reaches further on the canvas, which
+    // `half` covers for the off-canvas reject.
+    let rel = Aabb {
+        min_x: offset.0 - 0.5 * w,
+        min_y: offset.1 - 0.5 * h,
+        max_x: offset.0 + 0.5 * w,
+        max_y: offset.1 + 0.5 * h,
+    }
+    .inflate(gi.padding);
+    let half = if gi.rotate_deg == 0.0 {
+        (0.5 * w, 0.5 * h)
+    } else {
+        let d = 0.5 * (w * w + h * h).sqrt();
+        (d, d)
+    };
+    (
+        Arc::new(IconDraw {
+            image,
+            offset,
+            scale,
+            rotation_deg: gi.rotate_deg,
+            opacity: gi.opacity,
+            half,
+        }),
+        rel,
+    )
+}
+
+/// A symbol's icon stretched to the box `block` occupies (MapLibre
+/// `icon-text-fit`). The sprite's nine-slice bands absorb the growth, so the
+/// stretched image is pre-composed here and drawn at 1:1; the collision box is
+/// the fitted content box, which is what the label actually reserves.
+#[allow(clippy::too_many_arguments)]
+fn fitted_icon(
+    cfg: &IconConfig,
+    gi: &GroupIcon,
+    image: &Arc<ezu_graph::RasterBuf>,
+    rect: Option<&ezu_graph::SpriteRect>,
+    scale: f32,
+    block: &TextBlock,
+    size: f32,
+) -> (Arc<IconDraw>, Aabb) {
+    let bb = block.bbox;
+    let text = Aabb {
+        min_x: bb.min_x * size,
+        min_y: bb.min_y * size,
+        max_x: bb.max_x * size,
+        max_y: bb.max_y * size,
+    };
+    let display = (image.width as f32 * scale, image.height as f32 * scale);
+    let fitted = fitted_content_box(
+        cfg.text_fit,
+        text,
+        display,
+        cfg.text_fit_padding,
+        (cfg.offset[0] * gi.size, cfg.offset[1] * gi.size),
+    );
+    let slice = NineSlice {
+        stretch_x: rect.map_or(&[][..], |r| &r.stretch_x),
+        stretch_y: rect.map_or(&[][..], |r| &r.stretch_y),
+        content: rect.and_then(|r| r.content),
+    };
+    let target = (fitted.max_x - fitted.min_x, fitted.max_y - fitted.min_y);
+    let Some((stretched, origin)) = stretch_image(image, &slice, target, scale) else {
+        return plain_icon(cfg, gi, image.clone(), scale);
+    };
+    let (w, h) = (stretched.width as f32, stretched.height as f32);
+    // The drawn image's top-left sits `origin` from the fitted box's, so its
+    // centre lands here relative to the symbol anchor.
+    let offset = (
+        fitted.min_x + origin.0 + 0.5 * w,
+        fitted.min_y + origin.1 + 0.5 * h,
+    );
+    let half = if gi.rotate_deg == 0.0 {
+        (0.5 * w, 0.5 * h)
+    } else {
+        let d = 0.5 * (w * w + h * h).sqrt();
+        (d, d)
+    };
+    (
+        Arc::new(IconDraw {
+            image: Arc::new(stretched),
+            offset,
+            scale: 1.0,
+            rotation_deg: gi.rotate_deg,
+            opacity: gi.opacity,
+            half,
+        }),
+        fitted.inflate(gi.padding),
+    )
 }
 
 /// One feature group's resolved icon: the named image plus the per-group
@@ -600,55 +740,55 @@ impl IconConfig {
 /// it placed.
 ///
 /// `text_boxes` holds one box per anchor candidate (empty for an icon-only
-/// symbol); `icon_box` is the icon's box, if any.
+/// symbol); `icon_boxes` holds the icon's box — one shared by every anchor,
+/// or one per anchor when `icon-text-fit` sizes the icon to the label that
+/// anchor lays out. Empty means the symbol has no icon.
 fn symbol_variants(
     text_boxes: &[Aabb],
-    icon_box: Option<Aabb>,
+    icon_boxes: &[Aabb],
     text_optional: bool,
     icon_optional: bool,
 ) -> (Vec<Vec<Aabb>>, Vec<PointVariant>) {
     let mut boxes = Vec::new();
     let mut variants = Vec::new();
-    match icon_box {
-        None => {
+    // A single icon box serves every anchor; a fitted one is picked per anchor.
+    let icon_at = |ix: usize| icon_boxes[ix.min(icon_boxes.len() - 1)];
+    if icon_boxes.is_empty() {
+        for (ix, b) in text_boxes.iter().enumerate() {
+            boxes.push(vec![*b]);
+            variants.push(PointVariant {
+                block: Some(ix),
+                icon: None,
+            });
+        }
+    } else if text_boxes.is_empty() {
+        boxes.push(vec![icon_at(0)]);
+        variants.push(PointVariant {
+            block: None,
+            icon: Some(0),
+        });
+    } else {
+        for (ix, b) in text_boxes.iter().enumerate() {
+            boxes.push(vec![icon_at(ix), *b]);
+            variants.push(PointVariant {
+                block: Some(ix),
+                icon: Some(ix.min(icon_boxes.len() - 1)),
+            });
+        }
+        if text_optional {
+            boxes.push(vec![icon_at(0)]);
+            variants.push(PointVariant {
+                block: None,
+                icon: Some(0),
+            });
+        }
+        if icon_optional {
             for (ix, b) in text_boxes.iter().enumerate() {
                 boxes.push(vec![*b]);
                 variants.push(PointVariant {
                     block: Some(ix),
-                    icon: false,
+                    icon: None,
                 });
-            }
-        }
-        Some(icon) if text_boxes.is_empty() => {
-            boxes.push(vec![icon]);
-            variants.push(PointVariant {
-                block: None,
-                icon: true,
-            });
-        }
-        Some(icon) => {
-            for (ix, b) in text_boxes.iter().enumerate() {
-                boxes.push(vec![icon, *b]);
-                variants.push(PointVariant {
-                    block: Some(ix),
-                    icon: true,
-                });
-            }
-            if text_optional {
-                boxes.push(vec![icon]);
-                variants.push(PointVariant {
-                    block: None,
-                    icon: true,
-                });
-            }
-            if icon_optional {
-                for (ix, b) in text_boxes.iter().enumerate() {
-                    boxes.push(vec![*b]);
-                    variants.push(PointVariant {
-                        block: Some(ix),
-                        icon: false,
-                    });
-                }
             }
         }
     }
@@ -801,14 +941,20 @@ impl TextNode {
         }
     }
 
-    /// Layout params for one variable-anchor candidate: the block is
-    /// re-anchored and pushed `radial_offset_em` away from the point in the
-    /// anchor's direction (MapLibre `text-variable-anchor` + `text-radial-offset`).
+    /// Layout params for one anchor candidate: the block is re-anchored and
+    /// shifted away from the point in that anchor's direction. A layer with
+    /// `text-variable-anchor` (or any `text-radial-offset`) re-evaluates its
+    /// offset per anchor, so the label always sits on the far side of the
+    /// point; a plain fixed anchor takes `text-offset` as written.
     fn variant_layout_params(&self, anchor: Anchor) -> LayoutParams {
-        let [ox, oy] = radial_offset_em(anchor, self.radial_offset_em);
+        let offset_em = if self.anchor_variants.is_empty() && self.radial_offset_em <= 0.0 {
+            self.offset_em
+        } else {
+            anchor_offset_em(anchor, self.offset_em, self.radial_offset_em)
+        };
         LayoutParams {
             anchor,
-            offset_em: [self.offset_em[0] + ox, self.offset_em[1] + oy],
+            offset_em,
             ..self.layout_params()
         }
     }
@@ -827,8 +973,8 @@ impl TextNode {
     /// before shaping. The widest an unshaped label can lay out is 2 em of
     /// advance per char — above any real glyph advance, ligatures and wide
     /// scripts included. Added on top: the collision `padding`, the halo (drawn
-    /// beyond the collision box), and any `radial-offset` an `anchor-variants`
-    /// candidate applies.
+    /// beyond the collision box), and the widest shift an anchor candidate can
+    /// apply (`radial-offset` or `offset-em`).
     ///
     /// `cap` bounds the advance by `max-extent-px` for point placement, where
     /// labels reaching past it are culled; line placement passes `false`, since
@@ -851,7 +997,10 @@ impl TextNode {
         } else {
             advance
         };
-        advance + padding + halo + self.radial_offset_em * size
+        let offset = self
+            .radial_offset_em
+            .max(self.offset_em[0].abs().max(self.offset_em[1].abs()));
+        advance + padding + halo + offset * size
     }
 
     /// Resolve a feature group's evaluated `text` into label sections against
@@ -890,6 +1039,7 @@ impl TextNode {
     fn prep_group<'g>(
         &self,
         group: &'g FeatureGroup,
+        feature: u32,
         dx: i64,
         dy: i64,
         registry: &FontRegistry,
@@ -945,6 +1095,7 @@ impl TextNode {
             group,
             dx,
             dy,
+            feature,
             sections,
             text,
             icon,
@@ -1136,12 +1287,13 @@ impl TextNode {
         // label reach for the neighbour band and the per-own-label warnings.
         let mut preps: Vec<GroupPrep> = Vec::new();
         let mut reach_max = 0.0f32;
-        for group in &feats.groups {
+        for (fi, group) in feats.groups.iter().enumerate() {
             if group.lines.is_empty() {
                 continue;
             }
             if let Some(prep) = self.prep_group(
                 group,
+                fi as u32,
                 0,
                 0,
                 registry,
@@ -1161,12 +1313,13 @@ impl TextNode {
             }
         }
         for (groups, dx, dy) in &nbr_groups {
-            for group in groups {
+            for (fi, group) in groups.iter().enumerate() {
                 if group.lines.is_empty() {
                     continue;
                 }
                 if let Some(prep) = self.prep_group(
                     group,
+                    fi as u32,
                     *dx,
                     *dy,
                     registry,
@@ -1354,13 +1507,19 @@ impl TextNode {
                 // MapLibre measures the bend over 3/5 of the font size, so a
                 // long gentle curve is fine and only a kink is rejected.
                 angle_window: ANGLE_WINDOW_EM * size,
+                glyph_size: size,
+                // Set per clipped run below.
+                continued: false,
             };
 
+            // MapLibre's within-feature symbol order: the anchors of each of
+            // the feature's lines, in the order they were generated.
+            let mut symbol = 0u32;
             for line in &group.lines {
                 if line.len() < 2 {
                     continue;
                 }
-                let poly: Vec<(f32, f32)> = line
+                let full: Vec<(f32, f32)> = line
                     .iter()
                     .map(|&(x, y)| {
                         let wx = dx * extent_i + x as i64;
@@ -1368,64 +1527,84 @@ impl TextNode {
                         (wx as f32 * sx, wy as f32 * sy)
                     })
                     .collect();
-                for mut anchor in generate_anchors(&poly, &anchor_params) {
-                    if !self.keep_upright {
-                        anchor.reversed = false;
+                // MapLibre anchors on the geometry clipped to the tile the
+                // feature came from, so the copy of a road in this tile and
+                // the copy in its neighbour's buffer each label only their
+                // own stretch.
+                let (tile_x0, tile_y0) = (dx as f32 * tile_w, dy as f32 * tile_h);
+                let runs = clip_line(&full, tile_x0, tile_y0, tile_x0 + tile_w, tile_y0 + tile_h);
+                for poly in &runs {
+                    let head = poly[0];
+                    let mut params = anchor_params;
+                    params.continued = head.0 <= tile_x0
+                        || head.0 >= tile_x0 + tile_w
+                        || head.1 <= tile_y0
+                        || head.1 >= tile_y0 + tile_h;
+                    for mut anchor in generate_anchors(poly, &params) {
+                        if !self.keep_upright {
+                            anchor.reversed = false;
+                        }
+                        let Some(placed) = place_glyphs(poly, &anchor, &centre_offsets) else {
+                            continue;
+                        };
+                        // Per-glyph rotated-AABB collision boxes (local px).
+                        let mut boxes = Vec::with_capacity(placed.len());
+                        for (g, gp) in block.glyphs.iter().zip(&placed) {
+                            let hw = 0.5 * g.advance * size;
+                            let (c, s) = (gp.angle.cos().abs(), gp.angle.sin().abs());
+                            let ex = hw * c + half_h * s;
+                            let ey = hw * s + half_h * c;
+                            boxes.push(
+                                Aabb {
+                                    min_x: gp.x - ex,
+                                    min_y: gp.y - ey,
+                                    max_x: gp.x + ex,
+                                    max_y: gp.y + ey,
+                                }
+                                .inflate(padding),
+                            );
+                        }
+                        // World anchor (extent units) of the label-centre sample.
+                        let world_ax = tx * extent_i + (anchor.x / sx).round() as i64;
+                        let world_ay = ty * extent_i + (anchor.y / sy).round() as i64;
+                        cands.push(LabelCandidate {
+                            sort_key,
+                            rank: PlaceRank {
+                                tile: (tx + dx, ty + dy),
+                                feature: prep.feature,
+                                symbol,
+                            },
+                            world_ax,
+                            world_ay,
+                            text: text.clone(),
+                            style_id: hash,
+                            // One variant holding every glyph box: the label shows
+                            // only where the whole run is free.
+                            variants: vec![boxes],
+                            anchor_x: anchor.x,
+                            anchor_y: anchor.y,
+                            repeat_px,
+                            allow_overlap: self.allow_overlap,
+                            ignore_placement: self.ignore_placement,
+                        });
+                        let placements: Vec<GlyphPlacement> = placed
+                            .iter()
+                            .map(|g| GlyphPlacement {
+                                x: g.x,
+                                y: g.y,
+                                angle: g.angle,
+                            })
+                            .collect();
+                        symbol += 1;
+                        draws.push(LabelDraw::Line {
+                            block: block.clone(),
+                            placements,
+                            perp_px: perp,
+                            paint,
+                            fonts: fonts.clone(),
+                            paints: paints.clone(),
+                        });
                     }
-                    let Some(placed) = place_glyphs(&poly, &anchor, &centre_offsets) else {
-                        continue;
-                    };
-                    // Per-glyph rotated-AABB collision boxes (local px).
-                    let mut boxes = Vec::with_capacity(placed.len());
-                    for (g, gp) in block.glyphs.iter().zip(&placed) {
-                        let hw = 0.5 * g.advance * size;
-                        let (c, s) = (gp.angle.cos().abs(), gp.angle.sin().abs());
-                        let ex = hw * c + half_h * s;
-                        let ey = hw * s + half_h * c;
-                        boxes.push(
-                            Aabb {
-                                min_x: gp.x - ex,
-                                min_y: gp.y - ey,
-                                max_x: gp.x + ex,
-                                max_y: gp.y + ey,
-                            }
-                            .inflate(padding),
-                        );
-                    }
-                    // World anchor (extent units) of the label-centre sample.
-                    let world_ax = tx * extent_i + (anchor.x / sx).round() as i64;
-                    let world_ay = ty * extent_i + (anchor.y / sy).round() as i64;
-                    cands.push(LabelCandidate {
-                        sort_key,
-                        world_ax,
-                        world_ay,
-                        text: text.clone(),
-                        style_id: hash,
-                        // One variant holding every glyph box: the label shows
-                        // only where the whole run is free.
-                        variants: vec![boxes],
-                        anchor_x: anchor.x,
-                        anchor_y: anchor.y,
-                        repeat_px,
-                        allow_overlap: self.allow_overlap,
-                        ignore_placement: self.ignore_placement,
-                    });
-                    let placements: Vec<GlyphPlacement> = placed
-                        .iter()
-                        .map(|g| GlyphPlacement {
-                            x: g.x,
-                            y: g.y,
-                            angle: g.angle,
-                        })
-                        .collect();
-                    draws.push(LabelDraw::Line {
-                        block: block.clone(),
-                        placements,
-                        perp_px: perp,
-                        paint,
-                        fonts: fonts.clone(),
-                        paints: paints.clone(),
-                    });
                 }
             }
         }
@@ -1515,12 +1694,13 @@ impl TextNode {
         // label reach for the neighbour band and the per-own-label warnings.
         let mut preps: Vec<GroupPrep> = Vec::new();
         let mut reach_max = 0.0f32;
-        for group in &feats.groups {
+        for (fi, group) in feats.groups.iter().enumerate() {
             if group.points.is_empty() {
                 continue;
             }
             if let Some(prep) = self.prep_group(
                 group,
+                fi as u32,
                 0,
                 0,
                 registry,
@@ -1540,12 +1720,13 @@ impl TextNode {
             }
         }
         for (groups, dx, dy) in &nbr_groups {
-            for group in groups {
+            for (fi, group) in groups.iter().enumerate() {
                 if group.points.is_empty() {
                     continue;
                 }
                 if let Some(prep) = self.prep_group(
                     group,
+                    fi as u32,
                     *dx,
                     *dy,
                     registry,
@@ -1717,8 +1898,11 @@ impl TextNode {
             }
             // The group's icon, cropped once and shared by its points, with
             // the collision box it occupies relative to the symbol anchor.
-            let icon: Option<(Arc<IconDraw>, Aabb)> = match (&self.icon, &prep.icon, &sheet) {
-                (Some(cfg), Some(gi), Some(sheet)) => crops
+            // With `icon-text-fit` the sprite is stretched to the label box
+            // instead, once per anchor candidate — each lays the text out in
+            // a different place, so each needs its own fitted icon.
+            let cropped = match (&self.icon, &prep.icon, &sheet) {
+                (Some(_), Some(gi), Some(sheet)) => crops
                     .entry(gi.name.clone())
                     .or_insert_with(|| {
                         let ratio = sheet
@@ -1727,48 +1911,30 @@ impl TextNode {
                             .map_or(1.0, |r| r.pixel_ratio.max(f32::EPSILON));
                         sheet.crop(&gi.name).map(|img| (Arc::new(img), ratio))
                     })
-                    .clone()
-                    .map(|(image, ratio)| {
-                        // MapLibre displays a sprite at its authored size —
-                        // atlas pixels over the sheet's pixel ratio — times
-                        // `icon-size`.
-                        let scale = gi.size / ratio;
-                        let (w, h) = (image.width as f32 * scale, image.height as f32 * scale);
-                        let (fx, fy) = cfg.anchor.fraction();
-                        let offset = (
-                            (0.5 - fx) * w + cfg.offset[0] * gi.size,
-                            (0.5 - fy) * h + cfg.offset[1] * gi.size,
-                        );
-                        // The collision box is the unrotated rect, as
-                        // MapLibre's point-placed icon box is; a rotated icon
-                        // only reaches further on the canvas, which `half`
-                        // covers for the off-canvas reject.
-                        let rel = Aabb {
-                            min_x: offset.0 - 0.5 * w,
-                            min_y: offset.1 - 0.5 * h,
-                            max_x: offset.0 + 0.5 * w,
-                            max_y: offset.1 + 0.5 * h,
-                        }
-                        .inflate(gi.padding);
-                        let half = if gi.rotate_deg == 0.0 {
-                            (0.5 * w, 0.5 * h)
-                        } else {
-                            let d = 0.5 * (w * w + h * h).sqrt();
-                            (d, d)
-                        };
-                        let draw = IconDraw {
-                            image,
-                            offset,
-                            scale,
-                            rotation_deg: gi.rotate_deg,
-                            opacity: gi.opacity,
-                            half,
-                        };
-                        (Arc::new(draw), rel)
-                    }),
+                    .clone(),
                 _ => None,
             };
-            if text_blocks.is_empty() && icon.is_none() {
+            let mut icons: Vec<(Arc<IconDraw>, Aabb)> = Vec::new();
+            if let (Some(cfg), Some(gi), Some((image, ratio)), Some(sheet)) =
+                (&self.icon, &prep.icon, &cropped, &sheet)
+            {
+                // MapLibre displays a sprite at its authored size — atlas
+                // pixels over the sheet's pixel ratio — times `icon-size`.
+                let scale = gi.size / ratio;
+                let fit_blocks: &[Arc<TextBlock>] = match cfg.text_fit {
+                    IconTextFit::None => &[],
+                    _ => &text_blocks,
+                };
+                if fit_blocks.is_empty() {
+                    icons.push(plain_icon(cfg, gi, image.clone(), scale));
+                } else {
+                    let rect = sheet.icons.get(&gi.name);
+                    for block in fit_blocks {
+                        icons.push(fitted_icon(cfg, gi, image, rect, scale, block, size));
+                    }
+                }
+            }
+            if text_blocks.is_empty() && icons.is_empty() {
                 continue;
             }
             // Two symbols differing only in their icon are distinct labels, so
@@ -1786,7 +1952,7 @@ impl TextNode {
             // A symbol carries one overlap decision. With both halves present
             // the stricter of the two wins — MapLibre's per-box flags have no
             // single-candidate equivalent.
-            let (allow_overlap, ignore_placement) = match (&self.icon, icon.is_some()) {
+            let (allow_overlap, ignore_placement) = match (&self.icon, !icons.is_empty()) {
                 (Some(cfg), true) if text_blocks.is_empty() => {
                     (cfg.allow_overlap, cfg.ignore_placement)
                 }
@@ -1817,7 +1983,7 @@ impl TextNode {
                 }
                 .inflate(padding)
             };
-            for &(x, y) in &group.points {
+            for (pi, &(x, y)) in group.points.iter().enumerate() {
                 let world_ax = (tx + dx) * extent_i + x as i64;
                 let world_ay = (ty + dy) * extent_i + y as i64;
                 // Local world-pixel frame (current tile origin subtracted):
@@ -1831,20 +1997,28 @@ impl TextNode {
                 // the first variant whose every box is free.
                 let text_boxes: Vec<Aabb> =
                     text_blocks.iter().map(|v| box_at(v, lpx, lpy)).collect();
-                let icon_box = icon.as_ref().map(|(_, rel)| Aabb {
-                    min_x: rel.min_x + lpx,
-                    min_y: rel.min_y + lpy,
-                    max_x: rel.max_x + lpx,
-                    max_y: rel.max_y + lpy,
-                });
+                let icon_boxes: Vec<Aabb> = icons
+                    .iter()
+                    .map(|(_, rel)| Aabb {
+                        min_x: rel.min_x + lpx,
+                        min_y: rel.min_y + lpy,
+                        max_x: rel.max_x + lpx,
+                        max_y: rel.max_y + lpy,
+                    })
+                    .collect();
                 let (variant_boxes, point_variants) = symbol_variants(
                     &text_boxes,
-                    icon_box,
+                    &icon_boxes,
                     self.text_optional,
                     self.icon.as_ref().is_some_and(|c| c.optional),
                 );
                 cands.push(LabelCandidate {
                     sort_key,
+                    rank: PlaceRank {
+                        tile: (tx + dx, ty + dy),
+                        feature: prep.feature,
+                        symbol: pi as u32,
+                    },
                     world_ax,
                     world_ay,
                     text: text.clone(),
@@ -1865,7 +2039,7 @@ impl TextNode {
                     paint,
                     fonts: fonts.clone(),
                     paints: paints.clone(),
-                    icon: icon.as_ref().map(|(d, _)| d.clone()),
+                    icons: icons.iter().map(|(d, _)| d.clone()).collect(),
                 });
             }
         }
@@ -2148,6 +2322,10 @@ impl Node for TextNode {
                 cfg.offset[0],
                 cfg.offset[1],
                 cfg.padding_px,
+                cfg.text_fit_padding[0],
+                cfg.text_fit_padding[1],
+                cfg.text_fit_padding[2],
+                cfg.text_fit_padding[3],
             ] {
                 h.update(&v.to_le_bytes());
             }
@@ -2156,6 +2334,7 @@ impl Node for TextNode {
                 cfg.allow_overlap as u8,
                 cfg.ignore_placement as u8,
                 cfg.optional as u8,
+                cfg.text_fit as u8,
             ]);
         }
         if let Some(base) = &self.neighbor_base {
@@ -2264,6 +2443,29 @@ fn build_icon_config(
         parse_expr_field(fields, "icon-opacity-expr", &maplibre_expr::Type::Number)?;
     let (padding_expr, padding_expr_src) =
         parse_expr_field(fields, "icon-padding-expr", &maplibre_expr::Type::Number)?;
+    let fit_s = read_string_or(fields, "icon-text-fit", ctx, "none")?;
+    let text_fit = IconTextFit::parse(&fit_s).ok_or_else(|| FactoryError::BadField {
+        field: "icon-text-fit".into(),
+        msg: format!("unknown fit `{fit_s}`"),
+    })?;
+    let text_fit_padding = match fields.get("icon-text-fit-padding") {
+        None => [0.0; 4],
+        Some(_) => {
+            let v = crate::nodes::common::resolve_field(fields, "icon-text-fit-padding", ctx)?;
+            let arr =
+                v.as_array()
+                    .filter(|a| a.len() == 4)
+                    .ok_or_else(|| FactoryError::BadField {
+                        field: "icon-text-fit-padding".into(),
+                        msg: "expected [top, right, bottom, left]".into(),
+                    })?;
+            let mut out = [0.0f32; 4];
+            for (o, v) in out.iter_mut().zip(arr) {
+                *o = v.as_f64().unwrap_or(0.0) as f32;
+            }
+            out
+        }
+    };
     Ok(Some(IconConfig {
         sprite,
         name,
@@ -2287,6 +2489,8 @@ fn build_icon_config(
         allow_overlap: read_bool_or(fields, "icon-allow-overlap", ctx, false)?,
         ignore_placement: read_bool_or(fields, "icon-ignore-placement", ctx, false)?,
         optional: read_bool_or(fields, "icon-optional", ctx, false)?,
+        text_fit,
+        text_fit_padding,
     }))
 }
 
@@ -2761,6 +2965,10 @@ fn text_schema(stage: Stage) -> Value {
                                    "description": "MapLibre `icon-optional`: let the text place when the icon's box is blocked. Default false — icon and text place as one unit." },
                 "text-optional": { "type": "boolean",
                                    "description": "MapLibre `text-optional`: let the icon place when the text's box is blocked. Default false." },
+                "icon-text-fit": { "enum": ["none", "width", "height", "both"],
+                                   "description": "MapLibre `icon-text-fit`: stretch the icon to the box its label occupies, on the named axes. The sprite's `stretchX`/`stretchY`/`content` metadata decides which bands absorb the growth, so a shield keeps its corners; a sprite without it scales whole. The fitted box is also the icon's collision box. Default `none`." },
+                "icon-text-fit-padding": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4,
+                                           "description": "MapLibre `icon-text-fit-padding`: `[top, right, bottom, left]` px added around the label's box before the icon is fitted to it. Default [0, 0, 0, 0]." },
             },
         "required": ["features"],
     });
@@ -2776,3 +2984,42 @@ fn text_schema(stage: Stage) -> Value {
 
 ezu_graph::submit_node!(TextFactory);
 ezu_graph::submit_node!(TextLabelsFactory);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_offset_mirrors_per_anchor() {
+        // A `text-offset` of [1.1, 0] pushes the label right of a `left`-anchored
+        // point and left of a `right`-anchored one, so both variants clear the
+        // symbol instead of stacking on the same side.
+        let o = [1.1, 0.0];
+        assert_eq!(anchor_offset_em(Anchor::Left, o, 0.0), [1.1, 0.0]);
+        assert_eq!(anchor_offset_em(Anchor::Right, o, 0.0), [-1.1, 0.0]);
+        // A negative offset has the same magnitude either way.
+        assert_eq!(anchor_offset_em(Anchor::Left, [-1.1, 0.0], 0.0), [1.1, 0.0]);
+        // An axis the anchor does not name contributes nothing.
+        assert_eq!(
+            anchor_offset_em(Anchor::Center, [1.1, 2.0], 0.0),
+            [0.0, 0.0]
+        );
+        // Vertical anchors lose the baseline gap.
+        let [_, y] = anchor_offset_em(Anchor::Top, [0.0, 1.0], 0.0);
+        assert!((y - (1.0 - BASELINE_OFFSET_EM)).abs() < 1e-6);
+        let [_, y] = anchor_offset_em(Anchor::Bottom, [0.0, 1.0], 0.0);
+        assert!((y + (1.0 - BASELINE_OFFSET_EM)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn radial_offset_pushes_away_from_the_point() {
+        // `text-radial-offset` wins over `text-offset` and splits corners.
+        let r = 2.0f32;
+        assert_eq!(anchor_offset_em(Anchor::Left, [9.0, 9.0], r), [r, 0.0]);
+        assert_eq!(anchor_offset_em(Anchor::Right, [9.0, 9.0], r), [-r, 0.0]);
+        let [x, y] = anchor_offset_em(Anchor::TopLeft, [0.0, 0.0], r);
+        let diag = r / std::f32::consts::SQRT_2;
+        assert!((x - diag).abs() < 1e-6);
+        assert!((y - (diag - BASELINE_OFFSET_EM)).abs() < 1e-6);
+    }
+}

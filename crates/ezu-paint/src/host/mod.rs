@@ -1026,6 +1026,9 @@ pub fn build_sprite_icons(
                     width: r.width,
                     height: r.height,
                     pixel_ratio: r.pixel_ratio,
+                    stretch_x: r.stretch_x,
+                    stretch_y: r.stretch_y,
+                    content: r.content,
                 },
             )
         })
