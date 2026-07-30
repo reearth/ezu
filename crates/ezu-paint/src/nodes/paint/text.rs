@@ -170,25 +170,48 @@ fn eval_number(
     }
 }
 
-/// The block shift (em, y-down) a MapLibre `text-radial-offset` applies for a
-/// given variable anchor: the label is pushed `r` em away from the point in
-/// the anchor's direction (`top` → below the point, `left` → right of it).
-/// Corners split the distance along both axes (MapLibre's radial layout).
-fn radial_offset_em(anchor: Anchor, r: f32) -> [f32; 2] {
-    if r <= 0.0 {
-        return [0.0, 0.0];
+/// The gap (em) MapLibre's shaping leaves between a block's box edge and the
+/// glyph baseline, subtracted from a vertically anchored offset so the visible
+/// text keeps the requested distance from the point.
+const BASELINE_OFFSET_EM: f32 = 7.0 / 24.0;
+
+/// The block shift (em, y-down) an anchor applies — MapLibre's
+/// `evaluateVariableOffset`.
+///
+/// With `text-radial-offset` the label is pushed `r` em away from the point in
+/// the anchor's direction (`top` → below the point, `left` → right of it), and
+/// corners split the distance along both axes. Otherwise `text-offset` is
+/// **mirrored**: its magnitude points away from the anchored edge, so a `right`
+/// anchor shifts left by `|dx|` where a `left` anchor shifts right by it, and
+/// an axis the anchor doesn't name contributes nothing.
+fn anchor_offset_em(anchor: Anchor, offset: [f32; 2], radial: f32) -> [f32; 2] {
+    if radial > 0.0 {
+        let diag = radial / std::f32::consts::SQRT_2;
+        let b = BASELINE_OFFSET_EM;
+        let (x, y) = match anchor {
+            Anchor::Center => (0.0, 0.0),
+            Anchor::Left => (radial, 0.0),
+            Anchor::Right => (-radial, 0.0),
+            Anchor::Top => (0.0, radial - b),
+            Anchor::Bottom => (0.0, -radial + b),
+            Anchor::TopLeft => (diag, diag - b),
+            Anchor::TopRight => (-diag, diag - b),
+            Anchor::BottomLeft => (diag, -diag + b),
+            Anchor::BottomRight => (-diag, -diag + b),
+        };
+        return [x, y];
     }
-    let diag = r / std::f32::consts::SQRT_2;
-    let (x, y) = match anchor {
-        Anchor::Center => (0.0, 0.0),
-        Anchor::Left => (r, 0.0),
-        Anchor::Right => (-r, 0.0),
-        Anchor::Top => (0.0, r),
-        Anchor::Bottom => (0.0, -r),
-        Anchor::TopLeft => (diag, diag),
-        Anchor::TopRight => (-diag, diag),
-        Anchor::BottomLeft => (diag, -diag),
-        Anchor::BottomRight => (-diag, -diag),
+    let (ox, oy) = (offset[0].abs(), offset[1].abs());
+    let b = BASELINE_OFFSET_EM;
+    let x = match anchor {
+        Anchor::Left | Anchor::TopLeft | Anchor::BottomLeft => ox,
+        Anchor::Right | Anchor::TopRight | Anchor::BottomRight => -ox,
+        _ => 0.0,
+    };
+    let y = match anchor {
+        Anchor::Top | Anchor::TopLeft | Anchor::TopRight => oy - b,
+        Anchor::Bottom | Anchor::BottomLeft | Anchor::BottomRight => -oy + b,
+        _ => 0.0,
     };
     [x, y]
 }
@@ -801,14 +824,20 @@ impl TextNode {
         }
     }
 
-    /// Layout params for one variable-anchor candidate: the block is
-    /// re-anchored and pushed `radial_offset_em` away from the point in the
-    /// anchor's direction (MapLibre `text-variable-anchor` + `text-radial-offset`).
+    /// Layout params for one anchor candidate: the block is re-anchored and
+    /// shifted away from the point in that anchor's direction. A layer with
+    /// `text-variable-anchor` (or any `text-radial-offset`) re-evaluates its
+    /// offset per anchor, so the label always sits on the far side of the
+    /// point; a plain fixed anchor takes `text-offset` as written.
     fn variant_layout_params(&self, anchor: Anchor) -> LayoutParams {
-        let [ox, oy] = radial_offset_em(anchor, self.radial_offset_em);
+        let offset_em = if self.anchor_variants.is_empty() && self.radial_offset_em <= 0.0 {
+            self.offset_em
+        } else {
+            anchor_offset_em(anchor, self.offset_em, self.radial_offset_em)
+        };
         LayoutParams {
             anchor,
-            offset_em: [self.offset_em[0] + ox, self.offset_em[1] + oy],
+            offset_em,
             ..self.layout_params()
         }
     }
@@ -827,8 +856,8 @@ impl TextNode {
     /// before shaping. The widest an unshaped label can lay out is 2 em of
     /// advance per char — above any real glyph advance, ligatures and wide
     /// scripts included. Added on top: the collision `padding`, the halo (drawn
-    /// beyond the collision box), and any `radial-offset` an `anchor-variants`
-    /// candidate applies.
+    /// beyond the collision box), and the widest shift an anchor candidate can
+    /// apply (`radial-offset` or `offset-em`).
     ///
     /// `cap` bounds the advance by `max-extent-px` for point placement, where
     /// labels reaching past it are culled; line placement passes `false`, since
@@ -851,7 +880,10 @@ impl TextNode {
         } else {
             advance
         };
-        advance + padding + halo + self.radial_offset_em * size
+        let offset = self
+            .radial_offset_em
+            .max(self.offset_em[0].abs().max(self.offset_em[1].abs()));
+        advance + padding + halo + offset * size
     }
 
     /// Resolve a feature group's evaluated `text` into label sections against
@@ -2776,3 +2808,42 @@ fn text_schema(stage: Stage) -> Value {
 
 ezu_graph::submit_node!(TextFactory);
 ezu_graph::submit_node!(TextLabelsFactory);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_offset_mirrors_per_anchor() {
+        // A `text-offset` of [1.1, 0] pushes the label right of a `left`-anchored
+        // point and left of a `right`-anchored one, so both variants clear the
+        // symbol instead of stacking on the same side.
+        let o = [1.1, 0.0];
+        assert_eq!(anchor_offset_em(Anchor::Left, o, 0.0), [1.1, 0.0]);
+        assert_eq!(anchor_offset_em(Anchor::Right, o, 0.0), [-1.1, 0.0]);
+        // A negative offset has the same magnitude either way.
+        assert_eq!(anchor_offset_em(Anchor::Left, [-1.1, 0.0], 0.0), [1.1, 0.0]);
+        // An axis the anchor does not name contributes nothing.
+        assert_eq!(
+            anchor_offset_em(Anchor::Center, [1.1, 2.0], 0.0),
+            [0.0, 0.0]
+        );
+        // Vertical anchors lose the baseline gap.
+        let [_, y] = anchor_offset_em(Anchor::Top, [0.0, 1.0], 0.0);
+        assert!((y - (1.0 - BASELINE_OFFSET_EM)).abs() < 1e-6);
+        let [_, y] = anchor_offset_em(Anchor::Bottom, [0.0, 1.0], 0.0);
+        assert!((y + (1.0 - BASELINE_OFFSET_EM)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn radial_offset_pushes_away_from_the_point() {
+        // `text-radial-offset` wins over `text-offset` and splits corners.
+        let r = 2.0f32;
+        assert_eq!(anchor_offset_em(Anchor::Left, [9.0, 9.0], r), [r, 0.0]);
+        assert_eq!(anchor_offset_em(Anchor::Right, [9.0, 9.0], r), [-r, 0.0]);
+        let [x, y] = anchor_offset_em(Anchor::TopLeft, [0.0, 0.0], r);
+        let diag = r / std::f32::consts::SQRT_2;
+        assert!((x - diag).abs() < 1e-6);
+        assert!((y - (diag - BASELINE_OFFSET_EM)).abs() < 1e-6);
+    }
+}
