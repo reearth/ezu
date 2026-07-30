@@ -31,6 +31,10 @@ pub(crate) fn convert_line(
     let (width_const, width_expr) = resolve_number(paint.get("line-width"));
     let width = width_const.unwrap_or(1.0).max(0.1);
 
+    // `line-gap-width` → `gap-width-px` / `gap-width-expr`: a road casing,
+    // drawn as two parallel bands of `line-width` around a gap of this size.
+    let (gap_const, gap_expr) = resolve_number(paint.get("line-gap-width"));
+
     // `line-pattern` replaces the solid stroke: repeat the named sprite icon
     // along each line, scaled to the stroke width (`line-stamp`).
     if let Some(pattern) = paint.get("line-pattern") {
@@ -93,6 +97,12 @@ pub(crate) fn convert_line(
     }
     if let Some(expr) = width_expr {
         spec["width-expr"] = expr;
+    }
+    if let Some(g) = gap_const {
+        spec["gap-width-px"] = Value::from(g);
+    }
+    if let Some(expr) = gap_expr {
+        spec["gap-width-expr"] = expr;
     }
     if let Some(a) = opacity {
         spec["opacity"] = Value::from(a);

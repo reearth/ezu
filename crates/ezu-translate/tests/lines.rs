@@ -46,4 +46,46 @@ fn lines_use_stroke_with_dash_and_fill_has_outline() {
     // Valid Document.
     let text = serde_json::to_string(&recipe).unwrap();
     ezu_style::Document::from_json(&text).expect("recipe parses as ezu Document");
+    // Without `line-gap-width` the stroke stays a plain centreline stroke.
+    assert!(stroke.get("gap-width-px").is_none());
+}
+
+const CASING_STYLE: &str = r##"{
+  "version": 8,
+  "name": "casings",
+  "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+  "layers": [
+    { "id": "road_casing", "type": "line", "source": "s", "source-layer": "roads",
+      "paint": { "line-color": "#ffffff", "line-width": 1.5, "line-gap-width": 6 } },
+    { "id": "road_casing_dd", "type": "line", "source": "s", "source-layer": "roads",
+      "paint": { "line-color": "#ffffff", "line-width": 1.5,
+                 "line-gap-width": ["interpolate", ["linear"], ["zoom"], 12, 2, 16, 10] } }
+  ]
+}"##;
+
+#[test]
+fn line_gap_width_becomes_a_stroke_casing() {
+    let style: serde_json::Value = serde_json::from_str(CASING_STYLE).unwrap();
+    let (recipe, report) = convert(&style, &ConvertOptions::default()).unwrap();
+    let nodes = recipe["nodes"].as_object().unwrap();
+
+    let constant = &nodes["road_casing__stroke"];
+    assert_eq!(constant["gap-width-px"], 6.0);
+    assert!(constant.get("gap-width-expr").is_none());
+
+    let data_driven = &nodes["road_casing_dd__stroke"];
+    assert_eq!(
+        data_driven["gap-width-expr"],
+        serde_json::json!(["interpolate", ["linear"], ["zoom"], 12, 2, 16, 10])
+    );
+    assert!(data_driven.get("gap-width-px").is_none());
+
+    assert!(
+        !report.warnings.iter().any(|w| w.contains("gap")),
+        "gap widths are supported, not warned about: {:?}",
+        report.warnings
+    );
+
+    let text = serde_json::to_string(&recipe).unwrap();
+    ezu_style::Document::from_json(&text).expect("recipe parses as ezu Document");
 }
