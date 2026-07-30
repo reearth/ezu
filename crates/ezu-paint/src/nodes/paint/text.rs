@@ -64,7 +64,7 @@ use ezu_core::text::{
     SectionPaint, SectionSpec, StackEntry, TextBlock, TextPaint, TextTransform, VerticalAlign,
 };
 
-use super::labels::{draw_labels, set_id, FaceCache, LabelDraw, LabelSet};
+use super::labels::{draw_labels, set_id, FaceCache, IconDraw, LabelDraw, LabelSet, PointVariant};
 
 /// Parse an optional raw MapLibre expression field, type-checked against
 /// `expect`. Returns `(parsed, raw_json_text)` for a stable cache hash.
@@ -414,7 +414,11 @@ struct GroupPrep<'g> {
     dy: i64,
     sections: Vec<LabelSection>,
     /// The sections concatenated, as they lay out — the collision dedup text.
+    /// An icon-only symbol carries its icon name here instead, so two
+    /// different icons on one spot stay distinct labels.
     text: String,
+    /// The group's resolved `icon-image`, placed together with the text.
+    icon: Option<GroupIcon>,
     size: f32,
     sort_key: f64,
     opacity: f32,
@@ -512,6 +516,145 @@ impl Placement {
     }
 }
 
+/// The `icon-image` half of a symbol: which sprite to crop, how to name the
+/// per-feature icon, and MapLibre's icon layout / paint knobs. A symbol's
+/// icon and text are placed as one unit (see [`symbol_variants`]), so the
+/// icon lives on the label node rather than on a separate `stamp`.
+struct IconConfig {
+    /// Sprite atlas asset key (the `sprite` source's `image`).
+    sprite: String,
+    /// Constant `icon-image`; `None` when `name_expr` names it per feature.
+    name: Option<String>,
+    name_expr: Option<maplibre_expr::Expr>,
+    name_expr_src: Option<String>,
+    /// MapLibre `icon-size`: multiplier on the sprite's display size.
+    size: f32,
+    size_expr: Option<maplibre_expr::Expr>,
+    size_expr_src: Option<String>,
+    /// MapLibre `icon-rotate`, degrees clockwise.
+    rotate_deg: f32,
+    rotate_expr: Option<maplibre_expr::Expr>,
+    rotate_expr_src: Option<String>,
+    opacity: f32,
+    opacity_expr: Option<maplibre_expr::Expr>,
+    opacity_expr_src: Option<String>,
+    /// MapLibre `icon-anchor`: which part of the image sits on the point.
+    anchor: Anchor,
+    /// MapLibre `icon-offset` in px, itself scaled by `icon-size`.
+    offset: [f32; 2],
+    /// MapLibre `icon-padding`: collision-box inflation in px.
+    padding_px: f32,
+    padding_expr: Option<maplibre_expr::Expr>,
+    padding_expr_src: Option<String>,
+    allow_overlap: bool,
+    ignore_placement: bool,
+    /// MapLibre `icon-optional`: the text may place without the icon.
+    optional: bool,
+}
+
+/// One feature group's resolved icon: the named image plus the per-group
+/// scalars. `None` for a group whose `icon-image` is absent or empty — such
+/// a symbol is text-only, exactly as in MapLibre.
+struct GroupIcon {
+    name: String,
+    size: f32,
+    rotate_deg: f32,
+    opacity: f32,
+    padding: f32,
+}
+
+impl IconConfig {
+    /// Resolve this config for one feature group, or `None` when the group
+    /// names no icon (empty / non-string result, or a zero size).
+    fn eval_group(&self, ectx: &maplibre_expr::EvaluationContext) -> Option<GroupIcon> {
+        let name = match &self.name_expr {
+            Some(e) => match maplibre_expr::evaluate(e, ectx) {
+                Ok(maplibre_expr::Value::String(s)) => s,
+                _ => return None,
+            },
+            None => self.name.clone()?,
+        };
+        if name.is_empty() {
+            return None;
+        }
+        let size = eval_number(&self.size_expr, ectx, self.size).max(0.0);
+        if size <= 0.0 {
+            return None;
+        }
+        Some(GroupIcon {
+            name,
+            size,
+            rotate_deg: eval_number(&self.rotate_expr, ectx, self.rotate_deg),
+            opacity: eval_number(&self.opacity_expr, ectx, self.opacity).clamp(0.0, 1.0),
+            padding: eval_number(&self.padding_expr, ectx, self.padding_px).max(0.0),
+        })
+    }
+}
+
+/// One symbol's collision variants: the box sets to try, and what each one
+/// draws. MapLibre places a symbol's icon and text together — both boxes
+/// must be free or the whole symbol drops — and the `*-optional` flags admit
+/// the fallbacks that keep just one of the two. Trying `[icon, text]` first
+/// and the permitted single-box sets after reproduces that, since a variant
+/// places only when every box in it is free and reserves exactly the boxes
+/// it placed.
+///
+/// `text_boxes` holds one box per anchor candidate (empty for an icon-only
+/// symbol); `icon_box` is the icon's box, if any.
+fn symbol_variants(
+    text_boxes: &[Aabb],
+    icon_box: Option<Aabb>,
+    text_optional: bool,
+    icon_optional: bool,
+) -> (Vec<Vec<Aabb>>, Vec<PointVariant>) {
+    let mut boxes = Vec::new();
+    let mut variants = Vec::new();
+    match icon_box {
+        None => {
+            for (ix, b) in text_boxes.iter().enumerate() {
+                boxes.push(vec![*b]);
+                variants.push(PointVariant {
+                    block: Some(ix),
+                    icon: false,
+                });
+            }
+        }
+        Some(icon) if text_boxes.is_empty() => {
+            boxes.push(vec![icon]);
+            variants.push(PointVariant {
+                block: None,
+                icon: true,
+            });
+        }
+        Some(icon) => {
+            for (ix, b) in text_boxes.iter().enumerate() {
+                boxes.push(vec![icon, *b]);
+                variants.push(PointVariant {
+                    block: Some(ix),
+                    icon: true,
+                });
+            }
+            if text_optional {
+                boxes.push(vec![icon]);
+                variants.push(PointVariant {
+                    block: None,
+                    icon: true,
+                });
+            }
+            if icon_optional {
+                for (ix, b) in text_boxes.iter().enumerate() {
+                    boxes.push(vec![*b]);
+                    variants.push(PointVariant {
+                        block: Some(ix),
+                        icon: false,
+                    });
+                }
+            }
+        }
+    }
+    (boxes, variants)
+}
+
 /// Which half of the label pipeline a [`TextNode`] runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stage {
@@ -567,6 +710,12 @@ struct TextNode {
     halo_color_expr_src: Option<String>,
     halo_width_expr_src: Option<String>,
     opacity_expr_src: Option<String>,
+    /// MapLibre `icon-image` and its layout / paint knobs. Point placement
+    /// only: a line-placed icon has no ezu equivalent, so line labels ignore
+    /// it. The icon shares its symbol's collision decision with the text.
+    icon: Option<IconConfig>,
+    /// MapLibre `text-optional`: the icon may place without the text.
+    text_optional: bool,
     /// MapLibre `symbol-placement`. Point placement uses each group's
     /// points; line / line-center placement walks its polylines.
     placement: Placement,
@@ -755,14 +904,25 @@ impl TextNode {
         let ectx = crate::render::group_expr_context(group, z);
         let base_font_id = registry.resolve(self.group_stack_key(&ectx).as_deref()).0;
         let font_fallback = self.font_expr.is_some() && base_font_id == 0;
-        let sections = self.eval_sections(&ectx, registry, base_font_id)?;
-        let text: String = sections.iter().map(|s| s.text.as_str()).collect();
-        if text.is_empty() {
-            return None;
-        }
         let size = eval_number(&self.size_expr, &ectx, const_size).max(0.0);
-        if size <= 0.0 {
-            return None;
+        // A group with no icon and nothing to say produces no symbol at all;
+        // with an icon it still places, text or not (MapLibre's icon-only
+        // symbol).
+        let icon = self.icon.as_ref().and_then(|c| c.eval_group(&ectx));
+        let mut sections = match size > 0.0 {
+            true => self
+                .eval_sections(&ectx, registry, base_font_id)
+                .unwrap_or_default(),
+            false => Vec::new(),
+        };
+        let mut text: String = sections.iter().map(|s| s.text.as_str()).collect();
+        if text.is_empty() {
+            sections.clear();
+        }
+        match (sections.is_empty(), &icon) {
+            (true, None) => return None,
+            (true, Some(i)) => text = i.name.clone(),
+            _ => {}
         }
         let sort_key = match &self.sort_key_expr {
             Some(e) => match maplibre_expr::evaluate(e, &ectx) {
@@ -778,6 +938,8 @@ impl TextNode {
         color[3] *= opacity;
         halo_color[3] *= opacity;
         let halo_width = eval_number(&self.halo_width_expr, &ectx, const_halo_width).max(0.0);
+        // The icon's contribution to the neighbour band is added by the
+        // caller, which knows the sprite sheet's dimensions.
         let reach = self.label_reach(&sections, size, padding, halo_width, cap);
         Some(GroupPrep {
             group,
@@ -785,6 +947,7 @@ impl TextNode {
             dy,
             sections,
             text,
+            icon,
             size,
             sort_key,
             opacity,
@@ -1400,11 +1563,45 @@ impl TextNode {
             }
         }
 
+        // The sprite sheet, loaded once per eval and only when some group
+        // actually names an icon (a layer whose `icon-image` resolves empty
+        // everywhere costs nothing).
+        let sheet = match &self.icon {
+            Some(cfg) if preps.iter().any(|p| p.icon.is_some()) => {
+                let Asset::Sprite(sheet) = ctx.assets.load(&cfg.sprite)? else {
+                    return Err(EvalError::Other(format!(
+                        "asset `{}` is not a sprite sheet",
+                        cfg.sprite
+                    )));
+                };
+                Some(sheet)
+            }
+            _ => None,
+        };
+        // An icon reaches at most half the sheet's widest icon from its
+        // anchor, plus its offset and padding — the icon half of the
+        // neighbour band.
+        if let (Some(cfg), Some(sheet)) = (&self.icon, &sheet) {
+            let widest = sheet
+                .icons
+                .values()
+                .map(|r| r.width.max(r.height) as f32 / r.pixel_ratio.max(f32::EPSILON))
+                .fold(0.0f32, f32::max);
+            let off = cfg.offset[0].abs().max(cfg.offset[1].abs());
+            for prep in &preps {
+                if let Some(icon) = &prep.icon {
+                    reach_max = reach_max.max((0.5 * widest + off) * icon.size + icon.padding);
+                }
+            }
+        }
+
         // Neighbour prefilter band: this many multiples of the widest label
         // reach — a collision chain advances one reach per hop. A neighbour
         // feature whose geometry stays outside this band of the tile cannot
         // change what it draws, so shaping it is wasted; skip it.
         let band = NEIGHBOR_BAND_HOPS * reach_max;
+        // One cropped image per icon name, shared by every symbol using it.
+        let mut crops: HashMap<String, Option<(Arc<ezu_graph::RasterBuf>, f32)>> = HashMap::new();
 
         // Shape the surviving groups into placement candidates. Everything that
         // feeds the collision decision is derived from the world anchor (exact
@@ -1444,74 +1641,161 @@ impl TextNode {
             let (flat_fonts, ranges, hash) = assemble_stacks(sections, registry);
             // Lay out one block per anchor candidate (a single fixed anchor,
             // or the `text-variable-anchor` list). Each is cached by anchor so
-            // repeated points/neighbours reuse it.
-            let variants: Vec<Arc<TextBlock>> = self
-                .anchors()
-                .iter()
-                .map(|&anchor| {
-                    let pkey = (hash, size.to_bits(), anchor as u8);
-                    if let Some(b) = blocks.get(&pkey) {
-                        return b.clone();
-                    }
-                    let params = self.variant_layout_params(anchor);
-                    let build = || {
-                        let specs: Vec<SectionSpec<'_>> = sections
-                            .iter()
-                            .zip(&ranges)
-                            .map(|(s, r)| SectionSpec {
-                                text: &s.text,
-                                fonts: r.clone(),
-                                scale: s.scale,
-                                valign: s.valign,
-                            })
-                            .collect();
-                        let view = faces.view(&flat_fonts);
-                        layout_sections(&specs, &view, &params)
-                    };
-                    // Reuse an identically-laid-out block across tiles via the
-                    // process-wide cache (outline stacks only); otherwise build.
-                    let block =
-                        match layout_cache_key(&flat_fonts, sections, &ranges, size, &params) {
-                            Some(gk) => {
-                                let (b, hit) = get_or_build_layout(gk, build);
-                                if hit {
-                                    layout_hits += 1;
-                                } else {
-                                    layout_misses += 1;
-                                }
-                                b
-                            }
-                            None => Arc::new(build()),
+            // repeated points/neighbours reuse it. An icon-only symbol has no
+            // sections and lays nothing out.
+            let mut text_blocks: Vec<Arc<TextBlock>> = if sections.is_empty() {
+                Vec::new()
+            } else {
+                self.anchors()
+                    .iter()
+                    .map(|&anchor| {
+                        let pkey = (hash, size.to_bits(), anchor as u8);
+                        if let Some(b) = blocks.get(&pkey) {
+                            return b.clone();
+                        }
+                        let params = self.variant_layout_params(anchor);
+                        let build = || {
+                            let specs: Vec<SectionSpec<'_>> = sections
+                                .iter()
+                                .zip(&ranges)
+                                .map(|(s, r)| SectionSpec {
+                                    text: &s.text,
+                                    fonts: r.clone(),
+                                    scale: s.scale,
+                                    valign: s.valign,
+                                })
+                                .collect();
+                            let view = faces.view(&flat_fonts);
+                            layout_sections(&specs, &view, &params)
                         };
-                    blocks.insert(pkey, block.clone());
-                    block
-                })
-                .collect();
-            // The primary anchor drives the warning counts and the cull test;
-            // every variant shares the same glyphs, so it is representative.
-            let primary = &variants[0];
-            // Count layout warnings once per distinct label (own groups
-            // only; neighbours repeat the same strings).
-            if dx == 0 && dy == 0 {
-                dropped_chars += primary.dropped_chars;
-                missing_range_chars += primary.missing_range_chars;
-            }
-            if primary.is_empty() {
-                continue;
-            }
-            // A label reaching past the pad this node requested would clip
-            // at tile borders — cull it instead.
-            let b = primary.bbox;
-            let half_extent = [b.min_x, b.max_x, b.min_y, b.max_y]
-                .iter()
-                .fold(0.0f32, |m, v| m.max(v.abs()))
-                * size;
-            if half_extent > self.max_extent_px {
+                        // Reuse an identically-laid-out block across tiles via the
+                        // process-wide cache (outline stacks only); otherwise build.
+                        let block =
+                            match layout_cache_key(&flat_fonts, sections, &ranges, size, &params) {
+                                Some(gk) => {
+                                    let (b, hit) = get_or_build_layout(gk, build);
+                                    if hit {
+                                        layout_hits += 1;
+                                    } else {
+                                        layout_misses += 1;
+                                    }
+                                    b
+                                }
+                                None => Arc::new(build()),
+                            };
+                        blocks.insert(pkey, block.clone());
+                        block
+                    })
+                    .collect()
+            };
+            if let Some(primary) = text_blocks.first() {
+                // The primary anchor drives the warning counts and the cull
+                // test; every variant shares the same glyphs, so it is
+                // representative.
+                // Count layout warnings once per distinct label (own groups
+                // only; neighbours repeat the same strings).
                 if dx == 0 && dy == 0 {
-                    culled += group.points.len();
+                    dropped_chars += primary.dropped_chars;
+                    missing_range_chars += primary.missing_range_chars;
                 }
+                // A label reaching past the pad this node requested would clip
+                // at tile borders — drop the text instead. The symbol's icon,
+                // if any, still places.
+                let b = primary.bbox;
+                let half_extent = [b.min_x, b.max_x, b.min_y, b.max_y]
+                    .iter()
+                    .fold(0.0f32, |m, v| m.max(v.abs()))
+                    * size;
+                if half_extent > self.max_extent_px {
+                    if dx == 0 && dy == 0 {
+                        culled += group.points.len();
+                    }
+                    text_blocks.clear();
+                } else if primary.is_empty() {
+                    text_blocks.clear();
+                }
+            }
+            // The group's icon, cropped once and shared by its points, with
+            // the collision box it occupies relative to the symbol anchor.
+            let icon: Option<(Arc<IconDraw>, Aabb)> = match (&self.icon, &prep.icon, &sheet) {
+                (Some(cfg), Some(gi), Some(sheet)) => crops
+                    .entry(gi.name.clone())
+                    .or_insert_with(|| {
+                        let ratio = sheet
+                            .icons
+                            .get(&gi.name)
+                            .map_or(1.0, |r| r.pixel_ratio.max(f32::EPSILON));
+                        sheet.crop(&gi.name).map(|img| (Arc::new(img), ratio))
+                    })
+                    .clone()
+                    .map(|(image, ratio)| {
+                        // MapLibre displays a sprite at its authored size —
+                        // atlas pixels over the sheet's pixel ratio — times
+                        // `icon-size`.
+                        let scale = gi.size / ratio;
+                        let (w, h) = (image.width as f32 * scale, image.height as f32 * scale);
+                        let (fx, fy) = cfg.anchor.fraction();
+                        let offset = (
+                            (0.5 - fx) * w + cfg.offset[0] * gi.size,
+                            (0.5 - fy) * h + cfg.offset[1] * gi.size,
+                        );
+                        // The collision box is the unrotated rect, as
+                        // MapLibre's point-placed icon box is; a rotated icon
+                        // only reaches further on the canvas, which `half`
+                        // covers for the off-canvas reject.
+                        let rel = Aabb {
+                            min_x: offset.0 - 0.5 * w,
+                            min_y: offset.1 - 0.5 * h,
+                            max_x: offset.0 + 0.5 * w,
+                            max_y: offset.1 + 0.5 * h,
+                        }
+                        .inflate(gi.padding);
+                        let half = if gi.rotate_deg == 0.0 {
+                            (0.5 * w, 0.5 * h)
+                        } else {
+                            let d = 0.5 * (w * w + h * h).sqrt();
+                            (d, d)
+                        };
+                        let draw = IconDraw {
+                            image,
+                            offset,
+                            scale,
+                            rotation_deg: gi.rotate_deg,
+                            opacity: gi.opacity,
+                            half,
+                        };
+                        (Arc::new(draw), rel)
+                    }),
+                _ => None,
+            };
+            if text_blocks.is_empty() && icon.is_none() {
                 continue;
             }
+            // Two symbols differing only in their icon are distinct labels, so
+            // the icon joins the style identity that dedup and ordering key on.
+            let style_id = match &prep.icon {
+                Some(gi) => {
+                    let mut h = Xxh3::new();
+                    h.update(&hash.to_le_bytes());
+                    h.update(gi.name.as_bytes());
+                    h.update(&gi.size.to_bits().to_le_bytes());
+                    h.digest()
+                }
+                None => hash,
+            };
+            // A symbol carries one overlap decision. With both halves present
+            // the stricter of the two wins — MapLibre's per-box flags have no
+            // single-candidate equivalent.
+            let (allow_overlap, ignore_placement) = match (&self.icon, icon.is_some()) {
+                (Some(cfg), true) if text_blocks.is_empty() => {
+                    (cfg.allow_overlap, cfg.ignore_placement)
+                }
+                (Some(cfg), true) => (
+                    self.allow_overlap && cfg.allow_overlap,
+                    self.ignore_placement && cfg.ignore_placement,
+                ),
+                _ => (self.allow_overlap, self.ignore_placement),
+            };
             let paint = TextPaint {
                 size_px: size,
                 color,
@@ -1542,31 +1826,46 @@ impl TextNode {
                 // identical collision decisions.
                 let lpx = (world_ax - tx * extent_i) as f32 * sx;
                 let lpy = (world_ay - ty * extent_i) as f32 * sy;
-                // One single-box variant per anchor candidate, in declaration
-                // order: the label takes the first anchor whose box is free.
-                let variant_boxes: Vec<Vec<Aabb>> =
-                    variants.iter().map(|v| vec![box_at(v, lpx, lpy)]).collect();
+                // One box per anchor candidate, in declaration order, joined
+                // with the icon's into the symbol's variants: the symbol takes
+                // the first variant whose every box is free.
+                let text_boxes: Vec<Aabb> =
+                    text_blocks.iter().map(|v| box_at(v, lpx, lpy)).collect();
+                let icon_box = icon.as_ref().map(|(_, rel)| Aabb {
+                    min_x: rel.min_x + lpx,
+                    min_y: rel.min_y + lpy,
+                    max_x: rel.max_x + lpx,
+                    max_y: rel.max_y + lpy,
+                });
+                let (variant_boxes, point_variants) = symbol_variants(
+                    &text_boxes,
+                    icon_box,
+                    self.text_optional,
+                    self.icon.as_ref().is_some_and(|c| c.optional),
+                );
                 cands.push(LabelCandidate {
                     sort_key,
                     world_ax,
                     world_ay,
                     text: text.clone(),
-                    style_id: hash,
+                    style_id,
                     variants: variant_boxes,
                     anchor_x: lpx,
                     anchor_y: lpy,
                     // The repeat filter is a line-label rule (MapLibre records
                     // anchors along a path); a point label has one anchor.
                     repeat_px: 0.0,
-                    allow_overlap: self.allow_overlap,
-                    ignore_placement: self.ignore_placement,
+                    allow_overlap,
+                    ignore_placement,
                 });
                 draws.push(LabelDraw::Point {
-                    blocks: variants.clone(),
+                    blocks: text_blocks.clone(),
+                    variants: point_variants,
                     anchor: (lpx, lpy),
                     paint,
                     fonts: fonts.clone(),
                     paints: paints.clone(),
+                    icon: icon.as_ref().map(|(d, _)| d.clone()),
                 });
             }
         }
@@ -1700,6 +1999,10 @@ impl Node for TextNode {
         for (_, asset_keys) in &self.font_stacks {
             keys.extend(asset_keys.iter().cloned());
         }
+        // The sprite sheet the icons are cropped from (wasm hosts pre-bind).
+        if let Some(cfg) = &self.icon {
+            keys.push(cfg.sprite.clone());
+        }
         keys.sort();
         keys.dedup();
         // With collision on and a known upstream source, request the 8
@@ -1814,7 +2117,47 @@ impl Node for TextNode {
             self.collide as u8,
             self.allow_overlap as u8,
             self.ignore_placement as u8,
+            self.text_optional as u8,
         ]);
+        // Icon config — absent fields fold nothing, so an icon-less node keeps
+        // its hash (and its cache entries).
+        if let Some(cfg) = &self.icon {
+            h.update(b"icon");
+            h.update(cfg.sprite.as_bytes());
+            h.update(&[0]);
+            if let Some(name) = &cfg.name {
+                h.update(name.as_bytes());
+                h.update(&[0]);
+            }
+            for (tag, src) in [
+                (b"iconnameexpr".as_slice(), &cfg.name_expr_src),
+                (b"iconsizeexpr".as_slice(), &cfg.size_expr_src),
+                (b"iconrotateexpr".as_slice(), &cfg.rotate_expr_src),
+                (b"iconopacityexpr".as_slice(), &cfg.opacity_expr_src),
+                (b"iconpaddingexpr".as_slice(), &cfg.padding_expr_src),
+            ] {
+                if let Some(s) = src {
+                    h.update(tag);
+                    h.update(s.as_bytes());
+                }
+            }
+            for v in [
+                cfg.size,
+                cfg.rotate_deg,
+                cfg.opacity,
+                cfg.offset[0],
+                cfg.offset[1],
+                cfg.padding_px,
+            ] {
+                h.update(&v.to_le_bytes());
+            }
+            h.update(&[
+                cfg.anchor as u8,
+                cfg.allow_overlap as u8,
+                cfg.ignore_placement as u8,
+                cfg.optional as u8,
+            ]);
+        }
         if let Some(base) = &self.neighbor_base {
             h.update(b"nbase");
             h.update(base.as_bytes());
@@ -1873,6 +2216,80 @@ impl NodeFactory for TextLabelsFactory {
     }
 }
 
+/// Build the [`IconConfig`] from a node's `icon-*` fields, or `None` when the
+/// node names no icon. `icon-sprite` plus either `icon-name` (constant) or
+/// `icon-name-expr` (MapLibre data-driven `icon-image`) turn it on.
+fn build_icon_config(
+    fields: &serde_json::Map<String, Value>,
+    ctx: &FactoryCtx<'_>,
+) -> Result<Option<IconConfig>, FactoryError> {
+    let name = read_optional_string(fields, "icon-name")?;
+    let (name_expr, name_expr_src) = match fields.get("icon-name-expr") {
+        Some(v) => {
+            let expr = maplibre_expr::parse(v).map_err(|e| FactoryError::BadField {
+                field: "icon-name-expr".into(),
+                msg: e.to_string(),
+            })?;
+            // Prefer a String check (icon names stringify); fall back to
+            // untyped, since `match`/`step` over literals may not narrow.
+            let expr = maplibre_expr::typecheck(&expr, Some(&maplibre_expr::Type::String), false)
+                .or_else(|_| maplibre_expr::typecheck(&expr, None, false))
+                .map_err(|e| FactoryError::BadField {
+                    field: "icon-name-expr".into(),
+                    msg: e.to_string(),
+                })?;
+            (Some(expr), Some(v.to_string()))
+        }
+        None => (None, None),
+    };
+    if name.is_none() && name_expr.is_none() {
+        return Ok(None);
+    }
+    let sprite = fields
+        .get("icon-sprite")
+        .and_then(Value::as_str)
+        .ok_or_else(|| FactoryError::MissingField("icon-sprite".into()))?;
+    let sprite = super::stamp::resolve_sprite_atlas(sprite, ctx)?;
+
+    let anchor_s = read_string_or(fields, "icon-anchor", ctx, "center")?;
+    let anchor = Anchor::parse(&anchor_s).ok_or_else(|| FactoryError::BadField {
+        field: "icon-anchor".into(),
+        msg: format!("unknown anchor `{anchor_s}`"),
+    })?;
+    let (size_expr, size_expr_src) =
+        parse_expr_field(fields, "icon-size-expr", &maplibre_expr::Type::Number)?;
+    let (rotate_expr, rotate_expr_src) =
+        parse_expr_field(fields, "icon-rotate-deg-expr", &maplibre_expr::Type::Number)?;
+    let (opacity_expr, opacity_expr_src) =
+        parse_expr_field(fields, "icon-opacity-expr", &maplibre_expr::Type::Number)?;
+    let (padding_expr, padding_expr_src) =
+        parse_expr_field(fields, "icon-padding-expr", &maplibre_expr::Type::Number)?;
+    Ok(Some(IconConfig {
+        sprite,
+        name,
+        name_expr,
+        name_expr_src,
+        size: read_number_or(fields, "icon-size", ctx, 1.0)? as f32,
+        size_expr,
+        size_expr_src,
+        rotate_deg: read_number_or(fields, "icon-rotate-deg", ctx, 0.0)? as f32,
+        rotate_expr,
+        rotate_expr_src,
+        opacity: read_number_or(fields, "icon-opacity", ctx, 1.0)? as f32,
+        opacity_expr,
+        opacity_expr_src,
+        anchor,
+        offset: read_xy(fields, "icon-offset", ctx, [0.0, 0.0])?,
+        // MapLibre's `icon-padding` default.
+        padding_px: read_number_or(fields, "icon-padding-px", ctx, 2.0)? as f32,
+        padding_expr,
+        padding_expr_src,
+        allow_overlap: read_bool_or(fields, "icon-allow-overlap", ctx, false)?,
+        ignore_placement: read_bool_or(fields, "icon-ignore-placement", ctx, false)?,
+        optional: read_bool_or(fields, "icon-optional", ctx, false)?,
+    }))
+}
+
 /// Build a [`TextNode`] for either stage: the fields, ports and connections
 /// are identical, only the output differs.
 fn build_text_node(
@@ -1882,19 +2299,26 @@ fn build_text_node(
 ) -> Result<BuiltNode, FactoryError> {
     let features = take_input_ref(fields, "features")?;
 
+    // MapLibre's `icon-image` half. A symbol may be icon-only, so its
+    // presence makes `font` / `text` optional.
+    let icon = build_icon_config(fields, ctx)?;
+
     // `font`: an ordered array of `font` / `glyphs` source names —
     // the fallback stack. Each resolves to its source's asset key
     // (a font's `url`; a glyphs source's `{range}` URL template).
-    let font_field = fields
-        .get("font")
-        .ok_or_else(|| FactoryError::MissingField("font".into()))?;
+    let empty_font = Value::Array(Vec::new());
+    let font_field = match (fields.get("font"), &icon) {
+        (Some(v), _) => v,
+        (None, Some(_)) => &empty_font,
+        (None, None) => return Err(FactoryError::MissingField("font".into())),
+    };
     let names = font_field
         .as_array()
         .ok_or_else(|| FactoryError::BadField {
             field: "font".into(),
             msg: "expected an array of font source names".into(),
         })?;
-    if names.is_empty() {
+    if names.is_empty() && icon.is_none() {
         return Err(FactoryError::BadField {
             field: "font".into(),
             msg: "font stack must name at least one font source".into(),
@@ -1986,6 +2410,9 @@ fn build_text_node(
     // `label_text`, so real-world `text-field`s (e.g. Protomaps' multi-
     // script `format` labels) build and render instead of erroring.
     let (text, text_expr, text_expr_src) = match fields.get("text") {
+        // An icon-only symbol has no label at all; otherwise the field is
+        // what the node exists for.
+        None if icon.is_some() => (None, None, None),
         None => return Err(FactoryError::MissingField("text".into())),
         Some(Value::String(s)) => (Some(s.clone()), None, None),
         Some(v) => {
@@ -2088,6 +2515,7 @@ fn build_text_node(
     // Collision. Default on (MapLibre's default); `collide: false`
     // restores the draw-everything behaviour.
     let collide = read_bool_or(fields, "collide", ctx, true)?;
+    let text_optional = read_bool_or(fields, "text-optional", ctx, false)?;
     let allow_overlap = read_bool_or(fields, "allow-overlap", ctx, false)?;
     let ignore_placement = read_bool_or(fields, "ignore-placement", ctx, false)?;
     let padding_px = read_number_or(fields, "padding-px", ctx, 2.0)? as f32;
@@ -2119,6 +2547,17 @@ fn build_text_node(
     let min_zoom_field = read_optional_string(fields, "min-zoom-field")?;
     let min_zoom = read_optional_zoom(fields, "min-zoom")?;
     let max_zoom = read_optional_zoom(fields, "max-zoom")?;
+
+    // A line-placed icon has no ezu equivalent (MapLibre repeats it along the
+    // path); the line path draws the label only.
+    let icon = match (placement, icon) {
+        (Placement::Point, icon) => icon,
+        (_, Some(_)) => {
+            tracing::warn!("text: `icon-name` on line placement is not supported — icon ignored");
+            None
+        }
+        (_, None) => None,
+    };
 
     let mut ports = vec![PortSpec {
         name: "features",
@@ -2157,6 +2596,8 @@ fn build_text_node(
             halo_color_expr_src,
             halo_width_expr_src,
             opacity_expr_src,
+            icon,
+            text_optional,
             placement,
             spacing_px,
             max_angle_deg,
@@ -2198,7 +2639,7 @@ fn build_text_node(
 /// shared `label-placement` node.
 fn text_schema(stage: Stage) -> Value {
     let mut schema = serde_json::json!({
-            "description": "Text labels (MapLibre `symbol-placement`): `placement: point` (default) labels each feature point, `line` / `line-center` walk each polyline with tangent-rotated glyphs. `font` is an ordered fallback stack of `font` and/or `glyphs` source names; `text` is a literal string or a MapLibre string expression evaluated per feature group. Paint properties have optional `*-expr` siblings; layout knobs are build-time constants in em. Collision is on by default and is deterministic across tiles: candidates come from this tile plus the 8 neighbour tiles (host-bound under `<source>.<layer>@dx,dy`), so borders stay seamless. Set `source`/`layer` (the upstream feature source) to enable neighbour gathering; without them collision is centre-tile-only.",
+            "description": "Text labels (MapLibre `symbol-placement`): `placement: point` (default) labels each feature point, `line` / `line-center` walk each polyline with tangent-rotated glyphs. `font` is an ordered fallback stack of `font` and/or `glyphs` source names; `text` is a literal string or a MapLibre string expression evaluated per feature group. Paint properties have optional `*-expr` siblings; layout knobs are build-time constants in em. Collision is on by default and is deterministic across tiles: candidates come from this tile plus the 8 neighbour tiles (host-bound under `<source>.<layer>@dx,dy`), so borders stay seamless. Set `source`/`layer` (the upstream feature source) to enable neighbour gathering; without them collision is centre-tile-only. `icon-name` / `icon-name-expr` add MapLibre's `icon-image` half: the icon is placed together with the text against the same index, so a symbol shows both or neither unless `icon-optional` / `text-optional` say otherwise. `font` and `text` are required unless the symbol is icon-only.",
             "properties": {
                 "features": schema_frag::node_ref(),
                 "font": { "type": "array", "items": { "type": "string" },
@@ -2291,8 +2732,37 @@ fn text_schema(stage: Stage) -> Value {
                               "description": "Style layer zoom gate: draw nothing below this zoom (mirrors the `features` node)." },
                 "max-zoom": { "type": "integer", "minimum": 0, "maximum": 24,
                               "description": "Style layer zoom gate: draw nothing above this zoom (mirrors the `features` node)." },
+                "icon-sprite": schema_frag::asset_ref(),
+                "icon-name": { "type": "string",
+                               "description": "Constant MapLibre `icon-image`: the sprite to draw at each point, cropped from `icon-sprite`. Needs `icon-sprite`." },
+                "icon-name-expr": {
+                    "description": "A MapLibre expression naming each feature's icon (data-driven `icon-image`), cropped from `icon-sprite`; overrides `icon-name`. A group resolving to an empty/unknown name draws no icon and places as a text-only symbol.",
+                },
+                "icon-size": { "type": "number", "minimum": 0.0,
+                               "description": "MapLibre `icon-size`: multiplier on the sprite's authored display size (atlas pixels over its pixel ratio). Default 1." },
+                "icon-size-expr": { "description": "A MapLibre number expression, evaluated per feature group; overrides `icon-size`." },
+                "icon-anchor": { "type": "string", "enum": ["center", "left", "right", "top", "bottom", "top-left", "top-right", "bottom-left", "bottom-right"],
+                                 "description": "Which part of the icon sits on the point (MapLibre `icon-anchor`). Default `center`." },
+                "icon-offset": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2,
+                                 "description": "MapLibre `icon-offset`: shift [x, y] in px, itself scaled by `icon-size`. Default [0, 0]." },
+                "icon-rotate-deg": { "type": "number",
+                                     "description": "MapLibre `icon-rotate`: rotation in degrees clockwise about the icon centre. Default 0." },
+                "icon-rotate-deg-expr": { "description": "A MapLibre number expression (degrees clockwise); overrides `icon-rotate-deg`." },
+                "icon-opacity": schema_frag::unit_number(),
+                "icon-opacity-expr": { "description": "A MapLibre number expression giving the icon's opacity; overrides `icon-opacity`." },
+                "icon-padding-px": { "type": "number", "minimum": 0.0,
+                                     "description": "MapLibre `icon-padding`: collision-box inflation around the icon, in px. Default 2." },
+                "icon-padding-expr": { "description": "A MapLibre number expression (px), evaluated per feature group; overrides `icon-padding-px`." },
+                "icon-allow-overlap": { "type": "boolean",
+                                        "description": "MapLibre `icon-allow-overlap`. A symbol carries one overlap decision, so with text present this and `allow-overlap` must both be set for the symbol to ignore collision. Default false." },
+                "icon-ignore-placement": { "type": "boolean",
+                                           "description": "MapLibre `icon-ignore-placement`; with text present it pairs with `ignore-placement` the same way as the overlap flags. Default false." },
+                "icon-optional": { "type": "boolean",
+                                   "description": "MapLibre `icon-optional`: let the text place when the icon's box is blocked. Default false — icon and text place as one unit." },
+                "text-optional": { "type": "boolean",
+                                   "description": "MapLibre `text-optional`: let the icon place when the text's box is blocked. Default false." },
             },
-        "required": ["features", "font", "text"],
+        "required": ["features"],
     });
     if stage == Stage::Labels {
         schema["description"] = Value::String(format!(

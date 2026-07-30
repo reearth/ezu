@@ -1,6 +1,7 @@
-//! A top-level `sprite` becomes an ezu `sprite` source; `symbol` icon
-//! layers convert to `icon` + `stamp`, and `fill-pattern` to
-//! `icon` + `tiling` clipped to the fill shape.
+//! A top-level `sprite` becomes an ezu `sprite` source; a `symbol` layer's
+//! `icon-image` rides its label node (so the icon joins the shared collision
+//! index), and `fill-pattern` converts to `icon` + `tiling` clipped to the
+//! fill shape.
 
 use ezu_translate::maplibre::{convert, ConvertOptions};
 
@@ -43,13 +44,18 @@ fn sprite_source_icons_and_pattern_convert() {
         nodes.values().filter(|n| n["op"] == op).collect()
     };
 
-    // Symbol icon layer → icon + stamp; the icon names the sprite + rect.
+    // Symbol icon layer → a label node carrying the icon, so it collides
+    // with every other symbol layer instead of being stamped blindly.
+    let labels = by_op("text-labels");
+    assert!(
+        labels.iter().any(|n| n["icon-name"] == "airport-15"
+            && n["icon-sprite"] == "@default"
+            && n["icon-size"] == 1.5),
+        "expected an icon-carrying label node: {labels:?}"
+    );
+    assert!(by_op("stamp").is_empty(), "no bare stamp for a point icon");
+
     let icons = by_op("icon");
-    assert!(icons
-        .iter()
-        .any(|n| n["name"] == "airport-15" && n["sprite"] == "@default"));
-    let stamps = by_op("stamp");
-    assert!(stamps.iter().any(|n| n["scale"] == 1.5));
 
     // fill-pattern → fill-solid shape + icon + tiling + blend(clip:true).
     assert!(icons.iter().any(|n| n["name"] == "hatch-16"));
@@ -82,9 +88,9 @@ fn sprite_source_icons_and_pattern_convert() {
 }
 
 #[test]
-fn data_driven_icon_size_becomes_scale_expr() {
-    // An expression-valued `icon-size` routes to the `stamp` node's
-    // `scale-expr` sibling instead of being dropped with a warning.
+fn data_driven_icon_size_becomes_size_expr() {
+    // An expression-valued `icon-size` routes to the label node's
+    // `icon-size-expr` sibling instead of being dropped with a warning.
     const STYLE: &str = r##"{
       "version": 8,
       "name": "dd-icon",
@@ -102,16 +108,19 @@ fn data_driven_icon_size_becomes_scale_expr() {
     let (recipe, report) = convert(&style, &ConvertOptions::default()).unwrap();
 
     let nodes = recipe["nodes"].as_object().unwrap();
-    let stamp = nodes
+    let labels = nodes
         .values()
-        .find(|n| n["op"] == "stamp")
-        .expect("a stamp node");
-    // The raw expression carries over verbatim; no constant `scale`.
+        .find(|n| n["op"] == "text-labels")
+        .expect("a label node");
+    // The raw expression carries over verbatim; no constant `icon-size`.
     assert_eq!(
-        stamp["scale-expr"],
+        labels["icon-size-expr"],
         serde_json::json!(["interpolate", ["linear"], ["zoom"], 10, 0.5, 16, 2])
     );
-    assert!(stamp.get("scale").is_none(), "no constant scale: {stamp}");
+    assert!(
+        labels.get("icon-size").is_none(),
+        "no constant icon-size: {labels}"
+    );
     // No "not supported" warning about a dropped data-driven size.
     assert!(
         !report.warnings.iter().any(|w| w.contains("icon-size")),
@@ -125,10 +134,10 @@ fn data_driven_icon_size_becomes_scale_expr() {
 }
 
 #[test]
-fn data_driven_icon_image_becomes_stamp_name_expr() {
+fn data_driven_icon_image_becomes_icon_name_expr() {
     // A data-driven `icon-image` (an expression, not a constant name) passes
-    // the expression to `stamp` as a `name-expr` over the sheet's atlas, with
-    // no per-icon `icon` node.
+    // the expression to the label node as an `icon-name-expr` over the
+    // sheet's atlas, with no per-icon `icon` node.
     const STYLE: &str = r##"{
       "version": 8,
       "name": "dd-icon-image",
@@ -143,17 +152,17 @@ fn data_driven_icon_image_becomes_stamp_name_expr() {
     let (recipe, _report) = convert(&style, &ConvertOptions::default()).unwrap();
 
     let nodes = recipe["nodes"].as_object().unwrap();
-    let stamp = nodes
+    let labels = nodes
         .values()
-        .find(|n| n["op"] == "stamp")
-        .expect("a stamp node");
-    // The icon-image expression carries over verbatim as `name-expr`, resolved
-    // against the `default` sprite sheet.
+        .find(|n| n["op"] == "text-labels")
+        .expect("a label node");
+    // The icon-image expression carries over verbatim as `icon-name-expr`,
+    // resolved against the `default` sprite sheet.
     assert_eq!(
-        stamp["name-expr"],
+        labels["icon-name-expr"],
         serde_json::json!(["concat", ["get", "class"], "-15"])
     );
-    assert_eq!(stamp["sprite"], "@default");
+    assert_eq!(labels["icon-sprite"], "@default");
     // No up-front `icon` node — cropping is per-feature at eval time.
     assert!(
         !nodes.values().any(|n| n["op"] == "icon"),

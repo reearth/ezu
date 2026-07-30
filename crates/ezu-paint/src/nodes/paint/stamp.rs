@@ -318,7 +318,10 @@ impl Node for StampNode {
 
 /// Resolve a `sprite` field (`@sprite-source` ref or literal atlas key) to the
 /// atlas asset key, matching the `icon` source node.
-fn resolve_sprite_atlas(raw: &str, ctx: &FactoryCtx<'_>) -> Result<String, FactoryError> {
+pub(super) fn resolve_sprite_atlas(
+    raw: &str,
+    ctx: &FactoryCtx<'_>,
+) -> Result<String, FactoryError> {
     match spec::FieldRef::classify(raw) {
         spec::FieldRef::Node(name) => {
             let source = ctx

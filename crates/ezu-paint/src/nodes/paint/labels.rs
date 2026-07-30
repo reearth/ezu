@@ -25,9 +25,10 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError,
-    Node, NodeFactory, PortKind, PortSpec, PortValue,
+    Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
 };
 use serde_json::Value;
+use tiny_skia::{PixmapPaint, PixmapRef, Transform};
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{canvas_into_raster, empty_raster, make_canvas};
@@ -66,14 +67,18 @@ pub(super) struct LabelSet {
 /// indices point into it), `paints` the per-section fill table; both are
 /// shared across a group's labels via `Arc`.
 pub(super) enum LabelDraw {
-    /// A point label: one laid-out block per anchor variant (a single entry
-    /// for a fixed anchor), selected by the winning variant index.
+    /// A point symbol: its laid-out text blocks (one per anchor candidate)
+    /// and its icon, selected by the winning variant through `variants`.
     Point {
         blocks: Vec<Arc<TextBlock>>,
+        /// What each collision variant draws, index-aligned with the
+        /// candidate's `variants`.
+        variants: Vec<PointVariant>,
         anchor: (f32, f32),
         paint: TextPaint,
         fonts: Arc<Vec<StackEntry>>,
         paints: Arc<Vec<SectionPaint>>,
+        icon: Option<Arc<IconDraw>>,
     },
     /// A line label: one block walked along the path, with a per-glyph
     /// placement and the perpendicular `offset-em` shift applied at draw.
@@ -85,6 +90,36 @@ pub(super) enum LabelDraw {
         fonts: Arc<Vec<StackEntry>>,
         paints: Arc<Vec<SectionPaint>>,
     },
+}
+
+/// What one collision variant of a point symbol draws. MapLibre places a
+/// symbol's icon and text as a unit; `icon-optional` / `text-optional`
+/// admit the fallback variants that carry only one of the two.
+pub(super) struct PointVariant {
+    /// Index into [`LabelDraw::Point::blocks`], or `None` when the variant
+    /// suppresses the text (`text-optional` with the text box blocked, or a
+    /// symbol with no label at all).
+    pub block: Option<usize>,
+    /// Whether the variant draws the symbol's icon.
+    pub icon: bool,
+}
+
+/// A symbol's icon, ready to composite at the label anchor. The image is
+/// already cropped from its sprite sheet; every geometric quantity is in
+/// the local world-pixel frame, so it lands where the collision box was.
+pub(super) struct IconDraw {
+    pub image: Arc<RasterBuf>,
+    /// Icon centre relative to the label anchor (px), from `icon-anchor`
+    /// and `icon-offset`.
+    pub offset: (f32, f32),
+    /// Image pixels → canvas px: `icon-size` over the sprite's pixel ratio.
+    pub scale: f32,
+    /// MapLibre `icon-rotate`, degrees clockwise about the icon centre.
+    pub rotation_deg: f32,
+    pub opacity: f32,
+    /// Half-extent of the drawn icon (px, rotation included), for the
+    /// off-canvas reject.
+    pub half: (f32, f32),
 }
 
 impl LabelSet {
@@ -204,6 +239,52 @@ pub(super) fn draw_labels(
     let sdf_cache = set.outline_sdf.then(OutlineSdfCache::new);
     let pm = canvas.pixmap_mut();
     let mut pm = pm.as_mut();
+    // maplibre-gl-js draws a symbol layer's icons underneath its text, so
+    // the icons of the whole layer go down first rather than per symbol.
+    for p in placed {
+        let Some(LabelDraw::Point {
+            variants,
+            anchor,
+            icon: Some(icon),
+            ..
+        }) = set.draws.get(p.cand)
+        else {
+            continue;
+        };
+        if !variants.get(p.variant).is_some_and(|v| v.icon) {
+            continue;
+        }
+        let (ax, ay) = (
+            anchor.0 + pad + icon.offset.0,
+            anchor.1 + pad + icon.offset.1,
+        );
+        if ax + icon.half.0 < 0.0
+            || ax - icon.half.0 > padded_w
+            || ay + icon.half.1 < 0.0
+            || ay - icon.half.1 > padded_h
+        {
+            continue;
+        }
+        let img = &icon.image;
+        let Some(img_ref) = PixmapRef::from_bytes(&img.pixels, img.width, img.height) else {
+            continue;
+        };
+        let t = Transform::from_translate(ax, ay)
+            .pre_rotate(icon.rotation_deg)
+            .pre_scale(icon.scale, icon.scale)
+            .pre_translate(img.width as f32 * -0.5, img.height as f32 * -0.5);
+        pm.draw_pixmap(
+            0,
+            0,
+            img_ref,
+            &PixmapPaint {
+                opacity: icon.opacity,
+                ..PixmapPaint::default()
+            },
+            t,
+            None,
+        );
+    }
     for p in placed {
         let Some(d) = set.draws.get(p.cand) else {
             continue;
@@ -211,12 +292,23 @@ pub(super) fn draw_labels(
         match d {
             LabelDraw::Point {
                 blocks,
+                variants,
                 anchor,
                 paint,
                 fonts,
                 paints,
+                ..
             } => {
-                let block = blocks.get(p.variant).unwrap_or(&blocks[0]);
+                // The winning variant names the laid-out block, or suppresses
+                // the text entirely (an icon-only symbol, or one whose text
+                // lost its box under `text-optional`).
+                let Some(block) = variants
+                    .get(p.variant)
+                    .and_then(|v| v.block)
+                    .and_then(|ix| blocks.get(ix))
+                else {
+                    continue;
+                };
                 let (ax, ay) = (anchor.0 + pad, anchor.1 + pad);
                 if set.collide {
                     let bb = block.bbox;
