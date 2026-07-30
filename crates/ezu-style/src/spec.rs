@@ -432,8 +432,8 @@ pub enum SpriteIndex {
 }
 
 /// One entry of a sprite index — a sub-rectangle of the atlas. Mirrors the
-/// MapLibre sprite-JSON entry shape (extra keys like `sdf`/`content` are
-/// ignored) so a fetched index deserializes into the same type.
+/// MapLibre sprite-JSON entry shape (extra keys like `sdf` are ignored) so a
+/// fetched index deserializes into the same type.
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct IconRect {
@@ -443,6 +443,18 @@ pub struct IconRect {
     pub height: u32,
     #[serde(default = "one_f32")]
     pub pixel_ratio: f32,
+    /// Nine-slice metadata: the `[from, to)` bands of image columns that may
+    /// stretch when `icon-text-fit` grows the icon. Absent = the whole image
+    /// scales.
+    #[serde(default)]
+    pub stretch_x: Vec<[u32; 2]>,
+    /// The stretchable bands of image rows, as [`Self::stretch_x`].
+    #[serde(default)]
+    pub stretch_y: Vec<[u32; 2]>,
+    /// The part of the image the label's text is fitted into, as
+    /// `[left, top, right, bottom]` image pixels. Absent = the whole image.
+    #[serde(default)]
+    pub content: Option<[u32; 4]>,
 }
 
 fn one_f32() -> f32 {

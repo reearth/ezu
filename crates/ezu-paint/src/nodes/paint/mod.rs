@@ -4,6 +4,7 @@ mod brush_file;
 mod circles;
 mod fill_dabs;
 mod fill_solid;
+mod icon_fit;
 mod labels;
 mod line;
 mod line_stamp;

@@ -262,10 +262,17 @@ fn icon_fields(
     if get("icon-optional").and_then(Value::as_bool) == Some(true) {
         f.insert("icon-optional".into(), Value::from(true));
     }
-    if get("icon-text-fit").is_some() {
-        report.warn(format!(
-            "layer `{id}`: `icon-text-fit` not supported — the icon keeps its sprite size"
-        ));
+    if let Some(fit) = const_string(get("icon-text-fit"), "icon-text-fit", id, report) {
+        f.insert("icon-text-fit".into(), Value::from(fit));
+    }
+    match get("icon-text-fit-padding") {
+        Some(Value::Array(a)) if a.len() == 4 && a.iter().all(Value::is_number) => {
+            f.insert("icon-text-fit-padding".into(), Value::Array(a.clone()));
+        }
+        Some(_) => report.warn(format!(
+            "layer `{id}`: expression `icon-text-fit-padding` not supported — using the default"
+        )),
+        None => {}
     }
     Some(f)
 }

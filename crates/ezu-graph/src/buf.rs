@@ -59,7 +59,7 @@ impl RasterBuf {
 }
 
 /// A sub-rectangle of a sprite atlas: one named icon.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Default)]
 pub struct SpriteRect {
     pub x: u32,
     pub y: u32,
@@ -69,6 +69,13 @@ pub struct SpriteRect {
     /// sprite has `pixel_ratio == 2.0`). Consumers divide by it to get the
     /// icon's intended display size.
     pub pixel_ratio: f32,
+    /// Nine-slice metadata for `icon-text-fit`: the `[from, to)` bands of
+    /// image columns (resp. rows) that absorb the stretch, and the part of
+    /// the image the text is fitted into. Empty / `None` means the whole
+    /// image stretches and the whole image is the content box.
+    pub stretch_x: Vec<[u32; 2]>,
+    pub stretch_y: Vec<[u32; 2]>,
+    pub content: Option<[u32; 4]>,
 }
 
 /// A decoded sprite sheet: one atlas image plus a name → sub-rect index.
@@ -196,6 +203,7 @@ mod tests {
                 width: 2,
                 height: 2,
                 pixel_ratio: 1.0,
+                ..SpriteRect::default()
             },
         );
         icons.insert(
@@ -206,6 +214,7 @@ mod tests {
                 width: 2,
                 height: 2,
                 pixel_ratio: 1.0,
+                ..SpriteRect::default()
             },
         );
         icons.insert(
@@ -216,6 +225,7 @@ mod tests {
                 width: 2,
                 height: 2,
                 pixel_ratio: 1.0,
+                ..SpriteRect::default()
             },
         );
         let sheet = SpriteSheet { atlas, icons };
