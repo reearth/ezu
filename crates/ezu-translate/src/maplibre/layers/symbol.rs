@@ -94,6 +94,7 @@ pub(crate) fn convert_symbol(
             id,
             layer,
             layout,
+            zoom_range,
             nodes,
             outputs,
             source_defs,
@@ -211,6 +212,7 @@ fn convert_text(
     id: &str,
     layer: &Map<String, Value>,
     layout: Option<&Map<String, Value>>,
+    zoom_range: ZoomRange,
     nodes: &mut Map<String, Value>,
     outputs: &mut Vec<String>,
     source_defs: &mut Map<String, Value>,
@@ -463,9 +465,18 @@ fn convert_text(
     // Collision (deterministic cross-tile placement). Always thread the
     // origin source/layer (+ the layer filter) through so the `text` node
     // gathers neighbour candidates and filters them exactly like its own
-    // features; collision itself is on by default in the `text` node.
+    // features; collision itself is on by default in the `text` node. The
+    // zoom band comes along too: neighbour candidates bypass the `features`
+    // node, so the layer's gate has to reach the `text` node as well.
     spec["source"] = Value::from(source);
     spec["layer"] = Value::from(source_layer);
+    let (min_zoom, max_zoom) = zoom_range;
+    if let Some(z) = min_zoom {
+        spec["min-zoom"] = Value::from(z);
+    }
+    if let Some(z) = max_zoom {
+        spec["max-zoom"] = Value::from(z);
+    }
     if let Some(f) = base_filter_expr {
         spec["filter-expr"] = f;
     }

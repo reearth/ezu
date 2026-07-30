@@ -261,6 +261,15 @@ pub struct LineCandidate {
     pub style_id: u64,
     /// Per-glyph collision boxes in the shared world-pixel frame.
     pub boxes: Vec<Aabb>,
+    /// Label-centre anchor in the shared world-pixel frame — the distance
+    /// reference for the same-label repeat check.
+    pub anchor_x: f32,
+    pub anchor_y: f32,
+    /// MapLibre's line-label repeat distance (px, `symbol-spacing / 2`):
+    /// a candidate whose anchor is nearer than this to an earlier
+    /// same-label anchor is dropped, so a street name doesn't reappear on
+    /// every branch of its own road. Zero disables the check.
+    pub repeat_px: f32,
     pub allow_overlap: bool,
     pub ignore_placement: bool,
 }
@@ -278,6 +287,12 @@ impl LineCandidate {
 /// `candidates` (all-or-nothing per label). Same total order and dedup
 /// key as [`place`]; a label shows only when *every* glyph box is free,
 /// and then reserves all of them (unless `ignore_placement`).
+///
+/// Between the dedup and the collision step comes MapLibre's repeat
+/// filter: a candidate within [`LineCandidate::repeat_px`] of an earlier
+/// same-label anchor is dropped. Like the reference it consumes the
+/// anchor whether or not the label goes on to win its collision, so a
+/// blocked candidate still keeps its neighbours away.
 pub fn place_lines(candidates: &[LineCandidate], cell_px: f32) -> Vec<usize> {
     let mut order: Vec<usize> = (0..candidates.len()).collect();
     order.sort_by(|&a, &b| {
@@ -292,12 +307,25 @@ pub fn place_lines(candidates: &[LineCandidate], cell_px: f32) -> Vec<usize> {
 
     let mut grid = Grid::new(cell_px);
     let mut seen: HashSet<(i64, i64, &str, u64)> = HashSet::new();
+    // Anchors already taken by each label, for the repeat filter.
+    let mut anchors: HashMap<(&str, u64), Vec<(f32, f32)>> = HashMap::new();
     let mut placed = Vec::new();
     for i in order {
         let c = &candidates[i];
         let (qx, qy) = c.quant();
         if !seen.insert((qx, qy, c.text.as_str(), c.style_id)) {
             continue;
+        }
+        if c.repeat_px > 0.0 {
+            let taken = anchors.entry((c.text.as_str(), c.style_id)).or_default();
+            let r2 = c.repeat_px * c.repeat_px;
+            if taken.iter().any(|&(x, y)| {
+                let (dx, dy) = (c.anchor_x - x, c.anchor_y - y);
+                dx * dx + dy * dy < r2
+            }) {
+                continue;
+            }
+            taken.push((c.anchor_x, c.anchor_y));
         }
         let shown = c.allow_overlap || c.boxes.iter().all(|b| !grid.intersects_any(b));
         if !shown {
@@ -465,6 +493,68 @@ mod tests {
         b.alt_aabbs = vec![boxed(8.0, 0.0, 10.0)]; // also overlaps a
         let placed = place(&[a, b], COLLISION_CELL_PX);
         assert_eq!(idxs(&placed), vec![0]);
+    }
+
+    /// A one-glyph line candidate anchored at `(x, y)` (world anchor derived
+    /// from the same point so the total order follows the geometry).
+    fn line_cand(text: &str, x: f32, y: f32, repeat_px: f32) -> LineCandidate {
+        LineCandidate {
+            sort_key: 0.0,
+            world_ax: x as i64,
+            world_ay: y as i64,
+            text: text.into(),
+            style_id: 0,
+            boxes: vec![boxed(x, y, 5.0)],
+            anchor_x: x,
+            anchor_y: y,
+            repeat_px,
+            allow_overlap: true,
+            ignore_placement: true,
+        }
+    }
+
+    #[test]
+    fn repeat_distance_drops_a_nearby_copy_of_the_same_label() {
+        // Three anchors of one street name, 60 px apart, with a 125 px
+        // repeat distance: the middle one is too close to the first and the
+        // last is clear of the surviving anchor.
+        let cands = [
+            line_cand("Main St", 0.0, 0.0, 125.0),
+            line_cand("Main St", 60.0, 0.0, 125.0),
+            line_cand("Main St", 180.0, 0.0, 125.0),
+        ];
+        assert_eq!(place_lines(&cands, COLLISION_CELL_PX), vec![0, 2]);
+        // A different label at the same distance is unaffected.
+        let mixed = [
+            line_cand("Main St", 0.0, 0.0, 125.0),
+            line_cand("Elm St", 60.0, 0.0, 125.0),
+        ];
+        assert_eq!(place_lines(&mixed, COLLISION_CELL_PX), vec![0, 1]);
+        // Zero repeat distance keeps every anchor (line-center placement).
+        let all = [
+            line_cand("Main St", 0.0, 0.0, 0.0),
+            line_cand("Main St", 60.0, 0.0, 0.0),
+        ];
+        assert_eq!(place_lines(&all, COLLISION_CELL_PX), vec![0, 1]);
+    }
+
+    #[test]
+    fn repeat_distance_is_consumed_by_a_blocked_candidate() {
+        // The first candidate loses its collision but still keeps the
+        // second, 60 px away, from taking its place (MapLibre records the
+        // anchor at layout time, before placement runs).
+        let blocker = {
+            let mut c = line_cand("blocker", 0.0, 0.0, 0.0);
+            c.allow_overlap = false;
+            c.ignore_placement = false;
+            c.sort_key = -1.0;
+            c
+        };
+        let mut a = line_cand("Main St", 0.0, 0.0, 125.0);
+        a.allow_overlap = false;
+        let mut b = line_cand("Main St", 60.0, 0.0, 125.0);
+        b.allow_overlap = false;
+        assert_eq!(place_lines(&[blocker, a, b], COLLISION_CELL_PX), vec![0]);
     }
 
     #[test]
