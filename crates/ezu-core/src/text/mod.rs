@@ -61,7 +61,8 @@ pub use layout::{
 };
 pub use layout_cache::get_or_build_layout;
 pub use line::{
-    generate_anchors, place_glyphs, Anchor as LineAnchor, AnchorParams, GlyphOnLine, LinePlacement,
+    clip_line, generate_anchors, place_glyphs, Anchor as LineAnchor, AnchorParams, GlyphOnLine,
+    LinePlacement,
 };
 pub use outline_sdf::{OutlineSdfCache, OutlineSdfStats};
 pub use pbf::{decode_glyph_range, GlyphPbfError, GlyphRange};

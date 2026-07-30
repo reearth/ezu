@@ -58,6 +58,7 @@ use crate::nodes::common::{
 };
 use crate::render::{collect_groups, SharedLayer};
 use ezu_core::text::{
+    clip_line,
     collide::{self, Aabb, LabelCandidate, PlaceRank},
     generate_anchors, get_or_build_layout, layout_sections, place_glyphs, Anchor, AnchorParams,
     FaceEntry, Font, GlyphPlacement, Justify, LayoutParams, LinePlacement, SdfFontStack,
@@ -1393,6 +1394,9 @@ impl TextNode {
                 // MapLibre measures the bend over 3/5 of the font size, so a
                 // long gentle curve is fine and only a kink is rejected.
                 angle_window: ANGLE_WINDOW_EM * size,
+                glyph_size: size,
+                // Set per clipped run below.
+                continued: false,
             };
 
             // MapLibre's within-feature symbol order: the anchors of each of
@@ -1402,7 +1406,7 @@ impl TextNode {
                 if line.len() < 2 {
                     continue;
                 }
-                let poly: Vec<(f32, f32)> = line
+                let full: Vec<(f32, f32)> = line
                     .iter()
                     .map(|&(x, y)| {
                         let wx = dx * extent_i + x as i64;
@@ -1410,70 +1414,84 @@ impl TextNode {
                         (wx as f32 * sx, wy as f32 * sy)
                     })
                     .collect();
-                for mut anchor in generate_anchors(&poly, &anchor_params) {
-                    if !self.keep_upright {
-                        anchor.reversed = false;
+                // MapLibre anchors on the geometry clipped to the tile the
+                // feature came from, so the copy of a road in this tile and
+                // the copy in its neighbour's buffer each label only their
+                // own stretch.
+                let (tile_x0, tile_y0) = (dx as f32 * tile_w, dy as f32 * tile_h);
+                let runs = clip_line(&full, tile_x0, tile_y0, tile_x0 + tile_w, tile_y0 + tile_h);
+                for poly in &runs {
+                    let head = poly[0];
+                    let mut params = anchor_params;
+                    params.continued = head.0 <= tile_x0
+                        || head.0 >= tile_x0 + tile_w
+                        || head.1 <= tile_y0
+                        || head.1 >= tile_y0 + tile_h;
+                    for mut anchor in generate_anchors(poly, &params) {
+                        if !self.keep_upright {
+                            anchor.reversed = false;
+                        }
+                        let Some(placed) = place_glyphs(poly, &anchor, &centre_offsets) else {
+                            continue;
+                        };
+                        // Per-glyph rotated-AABB collision boxes (local px).
+                        let mut boxes = Vec::with_capacity(placed.len());
+                        for (g, gp) in block.glyphs.iter().zip(&placed) {
+                            let hw = 0.5 * g.advance * size;
+                            let (c, s) = (gp.angle.cos().abs(), gp.angle.sin().abs());
+                            let ex = hw * c + half_h * s;
+                            let ey = hw * s + half_h * c;
+                            boxes.push(
+                                Aabb {
+                                    min_x: gp.x - ex,
+                                    min_y: gp.y - ey,
+                                    max_x: gp.x + ex,
+                                    max_y: gp.y + ey,
+                                }
+                                .inflate(padding),
+                            );
+                        }
+                        // World anchor (extent units) of the label-centre sample.
+                        let world_ax = tx * extent_i + (anchor.x / sx).round() as i64;
+                        let world_ay = ty * extent_i + (anchor.y / sy).round() as i64;
+                        cands.push(LabelCandidate {
+                            sort_key,
+                            rank: PlaceRank {
+                                tile: (tx + dx, ty + dy),
+                                feature: prep.feature,
+                                symbol,
+                            },
+                            world_ax,
+                            world_ay,
+                            text: text.clone(),
+                            style_id: hash,
+                            // One variant holding every glyph box: the label shows
+                            // only where the whole run is free.
+                            variants: vec![boxes],
+                            anchor_x: anchor.x,
+                            anchor_y: anchor.y,
+                            repeat_px,
+                            allow_overlap: self.allow_overlap,
+                            ignore_placement: self.ignore_placement,
+                        });
+                        let placements: Vec<GlyphPlacement> = placed
+                            .iter()
+                            .map(|g| GlyphPlacement {
+                                x: g.x,
+                                y: g.y,
+                                angle: g.angle,
+                            })
+                            .collect();
+                        symbol += 1;
+                        draws.push(LabelDraw::Line {
+                            block: block.clone(),
+                            placements,
+                            perp_px: perp,
+                            paint,
+                            fonts: fonts.clone(),
+                            paints: paints.clone(),
+                        });
                     }
-                    let Some(placed) = place_glyphs(&poly, &anchor, &centre_offsets) else {
-                        continue;
-                    };
-                    // Per-glyph rotated-AABB collision boxes (local px).
-                    let mut boxes = Vec::with_capacity(placed.len());
-                    for (g, gp) in block.glyphs.iter().zip(&placed) {
-                        let hw = 0.5 * g.advance * size;
-                        let (c, s) = (gp.angle.cos().abs(), gp.angle.sin().abs());
-                        let ex = hw * c + half_h * s;
-                        let ey = hw * s + half_h * c;
-                        boxes.push(
-                            Aabb {
-                                min_x: gp.x - ex,
-                                min_y: gp.y - ey,
-                                max_x: gp.x + ex,
-                                max_y: gp.y + ey,
-                            }
-                            .inflate(padding),
-                        );
-                    }
-                    // World anchor (extent units) of the label-centre sample.
-                    let world_ax = tx * extent_i + (anchor.x / sx).round() as i64;
-                    let world_ay = ty * extent_i + (anchor.y / sy).round() as i64;
-                    cands.push(LabelCandidate {
-                        sort_key,
-                        rank: PlaceRank {
-                            tile: (tx + dx, ty + dy),
-                            feature: prep.feature,
-                            symbol,
-                        },
-                        world_ax,
-                        world_ay,
-                        text: text.clone(),
-                        style_id: hash,
-                        // One variant holding every glyph box: the label shows
-                        // only where the whole run is free.
-                        variants: vec![boxes],
-                        anchor_x: anchor.x,
-                        anchor_y: anchor.y,
-                        repeat_px,
-                        allow_overlap: self.allow_overlap,
-                        ignore_placement: self.ignore_placement,
-                    });
-                    let placements: Vec<GlyphPlacement> = placed
-                        .iter()
-                        .map(|g| GlyphPlacement {
-                            x: g.x,
-                            y: g.y,
-                            angle: g.angle,
-                        })
-                        .collect();
-                    symbol += 1;
-                    draws.push(LabelDraw::Line {
-                        block: block.clone(),
-                        placements,
-                        perp_px: perp,
-                        paint,
-                        fonts: fonts.clone(),
-                        paints: paints.clone(),
-                    });
                 }
             }
         }
