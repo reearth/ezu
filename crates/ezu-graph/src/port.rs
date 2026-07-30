@@ -26,6 +26,16 @@ pub enum PortKind {
     Brush,
     /// Constant value (color, number, bool). Cheap to fan out.
     Scalar,
+    /// Label placement candidates, or the decisions a shared placement
+    /// stage reached over them. Type-erased (by convention the payloads
+    /// are `ezu-paint`'s label-set / placement types) so this crate gains
+    /// no text dependency, and cheap to fan out (`Arc`).
+    ///
+    /// Placement is global: every label layer of a recipe hands its
+    /// candidates to one `label-placement` node, which decides them all
+    /// against one collision index and passes the decisions back to each
+    /// layer's draw node.
+    Labels,
     /// Per-pixel single-channel `f32` grid matching the canvas's
     /// `padded_size`. The general carrier for floating-point grids:
     /// elevation (with `GeoScale` populated, produced by `dem`),
@@ -42,6 +52,7 @@ impl fmt::Display for PortKind {
             PortKind::Raster => "raster",
             PortKind::Sprite => "sprite",
             PortKind::Brush => "brush",
+            PortKind::Labels => "labels",
             PortKind::Scalar => "scalar",
             PortKind::ScalarField => "scalar-field",
         })

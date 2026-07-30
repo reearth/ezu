@@ -53,7 +53,7 @@ pub(crate) mod sources;
 
 use layers::{
     convert_background, convert_circle, convert_fill, convert_fill_extrusion, convert_heatmap,
-    convert_hillshade, convert_line, convert_raster, convert_symbol,
+    convert_hillshade, convert_line, convert_raster, convert_symbol, emit_label_placement,
 };
 use sources::convert_sources;
 
@@ -190,6 +190,10 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
     // Ordered list of the top raster node id each layer contributes; folded
     // into a blend chain at the end (painter's algorithm).
     let mut outputs: Vec<String> = Vec::new();
+    // Every label layer's `text-labels` node, in style order: they all feed
+    // one shared `label-placement` node emitted after the walk, so labels of
+    // different layers collide with each other as they do in MapLibre.
+    let mut label_layers: Vec<String> = Vec::new();
     // Largest canvas pad (px) any layer's pad-hungry kernel needs. The
     // document `pad` is lifted to cover this so kernels aren't clipped at
     // tile borders; today only `heatmap` → `density` reports a requirement.
@@ -273,6 +277,7 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
                 layer,
                 &mut nodes,
                 &mut outputs,
+                &mut label_layers,
                 zoom_range,
                 &sources,
                 &mut source_defs,
@@ -289,6 +294,8 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
             gate_hidden(id, &mut nodes, &mut outputs, out_start);
         }
     }
+
+    emit_label_placement(&mut nodes, &label_layers);
 
     if outputs.is_empty() {
         report.warn("no renderable layers produced output".to_string());

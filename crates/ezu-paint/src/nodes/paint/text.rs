@@ -1,6 +1,15 @@
 //! `text` — `Features -> Raster`. Draw text labels, shaped and laid out
 //! by `ezu-core`'s `text` module, with deterministic cross-tile
-//! collision. `placement` picks the MapLibre `symbol-placement` mode:
+//! collision, placing its own candidates.
+//!
+//! `text-labels` — `Features -> Labels`. The same node with the same
+//! fields, stopping at the candidates so a shared `label-placement` node
+//! can decide them against every other label layer's, the way MapLibre
+//! collides all symbol layers against one index. A recipe with more than
+//! one label layer wants this (see [`super::labels`]); a lone layer gets
+//! the same result either way.
+//!
+//! `placement` picks the MapLibre `symbol-placement` mode:
 //! `point` (default) labels each feature point; `line` / `line-center`
 //! walk each polyline with tangent-rotated glyphs (see
 //! [`ezu_core::text::line`]).
@@ -19,8 +28,8 @@
 //! jitter), so labels match across tile borders. Collision (default on)
 //! is likewise world-space deterministic: candidates are gathered from
 //! this tile plus its 8 neighbour tiles (host-bound under
-//! `<source>.<layer>@dx,dy`), deduped by `(text, quantized world
-//! anchor)`, ordered by `(sort-key, world anchor, text)`, and placed
+//! `<source>.<layer>@dx,dy`), deduped by `(layer, text, quantized world
+//! anchor)`, ordered by `(layer, sort-key, world anchor, text)`, and placed
 //! greedily against a grid — all from world-space quantities, so
 //! adjacent tiles agree on every straddling label (a line label
 //! collides per glyph, all-or-nothing). Missing neighbour bindings
@@ -44,17 +53,18 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    canvas_into_raster, downcast_features, empty_raster, make_canvas, read_bool_or, read_number_or,
-    read_optional_string, read_optional_zoom, read_string_or, read_xy, FeatureGroup,
+    downcast_features, read_bool_or, read_number_or, read_optional_string, read_optional_zoom,
+    read_string_or, read_xy, FeatureGroup,
 };
 use crate::render::{collect_groups, SharedLayer};
 use ezu_core::text::{
-    collide::{self, Aabb, Candidate, LineCandidate},
-    draw, draw_line, generate_anchors, get_or_build_layout, layout_sections, place_glyphs, Anchor,
-    AnchorParams, FaceEntry, Font, GlyphPlacement, Justify, LayoutParams, LinePlacement,
-    OutlineSdfCache, SdfFontStack, SectionPaint, SectionSpec, StackEntry, TextBlock, TextPaint,
-    TextTransform, VerticalAlign,
+    collide::{self, Aabb, LabelCandidate},
+    generate_anchors, get_or_build_layout, layout_sections, place_glyphs, Anchor, AnchorParams,
+    FaceEntry, Font, GlyphPlacement, Justify, LayoutParams, LinePlacement, SdfFontStack,
+    SectionPaint, SectionSpec, StackEntry, TextBlock, TextPaint, TextTransform, VerticalAlign,
 };
+
+use super::labels::{draw_labels, set_id, FaceCache, LabelDraw, LabelSet};
 
 /// Parse an optional raw MapLibre expression field, type-checked against
 /// `expect`. Returns `(parsed, raw_json_text)` for a stable cache hash.
@@ -78,23 +88,6 @@ fn parse_expr_field(
             Ok((Some(expr), Some(v.to_string())))
         }
         None => Ok((None, None)),
-    }
-}
-
-/// Emit a debug summary of the per-eval outline→SDF cache: unique glyphs
-/// rasterized, reuse count, and the bytes their bitmaps hold. Nothing is
-/// logged when the SDF path is off.
-fn log_outline_sdf_stats(cache: Option<&OutlineSdfCache>) {
-    if let Some(cache) = cache {
-        let s = cache.stats();
-        if s.built > 0 || s.hits > 0 {
-            tracing::debug!(
-                built = s.built,
-                hits = s.hits,
-                bitmap_bytes = s.bitmap_bytes,
-                "text: outline glyphs rendered through the SDF path"
-            );
-        }
     }
 }
 
@@ -391,55 +384,10 @@ impl FontRegistry {
     fn id_of(&self, key: &str) -> Option<u32> {
         self.by_key.get(key).map(|&i| i as u32 + 1)
     }
-}
 
-/// One `rustybuzz::Face` per distinct outline font in the registry, built once
-/// per eval. Shaping, coverage, and outline extraction all take a face, so
-/// building each once here (rather than reparsing the ~20 MB font file per
-/// glyph as coverage itemization would) is the dominant win for a text node.
-///
-/// Keyed by the font's `Arc` identity: every assembled flat stack is cloned
-/// from the registry's stacks, so its outline entries share these fonts and
-/// hit the cache. Handing out cheap [`rustybuzz::Face`] clones lets each label
-/// build a [`FaceEntry`] view without reparsing.
-struct FaceCache<'a> {
-    faces: HashMap<*const Font, rustybuzz::Face<'a>>,
-}
-
-impl<'a> FaceCache<'a> {
-    /// Build a face for every distinct outline font across the registry's
-    /// default and named stacks.
-    fn build(registry: &'a FontRegistry) -> FaceCache<'a> {
-        let mut faces: HashMap<*const Font, rustybuzz::Face<'a>> = HashMap::new();
-        for stack in std::iter::once(&registry.default).chain(registry.stacks.iter()) {
-            for entry in stack {
-                if let StackEntry::Outline(font) = entry {
-                    faces
-                        .entry(Arc::as_ptr(font))
-                        .or_insert_with(|| font.face());
-                }
-            }
-        }
-        FaceCache { faces }
-    }
-
-    /// A prepared view of `stack`, aligned index-for-index, whose outline
-    /// entries carry a cheap clone of the pre-built face.
-    fn view<'b>(&'b self, stack: &'b [StackEntry]) -> Vec<FaceEntry<'b>> {
-        stack
-            .iter()
-            .map(|entry| match entry {
-                StackEntry::Outline(font) => FaceEntry::Outline {
-                    font,
-                    face: self
-                        .faces
-                        .get(&Arc::as_ptr(font))
-                        .cloned()
-                        .unwrap_or_else(|| font.face()),
-                },
-                StackEntry::Sdf(s) => FaceEntry::Sdf(s),
-            })
-            .collect()
+    /// Every stack in the registry — the input to the eval's [`FaceCache`].
+    fn all_stacks(&self) -> impl Iterator<Item = &[StackEntry]> {
+        std::iter::once(self.default.as_slice()).chain(self.stacks.iter().map(Vec::as_slice))
     }
 }
 
@@ -564,7 +512,24 @@ impl Placement {
     }
 }
 
+/// Which half of the label pipeline a [`TextNode`] runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stage {
+    /// `text`: shape, place against this layer's own candidates, and draw.
+    Whole,
+    /// `text-labels`: shape into candidates and emit them for a shared
+    /// `label-placement` node to decide.
+    Labels,
+}
+
+/// Default `max-extent-px`: the canvas pad a label may need to cross a tile
+/// border un-clipped. Shared with `text-draw`, which requests the same pad.
+pub(super) const DEFAULT_MAX_EXTENT_PX: f32 = 128.0;
+
 struct TextNode {
+    /// Whether this node draws its labels itself or hands its candidates to
+    /// a shared `label-placement` node.
+    stage: Stage,
     /// Font asset keys in fallback order: a `font` source's `url`, or a
     /// `glyphs` source's asset key (its `{range}` URL template).
     font_keys: Vec<String>,
@@ -956,42 +921,28 @@ impl TextNode {
     }
 
     /// Line / line-center placement: shape each label once, then walk
-    /// every candidate polyline generating tangent-rotated glyph runs,
-    /// place them with per-glyph collision (all-or-nothing per label), and
-    /// draw. Determinism mirrors the point path: candidate lines come from
-    /// this tile plus its neighbours, and every quantity feeding placement
-    /// is derived from the shared world-pixel frame.
-    fn eval_line(
+    /// every candidate polyline generating tangent-rotated glyph runs, and
+    /// collect them as placement candidates (per-glyph boxes, so the label
+    /// is all-or-nothing). Determinism mirrors the point path: candidate
+    /// lines come from this tile plus its neighbours, and every quantity
+    /// feeding placement is derived from the shared world-pixel frame.
+    fn line_labels(
         &self,
         ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
         feats: &crate::nodes::common::FilteredFeatures,
-    ) -> Result<PortValue, EvalError> {
+        registry: &FontRegistry,
+        faces: &FaceCache<'_>,
+    ) -> Result<LabelSet, EvalError> {
         let mode = self.placement.line().expect("called on line placement");
-        // With collision off and no own lines there is nothing to draw;
-        // with collision on, neighbours may still spill labels in.
-        if !self.collide && !feats.has_lines() {
-            return Ok(empty_raster(ctx));
-        }
-
-        let registry = self.load_registry(ctx)?;
-        // Build each outline font's face once; every label's flat stack shares
-        // these fonts, so shaping/coverage/outline reuse them instead of
-        // reparsing the font file per call.
-        let faces = FaceCache::build(&registry);
-        // Per-eval SDF glyph cache for outline fonts (`None` keeps the vector
-        // path). Outline glyphs are rasterized to an SDF once and reused.
-        let sdf_cache = self.outline_sdf.then(OutlineSdfCache::new);
         let const_size = (self.size.get(ctx, inputs)? as f32).max(0.0);
         let const_color = self.color.get(ctx, inputs)?;
         let const_halo_color = self.halo_color.get(ctx, inputs)?;
         let const_halo_width = (self.halo_width.get(ctx, inputs)? as f32).max(0.0);
         let const_opacity = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
 
-        let mut canvas = make_canvas(ctx)?;
-        let pad = canvas.pad() as f32;
-        let tile_w = canvas.tile_width() as f32;
-        let tile_h = canvas.tile_height() as f32;
+        let tile_w = ctx.canvas.tile_size as f32;
+        let tile_h = tile_w;
         let extent_i = feats.extent.max(1) as i64;
         let sx = tile_w / extent_i as f32;
         let sy = tile_h / extent_i as f32;
@@ -1010,20 +961,8 @@ impl TextNode {
         let mut layout_hits = 0usize;
         let mut layout_misses = 0usize;
 
-        /// One placed line label's draw payload, index-aligned with the
-        /// collision candidate list. `placements` are in the local
-        /// world-pixel frame; the pad is added at draw time. `fonts`/`paints`
-        /// are the label's flat stack and per-section fill table.
-        struct LineDraw {
-            block: Arc<TextBlock>,
-            placements: Vec<GlyphPlacement>,
-            perp_px: f32,
-            paint: TextPaint,
-            fonts: Arc<Vec<StackEntry>>,
-            paints: Arc<Vec<SectionPaint>>,
-        }
-        let mut cands: Vec<LineCandidate> = Vec::new();
-        let mut draws: Vec<LineDraw> = Vec::new();
+        let mut cands: Vec<LabelCandidate> = Vec::new();
+        let mut draws: Vec<LabelDraw> = Vec::new();
 
         // Gather the neighbour feature groups once (collision only), decoded
         // here and reused by the single evaluation pass below.
@@ -1042,7 +981,7 @@ impl TextNode {
                 group,
                 0,
                 0,
-                &registry,
+                registry,
                 z,
                 const_size,
                 const_color,
@@ -1067,7 +1006,7 @@ impl TextNode {
                     group,
                     *dx,
                     *dy,
-                    &registry,
+                    registry,
                     z,
                     const_size,
                     const_color,
@@ -1133,7 +1072,7 @@ impl TextNode {
                 }
             }
 
-            let (flat_fonts, ranges, hash) = assemble_stacks(sections, &registry);
+            let (flat_fonts, ranges, hash) = assemble_stacks(sections, registry);
             let key = (hash, size.to_bits());
             let block = match blocks.get(&key) {
                 Some(b) => b.clone(),
@@ -1293,13 +1232,15 @@ impl TextNode {
                     // World anchor (extent units) of the label-centre sample.
                     let world_ax = tx * extent_i + (anchor.x / sx).round() as i64;
                     let world_ay = ty * extent_i + (anchor.y / sy).round() as i64;
-                    cands.push(LineCandidate {
+                    cands.push(LabelCandidate {
                         sort_key,
                         world_ax,
                         world_ay,
                         text: text.clone(),
                         style_id: hash,
-                        boxes,
+                        // One variant holding every glyph box: the label shows
+                        // only where the whole run is free.
+                        variants: vec![boxes],
                         anchor_x: anchor.x,
                         anchor_y: anchor.y,
                         repeat_px,
@@ -1314,7 +1255,7 @@ impl TextNode {
                             angle: g.angle,
                         })
                         .collect();
-                    draws.push(LineDraw {
+                    draws.push(LabelDraw::Line {
                         block: block.clone(),
                         placements,
                         perp_px: perp,
@@ -1326,60 +1267,6 @@ impl TextNode {
             }
         }
 
-        let placed: Vec<usize> = if self.collide {
-            collide::place_lines(&cands, collide::COLLISION_CELL_PX)
-        } else {
-            (0..cands.len()).collect()
-        };
-
-        let padded_w = tile_w + 2.0 * pad;
-        let padded_h = tile_h + 2.0 * pad;
-        let pm = canvas.pixmap_mut();
-        let mut pm = pm.as_mut();
-        for &i in &placed {
-            let d = &draws[i];
-            // Skip labels whose glyphs all sit outside this padded canvas (a
-            // neighbour's winner may land entirely off-tile). The margin
-            // covers one glyph's reach from its centre sample.
-            let margin = d.paint.size_px + self.padding_px + d.perp_px.abs();
-            let (mut min_x, mut min_y, mut max_x, mut max_y) =
-                (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-            for p in &d.placements {
-                min_x = min_x.min(p.x);
-                max_x = max_x.max(p.x);
-                min_y = min_y.min(p.y);
-                max_y = max_y.max(p.y);
-            }
-            // Local px → device px (add pad); reject if wholly off-canvas.
-            if max_x + pad + margin < 0.0
-                || min_x + pad - margin > padded_w
-                || max_y + pad + margin < 0.0
-                || min_y + pad - margin > padded_h
-            {
-                continue;
-            }
-            let shifted: Vec<GlyphPlacement> = d
-                .placements
-                .iter()
-                .map(|p| GlyphPlacement {
-                    x: p.x + pad,
-                    y: p.y + pad,
-                    angle: p.angle,
-                })
-                .collect();
-            let view = faces.view(&d.fonts);
-            draw_line(
-                &d.block,
-                &view,
-                &mut pm,
-                &shifted,
-                d.perp_px,
-                &d.paint,
-                &d.paints,
-                sdf_cache.as_ref(),
-            );
-        }
-        log_outline_sdf_stats(sdf_cache.as_ref());
         log_layout_cache_stats(layout_hits, layout_misses);
 
         if dropped_chars > 0 {
@@ -1401,89 +1288,24 @@ impl TextNode {
             );
         }
 
-        Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))))
+        Ok(self.label_set(cands, draws))
     }
-}
 
-impl Node for TextNode {
-    fn op_name(&self) -> &'static str {
-        "text"
-    }
-    fn inputs(&self) -> &[PortSpec] {
-        &self.ports
-    }
-    fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
-        PortKind::Raster
-    }
-    fn coord_space(&self) -> CoordSpace {
-        CoordSpace::World
-    }
-    fn required_pad(&self, downstream: u32) -> u32 {
-        downstream + self.max_extent_px.max(0.0).ceil() as u32
-    }
-    fn asset_inputs(&self) -> Vec<String> {
-        let mut keys = self.font_keys.clone();
-        // Every stack a `font-expr` (or a `format` section) could pick must be
-        // enumerable up front — wasm hosts pre-bind assets from this list.
-        for (_, asset_keys) in &self.font_stacks {
-            keys.extend(asset_keys.iter().cloned());
-        }
-        keys.sort();
-        keys.dedup();
-        // With collision on and a known upstream source, request the 8
-        // neighbour layers so a host that can fetch them binds them for
-        // cross-tile placement. Unbound neighbours degrade to centre-only.
-        if self.collide {
-            if let Some(base) = &self.neighbor_base {
-                keys.extend(ezu_graph::neighbor_bindings(base));
-            }
-        }
-        keys
-    }
-    fn eval(
+    /// Wrap this node's candidates and draw payloads into a [`LabelSet`],
+    /// stamping the content identity a shared placement matches on.
+    /// Point placement: shape every own and neighbour label once and collect
+    /// them as placement candidates. Everything that feeds the collision
+    /// decision is derived from the world anchor (exact integer tile-frame
+    /// coordinate) and the em box × size — never from tile-local floats — so
+    /// adjacent tiles agree.
+    fn point_labels(
         &self,
         ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
-    ) -> Result<PortValue, EvalError> {
-        // Style-level zoom gate: outside the band the layer draws nothing,
-        // neighbour candidates included.
-        let tile_z = ctx.tile.z;
-        if self.min_zoom.is_some_and(|mn| tile_z < mn)
-            || self.max_zoom.is_some_and(|mx| tile_z > mx)
-        {
-            return Ok(empty_raster(ctx));
-        }
-        let feats = downcast_features(
-            inputs[0]
-                .as_ref()
-                .ok_or_else(|| EvalError::MissingInput("features".into()))?,
-        )?;
-
-        // Line / line-center placement walks polylines on a wholly
-        // separate path; point placement continues below.
-        if self.placement.line().is_some() {
-            return self.eval_line(ctx, inputs, &feats);
-        }
-
-        // With collision off and no own points there is nothing to draw.
-        // With collision on, neighbour tiles may still spill labels into
-        // this tile, so we proceed and decide from the gathered candidates.
-        if !self.collide && !feats.has_points() {
-            return Ok(empty_raster(ctx));
-        }
-
-        // Resolve the default stack plus every registry stack once per eval.
-        // A per-feature `font-expr` picks among them; the draw path is picked
-        // per glyph by each entry's backend.
-        let registry = self.load_registry(ctx)?;
-        // Build each outline font's face once; every label's flat stack shares
-        // these fonts, so shaping/coverage/outline reuse them instead of
-        // reparsing the font file per call.
-        let faces = FaceCache::build(&registry);
-        // Per-eval SDF glyph cache for outline fonts (`None` keeps the vector
-        // path). Outline glyphs are rasterized to an SDF once and reused.
-        let sdf_cache = self.outline_sdf.then(OutlineSdfCache::new);
-
+        feats: &crate::nodes::common::FilteredFeatures,
+        registry: &FontRegistry,
+        faces: &FaceCache<'_>,
+    ) -> Result<LabelSet, EvalError> {
         // Constants, resolved once. Data-driven exprs (if present)
         // override these per feature group.
         let const_size = (self.size.get(ctx, inputs)? as f32).max(0.0);
@@ -1492,10 +1314,8 @@ impl Node for TextNode {
         let const_halo_width = (self.halo_width.get(ctx, inputs)? as f32).max(0.0);
         let const_opacity = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
 
-        let mut canvas = make_canvas(ctx)?;
-        let pad = canvas.pad() as f32;
-        let tile_w = canvas.tile_width() as f32;
-        let tile_h = canvas.tile_height() as f32;
+        let tile_w = ctx.canvas.tile_size as f32;
+        let tile_h = tile_w;
         let extent_i = feats.extent.max(1) as i64;
         let sx = tile_w / extent_i as f32;
         let sy = tile_h / extent_i as f32;
@@ -1520,21 +1340,8 @@ impl Node for TextNode {
         let mut layout_hits = 0usize;
         let mut layout_misses = 0usize;
 
-        /// One placed label's draw payload, index-aligned with the
-        /// collision candidate list. `blocks` holds one laid-out block per
-        /// anchor candidate (a single entry for a fixed anchor); the chosen
-        /// one is selected by `Placement::alt`. `fonts` is the label's flat
-        /// stack (its glyphs' `font` indices point into it); `paints` the
-        /// per-section fill table. All shared across a group's points via `Arc`.
-        struct DrawRec {
-            blocks: Vec<Arc<TextBlock>>,
-            anchor: (f32, f32),
-            paint: TextPaint,
-            fonts: Arc<Vec<StackEntry>>,
-            paints: Arc<Vec<SectionPaint>>,
-        }
-        let mut cands: Vec<Candidate> = Vec::new();
-        let mut draws: Vec<DrawRec> = Vec::new();
+        let mut cands: Vec<LabelCandidate> = Vec::new();
+        let mut draws: Vec<LabelDraw> = Vec::new();
 
         // Gather the neighbour feature groups once (collision only): each bound
         // neighbour layer, filtered exactly like this tile's own features.
@@ -1553,7 +1360,7 @@ impl Node for TextNode {
                 group,
                 0,
                 0,
-                &registry,
+                registry,
                 z,
                 const_size,
                 const_color,
@@ -1578,7 +1385,7 @@ impl Node for TextNode {
                     group,
                     *dx,
                     *dy,
-                    &registry,
+                    registry,
                     z,
                     const_size,
                     const_color,
@@ -1634,7 +1441,7 @@ impl Node for TextNode {
                 }
             }
 
-            let (flat_fonts, ranges, hash) = assemble_stacks(sections, &registry);
+            let (flat_fonts, ranges, hash) = assemble_stacks(sections, registry);
             // Lay out one block per anchor candidate (a single fixed anchor,
             // or the `text-variable-anchor` list). Each is cached by anchor so
             // repeated points/neighbours reuse it.
@@ -1735,23 +1542,28 @@ impl Node for TextNode {
                 // identical collision decisions.
                 let lpx = (world_ax - tx * extent_i) as f32 * sx;
                 let lpy = (world_ay - ty * extent_i) as f32 * sy;
-                let aabb = box_at(primary, lpx, lpy);
-                let alt_aabbs: Vec<Aabb> =
-                    variants[1..].iter().map(|v| box_at(v, lpx, lpy)).collect();
-                cands.push(Candidate {
+                // One single-box variant per anchor candidate, in declaration
+                // order: the label takes the first anchor whose box is free.
+                let variant_boxes: Vec<Vec<Aabb>> =
+                    variants.iter().map(|v| vec![box_at(v, lpx, lpy)]).collect();
+                cands.push(LabelCandidate {
                     sort_key,
                     world_ax,
                     world_ay,
                     text: text.clone(),
                     style_id: hash,
-                    aabb,
-                    alt_aabbs,
+                    variants: variant_boxes,
+                    anchor_x: lpx,
+                    anchor_y: lpy,
+                    // The repeat filter is a line-label rule (MapLibre records
+                    // anchors along a path); a point label has one anchor.
+                    repeat_px: 0.0,
                     allow_overlap: self.allow_overlap,
                     ignore_placement: self.ignore_placement,
                 });
-                draws.push(DrawRec {
+                draws.push(LabelDraw::Point {
                     blocks: variants.clone(),
-                    anchor: (lpx + pad, lpy + pad),
+                    anchor: (lpx, lpy),
                     paint,
                     fonts: fonts.clone(),
                     paints: paints.clone(),
@@ -1759,50 +1571,6 @@ impl Node for TextNode {
             }
         }
 
-        // Deterministic placement (or draw-everything when collision off).
-        // Each entry pairs a candidate with the anchor variant it placed at
-        // (always variant 0 when collision is off or the anchor is fixed).
-        let placed: Vec<collide::Placement> = if self.collide {
-            collide::place(&cands, collide::COLLISION_CELL_PX)
-        } else {
-            (0..cands.len())
-                .map(|cand| collide::Placement { cand, alt: 0 })
-                .collect()
-        };
-
-        let padded_w = tile_w + 2.0 * pad;
-        let padded_h = tile_h + 2.0 * pad;
-        let pm = canvas.pixmap_mut();
-        let mut pm = pm.as_mut();
-        for p in &placed {
-            let d = &draws[p.cand];
-            let block = &d.blocks[p.alt];
-            // Draw only placed labels whose box touches this padded canvas
-            // (a neighbour's winner may sit entirely outside it).
-            if self.collide {
-                let bb = block.bbox;
-                let s = d.paint.size_px;
-                let (ax, ay) = d.anchor;
-                let min_x = ax + bb.min_x * s - self.padding_px;
-                let max_x = ax + bb.max_x * s + self.padding_px;
-                let min_y = ay + bb.min_y * s - self.padding_px;
-                let max_y = ay + bb.max_y * s + self.padding_px;
-                if max_x < 0.0 || min_x > padded_w || max_y < 0.0 || min_y > padded_h {
-                    continue;
-                }
-            }
-            let view = faces.view(&d.fonts);
-            draw(
-                block,
-                &view,
-                &mut pm,
-                d.anchor,
-                &d.paint,
-                &d.paints,
-                sdf_cache.as_ref(),
-            );
-        }
-        log_outline_sdf_stats(sdf_cache.as_ref());
         log_layout_cache_stats(layout_hits, layout_misses);
         // One summary line per eval, not one per label.
         if culled > 0 {
@@ -1830,10 +1598,149 @@ impl Node for TextNode {
             );
         }
 
-        Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))))
+        Ok(self.label_set(cands, draws))
+    }
+
+    /// The label set for one eval: the zoom gate and the "nothing to place"
+    /// shortcuts, then the point or line candidate build.
+    fn eval_labels(
+        &self,
+        ctx: &EvalCtx<'_>,
+        inputs: &[Option<PortValue>],
+    ) -> Result<LabelSet, EvalError> {
+        // Style-level zoom gate: outside the band the layer draws nothing,
+        // neighbour candidates included.
+        let tile_z = ctx.tile.z;
+        if self.min_zoom.is_some_and(|mn| tile_z < mn)
+            || self.max_zoom.is_some_and(|mx| tile_z > mx)
+        {
+            return Ok(self.label_set(Vec::new(), Vec::new()));
+        }
+        let feats = downcast_features(
+            inputs[0]
+                .as_ref()
+                .ok_or_else(|| EvalError::MissingInput("features".into()))?,
+        )?;
+        let line = self.placement.line().is_some();
+        // With collision off and none of this layer's own geometry there is
+        // nothing to place. With collision on, neighbour tiles may still spill
+        // labels into this tile, so we proceed and decide from the gathered
+        // candidates.
+        let has_own = if line {
+            feats.has_lines()
+        } else {
+            feats.has_points()
+        };
+        if !self.collide && !has_own {
+            return Ok(self.label_set(Vec::new(), Vec::new()));
+        }
+
+        // Resolve the default stack plus every registry stack once per eval.
+        // A per-feature `font-expr` picks among them; the draw path is picked
+        // per glyph by each entry's backend.
+        let registry = self.load_registry(ctx)?;
+        // Build each outline font's face once; every label's flat stack shares
+        // these fonts, so shaping/coverage/outline reuse them instead of
+        // reparsing the font file per call.
+        let faces = FaceCache::from_stacks(registry.all_stacks());
+        if line {
+            self.line_labels(ctx, inputs, &feats, &registry, &faces)
+        } else {
+            self.point_labels(ctx, inputs, &feats, &registry, &faces)
+        }
+    }
+
+    /// Wrap this node's candidates and draw payloads into a [`LabelSet`],
+    /// stamping the content identity a shared placement matches on.
+    fn label_set(&self, candidates: Vec<LabelCandidate>, draws: Vec<LabelDraw>) -> LabelSet {
+        let mut h = Xxh3::new();
+        self.param_hash(&mut h);
+        LabelSet {
+            id: set_id(h.digest(), &candidates),
+            candidates,
+            draws,
+            padding_px: self.padding_px,
+            collide: self.collide,
+            outline_sdf: self.outline_sdf,
+        }
+    }
+}
+
+impl Node for TextNode {
+    fn op_name(&self) -> &'static str {
+        match self.stage {
+            Stage::Whole => "text",
+            Stage::Labels => "text-labels",
+        }
+    }
+    fn inputs(&self) -> &[PortSpec] {
+        &self.ports
+    }
+    fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
+        match self.stage {
+            Stage::Whole => PortKind::Raster,
+            Stage::Labels => PortKind::Labels,
+        }
+    }
+    fn coord_space(&self) -> CoordSpace {
+        CoordSpace::World
+    }
+    fn required_pad(&self, downstream: u32) -> u32 {
+        match self.stage {
+            // The paired `text-draw` node requests the label pad; asking for it
+            // again here would double-count it upstream.
+            Stage::Labels => downstream,
+            Stage::Whole => downstream + self.max_extent_px.max(0.0).ceil() as u32,
+        }
+    }
+    fn asset_inputs(&self) -> Vec<String> {
+        let mut keys = self.font_keys.clone();
+        // Every stack a `font-expr` (or a `format` section) could pick must be
+        // enumerable up front — wasm hosts pre-bind assets from this list.
+        for (_, asset_keys) in &self.font_stacks {
+            keys.extend(asset_keys.iter().cloned());
+        }
+        keys.sort();
+        keys.dedup();
+        // With collision on and a known upstream source, request the 8
+        // neighbour layers so a host that can fetch them binds them for
+        // cross-tile placement. Unbound neighbours degrade to centre-only.
+        if self.collide {
+            if let Some(base) = &self.neighbor_base {
+                keys.extend(ezu_graph::neighbor_bindings(base));
+            }
+        }
+        keys
+    }
+    fn eval(
+        &self,
+        ctx: &EvalCtx<'_>,
+        inputs: &[Option<PortValue>],
+    ) -> Result<PortValue, EvalError> {
+        let set = self.eval_labels(ctx, inputs)?;
+        match self.stage {
+            // Hand the candidates to the shared `label-placement` node.
+            Stage::Labels => Ok(PortValue::Labels(Arc::new(set))),
+            // Self-contained: place this layer's own candidates and draw.
+            Stage::Whole => {
+                let placed = if self.collide {
+                    collide::place(&set.candidates, collide::COLLISION_CELL_PX)
+                } else {
+                    (0..set.candidates.len())
+                        .map(|cand| collide::Placement { cand, variant: 0 })
+                        .collect()
+                };
+                let faces = FaceCache::from_stacks(set.stacks());
+                draw_labels(ctx, &set, &placed, &faces)
+            }
+        }
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"text");
+        // The stage decides the output *kind*, so it has to key the cache:
+        // otherwise a `text` and a `text-labels` node with identical fields
+        // would share an entry and hand back the wrong value.
+        h.update(&[self.stage as u8]);
         for key in &self.font_keys {
             h.update(key.as_bytes());
             h.update(&[0]);
@@ -1940,325 +1847,357 @@ impl NodeFactory for TextFactory {
         fields: &serde_json::Map<String, Value>,
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
-        let features = take_input_ref(fields, "features")?;
+        build_text_node(fields, ctx, Stage::Whole)
+    }
+    fn schema(&self) -> Value {
+        text_schema(Stage::Whole)
+    }
+}
 
-        // `font`: an ordered array of `font` / `glyphs` source names —
-        // the fallback stack. Each resolves to its source's asset key
-        // (a font's `url`; a glyphs source's `{range}` URL template).
-        let font_field = fields
-            .get("font")
-            .ok_or_else(|| FactoryError::MissingField("font".into()))?;
-        let names = font_field
-            .as_array()
-            .ok_or_else(|| FactoryError::BadField {
-                field: "font".into(),
-                msg: "expected an array of font source names".into(),
-            })?;
-        if names.is_empty() {
-            return Err(FactoryError::BadField {
-                field: "font".into(),
-                msg: "font stack must name at least one font source".into(),
-            });
-        }
-        // Resolve one `font`/`glyphs` source name to its asset key, validating
-        // the source exists and is a font-like source. Shared by the default
-        // `font` stack and every `font-stacks` registry entry.
-        let resolve_font_source = |field: &str, name: &str| -> Result<String, FactoryError> {
-            match ctx.sources.get(name) {
-                Some(ezu_style::SourceDecl::Font(f)) => Ok(f.url.clone()),
-                Some(ezu_style::SourceDecl::Glyphs(g)) => Ok(g.asset_key()),
-                Some(_) => Err(FactoryError::BadField {
-                    field: field.into(),
-                    msg: format!("source `{name}` is not a font or glyphs source"),
-                }),
-                None => Err(FactoryError::UnknownAsset(name.to_string())),
-            }
-        };
-        let mut font_keys = Vec::with_capacity(names.len());
-        for v in names {
-            let name = v.as_str().ok_or_else(|| FactoryError::BadField {
-                field: "font".into(),
-                msg: "font stack entries must be strings".into(),
-            })?;
-            font_keys.push(resolve_font_source("font", name)?);
-        }
+/// `text-labels` — the same node, stopping at the candidates so a shared
+/// `label-placement` node can decide them against every other label layer.
+pub(super) struct TextLabelsFactory;
+impl NodeFactory for TextLabelsFactory {
+    fn op_name(&self) -> &'static str {
+        "text-labels"
+    }
+    fn build(
+        &self,
+        fields: &serde_json::Map<String, Value>,
+        ctx: &FactoryCtx<'_>,
+    ) -> Result<BuiltNode, FactoryError> {
+        build_text_node(fields, ctx, Stage::Labels)
+    }
+    fn schema(&self) -> Value {
+        text_schema(Stage::Labels)
+    }
+}
 
-        // (A) `font-expr`: a MapLibre expression → array<string> of font names,
-        // evaluated per feature group. Prefer an `array<string>` check; fall
-        // back to untyped (a `case`/`match` over `["literal", [...]]` may not
-        // type-narrow), mirroring how `text` typechecks.
-        let (font_expr, font_expr_src) = match fields.get("font-expr") {
-            Some(v) => {
-                let expr = maplibre_expr::parse(v).map_err(|e| FactoryError::BadField {
+/// Build a [`TextNode`] for either stage: the fields, ports and connections
+/// are identical, only the output differs.
+fn build_text_node(
+    fields: &serde_json::Map<String, Value>,
+    ctx: &FactoryCtx<'_>,
+    stage: Stage,
+) -> Result<BuiltNode, FactoryError> {
+    let features = take_input_ref(fields, "features")?;
+
+    // `font`: an ordered array of `font` / `glyphs` source names —
+    // the fallback stack. Each resolves to its source's asset key
+    // (a font's `url`; a glyphs source's `{range}` URL template).
+    let font_field = fields
+        .get("font")
+        .ok_or_else(|| FactoryError::MissingField("font".into()))?;
+    let names = font_field
+        .as_array()
+        .ok_or_else(|| FactoryError::BadField {
+            field: "font".into(),
+            msg: "expected an array of font source names".into(),
+        })?;
+    if names.is_empty() {
+        return Err(FactoryError::BadField {
+            field: "font".into(),
+            msg: "font stack must name at least one font source".into(),
+        });
+    }
+    // Resolve one `font`/`glyphs` source name to its asset key, validating
+    // the source exists and is a font-like source. Shared by the default
+    // `font` stack and every `font-stacks` registry entry.
+    let resolve_font_source = |field: &str, name: &str| -> Result<String, FactoryError> {
+        match ctx.sources.get(name) {
+            Some(ezu_style::SourceDecl::Font(f)) => Ok(f.url.clone()),
+            Some(ezu_style::SourceDecl::Glyphs(g)) => Ok(g.asset_key()),
+            Some(_) => Err(FactoryError::BadField {
+                field: field.into(),
+                msg: format!("source `{name}` is not a font or glyphs source"),
+            }),
+            None => Err(FactoryError::UnknownAsset(name.to_string())),
+        }
+    };
+    let mut font_keys = Vec::with_capacity(names.len());
+    for v in names {
+        let name = v.as_str().ok_or_else(|| FactoryError::BadField {
+            field: "font".into(),
+            msg: "font stack entries must be strings".into(),
+        })?;
+        font_keys.push(resolve_font_source("font", name)?);
+    }
+
+    // (A) `font-expr`: a MapLibre expression → array<string> of font names,
+    // evaluated per feature group. Prefer an `array<string>` check; fall
+    // back to untyped (a `case`/`match` over `["literal", [...]]` may not
+    // type-narrow), mirroring how `text` typechecks.
+    let (font_expr, font_expr_src) = match fields.get("font-expr") {
+        Some(v) => {
+            let expr = maplibre_expr::parse(v).map_err(|e| FactoryError::BadField {
+                field: "font-expr".into(),
+                msg: e.to_string(),
+            })?;
+            let array_of_string =
+                maplibre_expr::Type::Array(Box::new(maplibre_expr::Type::String), None);
+            let expr = maplibre_expr::typecheck(&expr, Some(&array_of_string), false)
+                .or_else(|_| maplibre_expr::typecheck(&expr, None, false))
+                .map_err(|e| FactoryError::BadField {
                     field: "font-expr".into(),
                     msg: e.to_string(),
                 })?;
-                let array_of_string =
-                    maplibre_expr::Type::Array(Box::new(maplibre_expr::Type::String), None);
-                let expr = maplibre_expr::typecheck(&expr, Some(&array_of_string), false)
-                    .or_else(|_| maplibre_expr::typecheck(&expr, None, false))
-                    .map_err(|e| FactoryError::BadField {
-                        field: "font-expr".into(),
-                        msg: e.to_string(),
-                    })?;
-                (Some(expr), Some(v.to_string()))
-            }
-            None => (None, None),
-        };
+            (Some(expr), Some(v.to_string()))
+        }
+        None => (None, None),
+    };
 
-        // (A+B) `font-stacks`: canonical stack key → ordered source names. Each
-        // entry resolves exactly like `font`. Insertion order (serde_json
-        // `preserve_order`, the workspace default) fixes each stack's `font_id`.
-        let font_stacks: Vec<(String, Vec<String>)> = match fields.get("font-stacks") {
-            None => Vec::new(),
-            Some(Value::Object(map)) => {
-                let mut out = Vec::with_capacity(map.len());
-                for (key, names) in map {
-                    let arr = names.as_array().ok_or_else(|| FactoryError::BadField {
-                        field: "font-stacks".into(),
-                        msg: format!("stack `{key}` must be an array of source names"),
-                    })?;
-                    let mut keys = Vec::with_capacity(arr.len());
-                    for v in arr {
-                        let name = v.as_str().ok_or_else(|| FactoryError::BadField {
-                            field: "font-stacks".into(),
-                            msg: format!("stack `{key}` entries must be strings"),
-                        })?;
-                        keys.push(resolve_font_source("font-stacks", name)?);
-                    }
-                    out.push((key.clone(), keys));
-                }
-                out
-            }
-            Some(_) => {
-                return Err(FactoryError::BadField {
+    // (A+B) `font-stacks`: canonical stack key → ordered source names. Each
+    // entry resolves exactly like `font`. Insertion order (serde_json
+    // `preserve_order`, the workspace default) fixes each stack's `font_id`.
+    let font_stacks: Vec<(String, Vec<String>)> = match fields.get("font-stacks") {
+        None => Vec::new(),
+        Some(Value::Object(map)) => {
+            let mut out = Vec::with_capacity(map.len());
+            for (key, names) in map {
+                let arr = names.as_array().ok_or_else(|| FactoryError::BadField {
                     field: "font-stacks".into(),
-                    msg: "expected an object of stack key → source-name array".into(),
-                })
+                    msg: format!("stack `{key}` must be an array of source names"),
+                })?;
+                let mut keys = Vec::with_capacity(arr.len());
+                for v in arr {
+                    let name = v.as_str().ok_or_else(|| FactoryError::BadField {
+                        field: "font-stacks".into(),
+                        msg: format!("stack `{key}` entries must be strings"),
+                    })?;
+                    keys.push(resolve_font_source("font-stacks", name)?);
+                }
+                out.push((key.clone(), keys));
             }
-        };
+            out
+        }
+        Some(_) => {
+            return Err(FactoryError::BadField {
+                field: "font-stacks".into(),
+                msg: "expected an object of stack key → source-name array".into(),
+            })
+        }
+    };
 
-        // `text`: a literal string, or a raw MapLibre expression. We prefer a
-        // String-typed check (with top-level coercion, so number / property
-        // expressions stringify), but a `format` expression yields `formatted`
-        // — which String coercion rejects. Fall back to a `Formatted` check
-        // (then an untyped one) and flatten the sections at eval time via
-        // `label_text`, so real-world `text-field`s (e.g. Protomaps' multi-
-        // script `format` labels) build and render instead of erroring.
-        let (text, text_expr, text_expr_src) = match fields.get("text") {
-            None => return Err(FactoryError::MissingField("text".into())),
-            Some(Value::String(s)) => (Some(s.clone()), None, None),
-            Some(v) => {
-                let expr = maplibre_expr::parse(v).map_err(|e| FactoryError::BadField {
+    // `text`: a literal string, or a raw MapLibre expression. We prefer a
+    // String-typed check (with top-level coercion, so number / property
+    // expressions stringify), but a `format` expression yields `formatted`
+    // — which String coercion rejects. Fall back to a `Formatted` check
+    // (then an untyped one) and flatten the sections at eval time via
+    // `label_text`, so real-world `text-field`s (e.g. Protomaps' multi-
+    // script `format` labels) build and render instead of erroring.
+    let (text, text_expr, text_expr_src) = match fields.get("text") {
+        None => return Err(FactoryError::MissingField("text".into())),
+        Some(Value::String(s)) => (Some(s.clone()), None, None),
+        Some(v) => {
+            let expr = maplibre_expr::parse(v).map_err(|e| FactoryError::BadField {
+                field: "text".into(),
+                msg: e.to_string(),
+            })?;
+            let expr = maplibre_expr::typecheck(&expr, Some(&maplibre_expr::Type::String), true)
+                .or_else(|_| {
+                    maplibre_expr::typecheck(&expr, Some(&maplibre_expr::Type::Formatted), false)
+                })
+                .or_else(|_| maplibre_expr::typecheck(&expr, None, false))
+                .map_err(|e| FactoryError::BadField {
                     field: "text".into(),
                     msg: e.to_string(),
                 })?;
-                let expr =
-                    maplibre_expr::typecheck(&expr, Some(&maplibre_expr::Type::String), true)
-                        .or_else(|_| {
-                            maplibre_expr::typecheck(
-                                &expr,
-                                Some(&maplibre_expr::Type::Formatted),
-                                false,
-                            )
-                        })
-                        .or_else(|_| maplibre_expr::typecheck(&expr, None, false))
-                        .map_err(|e| FactoryError::BadField {
-                            field: "text".into(),
-                            msg: e.to_string(),
-                        })?;
-                (None, Some(expr), Some(v.to_string()))
-            }
-        };
+            (None, Some(expr), Some(v.to_string()))
+        }
+    };
 
-        let mut r = InReader::new(fields, ctx, 1);
-        let size = r.number_or("size", 16.0)?;
-        let color = r.color_or("color", [0.0, 0.0, 0.0, 1.0])?;
-        let halo_color = r.color_or("halo-color", [1.0, 1.0, 1.0, 1.0])?;
-        let halo_width = r.number_or("halo-width", 0.0)?;
-        let opacity = r.number_or("opacity", 1.0)?;
-        let parts = r.finish();
+    let mut r = InReader::new(fields, ctx, 1);
+    let size = r.number_or("size", 16.0)?;
+    let color = r.color_or("color", [0.0, 0.0, 0.0, 1.0])?;
+    let halo_color = r.color_or("halo-color", [1.0, 1.0, 1.0, 1.0])?;
+    let halo_width = r.number_or("halo-width", 0.0)?;
+    let opacity = r.number_or("opacity", 1.0)?;
+    let parts = r.finish();
 
-        let (size_expr, size_expr_src) =
-            parse_expr_field(fields, "size-expr", &maplibre_expr::Type::Number)?;
-        let (color_expr, color_expr_src) =
-            parse_expr_field(fields, "color-expr", &maplibre_expr::Type::Color)?;
-        let (halo_color_expr, halo_color_expr_src) =
-            parse_expr_field(fields, "halo-color-expr", &maplibre_expr::Type::Color)?;
-        let (halo_width_expr, halo_width_expr_src) =
-            parse_expr_field(fields, "halo-width-expr", &maplibre_expr::Type::Number)?;
-        let (opacity_expr, opacity_expr_src) =
-            parse_expr_field(fields, "opacity-expr", &maplibre_expr::Type::Number)?;
+    let (size_expr, size_expr_src) =
+        parse_expr_field(fields, "size-expr", &maplibre_expr::Type::Number)?;
+    let (color_expr, color_expr_src) =
+        parse_expr_field(fields, "color-expr", &maplibre_expr::Type::Color)?;
+    let (halo_color_expr, halo_color_expr_src) =
+        parse_expr_field(fields, "halo-color-expr", &maplibre_expr::Type::Color)?;
+    let (halo_width_expr, halo_width_expr_src) =
+        parse_expr_field(fields, "halo-width-expr", &maplibre_expr::Type::Number)?;
+    let (opacity_expr, opacity_expr_src) =
+        parse_expr_field(fields, "opacity-expr", &maplibre_expr::Type::Number)?;
 
-        // Placement (point / line / line-center) and its line-only knobs.
-        let placement_s = read_string_or(fields, "placement", ctx, "point")?;
-        let placement = Placement::parse(&placement_s).ok_or_else(|| FactoryError::BadField {
-            field: "placement".into(),
-            msg: format!("unknown placement `{placement_s}` (point|line|line-center)"),
-        })?;
-        let spacing_px = read_number_or(fields, "spacing-px", ctx, 250.0)? as f32;
-        let max_angle_deg = read_number_or(fields, "max-angle-deg", ctx, 45.0)? as f32;
-        let keep_upright = read_bool_or(fields, "keep-upright", ctx, true)?;
+    // Placement (point / line / line-center) and its line-only knobs.
+    let placement_s = read_string_or(fields, "placement", ctx, "point")?;
+    let placement = Placement::parse(&placement_s).ok_or_else(|| FactoryError::BadField {
+        field: "placement".into(),
+        msg: format!("unknown placement `{placement_s}` (point|line|line-center)"),
+    })?;
+    let spacing_px = read_number_or(fields, "spacing-px", ctx, 250.0)? as f32;
+    let max_angle_deg = read_number_or(fields, "max-angle-deg", ctx, 45.0)? as f32;
+    let keep_upright = read_bool_or(fields, "keep-upright", ctx, true)?;
 
-        // Layout constants. Enumerated strings are validated here so a
-        // typo fails the build instead of silently defaulting.
-        let anchor_s = read_string_or(fields, "anchor", ctx, "center")?;
-        let anchor = Anchor::parse(&anchor_s).ok_or_else(|| FactoryError::BadField {
-            field: "anchor".into(),
-            msg: format!("unknown anchor `{anchor_s}`"),
-        })?;
-        // `anchor-variants` (MapLibre `text-variable-anchor`): an ordered list
-        // of anchors tried on collision. Absent → the fixed `anchor`.
-        let anchor_variants = match fields.get("anchor-variants") {
-            Some(v) => {
-                let arr = v.as_array().ok_or_else(|| FactoryError::BadField {
-                    field: "anchor-variants".into(),
-                    msg: "expected an array of anchor names".into(),
-                })?;
-                arr.iter()
-                    .map(|a| {
-                        let s = a.as_str().ok_or_else(|| FactoryError::BadField {
-                            field: "anchor-variants".into(),
-                            msg: "anchor names must be strings".into(),
-                        })?;
-                        Anchor::parse(s).ok_or_else(|| FactoryError::BadField {
-                            field: "anchor-variants".into(),
-                            msg: format!("unknown anchor `{s}`"),
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?
-            }
-            None => Vec::new(),
-        };
-        let radial_offset_em = read_number_or(fields, "radial-offset", ctx, 0.0)? as f32;
-        let justify_s = read_string_or(fields, "justify", ctx, "auto")?;
-        let justify = Justify::parse(&justify_s).ok_or_else(|| FactoryError::BadField {
-            field: "justify".into(),
-            msg: format!("unknown justify `{justify_s}` (auto|left|center|right)"),
-        })?;
-        let transform_s = read_string_or(fields, "transform", ctx, "none")?;
-        let transform =
-            TextTransform::parse(&transform_s).ok_or_else(|| FactoryError::BadField {
-                field: "transform".into(),
-                msg: format!("unknown transform `{transform_s}` (none|uppercase|lowercase)"),
+    // Layout constants. Enumerated strings are validated here so a
+    // typo fails the build instead of silently defaulting.
+    let anchor_s = read_string_or(fields, "anchor", ctx, "center")?;
+    let anchor = Anchor::parse(&anchor_s).ok_or_else(|| FactoryError::BadField {
+        field: "anchor".into(),
+        msg: format!("unknown anchor `{anchor_s}`"),
+    })?;
+    // `anchor-variants` (MapLibre `text-variable-anchor`): an ordered list
+    // of anchors tried on collision. Absent → the fixed `anchor`.
+    let anchor_variants = match fields.get("anchor-variants") {
+        Some(v) => {
+            let arr = v.as_array().ok_or_else(|| FactoryError::BadField {
+                field: "anchor-variants".into(),
+                msg: "expected an array of anchor names".into(),
             })?;
-        let offset_em = read_xy(fields, "offset-em", ctx, [0.0, 0.0])?;
-        let max_width_em = read_number_or(fields, "max-width-em", ctx, 10.0)? as f32;
-        let line_height = read_number_or(fields, "line-height", ctx, 1.2)? as f32;
-        let letter_spacing_em = read_number_or(fields, "letter-spacing-em", ctx, 0.0)? as f32;
-        let max_extent_px = read_number_or(fields, "max-extent-px", ctx, 128.0)? as f32;
-        // Route outline glyphs through the SDF path for maplibre-gl-js
-        // parity (it renders every glyph from an SDF). Default on.
-        let outline_sdf = read_bool_or(fields, "outline-sdf", ctx, true)?;
+            arr.iter()
+                .map(|a| {
+                    let s = a.as_str().ok_or_else(|| FactoryError::BadField {
+                        field: "anchor-variants".into(),
+                        msg: "anchor names must be strings".into(),
+                    })?;
+                    Anchor::parse(s).ok_or_else(|| FactoryError::BadField {
+                        field: "anchor-variants".into(),
+                        msg: format!("unknown anchor `{s}`"),
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        }
+        None => Vec::new(),
+    };
+    let radial_offset_em = read_number_or(fields, "radial-offset", ctx, 0.0)? as f32;
+    let justify_s = read_string_or(fields, "justify", ctx, "auto")?;
+    let justify = Justify::parse(&justify_s).ok_or_else(|| FactoryError::BadField {
+        field: "justify".into(),
+        msg: format!("unknown justify `{justify_s}` (auto|left|center|right)"),
+    })?;
+    let transform_s = read_string_or(fields, "transform", ctx, "none")?;
+    let transform = TextTransform::parse(&transform_s).ok_or_else(|| FactoryError::BadField {
+        field: "transform".into(),
+        msg: format!("unknown transform `{transform_s}` (none|uppercase|lowercase)"),
+    })?;
+    let offset_em = read_xy(fields, "offset-em", ctx, [0.0, 0.0])?;
+    let max_width_em = read_number_or(fields, "max-width-em", ctx, 10.0)? as f32;
+    let line_height = read_number_or(fields, "line-height", ctx, 1.2)? as f32;
+    let letter_spacing_em = read_number_or(fields, "letter-spacing-em", ctx, 0.0)? as f32;
+    let max_extent_px = read_number_or(fields, "max-extent-px", ctx, 128.0)? as f32;
+    // Route outline glyphs through the SDF path for maplibre-gl-js
+    // parity (it renders every glyph from an SDF). Default on.
+    let outline_sdf = read_bool_or(fields, "outline-sdf", ctx, true)?;
 
-        // Collision. Default on (MapLibre's default); `collide: false`
-        // restores the draw-everything behaviour.
-        let collide = read_bool_or(fields, "collide", ctx, true)?;
-        let allow_overlap = read_bool_or(fields, "allow-overlap", ctx, false)?;
-        let ignore_placement = read_bool_or(fields, "ignore-placement", ctx, false)?;
-        let padding_px = read_number_or(fields, "padding-px", ctx, 2.0)? as f32;
-        let (padding_expr, padding_expr_src) =
-            parse_expr_field(fields, "padding-expr", &maplibre_expr::Type::Number)?;
-        let (sort_key_expr, sort_key_expr_src) =
-            parse_expr_field(fields, "sort-key-expr", &maplibre_expr::Type::Number)?;
-        // Neighbour candidate gathering: the upstream `<source>.<layer>`
-        // (used only to name the neighbour bindings in `asset_inputs`) plus
-        // the upstream feature filter, so neighbours are filtered exactly
-        // like the tile's own features. All optional — absent → the node
-        // collides against its own tile's features only.
-        let source = read_optional_string(fields, "source")?;
-        let layer = read_optional_string(fields, "layer")?;
-        let neighbor_base = match (source, layer) {
-            (Some(s), Some(l)) => Some(format!("{s}.{l}")),
-            _ => None,
-        };
-        let (filter_expr, filter_expr_src) = match fields.get("filter-expr") {
-            Some(v) => {
-                let expr = maplibre_expr::parse(v).map_err(|e| FactoryError::BadField {
-                    field: "filter-expr".into(),
-                    msg: e.to_string(),
-                })?;
-                (Some(expr), Some(v.to_string()))
-            }
-            None => (None, None),
-        };
-        let min_zoom_field = read_optional_string(fields, "min-zoom-field")?;
-        let min_zoom = read_optional_zoom(fields, "min-zoom")?;
-        let max_zoom = read_optional_zoom(fields, "max-zoom")?;
+    // Collision. Default on (MapLibre's default); `collide: false`
+    // restores the draw-everything behaviour.
+    let collide = read_bool_or(fields, "collide", ctx, true)?;
+    let allow_overlap = read_bool_or(fields, "allow-overlap", ctx, false)?;
+    let ignore_placement = read_bool_or(fields, "ignore-placement", ctx, false)?;
+    let padding_px = read_number_or(fields, "padding-px", ctx, 2.0)? as f32;
+    let (padding_expr, padding_expr_src) =
+        parse_expr_field(fields, "padding-expr", &maplibre_expr::Type::Number)?;
+    let (sort_key_expr, sort_key_expr_src) =
+        parse_expr_field(fields, "sort-key-expr", &maplibre_expr::Type::Number)?;
+    // Neighbour candidate gathering: the upstream `<source>.<layer>`
+    // (used only to name the neighbour bindings in `asset_inputs`) plus
+    // the upstream feature filter, so neighbours are filtered exactly
+    // like the tile's own features. All optional — absent → the node
+    // collides against its own tile's features only.
+    let source = read_optional_string(fields, "source")?;
+    let layer = read_optional_string(fields, "layer")?;
+    let neighbor_base = match (source, layer) {
+        (Some(s), Some(l)) => Some(format!("{s}.{l}")),
+        _ => None,
+    };
+    let (filter_expr, filter_expr_src) = match fields.get("filter-expr") {
+        Some(v) => {
+            let expr = maplibre_expr::parse(v).map_err(|e| FactoryError::BadField {
+                field: "filter-expr".into(),
+                msg: e.to_string(),
+            })?;
+            (Some(expr), Some(v.to_string()))
+        }
+        None => (None, None),
+    };
+    let min_zoom_field = read_optional_string(fields, "min-zoom-field")?;
+    let min_zoom = read_optional_zoom(fields, "min-zoom")?;
+    let max_zoom = read_optional_zoom(fields, "max-zoom")?;
 
-        let mut ports = vec![PortSpec {
-            name: "features",
-            accepts: &[PortKind::Features],
-            optional: false,
-        }];
-        ports.extend(parts.ports);
-        let mut connections = vec![Connection {
-            port: "features".into(),
-            src: features,
-        }];
-        connections.extend(parts.connections);
+    let mut ports = vec![PortSpec {
+        name: "features",
+        accepts: &[PortKind::Features],
+        optional: false,
+    }];
+    ports.extend(parts.ports);
+    let mut connections = vec![Connection {
+        port: "features".into(),
+        src: features,
+    }];
+    connections.extend(parts.connections);
 
-        Ok(BuiltNode {
-            node: Box::new(TextNode {
-                font_keys,
-                text,
-                text_expr,
-                font_expr,
-                font_expr_src,
-                font_stacks,
-                size,
-                color,
-                halo_color,
-                halo_width,
-                opacity,
-                size_expr,
-                color_expr,
-                halo_color_expr,
-                halo_width_expr,
-                opacity_expr,
-                text_expr_src,
-                size_expr_src,
-                color_expr_src,
-                halo_color_expr_src,
-                halo_width_expr_src,
-                opacity_expr_src,
-                placement,
-                spacing_px,
-                max_angle_deg,
-                keep_upright,
-                anchor,
-                anchor_variants,
-                radial_offset_em,
-                justify,
-                transform,
-                offset_em,
-                max_width_em,
-                line_height,
-                letter_spacing_em,
-                max_extent_px,
-                outline_sdf,
-                collide,
-                allow_overlap,
-                ignore_placement,
-                padding_px,
-                padding_expr,
-                padding_expr_src,
-                sort_key_expr,
-                sort_key_expr_src,
-                neighbor_base,
-                filter_expr,
-                filter_expr_src,
-                min_zoom_field,
-                min_zoom,
-                max_zoom,
-                ports,
-                param_refs: parts.param_refs,
-            }),
-            connections,
-        })
-    }
-    fn schema(&self) -> Value {
-        serde_json::json!({
+    Ok(BuiltNode {
+        node: Box::new(TextNode {
+            stage,
+            font_keys,
+            text,
+            text_expr,
+            font_expr,
+            font_expr_src,
+            font_stacks,
+            size,
+            color,
+            halo_color,
+            halo_width,
+            opacity,
+            size_expr,
+            color_expr,
+            halo_color_expr,
+            halo_width_expr,
+            opacity_expr,
+            text_expr_src,
+            size_expr_src,
+            color_expr_src,
+            halo_color_expr_src,
+            halo_width_expr_src,
+            opacity_expr_src,
+            placement,
+            spacing_px,
+            max_angle_deg,
+            keep_upright,
+            anchor,
+            anchor_variants,
+            radial_offset_em,
+            justify,
+            transform,
+            offset_em,
+            max_width_em,
+            line_height,
+            letter_spacing_em,
+            max_extent_px,
+            outline_sdf,
+            collide,
+            allow_overlap,
+            ignore_placement,
+            padding_px,
+            padding_expr,
+            padding_expr_src,
+            sort_key_expr,
+            sort_key_expr_src,
+            neighbor_base,
+            filter_expr,
+            filter_expr_src,
+            min_zoom_field,
+            min_zoom,
+            max_zoom,
+            ports,
+            param_refs: parts.param_refs,
+        }),
+        connections,
+    })
+}
+
+/// The document schema for both text ops: identical fields, different
+/// output — `text` draws a raster, `text-labels` emits candidates for a
+/// shared `label-placement` node.
+fn text_schema(stage: Stage) -> Value {
+    let mut schema = serde_json::json!({
             "description": "Text labels (MapLibre `symbol-placement`): `placement: point` (default) labels each feature point, `line` / `line-center` walk each polyline with tangent-rotated glyphs. `font` is an ordered fallback stack of `font` and/or `glyphs` source names; `text` is a literal string or a MapLibre string expression evaluated per feature group. Paint properties have optional `*-expr` siblings; layout knobs are build-time constants in em. Collision is on by default and is deterministic across tiles: candidates come from this tile plus the 8 neighbour tiles (host-bound under `<source>.<layer>@dx,dy`), so borders stay seamless. Set `source`/`layer` (the upstream feature source) to enable neighbour gathering; without them collision is centre-tile-only.",
             "properties": {
                 "features": schema_frag::node_ref(),
@@ -2353,9 +2292,17 @@ impl NodeFactory for TextFactory {
                 "max-zoom": { "type": "integer", "minimum": 0, "maximum": 24,
                               "description": "Style layer zoom gate: draw nothing above this zoom (mirrors the `features` node)." },
             },
-            "required": ["features", "font", "text"],
-        })
+        "required": ["features", "font", "text"],
+    });
+    if stage == Stage::Labels {
+        schema["description"] = Value::String(format!(
+            "{} Emits placement candidates instead of pixels: wire this node into a \
+             `label-placement` node and draw the result with `text-draw`.",
+            schema["description"].as_str().unwrap_or_default(),
+        ));
     }
+    schema
 }
 
 ezu_graph::submit_node!(TextFactory);
+ezu_graph::submit_node!(TextLabelsFactory);

@@ -20,7 +20,7 @@ pub(crate) use heatmap::convert_heatmap;
 pub(crate) use hillshade::convert_hillshade;
 pub(crate) use line::convert_line;
 pub(crate) use raster::convert_raster;
-pub(crate) use symbol::convert_symbol;
+pub(crate) use symbol::{convert_symbol, emit_label_placement};
 
 pub(crate) fn paint_of(layer: &Map<String, Value>) -> &Map<String, Value> {
     static EMPTY: std::sync::OnceLock<Map<String, Value>> = std::sync::OnceLock::new();

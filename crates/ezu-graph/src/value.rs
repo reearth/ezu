@@ -12,6 +12,8 @@ pub enum PortValue {
     Raster(Arc<RasterBuf>),
     Sprite(Arc<RasterBuf>),
     Brush(OpaqueValue),
+    /// Label placement candidates or decisions (see [`PortKind::Labels`]).
+    Labels(OpaqueValue),
     Scalar(ScalarValue),
     ScalarField(Arc<ScalarField>),
 }
@@ -23,6 +25,7 @@ impl PortValue {
             PortValue::Raster(_) => PortKind::Raster,
             PortValue::Sprite(_) => PortKind::Sprite,
             PortValue::Brush(_) => PortKind::Brush,
+            PortValue::Labels(_) => PortKind::Labels,
             PortValue::Scalar(_) => PortKind::Scalar,
             PortValue::ScalarField(_) => PortKind::ScalarField,
         }

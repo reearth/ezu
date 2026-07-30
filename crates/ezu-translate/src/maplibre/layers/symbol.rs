@@ -1,8 +1,12 @@
 //! `symbol` layer → icon (`layout.icon-image` → sprite `stamp`) and/or
-//! text (`layout.text-field` → the `text` node). Icons are placed at
-//! the layer's point features; text follows `symbol-placement` (points,
-//! or along polylines for `line` / `line-center`). An icon+text layer
-//! emits both, text blended over the icon.
+//! text (`layout.text-field` → `text-labels` + `text-draw`). Icons are
+//! placed at the layer's point features; text follows `symbol-placement`
+//! (points, or along polylines for `line` / `line-center`). An icon+text
+//! layer emits both, text blended over the icon.
+//!
+//! Every converted label layer feeds the recipe's one `label-placement`
+//! node, so labels of different layers collide with each other as they do
+//! in MapLibre; icons are still placed without collision.
 
 use std::collections::HashMap;
 
@@ -31,6 +35,7 @@ pub(crate) fn convert_symbol(
     layer: &Map<String, Value>,
     nodes: &mut Map<String, Value>,
     outputs: &mut Vec<String>,
+    label_layers: &mut Vec<String>,
     zoom_range: ZoomRange,
     sources: &Sources,
     source_defs: &mut Map<String, Value>,
@@ -97,6 +102,7 @@ pub(crate) fn convert_symbol(
             zoom_range,
             nodes,
             outputs,
+            label_layers,
             source_defs,
             fonts,
             glyphs_url,
@@ -205,8 +211,9 @@ fn convert_icon(
     outputs.push(stamp_id);
 }
 
-/// The text half: `layout.text-field` (+ text paint/layout properties)
-/// → the `text` node.
+/// The text half: `layout.text-field` (+ text paint/layout properties) →
+/// a `text-labels` node (this layer's placement candidates, registered in
+/// `label_layers`) plus the `text-draw` node that paints its winners.
 #[allow(clippy::too_many_arguments)]
 fn convert_text(
     id: &str,
@@ -215,6 +222,7 @@ fn convert_text(
     zoom_range: ZoomRange,
     nodes: &mut Map<String, Value>,
     outputs: &mut Vec<String>,
+    label_layers: &mut Vec<String>,
     source_defs: &mut Map<String, Value>,
     fonts: &HashMap<String, String>,
     glyphs_url: Option<&str>,
@@ -528,9 +536,50 @@ fn convert_text(
         ));
     }
 
+    // Placement is shared by every label layer of the style, the way
+    // maplibre-gl-js runs one collision index for all symbol layers: this
+    // layer contributes its candidates (`text-labels`), the recipe-wide
+    // `label-placement` node decides them all, and `text-draw` paints the
+    // winners. `label_layers` records the contribution in style order; the
+    // caller emits the placement node once every layer is known.
+    let labels_id = format!("{id}__labels");
+    spec["op"] = Value::from("text-labels");
+    nodes.insert(labels_id.clone(), spec);
+    label_layers.push(labels_id.clone());
+
     let text_id = format!("{id}__text");
-    nodes.insert(text_id.clone(), spec);
+    nodes.insert(
+        text_id.clone(),
+        serde_json::json!({
+            "op": "text-draw",
+            "labels": format!("@{labels_id}"),
+            "placement": format!("@{LABEL_PLACEMENT_ID}"),
+        }),
+    );
     outputs.push(text_id);
+}
+
+/// Node id of the recipe's shared placement node — referenced by every
+/// `text-draw` node and emitted once, after the layer walk.
+pub(crate) const LABEL_PLACEMENT_ID: &str = "__label_placement";
+
+/// Emit the recipe's shared `label-placement` node over `label_layers` (in
+/// style order, bottom first — the node gives the topmost layer priority).
+/// Nothing to do for a style with no label layer.
+pub(crate) fn emit_label_placement(nodes: &mut Map<String, Value>, label_layers: &[String]) {
+    if label_layers.is_empty() {
+        return;
+    }
+    nodes.insert(
+        LABEL_PLACEMENT_ID.to_string(),
+        serde_json::json!({
+            "op": "label-placement",
+            "labels": label_layers
+                .iter()
+                .map(|id| Value::from(format!("@{id}")))
+                .collect::<Vec<_>>(),
+        }),
+    );
 }
 
 /// Reuse (by URL) or declare a `font` source for one fontstack entry.

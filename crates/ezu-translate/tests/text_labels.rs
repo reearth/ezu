@@ -57,7 +57,7 @@ fn text_only_symbol_layer_converts_to_a_text_node() {
     let nodes = recipe["nodes"].as_object().unwrap();
     let text = nodes
         .values()
-        .find(|n| n["op"] == "text")
+        .find(|n| n["op"] == "text-labels")
         .expect("a text node");
     assert_eq!(text["font"], serde_json::json!(["noto-sans-regular"]));
     assert_eq!(text["text"], serde_json::json!(["get", "name"]));
@@ -139,12 +139,12 @@ fn token_text_field_rewrites_to_an_expression() {
     let nodes = recipe["nodes"].as_object().unwrap();
     // A bare `{name}` becomes a single to-string/get.
     assert_eq!(
-        nodes["bare__text"]["text"],
+        nodes["bare__labels"]["text"],
         serde_json::json!(["to-string", ["get", "name"]])
     );
     // Mixed literal + tokens become a concat.
     assert_eq!(
-        nodes["mixed__text"]["text"],
+        nodes["mixed__labels"]["text"],
         serde_json::json!([
             "concat",
             ["to-string", ["get", "name"]],
@@ -154,7 +154,7 @@ fn token_text_field_rewrites_to_an_expression() {
         ])
     );
     // No tokens: the constant carries through.
-    assert_eq!(nodes["plain__text"]["text"], "Ocean");
+    assert_eq!(nodes["plain__labels"]["text"], "Ocean");
 }
 
 #[test]
@@ -176,7 +176,7 @@ fn zoom_curve_text_size_routes_to_size_expr() {
     let opts = opts_with_fonts(&[("F", "https://fonts.example/F.ttf")]);
     let (recipe, _) = convert(&style, &opts).unwrap();
 
-    let text = &recipe["nodes"]["places__text"];
+    let text = &recipe["nodes"]["places__labels"];
     assert_eq!(
         text["size-expr"],
         serde_json::json!(["interpolate", ["linear"], ["zoom"], 8, 10, 16, 22])
@@ -200,7 +200,7 @@ fn unmapped_font_warns_and_skips_text() {
 
     let nodes = recipe["nodes"].as_object().unwrap();
     assert!(
-        !nodes.values().any(|n| n["op"] == "text"),
+        !nodes.values().any(|n| n["op"] == "text-labels"),
         "no text node without a font mapping"
     );
     assert!(
@@ -254,7 +254,7 @@ fn unmapped_font_with_glyphs_endpoint_emits_a_glyphs_source() {
 
     // Both text nodes reference it; no skipped-text warning.
     let nodes = recipe["nodes"].as_object().unwrap();
-    for layer in ["places__text", "pois__text"] {
+    for layer in ["places__labels", "pois__labels"] {
         assert_eq!(nodes[layer]["font"], serde_json::json!([id]));
     }
     assert!(
@@ -291,7 +291,7 @@ fn explicit_font_mapping_wins_over_the_glyphs_endpoint() {
         "a mapped stack must not fall back to the glyphs endpoint"
     );
     assert_eq!(
-        recipe["nodes"]["places__text"]["font"],
+        recipe["nodes"]["places__labels"]["font"],
         serde_json::json!(["noto-sans-regular"])
     );
 }
@@ -320,9 +320,9 @@ fn icon_and_text_layer_emits_both_nodes() {
 
     let nodes = recipe["nodes"].as_object().unwrap();
     let stamp = &nodes["pois__stamp"];
-    let text = &nodes["pois__text"];
+    let text = &nodes["pois__labels"];
     assert_eq!(stamp["op"], "stamp");
-    assert_eq!(text["op"], "text");
+    assert_eq!(text["op"], "text-labels");
     // Both halves share the layer's features node.
     assert_eq!(stamp["features"], text["features"]);
     // Painter's algorithm: the composite stacks the icon below the text.
@@ -379,7 +379,7 @@ fn collision_properties_route_to_the_text_node() {
     let opts = opts_with_fonts(&[("F", "https://fonts.example/F.ttf")]);
     let (recipe, _) = convert(&style, &opts).unwrap();
 
-    let text = &recipe["nodes"]["places__text"];
+    let text = &recipe["nodes"]["places__labels"];
     // Neighbour-gathering wiring: origin source/layer + the layer filter,
     // reproduced so neighbour candidates filter identically.
     assert_eq!(text["source"], "s");
@@ -420,7 +420,7 @@ fn expression_text_padding_routes_to_padding_expr() {
     let opts = opts_with_fonts(&[("F", "https://fonts.example/F.ttf")]);
     let (recipe, report) = convert(&style, &opts).unwrap();
 
-    let text = &recipe["nodes"]["places__text"];
+    let text = &recipe["nodes"]["places__labels"];
     assert_eq!(
         text["padding-expr"],
         serde_json::json!(["interpolate", ["linear"], ["zoom"], 6, 2, 16, 12])
@@ -462,7 +462,7 @@ fn text_variable_anchor_routes_to_anchor_variants() {
     let opts = opts_with_fonts(&[("F", "https://fonts.example/F.ttf")]);
     let (recipe, report) = convert(&style, &opts).unwrap();
 
-    let text = &recipe["nodes"]["pois__text"];
+    let text = &recipe["nodes"]["pois__labels"];
     assert_eq!(
         text["anchor-variants"],
         serde_json::json!(["top", "bottom", "left", "right"])
@@ -502,7 +502,7 @@ fn expression_text_variable_anchor_warns_and_falls_back() {
     let opts = opts_with_fonts(&[("F", "https://fonts.example/F.ttf")]);
     let (recipe, report) = convert(&style, &opts).unwrap();
 
-    let text = &recipe["nodes"]["pois__text"];
+    let text = &recipe["nodes"]["pois__labels"];
     assert!(
         text.get("anchor-variants").is_none(),
         "an expression variable-anchor should not emit anchor-variants: {text}"
@@ -538,11 +538,11 @@ fn text_overlap_enum_maps_and_cooperative_warns() {
 
     let nodes = recipe["nodes"].as_object().unwrap();
     // `always` → allow-overlap true.
-    assert_eq!(nodes["always__text"]["allow-overlap"], true);
+    assert_eq!(nodes["always__labels"]["allow-overlap"], true);
     // `never` → collide (no allow-overlap field emitted).
-    assert!(nodes["never__text"].get("allow-overlap").is_none());
+    assert!(nodes["never__labels"].get("allow-overlap").is_none());
     // `cooperative` → treated as never (collide) with a warning.
-    assert!(nodes["coop__text"].get("allow-overlap").is_none());
+    assert!(nodes["coop__labels"].get("allow-overlap").is_none());
     assert!(
         report
             .warnings
@@ -590,13 +590,13 @@ fn line_placement_routes_to_the_text_node() {
 
     let nodes = recipe["nodes"].as_object().unwrap();
     // Full knob routing.
-    let streets = &nodes["streets__text"];
+    let streets = &nodes["streets__labels"];
     assert_eq!(streets["placement"], "line");
     assert_eq!(streets["spacing-px"], 400.0);
     assert_eq!(streets["max-angle-deg"], 30.0);
     assert_eq!(streets["keep-upright"], false);
     // Defaults stay off the node (the `text` node's own defaults apply).
-    let rivers = &nodes["rivers__text"];
+    let rivers = &nodes["rivers__labels"];
     assert_eq!(rivers["placement"], "line-center");
     assert!(rivers.get("spacing-px").is_none());
     assert!(rivers.get("keep-upright").is_none());
@@ -607,7 +607,7 @@ fn line_placement_routes_to_the_text_node() {
         "unexpected warnings: {:?}",
         report.warnings
     );
-    assert_eq!(nodes["viewport__text"]["placement"], "line");
+    assert_eq!(nodes["viewport__labels"]["placement"], "line");
     assert!(
         report
             .warnings
@@ -676,7 +676,7 @@ fn legacy_stops_text_field_expands_tokens_into_a_step_expression() {
 
     let nodes = recipe["nodes"].as_object().unwrap();
     assert_eq!(
-        nodes["countries__text"]["text"],
+        nodes["countries__labels"]["text"],
         serde_json::json!([
             "step",
             ["zoom"],
@@ -686,7 +686,7 @@ fn legacy_stops_text_field_expands_tokens_into_a_step_expression() {
         ])
     );
     // Token-free legacy stops keep the raw passthrough.
-    assert!(nodes["plainstops__text"]["text"].is_object());
+    assert!(nodes["plainstops__labels"]["text"].is_object());
 }
 
 #[test]
@@ -722,7 +722,7 @@ fn data_driven_text_font_emits_font_expr_and_registry() {
     let nodes = recipe["nodes"].as_object().unwrap();
     let text = nodes
         .values()
-        .find(|n| n["op"] == "text")
+        .find(|n| n["op"] == "text-labels")
         .expect("text node");
 
     // `font` is the first enumerated stack (document order → the Devanagari
@@ -790,7 +790,7 @@ fn data_driven_text_font_without_literals_falls_back_to_default() {
     let nodes = recipe["nodes"].as_object().unwrap();
     let text = nodes
         .values()
-        .find(|n| n["op"] == "text")
+        .find(|n| n["op"] == "text-labels")
         .expect("text node");
     assert!(
         text.get("font-expr").is_none(),
@@ -834,7 +834,7 @@ fn all_string_array_expression_text_font_is_treated_as_dynamic() {
     let nodes = recipe["nodes"].as_object().unwrap();
     let text = nodes
         .values()
-        .find(|n| n["op"] == "text")
+        .find(|n| n["op"] == "text-labels")
         .expect("text node");
     assert!(
         text.get("font-expr").is_none(),
@@ -889,7 +889,7 @@ fn format_text_field_passes_through_and_registers_section_fonts() {
     let nodes = recipe["nodes"].as_object().unwrap();
     let text = nodes
         .values()
-        .find(|n| n["op"] == "text")
+        .find(|n| n["op"] == "text-labels")
         .expect("text node");
 
     // The `format` expression passes through unchanged (no flatten to concat).
@@ -917,4 +917,75 @@ fn format_text_field_passes_through_and_registers_section_fonts() {
 
     let doc_text = serde_json::to_string(&recipe).unwrap();
     ezu_style::Document::from_json(&doc_text).expect("recipe parses as ezu Document");
+}
+
+#[test]
+fn every_label_layer_feeds_one_shared_placement_in_style_order() {
+    // MapLibre collides all symbol layers against one index, so each label
+    // layer's candidates go into a single `label-placement` node, listed in
+    // style order (bottom first), and each layer draws its own winners.
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "shared-placement",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "roads", "type": "symbol", "source": "s", "source-layer": "road",
+          "layout": { "text-field": "{name}", "text-font": ["F"], "symbol-placement": "line" } },
+        { "id": "pois", "type": "symbol", "source": "s", "source-layer": "poi",
+          "layout": { "text-field": "{name}", "text-font": ["F"] } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let opts = opts_with_fonts(&[("F", "https://fonts.example/F.ttf")]);
+    let (recipe, _) = convert(&style, &opts).unwrap();
+    let nodes = recipe["nodes"].as_object().unwrap();
+
+    // One placement node, fed bottom-up: roads (drawn under) first, pois last,
+    // so the POI layer places first and wins.
+    assert_eq!(
+        nodes["__label_placement"]["labels"],
+        serde_json::json!(["@roads__labels", "@pois__labels"])
+    );
+    assert_eq!(
+        nodes
+            .values()
+            .filter(|n| n["op"] == "label-placement")
+            .count(),
+        1
+    );
+    // Each layer draws its own labels through the shared decisions.
+    for layer in ["roads", "pois"] {
+        let draw = &nodes[&format!("{layer}__text")];
+        assert_eq!(draw["op"], "text-draw");
+        assert_eq!(draw["labels"], format!("@{layer}__labels"));
+        assert_eq!(draw["placement"], "@__label_placement");
+    }
+    // Paint order is untouched: the draw nodes are what the stack composites.
+    let stack = nodes
+        .values()
+        .find(|n| n["op"] == "stack")
+        .expect("a stack node");
+    assert_eq!(
+        stack["layers"],
+        serde_json::json!(["@roads__text", "@pois__text"])
+    );
+
+    let doc_text = serde_json::to_string(&recipe).unwrap();
+    ezu_style::Document::from_json(&doc_text).expect("recipe parses as ezu Document");
+}
+
+#[test]
+fn a_style_without_label_layers_emits_no_placement_node() {
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "no-labels",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "water", "type": "fill", "source": "s", "source-layer": "water",
+          "paint": { "fill-color": "#88f" } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let (recipe, _) = convert(&style, &ConvertOptions::default()).unwrap();
+    assert!(recipe["nodes"].get("__label_placement").is_none());
 }
