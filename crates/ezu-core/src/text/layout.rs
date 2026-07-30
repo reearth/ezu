@@ -499,15 +499,20 @@ struct BreakCandidate {
 /// line ends at (exclusive), always ending with `chars.len()`.
 fn determine_line_breaks(shaped: &ShapedText, max_width_em: f32) -> Vec<usize> {
     let end = shaped.chars.len();
-    if max_width_em <= 0.0 {
-        return vec![end];
-    }
     // Target width: the total advance spread over the ideal line count.
     // Whitespace counts here but not in the per-line accumulation below,
-    // mirroring the reference (spaces at wraps are trimmed away).
+    // mirroring the reference (spaces at wraps are trimmed away). A
+    // non-positive width means "don't wrap" — MapLibre's unbounded
+    // `maxWidth`, which line placement passes — so the target is the whole
+    // run and no line is ragged. The search still runs: an explicit `\n`
+    // carries a penalty far past any raggedness cost, so a mandatory break
+    // splits the label either way.
     let total: f32 = shaped.glyphs.iter().map(|g| g.x_advance).sum();
-    let line_count = (total / max_width_em).ceil().max(1.0);
-    let target = total / line_count;
+    let target = if max_width_em > 0.0 {
+        total / (total / max_width_em).ceil().max(1.0)
+    } else {
+        total
+    };
 
     // MapLibre only penalizes ideographic breaks when the text carries
     // explicit server-supplied breaks (zero-width spaces).

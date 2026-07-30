@@ -207,6 +207,29 @@ fn shaping_advances_match_the_pbf() {
 }
 
 #[test]
+fn an_unwrapped_block_still_breaks_at_a_newline() {
+    // Line placement lays a label out un-wrapped, but an explicit `\n` is a
+    // mandatory break there too — a road name and its translation stack along
+    // the path rather than running together on one line.
+    let fonts = [StackEntry::Sdf(test_stack())];
+    let fonts = FaceEntry::prepare(&fonts);
+    let params = no_wrap();
+    let one = layout("AB", &fonts, &params);
+    let two = layout("AB\nAB", &fonts, &params);
+    assert_eq!(two.glyphs.len(), 4);
+    assert!(
+        (two.bbox.height() - 2.0 * params.line_height_em).abs() < 1e-5,
+        "the newline should open a second line slot: {:?}",
+        two.bbox
+    );
+    assert!(
+        (two.bbox.width() - one.bbox.width()).abs() < 1e-5,
+        "both lines are the same run, so the block stays one line wide: {:?}",
+        two.bbox
+    );
+}
+
+#[test]
 fn sdf_metrics_use_the_fixed_line_slot() {
     // MapLibre metrics: a block is `line-height × lines` tall, however
     // tall the glyphs actually are.
