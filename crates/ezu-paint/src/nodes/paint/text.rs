@@ -58,7 +58,7 @@ use crate::nodes::common::{
 };
 use crate::render::{collect_groups, SharedLayer};
 use ezu_core::text::{
-    collide::{self, Aabb, LabelCandidate},
+    collide::{self, Aabb, LabelCandidate, PlaceRank},
     generate_anchors, get_or_build_layout, layout_sections, place_glyphs, Anchor, AnchorParams,
     FaceEntry, Font, GlyphPlacement, Justify, LayoutParams, LinePlacement, SdfFontStack,
     SectionPaint, SectionSpec, StackEntry, TextBlock, TextPaint, TextTransform, VerticalAlign,
@@ -435,6 +435,9 @@ struct GroupPrep<'g> {
     group: &'g FeatureGroup,
     dx: i64,
     dy: i64,
+    /// The group's position in its own tile's filtered layer — MapLibre's
+    /// within-layer placement order.
+    feature: u32,
     sections: Vec<LabelSection>,
     /// The sections concatenated, as they lay out — the collision dedup text.
     /// An icon-only symbol carries its icon name here instead, so two
@@ -922,6 +925,7 @@ impl TextNode {
     fn prep_group<'g>(
         &self,
         group: &'g FeatureGroup,
+        feature: u32,
         dx: i64,
         dy: i64,
         registry: &FontRegistry,
@@ -977,6 +981,7 @@ impl TextNode {
             group,
             dx,
             dy,
+            feature,
             sections,
             text,
             icon,
@@ -1168,12 +1173,13 @@ impl TextNode {
         // label reach for the neighbour band and the per-own-label warnings.
         let mut preps: Vec<GroupPrep> = Vec::new();
         let mut reach_max = 0.0f32;
-        for group in &feats.groups {
+        for (fi, group) in feats.groups.iter().enumerate() {
             if group.lines.is_empty() {
                 continue;
             }
             if let Some(prep) = self.prep_group(
                 group,
+                fi as u32,
                 0,
                 0,
                 registry,
@@ -1193,12 +1199,13 @@ impl TextNode {
             }
         }
         for (groups, dx, dy) in &nbr_groups {
-            for group in groups {
+            for (fi, group) in groups.iter().enumerate() {
                 if group.lines.is_empty() {
                     continue;
                 }
                 if let Some(prep) = self.prep_group(
                     group,
+                    fi as u32,
                     *dx,
                     *dy,
                     registry,
@@ -1388,6 +1395,9 @@ impl TextNode {
                 angle_window: ANGLE_WINDOW_EM * size,
             };
 
+            // MapLibre's within-feature symbol order: the anchors of each of
+            // the feature's lines, in the order they were generated.
+            let mut symbol = 0u32;
             for line in &group.lines {
                 if line.len() < 2 {
                     continue;
@@ -1429,6 +1439,11 @@ impl TextNode {
                     let world_ay = ty * extent_i + (anchor.y / sy).round() as i64;
                     cands.push(LabelCandidate {
                         sort_key,
+                        rank: PlaceRank {
+                            tile: (tx + dx, ty + dy),
+                            feature: prep.feature,
+                            symbol,
+                        },
                         world_ax,
                         world_ay,
                         text: text.clone(),
@@ -1450,6 +1465,7 @@ impl TextNode {
                             angle: g.angle,
                         })
                         .collect();
+                    symbol += 1;
                     draws.push(LabelDraw::Line {
                         block: block.clone(),
                         placements,
@@ -1547,12 +1563,13 @@ impl TextNode {
         // label reach for the neighbour band and the per-own-label warnings.
         let mut preps: Vec<GroupPrep> = Vec::new();
         let mut reach_max = 0.0f32;
-        for group in &feats.groups {
+        for (fi, group) in feats.groups.iter().enumerate() {
             if group.points.is_empty() {
                 continue;
             }
             if let Some(prep) = self.prep_group(
                 group,
+                fi as u32,
                 0,
                 0,
                 registry,
@@ -1572,12 +1589,13 @@ impl TextNode {
             }
         }
         for (groups, dx, dy) in &nbr_groups {
-            for group in groups {
+            for (fi, group) in groups.iter().enumerate() {
                 if group.points.is_empty() {
                     continue;
                 }
                 if let Some(prep) = self.prep_group(
                     group,
+                    fi as u32,
                     *dx,
                     *dy,
                     registry,
@@ -1849,7 +1867,7 @@ impl TextNode {
                 }
                 .inflate(padding)
             };
-            for &(x, y) in &group.points {
+            for (pi, &(x, y)) in group.points.iter().enumerate() {
                 let world_ax = (tx + dx) * extent_i + x as i64;
                 let world_ay = (ty + dy) * extent_i + y as i64;
                 // Local world-pixel frame (current tile origin subtracted):
@@ -1877,6 +1895,11 @@ impl TextNode {
                 );
                 cands.push(LabelCandidate {
                     sort_key,
+                    rank: PlaceRank {
+                        tile: (tx + dx, ty + dy),
+                        feature: prep.feature,
+                        symbol: pi as u32,
+                    },
                     world_ax,
                     world_ay,
                     text: text.clone(),

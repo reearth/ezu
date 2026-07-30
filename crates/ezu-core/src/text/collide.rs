@@ -16,14 +16,17 @@
 //!    neighbours). The key is `(layer, text, quantized world anchor)`;
 //!    one candidate survives per key. Layers dedup separately: two
 //!    layers labelling the same feature are two labels in MapLibre.
-//! 3. **Total order** — `(layer ↑, sort-key ↑, quantized anchor y,
-//!    quantized anchor x, text)`. `layer` is the cross-layer priority
-//!    rank: MapLibre walks the style's symbol layers **top-down**, so a
-//!    layer drawn above another places first and can knock the lower
-//!    layer's labels out (verified against maplibre-gl-js). Its own
-//!    `symbol-sort-key` never crosses a layer boundary — layer rank
-//!    dominates. No tile-local quantity enters, so the order is
-//!    identical on every tile.
+//! 3. **Total order** — `(layer ↑, sort-key ↑, place rank ↑, quantized
+//!    anchor y, quantized anchor x, text)`. `layer` is the cross-layer
+//!    priority rank: MapLibre walks the style's symbol layers
+//!    **top-down**, so a layer drawn above another places first and can
+//!    knock the lower layer's labels out (verified against
+//!    maplibre-gl-js). Its own `symbol-sort-key` never crosses a layer
+//!    boundary — layer rank dominates. Under both comes the
+//!    [`PlaceRank`]: within a layer maplibre-gl-js places a bucket's
+//!    symbols in tile feature order, which decides which of two equally
+//!    ranked labels wins their overlap. No tile-local quantity enters, so
+//!    the order is identical on every tile.
 //! 4. **Greedy grid insertion** — each candidate carries one or more
 //!    *variants*: alternative box sets tried in order (a
 //!    `text-variable-anchor` label offers one single-box variant per
@@ -140,6 +143,28 @@ impl Grid {
     }
 }
 
+/// Where a candidate sits in MapLibre's within-layer placement order.
+/// maplibre-gl-js walks a bucket's symbols in **tile feature order** (after
+/// the `symbol-sort-key` sort), and a feature's own symbols in the order
+/// they were generated — its points, or its anchors along a line. Two
+/// labels of equal sort key resolve their overlap by that order alone, so
+/// reproducing it is what makes ezu pick the same winners.
+///
+/// `tile` carries the source tile index, lifting the per-tile order to a
+/// total order over the whole 3×3 window: any two candidates rank the same
+/// way in every tile that sees them both, so seams stay seamless. Which
+/// tile leads is arbitrary (the reference orders tiles by distance to the
+/// viewport centre, which a per-tile renderer cannot know).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PlaceRank {
+    /// Source tile index (x, y) at the render zoom.
+    pub tile: (i64, i64),
+    /// The feature's position in its tile layer, after filtering.
+    pub feature: u32,
+    /// The symbol's position within its feature.
+    pub symbol: u32,
+}
+
 /// One label placement candidate, in world-space terms only. Point and
 /// line labels share this shape: they differ only in how their
 /// [`variants`](Self::variants) are built.
@@ -148,6 +173,8 @@ pub struct LabelCandidate {
     /// MapLibre `symbol-sort-key`: lower places first, within a layer.
     /// Absent = 0.
     pub sort_key: f64,
+    /// Tie-break under `sort_key`: MapLibre's tile feature order.
+    pub rank: PlaceRank,
     /// World anchor in tile-extent units (exact integer:
     /// `tile_index × extent + local`), identical across the tiles that
     /// share this feature. For a line label it is the label-centre sample
@@ -228,8 +255,9 @@ pub struct Placement {
 ///
 /// Determinism: the result depends only on world-space quantities that
 /// are identical across every tile sharing the 3×3 window — the total
-/// order and dedup key use the layer index, quantized world anchor, text
-/// and sort key, and collision boxes are in the shared world-pixel frame.
+/// order and dedup key use the layer index, quantized world anchor, text,
+/// sort key and [`PlaceRank`], and collision boxes are in the shared
+/// world-pixel frame.
 /// No tile-local input enters. Variants are tried in declaration order
 /// (identical on every tile), so the seam stays seamless.
 ///
@@ -250,6 +278,7 @@ pub fn place_layers(layers: &[&[LabelCandidate]], cell_px: f32) -> Vec<Vec<Place
         let (ca, cb) = (at(a), at(b));
         a.0.cmp(&b.0)
             .then_with(|| ca.sort_key.total_cmp(&cb.sort_key))
+            .then_with(|| ca.rank.cmp(&cb.rank))
             .then_with(|| ca.quant().1.cmp(&cb.quant().1))
             .then_with(|| ca.quant().0.cmp(&cb.quant().0))
             .then_with(|| ca.text.cmp(&cb.text))
@@ -328,6 +357,7 @@ mod tests {
     fn cand(sort_key: f64, ax: i64, ay: i64, text: &str, x: f32, y: f32) -> LabelCandidate {
         LabelCandidate {
             sort_key,
+            rank: PlaceRank::default(),
             world_ax: ax,
             world_ay: ay,
             text: text.into(),
@@ -375,6 +405,23 @@ mod tests {
         let b = cand(0.0, 0, 0, "a", 0.0, 0.0); // anchor y lower → first
         let placed = place(&[a, b], COLLISION_CELL_PX);
         assert_eq!(idxs(&placed), vec![1]);
+    }
+
+    #[test]
+    fn feature_order_outranks_the_anchor_tie_break() {
+        // Equal sort-key, overlapping: the feature that comes first in the
+        // tile wins, even though the other sits higher on the canvas.
+        let mut a = cand(0.0, 0, 40, "z", 0.0, 10.0);
+        a.rank.feature = 0;
+        let mut b = cand(0.0, 0, 0, "a", 0.0, 0.0); // higher on canvas
+        b.rank.feature = 1;
+        assert_eq!(idxs(&place(&[a, b], COLLISION_CELL_PX)), vec![0]);
+        // The sort key still dominates the feature order.
+        let mut a = cand(5.0, 0, 40, "z", 0.0, 10.0);
+        a.rank.feature = 0;
+        let mut b = cand(1.0, 0, 0, "a", 0.0, 0.0);
+        b.rank.feature = 1;
+        assert_eq!(idxs(&place(&[a, b], COLLISION_CELL_PX)), vec![1]);
     }
 
     #[test]
@@ -473,6 +520,7 @@ mod tests {
     fn line_cand(text: &str, x: f32, y: f32, repeat_px: f32) -> LabelCandidate {
         LabelCandidate {
             sort_key: 0.0,
+            rank: PlaceRank::default(),
             world_ax: x as i64,
             world_ay: y as i64,
             text: text.into(),

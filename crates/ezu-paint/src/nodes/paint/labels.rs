@@ -145,6 +145,10 @@ pub(super) fn set_id(param_hash: u64, candidates: &[LabelCandidate]) -> u64 {
         h.update(&[0]);
         h.update(&c.style_id.to_le_bytes());
         h.update(&c.sort_key.to_bits().to_le_bytes());
+        h.update(&c.rank.tile.0.to_le_bytes());
+        h.update(&c.rank.tile.1.to_le_bytes());
+        h.update(&c.rank.feature.to_le_bytes());
+        h.update(&c.rank.symbol.to_le_bytes());
     }
     h.digest()
 }
