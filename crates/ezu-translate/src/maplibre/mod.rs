@@ -97,6 +97,8 @@ pub struct ConvertOptions {
     /// behind a `switch` that defaults to a transparent branch — so the
     /// layer is off yet present, and flipping the switch's `select` to `b`
     /// turns it on (a build-time toggle, since `switch` resolves at build).
+    /// A hidden label layer also stays out of the shared label placement, so
+    /// it knocks nothing out while off; it places its own labels once on.
     pub keep_hidden: bool,
     /// MapLibre fontstack entry name → font source, used to lower
     /// `symbol` text (`text-font`) to ezu `font` sources (CLI:
@@ -277,7 +279,9 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
                 layer,
                 &mut nodes,
                 &mut outputs,
-                &mut label_layers,
+                // A hidden layer stays out of the shared placement index:
+                // MapLibre collides only visible symbol layers.
+                (!hidden).then_some(&mut label_layers),
                 zoom_range,
                 &sources,
                 &mut source_defs,

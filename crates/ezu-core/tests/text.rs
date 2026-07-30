@@ -158,6 +158,91 @@ fn zero_max_width_disables_wrapping() {
 }
 
 #[test]
+fn an_explicit_newline_forces_a_break() {
+    // No font in the stack has a glyph for `\n`; it is still a mandatory
+    // break (maplibre-gl-js `calculatePenalty`), not a dropped char that
+    // merges the two lines into one.
+    let params = LayoutParams {
+        max_width_em: 20.0,
+        ..LayoutParams::default()
+    };
+    let spaced = layout_one("AB CD", &params);
+    let broken = layout_one("AB\nCD", &params);
+    assert_eq!(line_count(&spaced, &params), 1);
+    assert_eq!(line_count(&broken, &params), 2);
+    assert!(
+        broken.bbox.width() < spaced.bbox.width() * 0.6,
+        "the broken block should be one name wide: {} vs {}",
+        broken.bbox.width(),
+        spaced.bbox.width()
+    );
+}
+
+#[test]
+fn a_second_line_of_uncovered_chars_leaves_the_block_one_name_wide() {
+    // The bilingual `format` case with no glyphs for the local name: the
+    // break still happens, so the block's width is the first line's (the
+    // empty line keeps its slot, as in maplibre-gl-js `shapeLines`).
+    let params = LayoutParams {
+        max_width_em: 20.0,
+        ..LayoutParams::default()
+    };
+    let first = layout_one("Meguro", &params);
+    let both = layout_one("Meguro\nあいうえお", &params);
+    assert!(both.dropped_chars >= 5);
+    assert!(
+        (both.bbox.width() - first.bbox.width()).abs() < 1e-5,
+        "width should be the surviving line's: {} vs {}",
+        both.bbox.width(),
+        first.bbox.width()
+    );
+    assert_eq!(line_count(&both, &params), 2);
+}
+
+#[test]
+fn a_newline_section_breaks_between_format_sections() {
+    use ezu_core::text::{layout_sections, SectionSpec, VerticalAlign};
+    // The Protomaps bilingual text-field shape: name, a literal "\n"
+    // section, then the local name in another font.
+    let fonts = [latin(), digits()];
+    let fonts = FaceEntry::prepare(&fonts);
+    let params = LayoutParams {
+        max_width_em: 20.0,
+        ..LayoutParams::default()
+    };
+    let sec = |text, r: std::ops::Range<usize>| SectionSpec {
+        text,
+        fonts: r,
+        scale: 1.0,
+        valign: VerticalAlign::Baseline,
+    };
+    let block = layout_sections(
+        &[sec("AB", 0..1), sec("\n", 0..1), sec("12", 1..2)],
+        &fonts,
+        &params,
+    );
+    let top: Vec<f32> = block
+        .glyphs
+        .iter()
+        .filter(|g| g.section == 0)
+        .map(|g| g.y)
+        .collect();
+    let bottom: Vec<f32> = block
+        .glyphs
+        .iter()
+        .filter(|g| g.section == 2)
+        .map(|g| g.y)
+        .collect();
+    assert_eq!((top.len(), bottom.len()), (2, 2));
+    let baseline_gap = bottom[0] - top[0];
+    assert!(
+        (baseline_gap - params.line_height_em).abs() < 1e-5,
+        "the two names should sit one line apart: {baseline_gap}"
+    );
+    assert_eq!(line_count(&block, &params), 2);
+}
+
+#[test]
 fn ideographic_chars_are_break_candidates() {
     // The vendored subsets carry no CJK glyphs, so exercise the
     // break-candidate classification directly (maplibre-gl-js

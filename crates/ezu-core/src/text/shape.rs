@@ -4,7 +4,11 @@
 //! for each char, the first stack entry that covers it wins; combining
 //! marks stick to the preceding char's entry (when that entry covers
 //! them) so a base + mark pair shapes together. Chars no entry covers
-//! are dropped and counted, so callers can surface a warning.
+//! draw nothing and are counted, so callers can surface a warning; they
+//! stay in the logical char sequence, which line breaking runs over (a
+//! `\n` is a mandatory break whether or not any font has a glyph for
+//! it), and they end the run they fall in so a run's text is always
+//! contiguous in that sequence.
 //!
 //! Each run then shapes per its entry's backend: outline fonts go
 //! through rustybuzz (kerning and ligatures apply within the run); SDF
@@ -51,11 +55,15 @@ pub(crate) struct ShapeSection<'a> {
 }
 
 /// A shaped string: the glyph sequence plus the logical char sequence
-/// (post-transform, coverage-filtered) the glyphs' `char_ix` index into.
+/// (post-transform, every input char) the glyphs' `char_ix` index into.
 pub(crate) struct ShapedText {
     pub glyphs: Vec<ShapedGlyph>,
     pub chars: Vec<char>,
-    /// Chars covered by no entry in the stack, dropped before shaping.
+    /// Per char of `chars`: whether some stack entry covered it and it
+    /// therefore went through shaping. A `false` entry produced no glyph,
+    /// so a line may always break at it.
+    pub covered: Vec<bool>,
+    /// Chars covered by no entry in the stack, which shape to nothing.
     pub dropped: usize,
     /// The subset of `dropped` that hit an *unavailable* SDF glyph
     /// range (never loaded and unfetchable, or fetch failed) — distinct
@@ -84,16 +92,19 @@ pub(crate) fn shape_sections(
 ) -> ShapedText {
     let mut glyphs = Vec::new();
     let mut chars: Vec<char> = Vec::new();
+    let mut covered: Vec<bool> = Vec::new();
     let mut dropped = 0usize;
     let mut missing_range = 0usize;
     for (sec_ix, sec) in sections.iter().enumerate() {
         let base = sec.fonts.start;
         let sub = &fonts[sec.fonts.clone()];
-        let (runs, sec_chars, sec_dropped, sec_missing) = itemize(sec.text, sub);
+        let it = itemize(sec.text, sub);
         let char_base = chars.len();
-        chars.extend(sec_chars);
-        dropped += sec_dropped;
-        missing_range += sec_missing;
+        chars.extend(it.chars);
+        covered.extend(it.covered);
+        dropped += it.dropped;
+        missing_range += it.missing_range;
+        let runs = it.runs;
         for run in &runs {
             shape_run(
                 run,
@@ -110,6 +121,7 @@ pub(crate) fn shape_sections(
     ShapedText {
         glyphs,
         chars,
+        covered,
         dropped,
         missing_range,
     }
@@ -186,15 +198,30 @@ fn shape_run(
     }
 }
 
-/// Split `text` into runs by coverage. Returns the runs, the surviving
-/// logical char sequence, the dropped-char count, and how many of the
+/// One itemized section: its runs, its full logical char sequence, the
+/// per-char coverage flags, the dropped-char count, and how many of the
 /// drops were due to unavailable SDF ranges.
-fn itemize(text: &str, fonts: &[FaceEntry<'_>]) -> (Vec<Run>, Vec<char>, usize, usize) {
+struct Itemized {
+    runs: Vec<Run>,
+    chars: Vec<char>,
+    covered: Vec<bool>,
+    dropped: usize,
+    missing_range: usize,
+}
+
+/// Split `text` into runs by coverage. Uncovered chars shape to nothing but
+/// stay in `chars` (line breaking needs them) and end the open run, so every
+/// run's text is contiguous in the char sequence.
+fn itemize(text: &str, fonts: &[FaceEntry<'_>]) -> Itemized {
     let mut runs: Vec<Run> = Vec::new();
     let mut chars: Vec<char> = Vec::new();
+    let mut covered: Vec<bool> = Vec::new();
     let mut dropped = 0usize;
     let mut missing_range = 0usize;
     let mut prev_font: Option<usize> = None;
+    // Logical index just past the open run's last char; a gap means an
+    // uncovered char intervened and the run must not be extended.
+    let mut run_end = 0usize;
     for c in text.chars() {
         let first_covering = fonts.iter().position(|f| f.covers(c));
         // Combining marks stick to the preceding char's font (when it
@@ -216,10 +243,13 @@ fn itemize(text: &str, fonts: &[FaceEntry<'_>]) -> (Vec<Run>, Vec<char>, usize, 
             }) {
                 missing_range += 1;
             }
+            chars.push(c);
+            covered.push(false);
+            prev_font = None;
             continue;
         };
         match runs.last_mut() {
-            Some(run) if run.font == font => run.text.push(c),
+            Some(run) if run.font == font && run_end == chars.len() => run.text.push(c),
             _ => runs.push(Run {
                 font,
                 text: c.to_string(),
@@ -227,9 +257,17 @@ fn itemize(text: &str, fonts: &[FaceEntry<'_>]) -> (Vec<Run>, Vec<char>, usize, 
             }),
         }
         chars.push(c);
+        covered.push(true);
+        run_end = chars.len();
         prev_font = Some(font);
     }
-    (runs, chars, dropped, missing_range)
+    Itemized {
+        runs,
+        chars,
+        covered,
+        dropped,
+        missing_range,
+    }
 }
 
 /// Whether `c` is a combining mark (Unicode combining-diacritic blocks).
