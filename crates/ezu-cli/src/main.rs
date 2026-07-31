@@ -258,8 +258,18 @@ struct BBox {
     max_lat: f64,
 }
 
+/// Heap profiler, wired in only under `--features heap-profile`. Writes
+/// `dhat-heap.json` (viewable at <https://nnethercote.github.io/dh_view/>)
+/// on exit, attributing peak heap to allocation sites — the tool to reach
+/// for when a render's memory is not explained by its pixel buffers.
+#[cfg(feature = "heap-profile")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(feature = "heap-profile")]
+    let _dhat = dhat::Profiler::new_heap();
     let cli = Cli::parse();
     let filter = if cli.verbose {
         // Bump just the per-node evaluator target — info elsewhere keeps
@@ -325,7 +335,10 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
 
     let registry = default_registry();
     let graph = Arc::new(build_graph(&doc, &registry)?);
-    let cache = Arc::new(Cache::new());
+    let cache = Arc::new(Cache::with_limits(
+        ezu::graph::cache::DEFAULT_CAPACITY,
+        cache_budget_bytes(),
+    ));
     let canvas = CanvasInfo {
         tile_size: doc.tile_size,
         pad: doc.pad,
@@ -919,7 +932,14 @@ async fn render_one(
                 tile_loader.bind_raster(name, buf);
             }
             let ev = Evaluator::new(&graph, &cache, &tile_loader);
-            let out = ev.render_parallel(tile_id, canvas, &params, tile_seed(tile))?;
+            let out = if serial_eval() {
+                ev.render(tile_id, canvas, &params, tile_seed(tile))?
+            } else {
+                ev.render_parallel(tile_id, canvas, &params, tile_seed(tile))?
+            };
+            if ezu::graph::mem::enabled() {
+                report_glyph_memory(loader.as_ref());
+            }
             match out {
                 PortValue::Raster(r) => Ok(r),
                 other => Err(format!("expected Raster output, got {:?}", other.kind()).into()),
@@ -928,6 +948,61 @@ async fn render_one(
     )
     .await??;
     Ok(raster)
+}
+
+/// Print how much each glyph fontstack is holding, alongside the
+/// evaluator's own `EZU_MEM_REPORT` breakdown. Glyph ranges are fetched
+/// lazily and then kept for the process's life, so on a label-heavy tile
+/// they can outweigh every pixel buffer in the render.
+fn report_glyph_memory(loader: &BrushBankLoader) {
+    let stacks = loader.glyphs.read().expect("glyphs bank poisoned");
+    if stacks.is_empty() {
+        return;
+    }
+    let mut total = 0usize;
+    let mut lines = String::new();
+    for (key, stack) in stacks.iter() {
+        let (ranges, bytes) = stack.loaded_size();
+        total += bytes;
+        let name = key.rsplit('/').nth(1).unwrap_or(key);
+        lines.push_str(&format!(
+            "  {name:<32} {:>8.1} MB over {ranges} range(s)\n",
+            bytes as f64 / (1024.0 * 1024.0)
+        ));
+    }
+    eprintln!(
+        "glyph ranges: {:.1} MB\n{lines}",
+        total as f64 / (1024.0 * 1024.0)
+    );
+}
+
+/// Ceiling on the pixel bytes the intermediate cache retains, from
+/// `EZU_CACHE_MB` (default: the library's own).
+///
+/// The default is sized for rendering a tile at a time. Bulk runs
+/// (`ezu tiles`, `ezu bbox`) re-use world-anchored intermediates across
+/// neighbouring tiles, so on a machine with memory to spare, raising it
+/// trades RAM for a shorter run.
+fn cache_budget_bytes() -> usize {
+    std::env::var("EZU_CACHE_MB")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map(|mb| mb * 1024 * 1024)
+        .unwrap_or(ezu::graph::cache::DEFAULT_BYTE_BUDGET)
+}
+
+/// Whether to evaluate the graph on one thread, as `EZU_SERIAL=1`
+/// requests. Single-threaded evaluation is what a WebAssembly host gets,
+/// and it holds far fewer intermediates alive at once than the Rayon
+/// scheduler does, so it is the mode to reach for when reproducing a
+/// browser or Workers memory profile from the CLI.
+fn serial_eval() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("EZU_SERIAL")
+            .map(|v| v != "0" && !v.is_empty())
+            .unwrap_or(false)
+    })
 }
 
 /// Pre-resolve every entry in the style's `assets` block: each `src`

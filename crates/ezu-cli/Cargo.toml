@@ -35,3 +35,8 @@ axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "fs", "set-header"] }
 dashmap = "6"
+# `--features heap-profile` only: writes dhat-heap.json for a heap profile.
+dhat = { version = "0.3", optional = true }
+
+[features]
+heap-profile = ["dep:dhat"]
