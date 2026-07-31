@@ -227,6 +227,12 @@ pub struct StrokeStyle {
     pub join: LineJoin,
     /// On/off dash lengths in pixels (empty / `None` = solid).
     pub dash: Option<Vec<f32>>,
+    /// MapLibre `line-gap-width` in pixels. `0` (the plain case) strokes the
+    /// centreline at `width`. A positive gap turns the stroke into a casing:
+    /// two parallel strokes of `width` each, their inner edges `gap` apart,
+    /// i.e. an annulus of outer width `gap + 2 * width` around a `gap`-wide
+    /// hole.
+    pub gap: f32,
 }
 
 /// Stroke MVT polylines with a crisp, constant-width `tiny-skia` line onto a
@@ -246,12 +252,35 @@ pub fn paint_strokes(
     let ox = canvas.pad as f32;
     let oy = canvas.pad as f32;
 
+    let paths: Vec<tiny_skia::Path> = lines
+        .iter()
+        .filter(|line| line.len() >= 2)
+        .filter_map(|line| {
+            let mut pb = PathBuilder::new();
+            pb.move_to(line[0].0 as f32 * sx + ox, line[0].1 as f32 * sy + oy);
+            for &(x, y) in &line[1..] {
+                pb.line_to(x as f32 * sx + ox, y as f32 * sy + oy);
+            }
+            pb.finish()
+        })
+        .collect();
+    if paths.is_empty() {
+        return;
+    }
+
     let mut paint = Paint::default();
     paint.set_color(style.color);
     paint.anti_alias = true;
 
+    let gap = style.gap.max(0.0);
     let mut stroke = Stroke {
-        width: style.width,
+        // With a gap the drawn band spans `gap/2 ..= gap/2 + width` from the
+        // centreline, so the outer footprint is `gap + 2 * width`.
+        width: if gap > 0.0 {
+            gap + 2.0 * style.width
+        } else {
+            style.width
+        },
         line_cap: style.cap,
         line_join: style.join,
         ..Stroke::default()
@@ -267,21 +296,50 @@ pub fn paint_strokes(
         }
     }
 
-    for line in lines {
-        if line.len() < 2 {
-            continue;
-        }
-        let mut pb = PathBuilder::new();
-        pb.move_to(line[0].0 as f32 * sx + ox, line[0].1 as f32 * sy + oy);
-        for &(x, y) in &line[1..] {
-            pb.line_to(x as f32 * sx + ox, y as f32 * sy + oy);
-        }
-        if let Some(path) = pb.finish() {
+    if gap <= 0.0 {
+        for path in &paths {
             canvas
                 .pixmap
-                .stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+                .stroke_path(path, &paint, &stroke, Transform::identity(), None);
         }
+        return;
     }
+
+    // Casing: paint the full footprint onto an isolated layer, then knock the
+    // `gap`-wide corridor back out of it, so the two flanks share the outer
+    // stroke's joins, caps and dash phase exactly as MapLibre's line shader
+    // does (it renders one extruded ribbon and discards fragments closer to
+    // the centreline than `gap/2`). The knockout is solid even when the
+    // casing is dashed: the corridor is empty between dashes anyway.
+    let Some(mut layer) = Pixmap::new(canvas.pixmap.width(), canvas.pixmap.height()) else {
+        return;
+    };
+    for path in &paths {
+        layer.stroke_path(path, &paint, &stroke, Transform::identity(), None);
+    }
+    let mut erase = Paint {
+        blend_mode: tiny_skia::BlendMode::DestinationOut,
+        anti_alias: true,
+        ..Paint::default()
+    };
+    erase.set_color(Color::BLACK);
+    let hole = Stroke {
+        width: gap,
+        line_cap: style.cap,
+        line_join: style.join,
+        ..Stroke::default()
+    };
+    for path in &paths {
+        layer.stroke_path(path, &erase, &hole, Transform::identity(), None);
+    }
+    canvas.pixmap.draw_pixmap(
+        0,
+        0,
+        layer.as_ref(),
+        &PixmapPaint::default(),
+        Transform::identity(),
+        None,
+    );
 }
 
 pub(crate) fn build_polygon_path(
