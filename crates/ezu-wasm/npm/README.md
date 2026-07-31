@@ -14,7 +14,7 @@ npm install @reearth/ezu
 
 ## Usage
 
-The package ships three builds and picks one automatically via the
+The package ships four builds and picks one automatically via the
 `exports` map:
 
 | Runtime              | Build used  |
@@ -22,7 +22,7 @@ The package ships three builds and picks one automatically via the
 | Vite / Webpack / Rollup | `bundler` |
 | Browser (native ESM) | `web`       |
 | Node.js              | `nodejs`    |
-| Cloudflare Workers   | `bundler` (via `workerd` condition) |
+| Cloudflare Workers   | `workerd` (via the `workerd` condition) |
 
 ### Bundler / Cloudflare Workers / Node.js
 
@@ -47,7 +47,18 @@ const renderer = new Renderer(styleJson);
 ### Explicit build selection
 
 If the auto-resolved entry doesn't fit your toolchain, import a build
-directly: `@reearth/ezu/web`, `@reearth/ezu/bundler`, or `@reearth/ezu/nodejs`.
+directly: `@reearth/ezu/web`, `@reearth/ezu/bundler`, `@reearth/ezu/nodejs`,
+or `@reearth/ezu/workerd`.
+
+`workerd` reuses the `bundler` glue but instantiates the wasm itself,
+because Cloudflare Workers resolve a `.wasm` import to an uninstantiated
+`WebAssembly.Module` rather than to live exports. Importing
+`@reearth/ezu/bundler` on Workers therefore fails with
+`__wbindgen_start is not a function`.
+
+The raw artifacts are exported too, for hosts that need to wire up
+instantiation themselves: `@reearth/ezu/bundler/ezu_bg.js`,
+`@reearth/ezu/bundler/ezu_bg.wasm`, and `@reearth/ezu/web/ezu_bg.wasm`.
 
 ## API
 
