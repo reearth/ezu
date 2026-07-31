@@ -412,12 +412,57 @@ fn fold_blend(nodes: &mut Map<String, Value>, outputs: &[String]) -> String {
                 .iter()
                 .map(|l| Value::String(format!("@{l}")))
                 .collect();
-            nodes.insert(
-                id.clone(),
-                serde_json::json!({ "op": "stack", "layers": Value::Array(refs) }),
-            );
+            emit_stack_chain(nodes, &id, &refs);
             id
         }
+    }
+}
+
+/// Widest layer list a single `stack` node is given.
+///
+/// A renderer must hold every input of a node in memory at once, so one
+/// `stack` spanning a whole basemap's worth of layers pins a full padded
+/// raster per layer — tens of megabytes on a style with dozens of layers,
+/// and the peak is the same however the evaluator schedules the work.
+/// Splitting the run into a chain of narrow stacks caps that at roughly
+/// one chunk plus the accumulator, because each chunk's layers can be
+/// composited and released before the next chunk is drawn.
+///
+/// The pixels are unaffected: source-over is applied to the same layers
+/// in the same order either way, and a chunk boundary only materializes
+/// the accumulator the next chunk continues from.
+const STACK_CHUNK: usize = 8;
+
+/// Emit `layers` as a bottom-to-top chain of `stack` nodes of at most
+/// [`STACK_CHUNK`] inputs each, the topmost taking `id` so references to
+/// the stack as a whole keep resolving. Runs that already fit stay a
+/// single node.
+fn emit_stack_chain(nodes: &mut Map<String, Value>, id: &str, layers: &[Value]) {
+    let mut pos = 0;
+    let mut prev: Option<String> = None;
+    let mut part = 0;
+    while pos < layers.len() {
+        // Every chunk after the first spends one input on the
+        // accumulator it continues from.
+        let take = STACK_CHUNK - usize::from(prev.is_some());
+        let end = (pos + take).min(layers.len());
+        let mut chunk: Vec<Value> = Vec::with_capacity(STACK_CHUNK);
+        if let Some(p) = &prev {
+            chunk.push(Value::String(format!("@{p}")));
+        }
+        chunk.extend_from_slice(&layers[pos..end]);
+        let node_id = if end == layers.len() {
+            id.to_string()
+        } else {
+            part += 1;
+            unique_id(nodes, &format!("{id}_{part}"))
+        };
+        nodes.insert(
+            node_id.clone(),
+            serde_json::json!({ "op": "stack", "layers": Value::Array(chunk) }),
+        );
+        prev = Some(node_id);
+        pos = end;
     }
 }
 
@@ -528,6 +573,47 @@ mod tests {
             nodes["stack"]["layers"],
             serde_json::json!(["@#111111", "@#222222", "@#333333"])
         );
+    }
+
+    #[test]
+    fn wide_layer_runs_fold_into_a_chain_of_narrow_stacks() {
+        let mut nodes = Map::new();
+        let outputs: Vec<String> = (0..18)
+            .map(|i| {
+                let id = format!("l{i}");
+                nodes.insert(id.clone(), solid("#11223344"));
+                id
+            })
+            .collect();
+        let out = fold_blend(&mut nodes, &outputs);
+        assert_eq!(out, "stack");
+
+        // Walk the chain from the top back down and flatten it: the
+        // leaves, in order, must be exactly the layers handed in.
+        let mut flat: Vec<String> = Vec::new();
+        let mut next = Some(out);
+        while let Some(id) = next {
+            let layers = nodes[&id]["layers"].as_array().unwrap().clone();
+            assert!(
+                layers.len() <= STACK_CHUNK,
+                "no stack node should exceed the chunk width"
+            );
+            next = None;
+            let mut here: Vec<String> = Vec::new();
+            for (i, l) in layers.iter().enumerate() {
+                let name = l.as_str().unwrap().trim_start_matches('@').to_string();
+                if i == 0 && nodes[&name]["op"] == "stack" {
+                    next = Some(name);
+                } else {
+                    here.push(name);
+                }
+            }
+            // Prepend: we are walking top-down, so each chunk sits under
+            // the ones already collected.
+            here.append(&mut flat);
+            flat = here;
+        }
+        assert_eq!(flat, outputs);
     }
 
     #[test]
