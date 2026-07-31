@@ -17,8 +17,8 @@
   "exports": {
     ".": {
       "workerd": {
-        "types": "./bundler/ezu.d.ts",
-        "default": "./bundler/ezu.js"
+        "types": "./workerd/ezu.d.ts",
+        "default": "./workerd/ezu.js"
       },
       "browser": {
         "types": "./web/ezu.d.ts",
@@ -44,12 +44,22 @@
     "./nodejs": {
       "types": "./nodejs/ezu.d.ts",
       "default": "./nodejs/ezu.js"
-    }
+    },
+    "./workerd": {
+      "types": "./workerd/ezu.d.ts",
+      "default": "./workerd/ezu.js"
+    },
+    "./workerd/ezu.js": "./workerd/ezu.js",
+    "./bundler/ezu_bg.js": "./bundler/ezu_bg.js",
+    "./bundler/ezu_bg.wasm": "./bundler/ezu_bg.wasm",
+    "./web/ezu_bg.wasm": "./web/ezu_bg.wasm",
+    "./package.json": "./package.json"
   },
   "files": [
     "web",
     "bundler",
     "nodejs",
+    "workerd",
     "README.md",
     "LICENSE-MIT",
     "LICENSE-APACHE"
@@ -58,6 +68,7 @@
     "*.wasm",
     "./web/ezu.js",
     "./bundler/ezu.js",
-    "./nodejs/ezu.js"
+    "./nodejs/ezu.js",
+    "./workerd/ezu.js"
   ]
 }
