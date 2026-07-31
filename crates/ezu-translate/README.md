@@ -41,11 +41,11 @@ cargo run -p ezu-translate --example convert -- style.json > recipe.json
 | ordered layer list | `blend` chain (painter's algorithm) |
 | `background` | `solid` |
 | `fill` (solid colour, `fill-outline-color`) | `features` + `fill-solid` (outline → `edge`) |
-| `line` (+ `line-dasharray`, `line-cap`/`join`) | `features` + crisp `stroke` (dash in px) |
+| `line` (+ `line-dasharray`, `line-cap`/`join`, `line-gap-width`) | `features` + crisp `stroke` (dash in px); a gap renders MapLibre's casing annulus — one stroke's footprint with the corridor knocked out, so joins, caps, and dash phase behave like the GL shader |
 | `raster` | `raster` |
 | `circle` (+ `circle-stroke-*`) | a `circle` sprite `stamp`ed at each point (stroke = a larger ring stamped underneath) |
-| `symbol` **icons** (constant `icon-image`, `icon-size`/`-rotate`/`-opacity`) | `sprite` source → `icon` (crop) → `stamp` at each point |
-| `symbol` **text** (`symbol-placement: point`/`line`/`line-center`: `text-field`, `-size`/`-color`/`-halo-*`/`-opacity`, anchor/offset/justify/wrapping/transform/spacing, `symbol-spacing`/`text-max-angle`/`text-keep-upright` on lines; collision: `text-allow-overlap`/`-ignore-placement`/`-padding`, `text-overlap`, `symbol-sort-key`) | `text` node — point placement labels each point; line placement walks each polyline with tangent-rotated glyphs (per-glyph collision). Zero-config: an unmapped `text-font` stack is served from the style's own `glyphs` endpoint as an SDF `glyphs` source (the same pre-rendered glyphs MapLibre draws); `ConvertOptions::fonts` / CLI `--font "NAME=SOURCE"` overrides with a real font per entry for higher-fidelity outline rendering — `SOURCE` is a font-file URL (`http(s)://…`, `file:…`, `data:…`) or an installed-font reference (`system:Noto Sans`, optionally `?weight=700&style=italic`); a `system:` source is portable to write but resolves to whatever face the rendering machine has installed (`{token}` fields rewrite to expressions). Collision is **deterministic across tiles** (candidates gathered from the 8 neighbour tiles, deduped, ordered by `symbol-sort-key`, placed greedily) so borders stay seamless — the layer's source/layer/filter are threaded onto the node for neighbour gathering |
+| `symbol` **icons** (`icon-image` incl. data-driven, `icon-size`/`-rotate`/`-opacity`/`-anchor`/`-offset`/`-padding`, `icon-allow-overlap`/`icon-overlap`/`-ignore-placement`, `icon-optional`/`text-optional`, `icon-text-fit` + `-padding` with nine-slice sprite `stretchX`/`stretchY`/`content` metadata) | the icon rides the layer's label: a point symbol's icon and text boxes join the shared collision index and place or drop **as one unit** (`*-optional` lets one half survive alone); icon-only symbol layers place too. Line-placed icons still lower to a collision-free `stamp` |
+| `symbol` **text** (`symbol-placement: point`/`line`/`line-center`: `text-field`, `-size`/`-color`/`-halo-*`/`-opacity`, anchor/offset/justify/wrapping/transform/spacing, `text-variable-anchor` (+ `text-radial-offset`, per-anchor offset mirroring), `symbol-spacing`/`text-max-angle`/`text-keep-upright` on lines; collision: `text-allow-overlap`/`-ignore-placement`/`-padding`, `text-overlap`, `symbol-sort-key`) | `text` node — point placement labels each point; line placement walks each polyline with tangent-rotated glyphs (per-glyph collision), anchored on tile-clipped geometry with MapLibre's spacing phases. Zero-config: an unmapped `text-font` stack is served from the style's own `glyphs` endpoint as an SDF `glyphs` source (the same pre-rendered glyphs MapLibre draws); `ConvertOptions::fonts` / CLI `--font "NAME=SOURCE"` overrides with a real font per entry for higher-fidelity outline rendering — `SOURCE` is a font-file URL (`http(s)://…`, `file:…`, `data:…`) or an installed-font reference (`system:Noto Sans`, optionally `?weight=700&style=italic`); a `system:` source is portable to write but resolves to whatever face the rendering machine has installed (`{token}` fields rewrite to expressions). Collision is **deterministic across tiles** (candidates gathered from the 8 neighbour tiles, deduped, ordered by `symbol-sort-key` with ties broken by tile feature order as in MapLibre, placed greedily) so borders stay seamless — the layer's source/layer/filter are threaded onto the node for neighbour gathering. **All of a style's symbol layers collide in one shared index**: each layer lowers to a `text-labels` (candidates) + `text-draw` (its placed labels) pair around a single `label-placement` node, placed top layer first — a POI can knock out a road name, as MapLibre does |
 | `fill-pattern` (constant) | `icon` → `tiling`, clipped to the fill shape via `blend { clip: true }` |
 | `line-pattern` (constant) | `icon` → `line-stamp` (repeat along the line, fit to `line-width`) |
 | `fill-extrusion` | flat footprint `fill-solid` with `fill-extrusion-color` (no 3-D — height/base dropped) |
@@ -67,28 +67,31 @@ zoom — nothing is baked to a fixed zoom.
 
 ### What it does not (yet) — reported in `Report::warnings`
 
-- **`text-variable-anchor`** — only a fixed anchor is supported. Layers
-  whose `text-font` has no `--font NAME=SOURCE` mapping *and* whose style
-  declares no `glyphs` endpoint skip their text.
 - **`text-rotation-alignment: viewport`** on line placement — line-placed
-  glyphs always rotate with the line (map alignment).
-- **Icon collision** (`icon-allow-overlap`/`-ignore-placement`/
-  `icon-overlap`) and **text/icon pairing** (`text-optional`) — only
-  *text* collides; icons are placed without collision, and text is placed
-  independently of its icon.
-- Text collision is handled (default on) but **diverges from MapLibre by
+  glyphs always rotate with the line (map alignment). Likewise
+  `icon-rotation-alignment` / `icon-pitch-alignment` are ignored.
+- **Line-placed icons don't collide** — a `symbol-placement: line` layer's
+  icon lowers to a collision-free `stamp`, drawn independently of the
+  line's text (point-placed icons collide and pair, see the table).
+- Label collision is handled (default on) but **diverges from MapLibre by
   design**: it is world-space deterministic rather than viewport-driven,
   so there is **no "tiles nearest the viewport centre first" priority and
   no per-frame fade in/out**. `text-overlap: cooperative` has no
-  equivalent and is treated as `never` (collide) with a warning.
+  equivalent and is treated as `never` (collide) with a warning. A symbol
+  carrying both an icon and text takes one overlap decision — the
+  conjunction of the icon's and the text's overlap flags.
 - **SDF (recolourable) icons** — an `sdf: true` sprite entry is drawn as
   its raw RGBA; `icon-color` tinting isn't applied.
-- **Data-driven `icon-image` / `fill-pattern` / `line-pattern`** (only a
-  constant name converts). Data-driven *values* — fill/line/circle
-  colour/opacity/width/radius, `symbol` `icon-size`/`-rotate`/`-opacity`,
-  and the text paint properties — *are* supported, emitted as `*-expr`.
+- **Data-driven `fill-pattern` / `line-pattern`** (only a constant name
+  converts; data-driven `icon-image` *is* supported). Data-driven
+  *values* — fill/line/circle colour/opacity/width/radius, the `icon-*`
+  and text paint properties — are supported, emitted as `*-expr`. An
+  expression-valued `icon-text-fit-padding` also warns (constant only).
+- **`line-gap-width` on `line-pattern` layers** (the gap applies to plain
+  `line` layers only), and `line-offset` / `line-blur`.
 - True 3-D **`fill-extrusion`** (the footprint is drawn flat).
-- Road **casing** (the darker under-stroke MapLibre draws beneath a line).
+- Layers whose `text-font` has no `--font NAME=SOURCE` mapping *and*
+  whose style declares no `glyphs` endpoint skip their text.
 
 See [`ezu-compare`](../ezu-compare) to measure how close a converted recipe
 lands against a MapLibre reference render.

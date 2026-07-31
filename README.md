@@ -195,9 +195,10 @@ ezu treats MapLibre GL as a first-class input, along three axes:
   it, so evaluation matches MapLibre exactly.
 
 Text is MapLibre's `symbol` layer, ported: SDF glyphs, MapLibre glyph-PBF
-endpoints, `format` / `text-variable-anchor` / line placement, and
-collision that is **deterministic across tile boundaries**. See
-[Text labels](#text-labels).
+endpoints, `format` / `text-variable-anchor` / line placement, icons
+placed with their labels (`icon-text-fit` included), and collision that
+is **deterministic across tile boundaries** and shared across every
+label layer. See [Text labels](#text-labels).
 
 ## How it paints
 
@@ -264,15 +265,19 @@ The op set ships in [`ezu-paint`](https://github.com/reearth/ezu/tree/main/crate
   outline/blur), `fill-dabs` (hokusai scatter-dab fill, **world-
   deterministic** so dabs stay seamless across tile boundaries), `line`
   (hokusai brush stroke along polylines), `stroke` (crisp constant-width
-  tiny-skia vector stroke with cap/join + optional `dasharray` — clean
-  cartographic lines), `line-stamp` (repeat a sprite along a polyline,
+  tiny-skia vector stroke with cap/join + optional `dasharray`, and a
+  `gap-width` that renders MapLibre's `line-gap-width` casing annulus —
+  clean cartographic lines), `line-stamp` (repeat a sprite along a polyline,
   tangent-rotated — MapLibre `line-pattern`), `circles` (crisp filled
   disks at feature points with per-feature radius/colour/stroke — the
   vector counterpart to MapLibre's `circle`), `stamp` (paint a sprite at
   every feature point, world-deterministic jitter), `place` (composite one
   image at fixed canvas coordinates with `fit: none/cover/contain/
   stretch`), `tiling` (repeat an image across the canvas, world-anchored),
-  `text` (SDF glyph labels — see [Text labels](#text-labels))
+  `text` (SDF glyph labels — see [Text labels](#text-labels)), and the
+  shared-placement trio `text-labels` / `label-placement` / `text-draw`
+  (every label layer's candidates collide in **one** index — see
+  [Text labels](#text-labels))
 - **Composition** — `blend` (W3C 16 blend modes — multiply / screen /
   overlay / soft-light / hue / luminosity etc., plus `composite`
   operators (`destination-out` for a brush-style eraser), `clip` for
@@ -426,6 +431,14 @@ from vector features:
   node's `source` / `layer` (the upstream feature source) to enable
   neighbour gathering; without them collision is centre-tile-only.
   `allow-overlap` / `ignore-placement` / `padding-px` mirror MapLibre.
+- **Shared cross-layer placement & icons** — label layers can split into
+  `text-labels` (candidates) feeding one `label-placement` node, with a
+  `text-draw` per layer painting its winners: every layer's labels then
+  collide in **one** index, placed top layer first with ties broken by
+  tile feature order, as MapLibre does. A point symbol's icon places
+  *with* its text as one unit — `icon-size`/`-anchor`/`-offset`/
+  `-padding`, overlap flags, `text-optional` / `icon-optional`, and
+  `icon-text-fit` with nine-slice sprite stretching are all honoured.
 
 ### The `system:` font scheme
 
