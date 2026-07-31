@@ -58,6 +58,9 @@
 //! `MvtDecode`, `DemDecode`, `RasterDecode`, `GeoJsonDecode`,
 //! `SpriteDecode`, `FontParse`, `GlyphDecode`, `RenderFailed`,
 //! `PngEncode`, `WebpEncode`, `UnknownSource`.
+//!
+//! `OutOfMemory` is thrown from wherever the heap ran out — see
+//! [`oom`] for what the host may and may not do afterwards.
 
 mod log;
 
@@ -93,6 +96,97 @@ const ERR_GEOJSON: &str = "GeoJsonDecode";
 const ERR_SPRITE: &str = "SpriteDecode";
 const ERR_FONT: &str = "FontParse";
 const ERR_GLYPHS: &str = "GlyphDecode";
+/// Only the wasm build installs the allocator that throws it.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+const ERR_OOM: &str = "OutOfMemory";
+
+/// Turn heap exhaustion into a JavaScript exception.
+///
+/// Rust's reaction to a failed allocation is `handle_alloc_error`, which
+/// on wasm is an `unreachable` trap. The instance dies mid-call, the
+/// return value is never written, and the JS glue reads whatever happens
+/// to sit at the return pointer — which is how an out-of-memory render
+/// surfaces as a bewildering `RangeError: Invalid array buffer length`
+/// from `getArrayU8FromWasm0`, with nothing naming the real cause.
+///
+/// This allocator intercepts the null the underlying allocator returns
+/// when `memory.grow` is refused (a 128 MB Workers isolate refusing to
+/// grow, say) and throws a JS `Error` with `.name === "OutOfMemory"`
+/// from that exact point, so the host can branch on it:
+///
+/// ```js
+/// try { png = renderer.renderTile(z, x, y); }
+/// catch (e) { if (e.name === "OutOfMemory") { /* smaller tile, or bail */ } }
+/// ```
+///
+/// Limits, which callers must respect:
+///
+/// - **The renderer instance is finished.** The exception unwinds the
+///   wasm frames without running any Rust cleanup: locks stay locked,
+///   half-built values leak, and the allocator's own bookkeeping is
+///   whatever it was mid-call. Drop the module instance and, if the host
+///   retries, build a fresh one. Nothing here makes OOM recoverable *in
+///   place* — it makes it diagnosable.
+/// - It only fires for allocation failure. A wasm stack overflow, or a
+///   host that kills the isolate for exceeding a memory cap rather than
+///   refusing `memory.grow`, still ends the instance without warning.
+#[cfg(target_arch = "wasm32")]
+mod oom {
+    use std::alloc::{GlobalAlloc, Layout, System};
+
+    pub struct ThrowOnOom;
+
+    /// Throw a typed JS error and never return. Takes no allocation on
+    /// the Rust side: `js_sys::Error::new` and `set_name` pass the
+    /// message by pointer and length out of already-live memory, which
+    /// is what makes this safe to call from inside the allocator.
+    #[cold]
+    #[inline(never)]
+    fn throw_oom(size: usize) -> ! {
+        let err = js_sys::Error::new("out of memory: the wasm heap could not grow");
+        err.set_name(super::ERR_OOM);
+        let _ = js_sys::Reflect::set(
+            &err,
+            &wasm_bindgen::JsValue::from_str("requestedBytes"),
+            &wasm_bindgen::JsValue::from_f64(size as f64),
+        );
+        wasm_bindgen::throw_val(err.into())
+    }
+
+    unsafe impl GlobalAlloc for ThrowOnOom {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let p = System.alloc(layout);
+            if p.is_null() {
+                throw_oom(layout.size());
+            }
+            p
+        }
+
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            let p = System.alloc_zeroed(layout);
+            if p.is_null() {
+                throw_oom(layout.size());
+            }
+            p
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            let p = System.realloc(ptr, layout, new_size);
+            if p.is_null() {
+                throw_oom(new_size);
+            }
+            p
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            System.dealloc(ptr, layout)
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[global_allocator]
+static ALLOC: oom::ThrowOnOom = oom::ThrowOnOom;
 
 /// Pending tile bytes for a single named source. MVT bytes are
 /// validated at bind time (we attempt a decode and discard the
@@ -371,6 +465,116 @@ impl Renderer {
             .collect()
     }
 
+    /// Neighbour tile offsets the active style actually asks for from
+    /// `source`, as an array of `[dx, dy]` pairs (never including the
+    /// centre `[0, 0]`).
+    ///
+    /// Cross-tile label collision and edge-continuous DEM shading are the
+    /// only things that read neighbours, and only for the sources they
+    /// name. A host that fetches the full 3×3 window unconditionally
+    /// therefore pays for up to eight tiles it will not look at; passing
+    /// each offset from this list to `bindSource(name, bytes, { coord })`
+    /// fetches exactly what the recipe needs. An empty array means the
+    /// centre tile is enough.
+    ///
+    /// Throws `UnknownSource` if `name` is not declared in the style.
+    #[wasm_bindgen(js_name = requestedNeighborOffsets)]
+    pub fn requested_neighbor_offsets(&self, name: &str) -> Result<js_sys::Array, JsValue> {
+        if !self.doc.sources.contains_key(name) {
+            return Err(named_err(
+                ERR_SOURCE,
+                format!("no source `{name}` in style"),
+            ));
+        }
+        let requested = self.graph.asset_inputs();
+        let out = js_sys::Array::new();
+        for (dx, dy) in ezu_paint::host::requested_neighbor_offsets(&requested, name) {
+            let pair = js_sys::Array::new();
+            pair.push(&JsValue::from(dx));
+            pair.push(&JsValue::from(dy));
+            out.push(&pair);
+        }
+        Ok(out)
+    }
+
+    /// Glyph ranges the currently bound features can require, as
+    /// `{ [glyphsSourceName]: number[] }` where each number is a range
+    /// start (`0`, `256`, `512`, …) — i.e. the `{range}` in a
+    /// `…/{fontstack}/{range}.pbf` URL is `<start>-<start + 255>`.
+    ///
+    /// This host cannot fetch glyph ranges lazily, so every range a
+    /// tile's labels touch must be bound before `renderTile`. Rather than
+    /// scraping every string in the MVT, call this after binding the
+    /// vector sources and bind exactly the listed ranges.
+    ///
+    /// It is an over-approximation, deliberately: a range is listed if
+    /// *any* feature in a text layer carries the codepoint in a property
+    /// the layer's `text` expression reads, without evaluating filters,
+    /// zoom ranges, or the expression itself, and it is listed for every
+    /// fontstack in that layer's fallback chain. So it never omits a
+    /// range a label needs, and it may name a few that go unused. Text
+    /// layers that build their string from something other than a `get`
+    /// of a feature property (a literal, a `concat` of formatted values)
+    /// contribute their literal text where it is a plain string.
+    #[wasm_bindgen(js_name = neededGlyphRanges)]
+    pub fn needed_glyph_ranges(&self) -> Result<js_sys::Object, JsValue> {
+        // source name → range starts.
+        let mut needed: std::collections::BTreeMap<&str, std::collections::BTreeSet<u32>> =
+            std::collections::BTreeMap::new();
+
+        let decoded = self.decode_bound_features()?;
+        for spec in self.doc.nodes.values() {
+            let Some(stacks) = glyph_source_names(&self.doc, &spec.fields) else {
+                continue;
+            };
+            let Some(text) = spec.fields.get("text") else {
+                continue;
+            };
+            let mut ranges: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+            // A literal `text` needs no features at all.
+            if let Some(lit) = text.as_str() {
+                if !lit.starts_with('@') && !lit.starts_with('$') {
+                    collect_ranges(lit, &mut ranges);
+                }
+            }
+            let props = referenced_properties(text);
+            if !props.is_empty() {
+                let source = spec.fields.get("source").and_then(|v| v.as_str());
+                let layer = spec.fields.get("layer").and_then(|v| v.as_str());
+                for (bound_source, tile) in &decoded {
+                    if source.is_some_and(|s| s != *bound_source) {
+                        continue;
+                    }
+                    for l in &tile.layers {
+                        if layer.is_some_and(|want| want != l.name) {
+                            continue;
+                        }
+                        for f in &l.features {
+                            for p in &props {
+                                if let Some(ezu_features::Value::String(s)) = f.properties.get(*p) {
+                                    collect_ranges(s, &mut ranges);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            for stack in stacks {
+                needed.entry(stack).or_default().extend(ranges.iter());
+            }
+        }
+
+        let out = js_sys::Object::new();
+        for (source, ranges) in needed {
+            let arr = js_sys::Array::new();
+            for start in ranges {
+                arr.push(&JsValue::from(start));
+            }
+            js_sys::Reflect::set(&out, &JsValue::from_str(source), &arr)?;
+        }
+        Ok(out)
+    }
+
     /// Render a single tile using whatever sources are currently bound.
     ///
     /// `opts` (JS object, all fields optional):
@@ -399,6 +603,24 @@ enum OutputFormat {
 }
 
 impl Renderer {
+    /// Decode every bound MVT source once, centre and neighbours alike,
+    /// for inspection ahead of a render.
+    fn decode_bound_features(
+        &self,
+    ) -> Result<Vec<(&str, ezu_features::mvt::DecodedTile)>, JsValue> {
+        let mut out = Vec::new();
+        for (name, binding) in &self.bindings {
+            let SourceBinding::Mvt(byte_map) = binding else {
+                continue;
+            };
+            for bytes in byte_map.values() {
+                let tile = ezu_features::mvt::decode(bytes).map_err(|e| named_err(ERR_MVT, e))?;
+                out.push((name.as_str(), tile));
+            }
+        }
+        Ok(out)
+    }
+
     /// Render path used by the new `renderTile` API. Reads pending
     /// source bindings from `self.bindings` and dispatches each based
     /// on its declared kind in the style.
@@ -777,10 +999,162 @@ pub fn threads_enabled() -> bool {
 #[cfg(feature = "threads")]
 pub use wasm_bindgen_rayon::init_thread_pool;
 
+/// The `glyphs` source names a node's `font` stack resolves to, or
+/// `None` when the node has no font stack (so it is not a text node).
+///
+/// A `font` entry names a source; only the ones declared as `glyphs`
+/// have ranges to bind, and their *source* name is what `bindSource`
+/// takes.
+fn glyph_source_names<'a>(
+    doc: &'a Document,
+    fields: &serde_json::Map<String, serde_json::Value>,
+) -> Option<Vec<&'a str>> {
+    let font = fields.get("font")?;
+    let names: Vec<&str> = match font {
+        serde_json::Value::String(s) => vec![s.as_str()],
+        serde_json::Value::Array(a) => a.iter().filter_map(|v| v.as_str()).collect(),
+        _ => return None,
+    };
+    Some(
+        names
+            .into_iter()
+            .filter_map(|n| {
+                let n = n.strip_prefix('@').unwrap_or(n);
+                doc.sources
+                    .get_key_value(n)
+                    .filter(|(_, decl)| matches!(decl, SourceDecl::Glyphs(_)))
+                    .map(|(k, _)| k.as_str())
+            })
+            .collect(),
+    )
+}
+
+/// Feature property names a `text` expression reads, i.e. every
+/// `["get", "<name>"]` anywhere inside it.
+fn referenced_properties(expr: &serde_json::Value) -> Vec<&str> {
+    fn walk<'a>(v: &'a serde_json::Value, out: &mut Vec<&'a str>) {
+        match v {
+            serde_json::Value::Array(items) => {
+                if let (Some("get"), Some(serde_json::Value::String(name))) = (
+                    items.first().and_then(|h| h.as_str()),
+                    items.get(1).filter(|_| items.len() == 2),
+                ) {
+                    out.push(name.as_str());
+                }
+                for item in items {
+                    walk(item, out);
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for item in map.values() {
+                    walk(item, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(expr, &mut out);
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Add the 256-codepoint range start of every character in `s`.
+/// Codepoints outside the Basic Multilingual Plane are skipped: the
+/// glyph-range scheme cannot address them.
+fn collect_ranges(s: &str, out: &mut std::collections::BTreeSet<u32>) {
+    for c in s.chars() {
+        let cp = c as u32;
+        if cp <= 0xFFFF {
+            out.insert(cp & !0xFF);
+        }
+    }
+}
+
 /// Build a JS `Error` whose `.name` discriminates the failure kind so callers
 /// can dispatch on it.
 fn named_err(name: &str, e: impl std::fmt::Display) -> JsValue {
     let err = js_sys::Error::new(&e.to_string());
     err.set_name(name);
     err.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_expressions_yield_the_properties_they_read() {
+        let expr = serde_json::json!([
+            "concat",
+            ["get", "name:en"],
+            " (",
+            ["coalesce", ["get", "ref"], ["get", "name"]],
+            ")"
+        ]);
+        assert_eq!(
+            referenced_properties(&expr),
+            vec!["name", "name:en", "ref"],
+            "every `get` in the expression, deduplicated"
+        );
+        // A `get` with extra arguments reads from a supplied object, not
+        // the feature, so it names no feature property.
+        assert!(referenced_properties(&serde_json::json!(["get", "a", ["x"]])).is_empty());
+        assert!(referenced_properties(&serde_json::json!("plain")).is_empty());
+    }
+
+    #[test]
+    fn ranges_cover_each_codepoint_block_once() {
+        let mut out = std::collections::BTreeSet::new();
+        collect_ranges("AZ", &mut out);
+        collect_ranges("東京", &mut out);
+        // 'A' = U+0041 → 0; '東' = U+6771 → 0x6700; '京' = U+4EAC → 0x4E00.
+        assert_eq!(
+            out.iter().copied().collect::<Vec<_>>(),
+            vec![0x0000, 0x4E00, 0x6700]
+        );
+    }
+
+    #[test]
+    fn only_glyphs_sources_are_reported_as_fontstacks() {
+        let doc = Document::from_json(
+            r##"{
+                "name": "test",
+                "tile-size": 8,
+                "sources": {
+                    "labels": { "type": "glyphs",
+                                "url": "https://x/{fontstack}/{range}.pbf",
+                                "fontstack": "Noto Sans Regular" },
+                    "face": { "type": "font", "url": "file:noto.ttf" }
+                },
+                "nodes": { "bg": { "op": "solid", "color": "#fff" } },
+                "output": "bg"
+            }"##,
+        )
+        .expect("style parses");
+
+        let fields = |v: serde_json::Value| match v {
+            serde_json::Value::Object(m) => m,
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            glyph_source_names(
+                &doc,
+                &fields(serde_json::json!({ "font": ["labels", "face"] }))
+            ),
+            Some(vec!["labels"]),
+            "a `font` source has no ranges to bind"
+        );
+        assert_eq!(
+            glyph_source_names(&doc, &fields(serde_json::json!({ "font": "@labels" }))),
+            Some(vec!["labels"]),
+            "a `@` reference names the same source"
+        );
+        assert_eq!(
+            glyph_source_names(&doc, &fields(serde_json::json!({ "color": "#fff" }))),
+            None,
+            "a node with no font stack is not a text node"
+        );
+    }
 }

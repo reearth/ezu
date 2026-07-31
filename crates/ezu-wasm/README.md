@@ -52,6 +52,20 @@ class Renderer {
   // Names with at least one pending tile-scoped binding.
   boundSources(): string[];
 
+  // Neighbour offsets the style actually reads for this source, as
+  // [dx, dy] pairs (never [0, 0]). Only cross-tile label collision and
+  // edge-continuous DEM shading read neighbours, and only for the
+  // sources that need them — fetch these instead of the whole 3×3.
+  // Empty means the centre tile is enough.
+  requestedNeighborOffsets(name: string): [number, number][];
+
+  // Glyph ranges the bound features can require, keyed by `glyphs`
+  // source name; each number is a range start, so the `{range}` in
+  // `…/{fontstack}/{range}.pbf` is `${start}-${start + 255}`. Call it
+  // after binding the vector sources and before rendering — this host
+  // cannot fetch ranges lazily. Over-approximates (see below).
+  neededGlyphRanges(): Record<string, number[]>;
+
   // Single unified render. Format and canvas overrides go in `opts`.
   renderTile(z: number, x: number, y: number, opts?: {
     format?: "png" | "webp" | "rgba";       // default "png"
@@ -121,6 +135,35 @@ async function renderTileToLossyWebp(r, mvt, z, x, y, quality = 0.8) {
 }
 ```
 
+### Fetching only what the style needs
+
+Two prepass calls let a host fetch the tiles and glyph ranges the recipe
+actually reads, instead of a fixed 3×3 window and a hand-rolled scan of
+every string in the MVT:
+
+```js
+r.bindSource("basemap", await fetchMvt(z, x, y));
+for (const [dx, dy] of r.requestedNeighborOffsets("basemap")) {
+  const nb = await fetchMvt(z, x + dx, y + dy);
+  if (nb) r.bindSource("basemap", nb, { coord: [dx, dy] });
+}
+for (const [src, starts] of Object.entries(r.neededGlyphRanges())) {
+  for (const s of starts) {
+    r.bindSource(src, await fetchGlyphs(src, `${s}-${s + 255}`));
+  }
+}
+const png = r.renderTile(z, x, y);
+```
+
+`neededGlyphRanges` over-approximates on purpose: it lists a range when
+any feature in a text layer carries that codepoint in a property the
+layer's `text` expression reads (`["get", "name"]` and friends), without
+evaluating filters, zoom ranges, or the expression itself, and it lists
+it for every fontstack in that layer's fallback chain. It never omits a
+range a label needs; it may name a few that go unused. A `text` built
+from something other than a property read contributes only its literal
+strings.
+
 ### Missing tiles
 
 Don't `bindSource` an MVT source for that tile — `renderTile` returns
@@ -143,6 +186,18 @@ discriminates the failure kind:
 | `RenderFailed` | A node `eval` failed (e.g. missing brush, downcast mismatch) |
 | `PngEncode`    | PNG encoding failed |
 | `WebpEncode`   | WebP encoding failed |
+| `OutOfMemory`  | The wasm heap could not grow — the render needs more memory than the host allows |
+
+`OutOfMemory` is thrown from wherever the allocation failed, which means
+**the module instance is finished**: the exception unwinds the wasm
+frames without running any Rust cleanup, so locks stay locked and
+partially built values leak. Discard the instance and re-instantiate if
+you want to retry (with a smaller `tileSize`, say). Without this the
+same failure surfaces as a `RangeError: Invalid array buffer length`
+from the generated glue, which names neither the cause nor the call.
+It covers allocation failure only — a host that kills the isolate for
+exceeding a cap, rather than refusing to grow the heap, still ends the
+instance with no warning.
 
 ```js
 try {
