@@ -53,6 +53,44 @@
     "./bundler/ezu_bg.js": "./bundler/ezu_bg.js",
     "./bundler/ezu_bg.wasm": "./bundler/ezu_bg.wasm",
     "./web/ezu_bg.wasm": "./web/ezu_bg.wasm",
+    "./simd": {
+      "workerd": {
+        "types": "./simd/workerd/ezu.d.ts",
+        "default": "./simd/workerd/ezu.js"
+      },
+      "browser": {
+        "types": "./simd/web/ezu.d.ts",
+        "default": "./simd/web/ezu.js"
+      },
+      "node": {
+        "types": "./simd/nodejs/ezu.d.ts",
+        "default": "./simd/nodejs/ezu.js"
+      },
+      "import": {
+        "types": "./simd/bundler/ezu.d.ts",
+        "default": "./simd/bundler/ezu.js"
+      }
+    },
+    "./simd/web": {
+      "types": "./simd/web/ezu.d.ts",
+      "default": "./simd/web/ezu.js"
+    },
+    "./simd/bundler": {
+      "types": "./simd/bundler/ezu.d.ts",
+      "default": "./simd/bundler/ezu.js"
+    },
+    "./simd/nodejs": {
+      "types": "./simd/nodejs/ezu.d.ts",
+      "default": "./simd/nodejs/ezu.js"
+    },
+    "./simd/workerd": {
+      "types": "./simd/workerd/ezu.d.ts",
+      "default": "./simd/workerd/ezu.js"
+    },
+    "./simd/workerd/ezu.js": "./simd/workerd/ezu.js",
+    "./simd/bundler/ezu_bg.js": "./simd/bundler/ezu_bg.js",
+    "./simd/bundler/ezu_bg.wasm": "./simd/bundler/ezu_bg.wasm",
+    "./simd/web/ezu_bg.wasm": "./simd/web/ezu_bg.wasm",
     "./package.json": "./package.json"
   },
   "files": [
@@ -60,6 +98,7 @@
     "bundler",
     "nodejs",
     "workerd",
+    "simd",
     "README.md",
     "LICENSE-MIT",
     "LICENSE-APACHE"
@@ -69,6 +108,10 @@
     "./web/ezu.js",
     "./bundler/ezu.js",
     "./nodejs/ezu.js",
-    "./workerd/ezu.js"
+    "./workerd/ezu.js",
+    "./simd/web/ezu.js",
+    "./simd/bundler/ezu.js",
+    "./simd/nodejs/ezu.js",
+    "./simd/workerd/ezu.js"
   ]
 }

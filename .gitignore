@@ -12,4 +12,5 @@ crates/ezu-wasm/npm/web/
 crates/ezu-wasm/npm/bundler/
 crates/ezu-wasm/npm/nodejs/
 crates/ezu-wasm/npm/workerd/
+crates/ezu-wasm/npm/simd/
 crates/ezu-wasm/npm/LICENSE-*

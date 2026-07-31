@@ -24,6 +24,9 @@ The package ships four builds and picks one automatically via the
 | Node.js              | `nodejs`    |
 | Cloudflare Workers   | `workerd` (via the `workerd` condition) |
 
+Every build also exists in a wasm SIMD128 flavor under
+`@reearth/ezu/simd` — see [SIMD](#simd).
+
 ### Bundler / Cloudflare Workers / Node.js
 
 ```js
@@ -59,6 +62,42 @@ because Cloudflare Workers resolve a `.wasm` import to an uninstantiated
 The raw artifacts are exported too, for hosts that need to wire up
 instantiation themselves: `@reearth/ezu/bundler/ezu_bg.js`,
 `@reearth/ezu/bundler/ezu_bg.wasm`, and `@reearth/ezu/web/ezu_bg.wasm`.
+
+## SIMD
+
+The same four builds are shipped a second time compiled with
+`-C target-feature=+simd128`, under the `simd` subpath. It resolves by
+the same conditions as the default entry, so one import covers every
+runtime:
+
+```js
+import { Renderer } from "@reearth/ezu/simd";
+```
+
+The default entry (`.`) stays **non-SIMD** on purpose. Safari gained
+wasm SIMD128 only in 16.4, and a module that uses SIMD instructions
+fails to *compile* on older engines rather than degrading — so making
+SIMD the package default would hard-break those browsers. Opt in where
+you know the engine supports it: Cloudflare Workers (workerd), Node 16+,
+and Chrome/Firefox/Safari 16.4+.
+
+`simdEnabled()` reports which flavor is loaded — `true` only in the
+`simd` builds:
+
+```js
+import { simdEnabled } from "@reearth/ezu/simd";
+simdEnabled(); // true
+```
+
+Individual builds and raw artifacts mirror the default layout:
+`@reearth/ezu/simd/web`, `/simd/bundler`, `/simd/nodejs`,
+`/simd/workerd`, `@reearth/ezu/simd/bundler/ezu_bg.js`,
+`@reearth/ezu/simd/bundler/ezu_bg.wasm`, and
+`@reearth/ezu/simd/web/ezu_bg.wasm`.
+
+A future version could ship a single entry that feature-detects SIMD at
+load time and instantiates the matching wasm; that would double the
+bytes a browser may download, so for now the choice is explicit.
 
 ## API
 
