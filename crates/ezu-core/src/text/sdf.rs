@@ -151,6 +151,25 @@ impl SdfFontStack {
             .contains_key(&block)
     }
 
+    /// Ranges resolved so far (loaded or failed), and the glyph-bitmap
+    /// bytes they hold. Ranges accumulate for the life of the stack, so
+    /// this is what a long-lived host is paying to keep the fontstack
+    /// resident — the number to look at when a render's memory is not
+    /// accounted for by its pixel buffers.
+    pub fn loaded_size(&self) -> (usize, usize) {
+        let ranges = self.ranges.read().expect("range map poisoned");
+        let bytes = ranges
+            .values()
+            .map(|slot| match slot {
+                RangeSlot::Loaded { glyphs, .. } => {
+                    glyphs.values().map(|g| g.bitmap.len()).sum::<usize>()
+                }
+                RangeSlot::Failed => 0,
+            })
+            .sum();
+        (ranges.len(), bytes)
+    }
+
     /// Decode one raw range PBF and store it under its own block (from
     /// the message's `range` field). Replaces any earlier slot.
     pub fn insert_range(&self, bytes: &[u8]) -> Result<(), GlyphPbfError> {

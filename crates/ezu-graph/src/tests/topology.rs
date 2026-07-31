@@ -205,3 +205,54 @@ fn pad_exceeded_errors() {
         other => panic!("expected PadExceeded, got {other:?}"),
     }
 }
+
+#[test]
+fn order_finishes_one_branch_before_starting_the_next() {
+    // Two independent chains feeding a merge. A breadth-first order
+    // would interleave them and hold both chains' buffers at once; the
+    // evaluation order should instead complete one chain, letting its
+    // intermediates go, before touching the other.
+    let merge = Mock::new(
+        "merge",
+        vec![
+            PortSpec::new("left", &[PortKind::Raster]),
+            PortSpec::new("right", &[PortKind::Raster]),
+        ],
+        PortKind::Raster,
+    )
+    .boxed();
+
+    let mut b = GraphBuilder::new();
+    b.add_node("l0", src(PortKind::Raster))
+        .add_node("l1", passthrough(PortKind::Raster, PortKind::Raster))
+        .add_node("r0", src(PortKind::Raster))
+        .add_node("r1", passthrough(PortKind::Raster, PortKind::Raster))
+        .add_node("m", merge)
+        .connect("l0", "l1", "input")
+        .connect("r0", "r1", "input")
+        .connect("l1", "m", "left")
+        .connect("r1", "m", "right")
+        .set_output("m");
+    let g = b.build().unwrap();
+    let order: Vec<_> = g.topo_order().iter().map(|&i| g.node_id(i)).collect();
+    assert_eq!(order, vec!["l0", "l1", "r0", "r1", "m"]);
+}
+
+#[test]
+fn nodes_the_output_ignores_are_still_ordered() {
+    // `side` reads `a` but nothing reads `side`. It must still appear,
+    // and after the node it depends on.
+    let mut b = GraphBuilder::new();
+    b.add_node("a", src(PortKind::Raster))
+        .add_node("out", passthrough(PortKind::Raster, PortKind::Raster))
+        .add_node("side", passthrough(PortKind::Raster, PortKind::Raster))
+        .connect("a", "out", "input")
+        .connect("a", "side", "input")
+        .set_output("out");
+    let g = b.build().unwrap();
+    let order: Vec<_> = g.topo_order().iter().map(|&i| g.node_id(i)).collect();
+    assert_eq!(order.len(), 3);
+    let pos = |id: &str| order.iter().position(|n| *n == id).unwrap();
+    assert!(pos("a") < pos("out"));
+    assert!(pos("a") < pos("side"));
+}

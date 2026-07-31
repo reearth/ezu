@@ -9,6 +9,7 @@
 //!   into a typed `Graph` using a registry of node factories
 //! - [`input`] — `In<T>` scalar fields: literal / `$param` / `@node` port
 //! - [`eval`] / [`cache`] / [`evaluator`] — render a tile
+//! - [`mem`] — opt-in accounting of live intermediate pixel buffers
 
 pub mod buf;
 pub mod build;
@@ -17,6 +18,7 @@ pub mod eval;
 pub mod evaluator;
 pub mod graph;
 pub mod input;
+pub mod mem;
 pub mod neighbor;
 pub mod node;
 pub mod port;
