@@ -13,7 +13,7 @@ concrete node implementations.
 
 ## Port types
 
-The DAG is typed. Every edge carries one of six `PortKind`s:
+The DAG is typed. Every edge carries one of seven `PortKind`s:
 
 | Kind | Carries |
 |---|---|
@@ -22,6 +22,7 @@ The DAG is typed. Every edge carries one of six `PortKind`s:
 | `Sprite` | RGBA8 buffer at the **asset's native dimensions**, not canvas-sized. Carrier for sprite / texture sources (`image`). Cannot be wired directly into the document `output`. Polymorphic filter ops (`blur`, `hsl`, `brightness-contrast`, `invert`, `color-to-alpha`, `displace`, `warp`, `blend`) accept `Raster` and `Sprite` interchangeably and pass the input kind through; placement ops (`place`, `tiling`, `stamp`) also accept either, sampling the input at its native dimensions and producing a `Raster`. |
 | `Brush` | hokusai brush handle plus overrides |
 | `Scalar` | constant Color / Number / Bool |
+| `Labels` | Label placement candidates, or the decisions a shared placement stage reached over them. Type-erased (the payloads are `ezu-paint`'s label-set / placement types) so this crate gains no text dependency. Placement is global: every label layer hands its candidates to one `label-placement` node, which decides them against one collision index and passes the decisions back to each layer's draw node. |
 | `ScalarField` | Per-pixel single-channel `f32` grid, padded canvas-sized. The general carrier for floating-point fields — elevation (with `geo_scale` populated, produced by `dem`), distance fields, scalar noise, slope angle. Consumed by terrain ops (`hillshade`, `slope`) and scalar→raster mappers (`color-ramp`). `geo_scale.is_some()` distinguishes geographically scaled fields (where gradient ops produce real-world slopes) from unitless fields used for stylization. |
 
 `Features` and `Brush` ride as type-erased `Arc<dyn Any + Send + Sync>`
@@ -160,9 +161,14 @@ let mut registry = ezu_paint::nodes::default_registry();
 registry.register(MyOpFactory);
 ```
 
+`NodeFactory` is public, so any downstream crate can register its own
+ops on top of `ezu_paint::nodes::default_registry()` and feed the
+registry to `build_graph`.
+
 The optional `schema()` method feeds `NodeRegistry::document_schema()`,
-which is what `ezu serve` exposes at `/schemas/ezu-style.json` for
-editor autocomplete. Pre-built fragments live in
+which is what `ezu serve` exposes at `/schemas/ezu-style.json` — so
+custom ops get editor autocomplete, and as-you-type validation in the
+live editor, out of the box. Pre-built fragments live in
 [`schema_frag`](src/registry.rs): `node_ref`, `asset_ref`, `color`,
 `unit_number`, `px_number`.
 

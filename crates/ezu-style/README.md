@@ -64,6 +64,10 @@ carry a `src` URI, tile-scoped variants a `url` template.
   asset (e.g. a small `image` PNG or `.myb` brush), decoded in-process
   with no I/O, so it works in every host including wasm. `image/*` media
   types load as images; others are tried as a brush.
+- `system:FAMILY` — `font` sources only: a face resolved by family name
+  from the machine's installed fonts, which makes the recipe
+  machine-dependent and is unavailable on wasm. See
+  [the `system:` font scheme](../ezu-paint#the-system-font-scheme).
 
 Tile-scoped source kinds:
 
@@ -95,6 +99,13 @@ Document-scoped, besides `brush` / `image`:
   shape). The host decodes the sheet up front; an `icon` node crops a
   named rect into a `Sprite` for `stamp` (symbol icons) or `tiling`
   (`fill-pattern`).
+- `font` — outline font bytes (TTF / OTF / TTC) for the `text` node's
+  `font` stack, named with a `url`: a font file (`file:` / `http(s)://`
+  / `data:`) or a `system:` family reference.
+- `glyphs` — a MapLibre glyph-PBF endpoint (`{fontstack}` / `{range}`
+  URL template) serving pre-rendered SDF glyph ranges, fetched lazily.
+  An alternative to `font` that needs no font files. See
+  [text labels](../ezu-paint#text-labels).
 
 Tile pyramids (`raster`, `dem`) take an `on-missing` policy deciding
 what an in-range 404 means: `empty` (default — transparent pixels /
@@ -128,11 +139,69 @@ one MVT-flavoured source per style; later entries are ignored.
 
 The `params` block declares typed, documented knobs (`color` /
 `number` / `bool`, with `default`, optional `min` / `max`, and
-`description`). `$name` references resolve at render time against
-caller-supplied values — the CLI's `--param`, the tile server's
-query-string overrides, or a library `ParamValues` — so one built
-graph serves every parameter combination. `Document::params_schema()`
-derives a JSON Schema of the value object for editor UIs.
+`description`), referenced with `$name` anywhere a scalar field lives:
+
+```jsonc
+{
+  "params": {
+    "paper":    { "type": "color",  "default": "#fbf6e6" },
+    "softness": { "type": "number", "default": 0, "min": 0, "max": 4,
+                  "description": "Blur over the finished tile, in px." }
+  },
+  "nodes": {
+    "bg":  { "op": "solid", "color": "$paper" },
+    "out": { "op": "blur", "input": "@c4", "sigma": "$softness" }
+  }
+}
+```
+
+References resolve at **render time** against caller-supplied values —
+the CLI's `--param`, the tile server's query-string overrides, or a
+library `ParamValues` — so one built graph serves every parameter
+combination, and the intermediate cache keys on the values a node
+actually reads, so flipping one param only re-evaluates the nodes that
+depend on it.
+
+```sh
+# CLI: repeatable --param flags, validated against the declarations.
+ezu tile --style watercolor.json --tile 13/7276/3225 \
+  --param 'paper=#ffe0f0' --param softness=2 --out tile.png
+
+# Tile server: query-string overrides on the tile endpoint.
+curl 'http://127.0.0.1:8080/tiles/13/7276/3225.png?paper=%23ffe0f0&softness=2'
+
+# JSON Schema for the current style's parameters (defaults, ranges,
+# descriptions) — drive sliders / color pickers off this.
+curl http://127.0.0.1:8080/style/params
+```
+
+`Document::params_schema()` derives that schema for editor UIs; `ezu
+serve`'s params panel is generated straight from it.
+
+For computed values, wire scalars through the graph: `math` does
+arithmetic over numbers (literals, `$param`s, or `@node` scalar ports)
+and `zoom` emits the tile's zoom level, so zoom-dependent styling is a
+two-node chain:
+
+```jsonc
+"z":        { "op": "zoom" },
+"zfrac":    { "op": "math", "fn": "div", "a": "@z", "b": 16 },
+"lu_alpha": { "op": "math", "fn": "mul", "a": "$landuse-alpha", "b": "@zfrac" },
+"landuse":  { "op": "fill-solid", "features": "@landuse_feat",
+              "fill": "#a6c084", "fill-alpha": "@lu_alpha" }
+```
+
+For MapLibre-native curves, `expr` evaluates a full MapLibre expression
+once per tile (with the tile's zoom in the context) and emits a `Scalar`
+you can feed to any node's scalar field.
+
+One constraint: fields that decide canvas padding at build time (blur
+sigmas and friends) need a static upper bound — a literal, or a
+`$param` with `max` declared. Wiring those from a `@node` port is a
+build error.
+
+[`watercolor.json`](../ezu/examples/styles/watercolor.json) is a
+complete parametric style.
 
 ## Functions
 
