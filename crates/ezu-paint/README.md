@@ -13,14 +13,77 @@ Three things live here:
 1. **Paint primitives** — functions that take a `Canvas` and feature
    data and produce pixels. Reusable on their own.
 2. **`nodes` module** — `NodeFactory` implementations for each built-in
-   op, grouped into `raster`, `source`, `paint`, `geometry`
-   submodules. Each op self-registers via `ezu_graph::submit_node!`;
+   op, grouped into `raster`, `source`, `paint`, `geometry`,
+   `scalar`, `util` submodules. Each op self-registers via `ezu_graph::submit_node!`;
    `default_registry()` just collects everything via
    `NodeRegistry::from_inventory()`.
 3. **`host` module** — host-side glue: ready-made `AssetLoader`
    implementations (`BrushBankLoader` for document-scoped images /
    brushes, `TileLoader` for per-tile feature overlays), and
    conversions from `RasterBuf` to PNG / straight RGBA.
+
+## How a style paints
+
+An ezu style is a **typed node DAG**, not an ordered layer list. Every
+operation below is a node, and ports are statically type-checked across
+seven kinds — `Features`, `Raster`, `Sprite`, `Brush`, `Scalar`, `Labels`,
+`ScalarField` (see [`ezu-graph`](../ezu-graph#port-types) for what each
+carries). Ports list the kinds they accept, so polymorphic ops (e.g.
+`blur` over `Raster`/`Sprite`) pass the input kind straight through, and
+intermediate buffers are cached and reusable across tiles.
+
+Tile-pyramid inputs go beyond vectors: `dem` sources feed elevation as a
+`ScalarField`, and `raster` sources feed RGBA imagery (XYZ / TileJSON /
+PMTiles; satellite photos, pre-rendered basemaps) as a seam-free padded
+`Raster` — so any filter chain can post-process a photo basemap
+(`photo-pop.json` posterizes 国土地理院 aerial imagery). External inputs
+— images, brushes, fonts, per-tile MVT/GeoJSON feature layers — enter
+through one uniform `AssetLoader` trait (see [Host
+glue](#host-glue)); the schemes a style names them with are documented
+in the [`ezu-style` README](../ezu-style).
+
+Example: a watercolor water layer with a brushed road on top of an
+earth-tone background, composited bottom-to-top with `stack`.
+
+```json
+{
+  "name": "demo",
+  "tile-size": 512,
+  "pad": 24,
+  "sources": {
+    "glazing":  { "type": "brush", "src": "file:brushes/watercolor_glazing.myb" },
+    "basemap":  { "type": "mvt", "url": "https://papers.reearth.land/protomaps/tilejson.json" }
+  },
+  "nodes": {
+    "bg":      { "op": "solid", "color": "#fbf6e6" },
+    "earth":   { "op": "features", "layer": "earth" },
+    "earth_p": { "op": "fill-solid", "features": "@earth", "fill": "#e8d9b0" },
+    "water":   { "op": "features", "layer": "water" },
+    "water_p": { "op": "fill-dabs", "features": "@water",
+                 "color": "#5876a0", "opacity": 0.22,
+                 "radius-px": 7, "spacing-px": 3 },
+    "roads":   { "op": "features", "layer": "roads",
+                 "filter-expr": ["==", ["get", "kind_detail"], "motorway"] },
+    "brush":   { "op": "brush-file", "src": "@glazing" },
+    "roads_p": { "op": "line", "features": "@roads", "brush": "@brush",
+                 "color": "#4a3424", "radius-px": 2.6 },
+    "out":     { "op": "stack", "layers": ["@bg", "@earth_p", "@water_p", "@roads_p"] }
+  },
+  "output": "@out"
+}
+```
+
+`stack` composites its `layers` with plain source-over; reach for `blend`
+when you want a specific blend mode, a composite operator, or a clipping
+mask:
+
+```json
+"paper":  { "op": "solid", "color": "#fbf6e6" },
+"shaded": { "op": "blend", "base": "@paper", "over": "@ink", "mode": "multiply" }
+```
+
+The full reference watercolor style is in
+[`crates/ezu/examples/styles/watercolor.json`](../ezu/examples/styles/watercolor.json).
 
 ## Paint primitives
 
@@ -89,6 +152,8 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 | `displace` | `Raster\|Sprite + Raster\|Sprite → mirrors main input` | Photoshop-style displacement map. `displacement` raster's R/G channels (0.5 = no offset) drive per-pixel offsets up to `amp-px`. Output kind mirrors the main `input`. Grows upstream pad by `amp-px`; `boundary` (`clamp`/`transparent`/`mirror`) handles edge sampling |
 | `warp` | `Raster\|Sprite → same kind` | Domain warp via internal noise (same dial as `noise`: `type`, `scale-px`, `octaves`, `lacunarity`, `gain`, `seed`) plus `amp-px`. Pass-through over `Raster`/`Sprite`. `anchor: world` default → seamless across tile borders; grows upstream pad by `amp-px` |
 | `blend` | `Raster\|Sprite base + over [+ mask] → mirrors base` | W3C blend modes (normal/multiply/screen/overlay/darken/lighten/color-dodge/color-burn/hard-light/soft-light/difference/exclusion/hue/saturation/color/luminosity), `composite` operator (`over` default / `destination-out` for brush-eraser), `clip` (source-atop, PS clipping mask), optional alpha `mask`, `opacity`. All three inputs accept `Raster` or `Sprite`; output kind mirrors `base` |
+| `stack` | `[Raster\|Sprite] → mirrors first` | Composite an ordered `layers` list bottom-to-top with plain source-over — the n-ary form of a `blend` chain, and the usual document `output` |
+| `mix` | `Raster\|Sprite ×2 → mirrors first` | Tween two rasters by a scalar `t` in a selectable colour `space` — a straight colour blend, not a composite |
 | `brightness-contrast` | `Raster\|Sprite → same kind` | Linear brightness shift + contrast slope around mid-gray; pass-through over `Raster`/`Sprite` |
 | `levels` | `Raster\|Sprite → same kind` | Photoshop-style levels: remap `[in-black, in-white]` through `gamma` onto `[out-black, out-white]`; generalises `brightness-contrast` with a midtone curve |
 | `erode` / `dilate` | `Raster\|Sprite → same kind` | Per-channel morphological min / max over a square kernel of `radius-px`. Classic mask cleanup after `color-to-alpha`. Grows upstream pad by `radius-px` |
@@ -96,18 +161,24 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 | `hsl` | `Raster\|Sprite → same kind` | Hue rotation (degrees) + saturation/lightness shift in `[-1, 1]`; pass-through over `Raster`/`Sprite` |
 | `invert` | `Raster\|Sprite → same kind` | Negate RGB (alpha preserved); pass-through over `Raster`/`Sprite` |
 | `color-to-alpha` | `Raster\|Sprite → same kind` | Chroma-key: pixels near `color` (Chebyshev distance) become transparent with `threshold`/`softness` ramp; pass-through over `Raster`/`Sprite` |
+| `saturate` / `vibrance` | `Raster\|Sprite → same kind` | Scale CIELAB chroma preserving hue + lightness — `saturate` uniformly, `vibrance` adaptively boosting low-chroma pixels |
 | `posterize` | `Raster\|Sprite → same kind` | Quantise each RGB channel into `steps` evenly-spaced levels (non-premultiplied sRGB). Alpha preserved |
+| `quantize` | `Raster\|Sprite → same kind` | Snap every pixel to the nearest entry of a fixed `palette`, in perceptual CIELAB (default) or RGB — limited-palette / poster / pixel-art looks |
+| `dither` | `Raster → Raster` | Palette reduction with error diffusion (Floyd–Steinberg) or an ordered Bayer matrix — retro / print looks |
 | `mosaic` | `Raster → Raster` | Quantise into uniform `block × block` squares. `mode: "average"` (default) blends covered pixels into a mean colour — classic mosaic filter. `mode: "nearest"` samples each block's centre pixel verbatim, giving hard block edges without inter-colour blending (compose with `posterize` for indexed-palette / pixel-art looks). `anchor: "world"` (default) keeps the block grid seamless across tile borders by growing the upstream pad; `anchor: "tile"` restarts the grid per-tile |
+| `place` | `Raster\|Sprite → Raster` | Composite one image at fixed canvas coordinates with `fit: none / cover / contain / stretch` |
+| `tiling` | `Raster\|Sprite → Raster` | Repeat an image across the canvas, world-anchored so the pattern is seamless across tiles |
 | `channel-shuffle` | `Raster\|Sprite → same kind` | Rearrange RGBA channels: each output `r`/`g`/`b`/`a` names which input channel (or constant `0`/`1`) feeds it. Operates in non-premultiplied sRGB |
 | `sharpen` | `Raster\|Sprite → same kind` | 4-neighbour Laplacian sharpen with strength `amount`. Grows upstream pad by 1 |
 | `gradient-linear` | `() → Raster\|Sprite` | Linear gradient between two points. `start`/`end` as `[x, y]` fractions, `stops: [[t, "#hex"], …]`, optional `anchor: "tile" \| "world"`. `kind: sprite` switches to sprite-local `[0, 1]` coords at `width-px × height-px` |
 | `gradient-radial` | `() → Raster\|Sprite` | Radial / elliptical gradient. `center`, `radius`, optional `aspect`. Sprite mode same as linear |
 | `gradient-conic` | `() → Raster\|Sprite` | Sweep gradient around `center` starting at `start-angle` (degrees). Sprite mode same as linear |
-| `gradient-diamond` | `() → Raster\|Sprite` | Manhattan-distance gradient. `center`, `radius`. Sprite mode same as linear |
+| `gradient-diamond` | `() → Raster\|Sprite` | Manhattan-distance gradient. `center`, `radius`. Sprite mode same as linear. All four gradients interpolate their stops in a selectable `space` (`rgb` default, plus `hsl` / `hsv` / `hcl` / `lab`; hue-based spaces take the shortest path around the wheel), and take an `anchor: "tile" \| "world"` — `world` keeps the pattern seamless across tile borders |
 | `hillshade` | `ScalarField → Raster` | Horn-method analytical hillshade. `azimuth-deg` / `altitude-deg` light angle, `z-factor` / `exaggeration`, optional ESRI `multidirectional`. `mode: shade` (grayscale) or `mode: relief` (transparent black for multiply-blend over a base map). Geographically accurate only when the input's `geo_scale` is populated (DEM source); otherwise produces pixel-space gradients (fine for stylization) |
 | `slope` | `ScalarField → Raster` | Per-pixel slope angle as grayscale, normalised to `0..1` against `max-deg`; optional `invert`. Same `geo_scale` caveat as `hillshade` |
 | `color-ramp` | `ScalarField → Raster` | Map scalar values to colour via a `stops: [{value, color}]` table; linear interp, end colours clamp out-of-range. Canonical use is hypsometric tinting over an elevation `ScalarField` (`stops[i].value` = metres) but works on any scalar field |
 | `map-range` | `ScalarField → ScalarField` | Linearly remap from `[in-min, in-max]` to `[out-min, out-max]` with optional `clamp`. Normalise a DEM or distance field into `[0, 1]` before `color-ramp` |
+| `density` | `Features → ScalarField` | Kernel-density estimate over point features — the MapLibre heatmap kernel. Pair with `color-ramp` for a heatmap |
 | `threshold` | `ScalarField → ScalarField` | Binarise against `value`: emit `low` for samples ≤ `value`, `high` otherwise; `softness` gives a linear ramp instead of a hard step |
 
 **Sources** (`nodes::source`)
@@ -117,6 +188,8 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 | `features` | `() → Features` | Samples a host-bound vector tile layer. `source` (optional, matches a `mvt`/`pmtiles` entry in the document's `sources` block; defaults to the single such entry) + `layer` (the MVT layer name). Looked up as `<source>.<layer>` on the AssetLoader |
 | `dem` | `() → ScalarField` | Samples a host-bound DEM mosaic. `source` (optional, matches a `dem` entry in `sources`; defaults to the single such entry) — looked up by bare source name. The host fetches + decodes raster-DEM tiles (terrarium / mapbox-rgb) and binds the stitched scalar field (with `geo_scale` populated) per render |
 | `raster` | `() → Raster` | Samples a host-bound RGBA imagery mosaic (satellite photos, pre-rendered basemaps). `source` (optional, matches a `raster` entry in `sources`; defaults to the single such entry) — looked up by bare source name. The host fetches PNG/WebP/JPEG tiles (XYZ / TileJSON / PMTiles), stitches the 3×3 neighbourhood onto the padded canvas, and binds it per render; unbound tiles (`on-missing: empty`) emit transparent pixels |
+| `image` | `() → Sprite` | Load a PNG / WebP asset from the document's `sources` block at its native dimensions |
+| `icon` | `() → Sprite` | Crop one named icon out of a `sprite` atlas — the feed for `stamp` (symbol icons), `tiling` (`fill-pattern`) and `line-stamp` (`line-pattern`) |
 | `literal-geometry` | `() → Features` | Inline points / lines / polygons from style fields |
 | `tile-bounds` | `() → Features` | Polygon covering the current tile |
 | `point-grid` | `() → Features` | Regular grid of points across the tile |
@@ -128,9 +201,16 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 | `fill-solid` | `Features → Raster` | wraps `paint_polygons` |
 | `fill-dabs` | `Features → Raster` | wraps `paint_polygons_dabs` |
 | `line` | `Features + Brush → Raster` | wraps `paint_lines` |
-| `brush-file` | `() → Brush` | Resolved by the host's `AssetLoader` |
+| `stroke` | `Features → Raster` | Crisp constant-width `tiny-skia` vector stroke with cap / join, optional `dasharray`, and a `gap-width` that renders MapLibre's `line-gap-width` casing annulus — clean cartographic lines rather than brushwork |
+| `line-stamp` | `Features + Raster\|Sprite → Raster` | Repeat a sprite along each polyline, tangent-rotated and fit to the line width — MapLibre `line-pattern` |
+| `circles` | `Features → Raster` | Crisp filled disks at feature points with per-feature radius / colour / stroke — the vector counterpart to MapLibre's `circle` |
+| `stamp` | `Features + Raster\|Sprite → Raster` | Paint a sprite at every feature point, with world-deterministic jitter |
+| `text` | `Features → Raster` | SDF glyph labels with self-contained collision — see [Text labels](#text-labels) |
+| `text-labels` / `label-placement` / `text-draw` | `Features → Labels → Raster` | The shared-placement trio: every label layer's candidates collide in **one** index — see [Text labels](#text-labels) |
+| `brush-file` | `() → Brush` | Load a MyPaint `.myb` brush, resolved by the host's `AssetLoader` |
+| `brush-solid` | `() → Brush` | Synthesize a crisp constant-width brush without a `.myb` file |
 
-**Geometry ops** (`nodes::geometry`) — turf.js-flavored `Features → Features` transforms
+**Geometry ops** (`nodes::geometry`) — turf.js-flavored transforms, mostly `Features → Features`
 
 | Op | Inputs → Output | Notes |
 |---|---|---|
@@ -150,6 +230,17 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 | `resample` | `Features → Features` | Evenly-spaced vertices at `spacing-px` along arc length on each polyline / ring |
 | `feature-boolean` | `(Features, Features) → Features` | Polygon set ops: `mode: union/intersection/difference/symmetric-difference`. Lines / points on either input are dropped |
 | `triangulate` | `Features → Features` | Delaunay triangulation of input points → triangles as polygons |
+| `contour` | `ScalarField → Features` | Isolines from a scalar field via marching squares — contour lines over a DEM, edges of a noise field |
+| `dash` | `Features → Features` | Cut polylines into dash / gap segments |
+| `wave` | `Features → Features` | Lateral sine displacement of polylines, for hand-drawn wobble |
+
+**Scalars** (`nodes::scalar`) — computed values for any scalar field
+
+| Op | Inputs → Output | Notes |
+|---|---|---|
+| `zoom` | `() → Scalar` | The tile's zoom level, for zoom-dependent styling |
+| `math` | `Scalar… → Scalar` | Arithmetic over literals, `$param`s, and `@node` scalar ports |
+| `expr` | `() → Scalar` | Evaluate a MapLibre expression once per tile (the tile's zoom in context) and emit the result as a `Scalar` |
 
 **Utility** (`nodes::util`)
 
@@ -162,6 +253,117 @@ Each factory implements `NodeFactory::schema()` so editors picking up
 the registry-derived JSON Schema get per-op autocomplete. Adding a new
 op means dropping a file under the right category and ending it with
 `ezu_graph::submit_node!(MyFactory);` — no central list to edit.
+Downstream crates can register [custom ops](../ezu-graph#custom-ops) on
+top of `default_registry()`.
+
+## Text labels
+
+The `text` node renders labels the way MapLibre's `symbol` layer does,
+from vector features:
+
+- **Shaping** — [`rustybuzz`](https://github.com/harfbuzz/rustybuzz)
+  (a pure-Rust HarfBuzz port) shapes each label; `placement: point`
+  labels each feature point, `placement: line` / `line-center` walks
+  each polyline with tangent-rotated glyphs. Layout knobs mirror MapLibre
+  — `justify`, `anchor` / `anchor-variants` (variable anchor), `offset-em`,
+  `max-width-em` (wrapping), `letter-spacing-em`, `spacing-px`,
+  `max-angle-deg`, `keep-upright`.
+- **Two glyph backends** — the `font` fallback stack names `font` and/or
+  `glyphs` sources:
+  - a **`font` source** supplies outline font bytes (TTF / OTF / TTC),
+    which ezu shapes and rasterises into an SDF itself. Its `url` is a
+    font file (`file:`, `http(s)://`, `data:`) or an installed-font
+    reference (`system:`, below).
+  - a **`glyphs` source** is a MapLibre glyph-PBF endpoint — a
+    `{fontstack}` / `{range}` URL template serving pre-rendered 24 px SDF
+    glyphs in 256-codepoint ranges, fetched lazily per range. This is the
+    exact glyph data maplibre-gl-js itself draws, so a translated style
+    can label with zero font files.
+- **SDF drawing** — glyphs are composited from signed-distance fields, so
+  the `size`, `color`, and halo (`halo-color`, `halo-width`) are all
+  cheap runtime parameters. Every paint property has an optional `*-expr`
+  sibling (`color-expr`, `size-expr`, `halo-width-expr`, …) evaluated per
+  feature.
+- **Deterministic collision** — collision is on by default and is
+  **deterministic across tile boundaries**: candidates come from this
+  tile plus its 8 neighbours (host-bound under `<source>.<layer>@dx,dy`),
+  deduped and placed greedily by `symbol-sort-key`, so a label straddling
+  a tile edge is placed or dropped identically in both tiles. Set the
+  node's `source` / `layer` (the upstream feature source) to enable
+  neighbour gathering; without them collision is centre-tile-only.
+  `allow-overlap` / `ignore-placement` / `padding-px` mirror MapLibre.
+- **Shared cross-layer placement & icons** — label layers can split into
+  `text-labels` (candidates) feeding one `label-placement` node, with a
+  `text-draw` per layer painting its winners: every layer's labels then
+  collide in **one** index, placed top layer first with ties broken by
+  tile feature order, as MapLibre does. A point symbol's icon places
+  *with* its text as one unit — `icon-size`/`-anchor`/`-offset`/
+  `-padding`, overlap flags, `text-optional` / `icon-optional`, and
+  `icon-text-fit` with nine-slice sprite stretching are all honoured.
+
+`ezu translate` emits exactly this shape from a MapLibre `symbol` layer;
+see the [`ezu-translate` README](../ezu-translate) for the property
+mapping and the known divergences.
+
+### The `system:` font scheme
+
+A `font` source can resolve a face from the **machine's installed
+fonts** by family name instead of shipping bytes:
+
+```jsonc
+"sans": { "type": "font",
+          "url": "system:Arial Unicode MS?weight=700&style=italic" }
+```
+
+The family may contain literal spaces or be percent-encoded; `weight`
+(100–900, default 400) and `style` (`normal` / `italic` / `oblique`)
+are optional query params. A `system:` reference makes the recipe
+**machine-dependent** — the same family resolves to whatever face that
+machine has installed, so glyph shapes and character coverage can differ
+across environments, and it is **unavailable in the browser/wasm host**
+(supply font bytes there). Reference a font file for a fully portable,
+reproducible recipe.
+
+```json
+{
+  "name": "labels",
+  "tile-size": 512,
+  "sources": {
+    "basemap": { "type": "mvt", "url": "https://papers.reearth.land/protomaps/tilejson.json" },
+    "sans":    { "type": "font", "url": "system:Helvetica" }
+  },
+  "nodes": {
+    "bg":        { "op": "solid", "color": "#f7f4ee" },
+    "places":    { "op": "features", "source": "basemap", "layer": "places" },
+    "place_lbl": { "op": "text", "features": "@places",
+                   "source": "basemap", "layer": "places",
+                   "font": ["sans"],
+                   "text": ["get", "name"],
+                   "size": 14,
+                   "color": "#333333",
+                   "halo-color": "#ffffff", "halo-width": 1.2,
+                   "color-expr": ["match", ["get", "kind"], "city", "#111111", "#555555"] },
+    "out":       { "op": "stack", "layers": ["@bg", "@place_lbl"] }
+  },
+  "output": "@out"
+}
+```
+
+## Brushes
+
+Nothing is bundled into the library — a style references every brush it
+uses through a `src` in its `sources` block, and the host loads it from
+disk, HTTP, or an inline `data:` payload. Any MyPaint `.myb` brush
+works; `brush-solid` synthesizes a crisp constant-width one when no file
+is wanted.
+
+The example styles ship their brushes alongside the style JSON in
+[`crates/ezu/examples/styles/brushes/`](../ezu/examples/styles/brushes/)
+and reference them by relative `file:` path (resolved against the style
+file's directory); those are CC0 brushes by David Revoy from
+[`mypaint/mypaint-brushes`](https://github.com/mypaint/mypaint-brushes)
+(attribution in
+[`brushes/CREDITS.md`](../ezu/examples/styles/brushes/CREDITS.md)).
 
 ## Canvas
 
