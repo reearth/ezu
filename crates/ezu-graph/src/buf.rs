@@ -47,6 +47,35 @@ impl RasterBuf {
         head.iter().all(|&b| b == 0) && mid.iter().all(|&w| w == 0) && tail.iter().all(|&b| b == 0)
     }
 
+    /// A shared all-zero raster of the given size.
+    ///
+    /// A style with dozens of layers produces dozens of fully transparent
+    /// rasters on any tile that lacks those features — every one of them
+    /// identical, and each otherwise costing a full padded canvas. Handing
+    /// out one interned buffer per size collapses them into a single
+    /// allocation. The pool keeps at most one buffer per distinct canvas
+    /// size, which in practice means one.
+    ///
+    /// Callers must treat the result as immutable; `RasterBuf` is `Clone`,
+    /// so any consumer needing to write copies first.
+    pub fn blank_shared(width: u32, height: u32) -> Arc<RasterBuf> {
+        let mut pool = blank_pool().lock().unwrap_or_else(|e| e.into_inner());
+        Arc::clone(
+            pool.entry((width, height))
+                .or_insert_with(|| Arc::new(RasterBuf::new(width, height))),
+        )
+    }
+
+    /// Whether `buf` *is* the interned blank for its size — i.e. holding
+    /// it costs nothing, because every other holder points at the same
+    /// allocation. Memory accounting uses this to avoid charging one
+    /// buffer's worth of bytes to each of its dozens of holders.
+    pub fn is_interned_blank(buf: &Arc<RasterBuf>) -> bool {
+        let pool = blank_pool().lock().unwrap_or_else(|e| e.into_inner());
+        pool.get(&(buf.width, buf.height))
+            .is_some_and(|shared| Arc::ptr_eq(shared, buf))
+    }
+
     pub fn pixel(&self, x: u32, y: u32) -> [u8; 4] {
         let i = ((y * self.width + x) * 4) as usize;
         [
@@ -56,6 +85,14 @@ impl RasterBuf {
             self.pixels[i + 3],
         ]
     }
+}
+
+/// Interned all-zero rasters, keyed by `(width, height)`.
+type BlankPool = std::sync::Mutex<HashMap<(u32, u32), Arc<RasterBuf>>>;
+
+fn blank_pool() -> &'static BlankPool {
+    static POOL: std::sync::OnceLock<BlankPool> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
 /// A sub-rectangle of a sprite atlas: one named icon.

@@ -55,6 +55,30 @@ impl PortValue {
         }
     }
 
+    /// Approximate heap bytes held by this value's payload.
+    ///
+    /// Exact for the pixel-carrying variants (raster, sprite, scalar
+    /// field) — the ones that dominate render-time memory. Type-erased
+    /// payloads (features, brushes, labels) report `0` because their
+    /// concrete types live in other crates; treat the number as "bytes
+    /// in pixel buffers", which is what memory reports care about.
+    /// The interned blank raster reports `0`: it is one allocation shared
+    /// by every holder, so charging it per holder would badly overstate
+    /// what a render or a cache is really costing.
+    pub fn approx_bytes(&self) -> usize {
+        match self {
+            PortValue::Raster(r) | PortValue::Sprite(r) => {
+                if RasterBuf::is_interned_blank(r) {
+                    0
+                } else {
+                    r.pixels.len()
+                }
+            }
+            PortValue::ScalarField(f) => f.values.len() * std::mem::size_of::<f32>(),
+            _ => 0,
+        }
+    }
+
     pub fn as_scalar(&self) -> Option<&ScalarValue> {
         if let PortValue::Scalar(s) = self {
             Some(s)

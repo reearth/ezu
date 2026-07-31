@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use xxhash_rust::xxh3::Xxh3;
 
+use crate::buf::RasterBuf;
 use crate::cache::{Cache, CacheKey, Hash128};
 use crate::eval::{AssetLoader, CanvasInfo, EvalCtx, EvalError, ParamValues, TileId};
 use crate::graph::{Graph, NodeIx};
@@ -50,9 +51,19 @@ impl<'a> Evaluator<'a> {
             params,
             rng_seed,
         };
+        if crate::mem::enabled() {
+            crate::mem::reset();
+        }
         let n = self.graph.len();
         let mut hashes: Vec<Hash128> = vec![0; n];
         let mut values: Vec<Option<PortValue>> = vec![None; n];
+
+        // How many not-yet-evaluated consumers each node still has. Once
+        // it hits zero the node's value is dead weight, so it is dropped
+        // instead of being carried to the end of the render.
+        let mut consumers: Vec<usize> = (0..n)
+            .map(|ix| self.graph.downstream_unique(ix).len())
+            .collect();
 
         for &ix in self.graph.topo_order() {
             let (value, hash) = {
@@ -68,8 +79,25 @@ impl<'a> Evaluator<'a> {
             };
             hashes[ix] = hash;
             values[ix] = Some(value);
+
+            // Safe to drop upstream values only now: `eval_one` has
+            // already cloned everything this node reads.
+            for src in self.graph.upstream(ix) {
+                consumers[src] -= 1;
+                if consumers[src] == 0 && src != self.graph.output() {
+                    if let Some(v) = values[src].take() {
+                        if crate::mem::enabled() {
+                            crate::mem::released(v.approx_bytes());
+                        }
+                    }
+                }
+            }
         }
-        Ok(values[self.graph.output()].clone().expect("output unset"))
+        let out = values[self.graph.output()].clone().expect("output unset");
+        if crate::mem::enabled() {
+            eprintln!("{}", crate::mem::report());
+        }
+        Ok(out)
     }
 
     /// Like [`render`] but evaluates nodes concurrently on Rayon, firing
@@ -103,11 +131,18 @@ impl<'a> Evaluator<'a> {
                 params,
                 rng_seed,
             };
+            if crate::mem::enabled() {
+                crate::mem::reset();
+            }
             let n = self.graph.len();
             let state = ParState {
-                slots: (0..n).map(|_| OnceLock::new()).collect(),
+                slots: (0..n).map(|_| Mutex::new(None)).collect(),
+                hashes: (0..n).map(|_| OnceLock::new()).collect(),
                 pending: (0..n)
                     .map(|ix| AtomicUsize::new(self.graph.indegree(ix)))
+                    .collect(),
+                consumers: (0..n)
+                    .map(|ix| AtomicUsize::new(self.graph.downstream_unique(ix).len()))
                     .collect(),
                 first_err: Mutex::new(None),
                 ctx,
@@ -132,11 +167,15 @@ impl<'a> Evaluator<'a> {
             {
                 return Err(e);
             }
-            Ok(state.slots[self.graph.output()]
-                .get()
-                .expect("output unset")
-                .0
-                .clone())
+            let out = state.slots[self.graph.output()]
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .take()
+                .expect("output unset");
+            if crate::mem::enabled() {
+                eprintln!("{}", crate::mem::report());
+            }
+            Ok(out)
         }
     }
 
@@ -164,15 +203,39 @@ impl<'a> Evaluator<'a> {
         }
 
         let upstream = |src: NodeIx| -> (Hash128, PortValue) {
-            let (v, h) = state.slots[src]
+            let v = state.slots[src]
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+                .expect("upstream still held while a consumer is running");
+            let h = *state.hashes[src]
                 .get()
                 .expect("upstream resolved before dependent is scheduled");
-            (*h, v.clone())
+            (h, v)
         };
 
         match self.eval_one(ix, &state.ctx, &upstream) {
             Ok((v, h)) => {
-                let _ = state.slots[ix].set((v, h));
+                let _ = state.hashes[ix].set(h);
+                *state.slots[ix].lock().unwrap_or_else(|p| p.into_inner()) = Some(v);
+                // This node has taken its copies, so any upstream whose
+                // last consumer it was can be released now rather than at
+                // the end of the render.
+                for src in self.graph.upstream(ix) {
+                    if state.consumers[src].fetch_sub(1, Ordering::AcqRel) == 1
+                        && src != self.graph.output()
+                    {
+                        let dropped = state.slots[src]
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .take();
+                        if crate::mem::enabled() {
+                            if let Some(v) = dropped {
+                                crate::mem::released(v.approx_bytes());
+                            }
+                        }
+                    }
+                }
             }
             Err(e) => {
                 let mut slot = state.first_err.lock().unwrap_or_else(|p| p.into_inner());
@@ -263,7 +326,7 @@ impl<'a> Evaluator<'a> {
         // host-only. Traces there report `elapsed_us = 0`.
         #[cfg(not(target_arch = "wasm32"))]
         let t0 = Instant::now();
-        let value = node.eval(ctx, &input_vals)?;
+        let (value, blank) = intern_blank(node.eval(ctx, &input_vals)?);
         #[cfg(not(target_arch = "wasm32"))]
         let elapsed_us = t0.elapsed().as_micros();
         #[cfg(target_arch = "wasm32")]
@@ -278,6 +341,9 @@ impl<'a> Evaluator<'a> {
             elapsed_us,
             "evaluated",
         );
+        if crate::mem::enabled() && !blank {
+            crate::mem::acquired(node.op_name(), value.approx_bytes());
+        }
         self.cache.insert(key, value.clone());
         Ok((value, key.0))
     }
@@ -289,10 +355,40 @@ impl<'a> Evaluator<'a> {
 /// across the Rayon scope without further locking of the results.
 #[cfg(feature = "parallel")]
 struct ParState<'a> {
-    slots: Vec<std::sync::OnceLock<(PortValue, Hash128)>>,
+    /// Per-node result, cleared once the node's last consumer has run.
+    slots: Vec<std::sync::Mutex<Option<PortValue>>>,
+    /// Per-node cache hash; kept for the whole render (it is 16 bytes).
+    hashes: Vec<std::sync::OnceLock<Hash128>>,
     pending: Vec<std::sync::atomic::AtomicUsize>,
+    /// Consumers that have not yet read each node's slot.
+    consumers: Vec<std::sync::atomic::AtomicUsize>,
     first_err: std::sync::Mutex<Option<RenderError>>,
     ctx: EvalCtx<'a>,
+}
+
+/// Replace a fully transparent raster with the shared blank of the same
+/// size, dropping the freshly allocated one.
+///
+/// Layers that match nothing on a tile — most of them, on most tiles —
+/// each hand back a full padded canvas of zeros, and the evaluator holds
+/// every intermediate until its consumers have run. Collapsing them onto
+/// one interned buffer keeps the pixels identical while costing a single
+/// wide scan (`is_blank` reads 16 bytes at a time) per raster produced.
+///
+/// Returns whether the value was replaced, so memory accounting can skip
+/// the shared buffer instead of counting it once per node.
+fn intern_blank(value: PortValue) -> (PortValue, bool) {
+    match &value {
+        PortValue::Raster(r) if r.is_blank() => (
+            PortValue::Raster(RasterBuf::blank_shared(r.width, r.height)),
+            true,
+        ),
+        PortValue::Sprite(s) if s.is_blank() => (
+            PortValue::Sprite(RasterBuf::blank_shared(s.width, s.height)),
+            true,
+        ),
+        _ => (value, false),
+    }
 }
 
 /// One-line human-readable summary of a `PortValue` for debug logs.

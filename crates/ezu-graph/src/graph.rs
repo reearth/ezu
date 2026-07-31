@@ -208,7 +208,10 @@ impl GraphBuilder {
             }
         }
 
-        let topo = topo_sort(n, &incoming, &self.nodes)?;
+        let output_id = self.output.ok_or(BuildError::NoOutput)?;
+        let output_ix = ix_of(&output_id).ok_or(BuildError::UnknownOutput(output_id.clone()))?;
+
+        let topo = topo_sort(n, &incoming, &self.nodes, output_ix)?;
 
         // Pass 2: walk topo order, resolve each node's output kind from
         // its (already-resolved) upstream kinds, and check the upstream
@@ -243,8 +246,6 @@ impl GraphBuilder {
             output_kinds[ix] = node.output(&input_kinds);
         }
 
-        let output_id = self.output.ok_or(BuildError::NoOutput)?;
-        let output_ix = ix_of(&output_id).ok_or(BuildError::UnknownOutput(output_id.clone()))?;
         // Document output must be a canvas-padded raster — anything
         // smaller (e.g. a raw `Sprite`) will alias badly through the
         // host's `raster_to_png` crop. Catch this at build time.
@@ -293,7 +294,59 @@ impl Default for GraphBuilder {
     }
 }
 
+/// Evaluation order for the graph: a valid topological order, chosen to
+/// keep few intermediates alive at once.
+///
+/// Any topological order is correct, but they differ enormously in peak
+/// memory. Breadth-first (plain Kahn) evaluates every source, then every
+/// node above them, so a wide graph holds a full canvas-sized buffer for
+/// each parallel branch before the node that consumes them ever runs.
+/// Depth-first from the output instead finishes one input subtree before
+/// starting its sibling, so a branch's buffers are released as soon as
+/// their consumer has run.
+///
+/// Kahn still runs first, to detect cycles and to order any nodes the
+/// output does not depend on (which are appended, after everything the
+/// output needs).
 fn topo_sort(
+    n: usize,
+    incoming: &[Vec<Option<NodeIx>>],
+    nodes: &IndexMap<NodeId, Box<dyn Node>>,
+    output: NodeIx,
+) -> Result<Vec<NodeIx>, BuildError> {
+    let kahn = kahn_order(n, incoming, nodes)?;
+
+    // Depth-first post-order from the output: a node is emitted only
+    // after every node it reads. Iterative, so a deep chain cannot blow
+    // the stack.
+    let mut order = Vec::with_capacity(n);
+    let mut seen = vec![false; n];
+    let mut stack: Vec<(NodeIx, usize)> = vec![(output, 0)];
+    seen[output] = true;
+    while let Some((ix, port)) = stack.pop() {
+        // Ports are visited in declaration order, which for the
+        // accumulator-style nodes (`stack`, `blend`) means the running
+        // base is resolved before the layers composited onto it.
+        match incoming[ix].get(port) {
+            Some(&edge) => {
+                stack.push((ix, port + 1));
+                if let Some(src) = edge {
+                    if !seen[src] {
+                        seen[src] = true;
+                        stack.push((src, 0));
+                    }
+                }
+            }
+            None => order.push(ix),
+        }
+    }
+    // Nodes the output does not depend on: keep them, in Kahn order, so
+    // a document is still free to evaluate a node for its own sake.
+    order.extend(kahn.into_iter().filter(|&ix| !seen[ix]));
+    Ok(order)
+}
+
+fn kahn_order(
     n: usize,
     incoming: &[Vec<Option<NodeIx>>],
     nodes: &IndexMap<NodeId, Box<dyn Node>>,

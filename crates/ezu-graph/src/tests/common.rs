@@ -17,6 +17,7 @@ pub(super) struct Mock {
     output: PortKind,
     pad_grow: u32,
     space: CoordSpace,
+    fill: [u8; 4],
 }
 
 impl Mock {
@@ -27,10 +28,16 @@ impl Mock {
             output,
             pad_grow: 0,
             space: CoordSpace::Inherit,
+            fill: [0, 0, 0, 255],
         }
     }
     pub(super) fn with_pad_grow(mut self, g: u32) -> Self {
         self.pad_grow = g;
+        self
+    }
+    /// Produce a fully transparent raster instead of the opaque default.
+    pub(super) fn transparent(mut self) -> Self {
+        self.fill = [0, 0, 0, 0];
         self
     }
     pub(super) fn boxed(self) -> Box<dyn Node> {
@@ -62,7 +69,7 @@ impl Node for Mock {
         let size = ctx.canvas.padded_size();
         Ok(match self.output {
             PortKind::Raster => {
-                PortValue::Raster(Arc::new(RasterBuf::filled(size, size, [0, 0, 0, 255])))
+                PortValue::Raster(Arc::new(RasterBuf::filled(size, size, self.fill)))
             }
             other => panic!("mock node has no default output for {other:?}"),
         })
