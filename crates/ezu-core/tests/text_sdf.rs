@@ -98,6 +98,19 @@ fn box_sdf(width: u32, height: u32) -> Vec<u8> {
     bitmap
 }
 
+/// A 10×12 SDF box under an arbitrary codepoint.
+fn box_glyph(id: u32) -> SdfGlyph {
+    SdfGlyph {
+        id,
+        bitmap: box_sdf(10, 12),
+        width: 10,
+        height: 12,
+        left: 1,
+        top: -6,
+        advance: 13,
+    }
+}
+
 /// 'A' as a 10×12 SDF box, 'B' as an inkless advance (space-like).
 fn test_glyphs() -> Vec<SdfGlyph> {
     vec![
@@ -334,6 +347,79 @@ fn fetcher_pulls_each_range_once() {
     let block = layout("あ", &fonts, &no_wrap());
     assert_eq!(block.missing_range_chars, 1);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn a_subset_pbf_files_each_glyph_by_its_own_id() {
+    // A host that builds its own PBF (from `neededCodepoints`) ships
+    // only the characters a tile draws, in one message spanning as many
+    // blocks as it likes. Every glyph must still resolve, whatever the
+    // `range` string says.
+    let stack = SdfFontStack::new();
+    stack
+        .insert_range(&encode_range(
+            "Test Sans",
+            "0-65535",
+            &[box_glyph('A' as u32), box_glyph('あ' as u32)],
+        ))
+        .expect("subset decodes");
+    assert!(stack.is_loaded(0), "block 0 holds 'A'");
+    assert!(stack.is_loaded(0x30), "block 0x30 holds 'あ'");
+    assert!(stack.glyph('あ').is_some(), "'あ' must not follow 'A' home");
+
+    let fonts = [StackEntry::Sdf(Arc::new(stack))];
+    let fonts = FaceEntry::prepare(&fonts);
+    let block = layout("Aあ", &fonts, &no_wrap());
+    assert_eq!(block.glyphs.len(), 2);
+    assert_eq!(block.dropped_chars, 0);
+}
+
+#[test]
+fn partial_binds_of_one_block_accumulate() {
+    // Two subsets can each carry part of the same block; the second
+    // must not evict the first, and the hash has to move so caches
+    // keyed on it see the wider coverage.
+    let stack = SdfFontStack::new();
+    stack
+        .insert_range(&encode_range(
+            "Test Sans",
+            "0-255",
+            &[box_glyph('A' as u32)],
+        ))
+        .unwrap();
+    let after_first = stack.ranges_hash();
+    stack
+        .insert_range(&encode_range(
+            "Test Sans",
+            "0-255",
+            &[box_glyph('C' as u32)],
+        ))
+        .unwrap();
+    assert!(stack.glyph('A').is_some(), "the earlier glyph survives");
+    assert!(stack.glyph('C').is_some());
+    assert_ne!(
+        stack.ranges_hash(),
+        after_first,
+        "widening a block must rehash"
+    );
+}
+
+#[test]
+fn an_empty_whole_range_still_counts_as_loaded() {
+    // A range a server has nothing for is a fact worth remembering:
+    // without a glyph to file it under, the block would look unseen and
+    // a fetcher would ask again on every layout.
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    let stack = SdfFontStack::with_fetcher(Box::new(move |start, end| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        Ok(encode_range("Test Sans", &format!("{start}-{end}"), &[]))
+    }));
+    let fonts = [StackEntry::Sdf(Arc::new(stack))];
+    let fonts = FaceEntry::prepare(&fonts);
+    assert!(layout("AA", &fonts, &no_wrap()).is_empty());
+    assert!(layout("AA", &fonts, &no_wrap()).is_empty());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 #[test]

@@ -28,7 +28,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use xxhash_rust::xxh3::{xxh3_64, Xxh3};
+use xxhash_rust::xxh3::Xxh3;
 
 use super::pbf::{decode_glyph_range, GlyphPbfError};
 
@@ -75,10 +75,57 @@ enum RangeSlot {
     Loaded {
         /// BMP codepoint → glyph.
         glyphs: HashMap<u16, Arc<SdfGlyph>>,
-        /// Content hash of the raw PBF bytes.
+        /// Hash of the glyphs above — of the slot's contents, not of
+        /// the message that delivered them, since a block can be
+        /// filled by several partial messages.
         hash: u64,
     },
     Failed,
+}
+
+impl RangeSlot {
+    /// A loaded-but-empty block, ready to be filled in.
+    fn empty() -> Self {
+        RangeSlot::Loaded {
+            glyphs: HashMap::new(),
+            hash: hash_glyphs(&HashMap::new()),
+        }
+    }
+}
+
+/// The glyph map of `block`, opening it — or superseding a remembered
+/// failure, since glyphs for it are arriving now — as needed.
+fn load_block(
+    ranges: &mut HashMap<u16, RangeSlot>,
+    block: u16,
+) -> &mut HashMap<u16, Arc<SdfGlyph>> {
+    let slot = ranges.entry(block).or_insert_with(RangeSlot::empty);
+    if matches!(slot, RangeSlot::Failed) {
+        *slot = RangeSlot::empty();
+    }
+    match slot {
+        RangeSlot::Loaded { glyphs, .. } => glyphs,
+        RangeSlot::Failed => unreachable!("a failed slot was just replaced"),
+    }
+}
+
+/// Digest of a block's glyphs — every field that reaches shaping or
+/// drawing, in id order so it does not depend on insertion order.
+fn hash_glyphs(glyphs: &HashMap<u16, Arc<SdfGlyph>>) -> u64 {
+    let mut ids: Vec<u16> = glyphs.keys().copied().collect();
+    ids.sort_unstable();
+    let mut h = Xxh3::new();
+    for id in ids {
+        let g = &glyphs[&id];
+        h.update(&id.to_le_bytes());
+        h.update(&g.width.to_le_bytes());
+        h.update(&g.height.to_le_bytes());
+        h.update(&g.left.to_le_bytes());
+        h.update(&g.top.to_le_bytes());
+        h.update(&g.advance.to_le_bytes());
+        h.update(&g.bitmap);
+    }
+    h.digest()
 }
 
 /// A fontstack served as SDF glyph ranges — the `text` node's compat
@@ -142,8 +189,9 @@ impl SdfFontStack {
         blocks
     }
 
-    /// Whether `block` has been loaded (or its fetch has failed —
-    /// either way, no further fetch will run for it).
+    /// Whether `block` has been seen at all — loaded (in full or as a
+    /// subset), or remembered as failed. Either way no further fetch
+    /// will run for it.
     pub fn is_loaded(&self, block: u16) -> bool {
         self.ranges
             .read()
@@ -170,23 +218,50 @@ impl SdfFontStack {
         (ranges.len(), bytes)
     }
 
-    /// Decode one raw range PBF and store it under its own block (from
-    /// the message's `range` field). Replaces any earlier slot.
+    /// Decode one raw glyph PBF and file every glyph under the block
+    /// its own `id` falls in, merging with whatever is already loaded.
+    ///
+    /// The message's `range` string is treated as metadata, not as the
+    /// destination: a host may send a **subset** — one message holding
+    /// only the codepoints a tile actually draws, spanning as many
+    /// blocks as it likes — and each glyph still resolves. Sending
+    /// conventional whole-range messages is unchanged, since every
+    /// glyph in one lands in the block its range names anyway. A
+    /// single-block message additionally marks that block loaded even
+    /// when it carries no glyphs, so an empty range is not refetched.
+    ///
+    /// Rebinding does not clear: a block accumulates glyphs across
+    /// calls, and an id bound twice keeps the later copy. A block
+    /// holding a subset counts as [`is_loaded`](Self::is_loaded), so a
+    /// stack with a [`RangeFetcher`] will not fetch the rest of it —
+    /// pull-on-demand and pushed subsets are not meant to be mixed.
     pub fn insert_range(&self, bytes: &[u8]) -> Result<(), GlyphPbfError> {
         let decoded = decode_glyph_range(bytes)?;
-        let block = (decoded.start >> 8) as u16;
-        let glyphs = decoded
-            .glyphs
-            .into_iter()
-            .filter_map(|g| u16::try_from(g.id).ok().map(|id| (id, Arc::new(g))))
-            .collect();
-        self.ranges.write().expect("range map poisoned").insert(
-            block,
-            RangeSlot::Loaded {
-                glyphs,
-                hash: xxh3_64(bytes),
-            },
-        );
+        let mut ranges = self.ranges.write().expect("range map poisoned");
+
+        let mut touched: Vec<u16> = Vec::new();
+        // A whole-range message claims its block outright, so a range
+        // that legitimately holds no glyphs still reads as loaded.
+        if decoded.start >> 8 == decoded.end >> 8 {
+            let block = (decoded.start >> 8) as u16;
+            touched.push(block);
+            load_block(&mut ranges, block);
+        }
+        for g in decoded.glyphs {
+            let Ok(id) = u16::try_from(g.id) else {
+                continue;
+            };
+            touched.push(id >> 8);
+            load_block(&mut ranges, id >> 8).insert(id, Arc::new(g));
+        }
+
+        touched.sort_unstable();
+        touched.dedup();
+        for block in touched {
+            if let Some(RangeSlot::Loaded { glyphs, hash }) = ranges.get_mut(&block) {
+                *hash = hash_glyphs(glyphs);
+            }
+        }
         Ok(())
     }
 
