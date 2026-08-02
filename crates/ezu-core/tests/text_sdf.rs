@@ -423,6 +423,60 @@ fn an_empty_whole_range_still_counts_as_loaded() {
 }
 
 #[test]
+fn trimming_drops_the_coldest_blocks_first() {
+    let stack = SdfFontStack::new();
+    for (block, id) in [(0u32, 'A' as u32), (0x30, 'あ' as u32), (0x4E, 0x4E00)] {
+        let start = block << 8;
+        stack
+            .insert_range(&encode_range(
+                "Test Sans",
+                &format!("{start}-{}", start + 255),
+                &[box_glyph(id)],
+            ))
+            .unwrap();
+    }
+    let (blocks, bytes) = stack.loaded_size();
+    assert_eq!(blocks, 3);
+
+    // Read the oldest block back, making the second-oldest the coldest.
+    assert!(stack.glyph('A').is_some());
+
+    // Budget for two of the three.
+    stack.set_byte_budget(bytes * 2 / 3);
+    assert_eq!(stack.trim_to_budget(), 1, "one block should go");
+    assert!(stack.glyph('あ').is_none(), "the coldest block was dropped");
+    assert!(stack.glyph('A').is_some(), "the block just read survives");
+    assert!(stack.glyph('\u{4E00}').is_some(), "so does the newest");
+    assert!(stack.loaded_size().1 <= bytes * 2 / 3);
+}
+
+#[test]
+fn an_unlimited_budget_keeps_everything() {
+    let stack = SdfFontStack::new();
+    stack
+        .insert_range(&encode_range("Test Sans", "0-255", &test_glyphs()))
+        .unwrap();
+    assert_eq!(stack.byte_budget(), usize::MAX, "unlimited by default");
+    assert_eq!(stack.trim_to_budget(), 0);
+    assert!(stack.glyph('A').is_some());
+}
+
+#[test]
+fn a_budget_below_one_block_is_still_honoured() {
+    // The ceiling is what the host asked for, so it holds even when it
+    // empties the stack. Nothing is lost mid-render — trimming runs
+    // after one — and the next tile re-binds what it needs.
+    let stack = SdfFontStack::new();
+    stack
+        .insert_range(&encode_range("Test Sans", "0-255", &test_glyphs()))
+        .unwrap();
+    stack.set_byte_budget(1);
+    assert_eq!(stack.trim_to_budget(), 1);
+    assert_eq!(stack.loaded_size(), (0, 0));
+    assert!(stack.glyph('A').is_none());
+}
+
+#[test]
 fn ranges_hash_tracks_the_loaded_set() {
     let stack = SdfFontStack::new();
     let empty = stack.ranges_hash();

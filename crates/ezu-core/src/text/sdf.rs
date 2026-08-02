@@ -26,6 +26,7 @@
 //!   scheme; astral codepoints never resolve.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
 use xxhash_rust::xxh3::Xxh3;
@@ -79,6 +80,13 @@ enum RangeSlot {
         /// the message that delivered them, since a block can be
         /// filled by several partial messages.
         hash: u64,
+        /// Glyph-bitmap bytes the block holds, so
+        /// [`trim_to_budget`](SdfFontStack::trim_to_budget) can total
+        /// the stack without walking every glyph.
+        bytes: usize,
+        /// Reading of the stack's clock when this block was last bound
+        /// or read from. Eviction takes the lowest first.
+        last_used: AtomicU64,
     },
     Failed,
 }
@@ -89,6 +97,8 @@ impl RangeSlot {
         RangeSlot::Loaded {
             glyphs: HashMap::new(),
             hash: hash_glyphs(&HashMap::new()),
+            bytes: 0,
+            last_used: AtomicU64::new(0),
         }
     }
 }
@@ -135,13 +145,23 @@ fn hash_glyphs(glyphs: &HashMap<u16, Arc<SdfGlyph>>) -> u64 {
 /// the host up front ([`insert_range`](Self::insert_range), the wasm
 /// path) or pulled on demand through an optional [`RangeFetcher`] (the
 /// native path) the first time shaping needs a codepoint from an
-/// unloaded range. Ranges only ever accumulate; a fetch failure is
-/// remembered per range. [`ranges_hash`](Self::ranges_hash) digests
-/// the loaded/failed set so asset consumers can key caches on exactly
-/// what affects output.
+/// unloaded range. A fetch failure is remembered per range.
+/// [`ranges_hash`](Self::ranges_hash) digests the loaded/failed set so
+/// asset consumers can key caches on exactly what affects output.
+///
+/// Ranges accumulate until [`trim_to_budget`](Self::trim_to_budget)
+/// drops the least recently used back to
+/// [`byte_budget`](Self::byte_budget) — unlimited unless a host sets
+/// one. See `trim_to_budget` for why trimming is the caller's call and
+/// not something binding does on its own.
 pub struct SdfFontStack {
     ranges: RwLock<HashMap<u16, RangeSlot>>,
     fetcher: Option<RangeFetcher>,
+    /// Ceiling on resident glyph bytes, applied by `trim_to_budget`.
+    byte_budget: AtomicUsize,
+    /// Monotone counter stamped into a block's `last_used` on every
+    /// bind and every glyph read, giving eviction its ordering.
+    clock: AtomicU64,
 }
 
 impl SdfFontStack {
@@ -151,6 +171,8 @@ impl SdfFontStack {
         SdfFontStack {
             ranges: RwLock::new(HashMap::new()),
             fetcher: None,
+            byte_budget: AtomicUsize::new(usize::MAX),
+            clock: AtomicU64::new(0),
         }
     }
 
@@ -159,6 +181,82 @@ impl SdfFontStack {
         SdfFontStack {
             ranges: RwLock::new(HashMap::new()),
             fetcher: Some(fetcher),
+            byte_budget: AtomicUsize::new(usize::MAX),
+            clock: AtomicU64::new(0),
+        }
+    }
+
+    /// Cap resident glyph bytes at `bytes`. Takes effect at the next
+    /// [`trim_to_budget`](Self::trim_to_budget); nothing is dropped
+    /// here, so lowering the budget mid-render is safe.
+    ///
+    /// `usize::MAX` (the default) means unlimited: ranges are kept for
+    /// the life of the stack, which is what a short-lived process
+    /// wants and what a long-lived one pays for.
+    pub fn set_byte_budget(&self, bytes: usize) {
+        self.byte_budget.store(bytes, Ordering::Relaxed);
+    }
+
+    /// The configured ceiling on resident glyph bytes.
+    pub fn byte_budget(&self) -> usize {
+        self.byte_budget.load(Ordering::Relaxed)
+    }
+
+    /// Drop least-recently-used blocks until resident glyph bytes fit
+    /// the budget. Returns the number of blocks dropped.
+    ///
+    /// Call this **between renders**, never between binding a range and
+    /// drawing with it. Eviction cannot tell a range bound for the tile
+    /// about to be drawn from one left over from the last tile, so a
+    /// trim in the middle of a host's bind loop can drop glyphs that
+    /// tile is about to need — and a host with no fetcher cannot get
+    /// them back before the render. Trimming after the render instead
+    /// leaves the tile that just drew as the most recently used, so a
+    /// budget that fits one tile's glyphs keeps exactly those.
+    ///
+    /// A stack with a [`RangeFetcher`] re-pulls what it dropped, so
+    /// there the budget trades memory for refetches.
+    pub fn trim_to_budget(&self) -> usize {
+        let budget = self.byte_budget();
+        // Cheap early out on the common path: nothing to weigh when the
+        // budget is unlimited or the stack already fits.
+        if budget == usize::MAX || self.loaded_size().1 <= budget {
+            return 0;
+        }
+        let mut ranges = self.ranges.write().expect("range map poisoned");
+        let mut live: Vec<(u64, u16, usize)> = ranges
+            .iter()
+            .filter_map(|(&block, slot)| match slot {
+                RangeSlot::Loaded {
+                    bytes, last_used, ..
+                } => Some((last_used.load(Ordering::Relaxed), block, *bytes)),
+                // A remembered failure costs nothing to keep and is
+                // worth more than the refetch it prevents.
+                RangeSlot::Failed => None,
+            })
+            .collect();
+        let mut total: usize = live.iter().map(|&(_, _, bytes)| bytes).sum();
+        live.sort_unstable();
+        let mut dropped = 0;
+        for (_, block, bytes) in live {
+            if total <= budget {
+                break;
+            }
+            ranges.remove(&block);
+            total = total.saturating_sub(bytes);
+            dropped += 1;
+        }
+        dropped
+    }
+
+    /// Stamp `block` as used now, so a later trim evicts colder blocks
+    /// first.
+    fn touch(&self, slot: &RangeSlot) {
+        if let RangeSlot::Loaded { last_used, .. } = slot {
+            last_used.store(
+                self.clock.fetch_add(1, Ordering::Relaxed),
+                Ordering::Relaxed,
+            );
         }
     }
 
@@ -200,18 +298,15 @@ impl SdfFontStack {
     }
 
     /// Ranges resolved so far (loaded or failed), and the glyph-bitmap
-    /// bytes they hold. Ranges accumulate for the life of the stack, so
-    /// this is what a long-lived host is paying to keep the fontstack
-    /// resident — the number to look at when a render's memory is not
-    /// accounted for by its pixel buffers.
+    /// bytes they hold — what a long-lived host is paying to keep the
+    /// fontstack resident, and the figure
+    /// [`trim_to_budget`](Self::trim_to_budget) works against.
     pub fn loaded_size(&self) -> (usize, usize) {
         let ranges = self.ranges.read().expect("range map poisoned");
         let bytes = ranges
             .values()
             .map(|slot| match slot {
-                RangeSlot::Loaded { glyphs, .. } => {
-                    glyphs.values().map(|g| g.bitmap.len()).sum::<usize>()
-                }
+                RangeSlot::Loaded { bytes, .. } => *bytes,
                 RangeSlot::Failed => 0,
             })
             .sum();
@@ -257,9 +352,18 @@ impl SdfFontStack {
 
         touched.sort_unstable();
         touched.dedup();
+        let now = self.clock.fetch_add(1, Ordering::Relaxed);
         for block in touched {
-            if let Some(RangeSlot::Loaded { glyphs, hash }) = ranges.get_mut(&block) {
+            if let Some(RangeSlot::Loaded {
+                glyphs,
+                hash,
+                bytes,
+                last_used,
+            }) = ranges.get_mut(&block)
+            {
                 *hash = hash_glyphs(glyphs);
+                *bytes = glyphs.values().map(|g| g.bitmap.len()).sum();
+                last_used.store(now, Ordering::Relaxed);
             }
         }
         Ok(())
@@ -274,7 +378,10 @@ impl SdfFontStack {
         let block = Self::block_of(c)?;
         self.ensure(block);
         match self.ranges.read().expect("range map poisoned").get(&block) {
-            Some(RangeSlot::Loaded { glyphs, .. }) => glyphs.get(&(c as u16)).cloned(),
+            Some(slot @ RangeSlot::Loaded { glyphs, .. }) => {
+                self.touch(slot);
+                glyphs.get(&(c as u16)).cloned()
+            }
             _ => None,
         }
     }
@@ -287,7 +394,8 @@ impl SdfFontStack {
         };
         self.ensure(block);
         match self.ranges.read().expect("range map poisoned").get(&block) {
-            Some(RangeSlot::Loaded { glyphs, .. }) => {
+            Some(slot @ RangeSlot::Loaded { glyphs, .. }) => {
+                self.touch(slot);
                 if glyphs.contains_key(&(c as u16)) {
                     SdfCoverage::Present
                 } else {

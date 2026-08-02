@@ -221,6 +221,9 @@ pub struct Renderer {
     /// Pending source bindings, keyed by the `sources.<name>` entry in
     /// the style. Cleared by [`Renderer::clear_sources`].
     bindings: HashMap<String, SourceBinding>,
+    /// Ceiling on resident glyph bytes per fontstack, applied after each
+    /// render. `usize::MAX` (the default) keeps every bound range.
+    glyph_budget: usize,
 }
 
 #[wasm_bindgen]
@@ -238,6 +241,7 @@ impl Renderer {
             cache: Arc::new(Cache::new()),
             assets: BrushBankLoader::new(),
             bindings: HashMap::new(),
+            glyph_budget: usize::MAX,
         })
     }
 
@@ -424,6 +428,7 @@ impl Renderer {
                         Some(stack) => stack,
                         None => {
                             let stack = Arc::new(ezu_core::text::SdfFontStack::new());
+                            stack.set_byte_budget(self.glyph_budget);
                             self.assets.insert_glyphs(key, stack.clone());
                             stack
                         }
@@ -454,6 +459,42 @@ impl Renderer {
     #[wasm_bindgen(js_name = clearSources)]
     pub fn clear_sources(&mut self) {
         self.bindings.clear();
+    }
+
+    /// Cap the glyph bytes each bound fontstack keeps resident, in
+    /// bytes. Unset, a fontstack keeps every range ever bound to it for
+    /// the life of the renderer — `clearSources` does not touch glyphs,
+    /// and on a long-lived instance rendering across a basemap that is
+    /// usually what grew.
+    ///
+    /// Trimming happens **after** each `renderTile`, not while binding,
+    /// so a render never loses glyphs that were bound for it. The tile
+    /// that just drew is therefore the most recently used, and a budget
+    /// large enough for one tile's glyphs always keeps that tile's; what
+    /// goes is what earlier tiles needed and this one did not. Set it
+    /// below one tile's worth and the ceiling still holds — the stack
+    /// empties after every render and nothing carries over, which
+    /// renders correctly but buys no reuse.
+    ///
+    /// It is a per-fontstack ceiling: a style with a regular, a medium
+    /// and an italic stack can hold three times what is set here.
+    ///
+    /// This host cannot refetch, so anything trimmed must be bound again
+    /// before the next tile that needs it. `neededCodepoints()` already
+    /// names exactly what to bind, and a host that re-binds every tile
+    /// (rather than tracking what it sent) needs no other change.
+    #[wasm_bindgen(js_name = setGlyphBudget)]
+    pub fn set_glyph_budget(&mut self, bytes: usize) {
+        self.glyph_budget = bytes;
+        for stack in self
+            .assets
+            .glyphs
+            .read()
+            .expect("glyphs bank poisoned")
+            .values()
+        {
+            stack.set_byte_budget(bytes);
+        }
     }
 
     /// Names of every source with at least one pending binding.
@@ -637,7 +678,12 @@ impl Renderer {
         opts: Option<js_sys::Object>,
     ) -> Result<Vec<u8>, JsValue> {
         let parsed = parse_render_options(opts.as_ref());
-        self.render_with_bindings(z, x, y, parsed)
+        let out = self.render_with_bindings(z, x, y, parsed);
+        // Trim here rather than at bind time: this tile is done with its
+        // glyphs, so dropping the coldest ranges now cannot cost it any.
+        // A failed render trims too — it held the same glyphs.
+        self.trim_glyphs();
+        out
     }
 }
 
@@ -649,6 +695,23 @@ enum OutputFormat {
 }
 
 impl Renderer {
+    /// Bring every bound fontstack back under the glyph budget. A no-op
+    /// until a host sets one with `setGlyphBudget`.
+    fn trim_glyphs(&self) {
+        if self.glyph_budget == usize::MAX {
+            return;
+        }
+        for stack in self
+            .assets
+            .glyphs
+            .read()
+            .expect("glyphs bank poisoned")
+            .values()
+        {
+            stack.trim_to_budget();
+        }
+    }
+
     /// Decode every bound MVT source once, centre and neighbours alike,
     /// for inspection ahead of a render.
     fn decode_bound_features(
