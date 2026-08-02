@@ -311,11 +311,25 @@ pub fn paint_strokes(
     // does (it renders one extruded ribbon and discards fragments closer to
     // the centreline than `gap/2`). The knockout is solid even when the
     // casing is dashed: the corridor is empty between dashes anyway.
-    let Some(mut layer) = Pixmap::new(canvas.pixmap.width(), canvas.pixmap.height()) else {
+    //
+    // The layer spans only what these paths can ink. A data-driven stroke
+    // calls this once per feature group, and a full-canvas layer would
+    // charge every one of them for an allocation, a clear and a composite
+    // over the whole tile however short the road is.
+    let Some((ox_i, oy_i, w, h)) = ink_bounds(
+        &paths,
+        &stroke,
+        canvas.pixmap.width(),
+        canvas.pixmap.height(),
+    ) else {
         return;
     };
+    let Some(mut layer) = Pixmap::new(w, h) else {
+        return;
+    };
+    let to_layer = Transform::from_translate(-(ox_i as f32), -(oy_i as f32));
     for path in &paths {
-        layer.stroke_path(path, &paint, &stroke, Transform::identity(), None);
+        layer.stroke_path(path, &paint, &stroke, to_layer, None);
     }
     let mut erase = Paint {
         blend_mode: tiny_skia::BlendMode::DestinationOut,
@@ -330,16 +344,51 @@ pub fn paint_strokes(
         ..Stroke::default()
     };
     for path in &paths {
-        layer.stroke_path(path, &erase, &hole, Transform::identity(), None);
+        layer.stroke_path(path, &erase, &hole, to_layer, None);
     }
     canvas.pixmap.draw_pixmap(
-        0,
-        0,
+        ox_i,
+        oy_i,
         layer.as_ref(),
         &PixmapPaint::default(),
         Transform::identity(),
         None,
     );
+}
+
+/// Pixel rect `(x, y, width, height)` that `paths` stroked with `stroke`
+/// can touch, clipped to the canvas. `None` when the stroke falls entirely
+/// outside the canvas.
+///
+/// The outset is deliberately generous: a miter join reaches out to
+/// `miter_limit` half-widths from the centreline, and anti-aliasing
+/// spills a pixel past that. Overshooting costs a few rows of a scratch
+/// buffer, while undershooting would clip ink off a join.
+fn ink_bounds(
+    paths: &[tiny_skia::Path],
+    stroke: &Stroke,
+    canvas_w: u32,
+    canvas_h: u32,
+) -> Option<(i32, i32, u32, u32)> {
+    let mut bounds = paths.first()?.bounds();
+    for path in &paths[1..] {
+        let b = path.bounds();
+        bounds = tiny_skia::Rect::from_ltrb(
+            bounds.left().min(b.left()),
+            bounds.top().min(b.top()),
+            bounds.right().max(b.right()),
+            bounds.bottom().max(b.bottom()),
+        )?;
+    }
+    let outset = stroke.width * 0.5 * stroke.miter_limit.max(1.0) + 2.0;
+    let left = (bounds.left() - outset).floor().max(0.0) as u32;
+    let top = (bounds.top() - outset).floor().max(0.0) as u32;
+    let right = ((bounds.right() + outset).ceil().max(0.0) as u32).min(canvas_w);
+    let bottom = ((bounds.bottom() + outset).ceil().max(0.0) as u32).min(canvas_h);
+    if right <= left || bottom <= top {
+        return None;
+    }
+    Some((left as i32, top as i32, right - left, bottom - top))
 }
 
 pub(crate) fn build_polygon_path(

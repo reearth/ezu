@@ -104,6 +104,48 @@ fn zero_gap_is_byte_identical_to_a_plain_stroke() {
 }
 
 #[test]
+fn a_casing_lands_where_the_line_is_not_where_the_tile_starts() {
+    // The knockout happens on a scratch layer covering only the stroke's
+    // own footprint, which is then composited back at that offset. A line
+    // through the middle of the tile would survive a wrong offset; one
+    // confined to a corner would not.
+    let mut geometry = Geometry::default();
+    geometry.lines.push(vec![(2560, 3072), (4095, 3072)]);
+    let layer = FeatureLayer {
+        name: "roads".to_string(),
+        extent: 4096,
+        features: vec![Feature {
+            id: None,
+            geometry,
+            properties: HashMap::new(),
+        }],
+    };
+    let r = render_with_features(
+        &recipe(r#", "gap-width-px": 8"#),
+        64,
+        0,
+        TileId { z: 0, x: 0, y: 0 },
+        &[("src.roads", layer)],
+    );
+
+    // 1 px per 64 extent units: the line runs along row 48 from column 40
+    // to the tile edge. Bands land on rows 40..44 and 52..56.
+    let opaque = |x: u32, y: u32| r.pixel(x, y)[3] > 200;
+    assert!(opaque(50, 41) && opaque(50, 54), "both bands are drawn");
+    assert!(!opaque(50, 48), "the corridor is knocked out");
+    assert_eq!(
+        (0..64).filter(|&y| opaque(50, y)).count(),
+        8,
+        "two 4 px bands, and nothing shifted onto other rows"
+    );
+    assert_eq!(
+        (0..64).filter(|&y| opaque(20, y)).count(),
+        0,
+        "nothing before the line starts"
+    );
+}
+
+#[test]
 fn gap_width_expr_is_data_driven() {
     // `class=wide` gets a 16 px gap, `class=narrow` none; both keep width 4.
     let layer = FeatureLayer {
