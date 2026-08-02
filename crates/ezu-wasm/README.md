@@ -60,6 +60,7 @@ class Renderer {
   memoryUsage(): {
     heapBytes: number;
     glyphBytes: number; glyphRanges: number;   // survive clearSources
+    glyphBudget: number;                       // Infinity unless capped
     fontBytes: number;
     imageBytes: number;                        // images + sprite atlases
     cacheBytes: number; cacheBudget: number;   // self-evicting

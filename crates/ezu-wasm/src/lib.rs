@@ -675,7 +675,10 @@ impl Renderer {
     ///   glyph bank, and how many 256-codepoint blocks they span. Glyphs
     ///   accumulate for the life of the renderer and survive
     ///   `clearSources`, so on a long-lived instance this is usually
-    ///   what grew.
+    ///   what grew. `glyphBudget` is the per-fontstack ceiling
+    ///   `setGlyphBudget` put on them, or `Infinity` if none — note
+    ///   `glyphBytes` totals *every* fontstack, so it can exceed the
+    ///   budget legitimately.
     /// - `fontBytes` — outline font files held in the font bank.
     /// - `imageBytes` — decoded pixels of bound images and sprite
     ///   atlases.
@@ -725,6 +728,17 @@ impl Renderer {
         set("heapBytes", heap_bytes())?;
         set("glyphBytes", glyph_bytes)?;
         set("glyphRanges", glyph_ranges)?;
+        // An unset budget reads as `Infinity`, not as the bewildering
+        // 1.8e19 that `usize::MAX` would land on.
+        js_sys::Reflect::set(
+            &out,
+            &JsValue::from_str("glyphBudget"),
+            &JsValue::from_f64(if self.glyph_budget == usize::MAX {
+                f64::INFINITY
+            } else {
+                self.glyph_budget as f64
+            }),
+        )?;
         set("fontBytes", font_bytes)?;
         set("imageBytes", image_bytes)?;
         set("cacheBytes", self.cache.bytes())?;
