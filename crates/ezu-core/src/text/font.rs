@@ -97,6 +97,13 @@ impl Font {
         self.content_hash
     }
 
+    /// Size of the font file this face was parsed from, in bytes — the
+    /// resident cost of keeping the font loaded. Excludes the glyph-path
+    /// cache, which grows with the characters actually drawn.
+    pub fn byte_size(&self) -> usize {
+        self.bytes.len()
+    }
+
     /// Font units per em (typically 1000 or 2048).
     pub fn units_per_em(&self) -> f32 {
         self.units_per_em

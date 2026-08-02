@@ -575,6 +575,76 @@ impl Renderer {
         Ok(out)
     }
 
+    /// What this renderer is holding, in bytes, so a host can shed load
+    /// *before* an allocation fails rather than after.
+    ///
+    /// Returns a JS object:
+    /// - `heapBytes` — wasm linear memory committed to the **module**,
+    ///   shared by every `Renderer` in this instance. This is the number
+    ///   that meets an isolate's memory cap. It is a high-water mark:
+    ///   freeing Rust values returns them to the allocator, never to the
+    ///   host, so it only ever grows.
+    /// - `glyphBytes` / `glyphRanges` — SDF bitmaps resident in the
+    ///   glyph bank, and how many 256-codepoint blocks they span. Glyphs
+    ///   accumulate for the life of the renderer and survive
+    ///   `clearSources`, so on a long-lived instance this is usually
+    ///   what grew.
+    /// - `fontBytes` — outline font files held in the font bank.
+    /// - `imageBytes` — decoded pixels of bound images and sprite
+    ///   atlases.
+    /// - `cacheBytes` / `cacheBudget` — the render cache's pixel
+    ///   payload against its own eviction budget; it bounds itself, so
+    ///   `cacheBytes` near `cacheBudget` is steady state, not a leak.
+    ///
+    /// These are payload sizes, not an accounting of the heap: they omit
+    /// allocator overhead, decoded features, per-font glyph-path caches,
+    /// and the buffers a render is using right now. Expect the parts to
+    /// sum to less than `heapBytes`.
+    #[wasm_bindgen(js_name = memoryUsage)]
+    pub fn memory_usage(&self) -> Result<js_sys::Object, JsValue> {
+        let (glyph_ranges, glyph_bytes) = self
+            .assets
+            .glyphs
+            .read()
+            .expect("glyphs bank poisoned")
+            .values()
+            .fold((0usize, 0usize), |(ranges, bytes), stack| {
+                let (r, b) = stack.loaded_size();
+                (ranges + r, bytes + b)
+            });
+        let image_bytes: usize = self
+            .assets
+            .images
+            .values()
+            .map(|img| img.pixels.len())
+            .chain(
+                self.assets
+                    .sprites
+                    .values()
+                    .map(|sheet| sheet.atlas.pixels.len()),
+            )
+            .sum();
+        let font_bytes: usize = self.assets.fonts.values().map(|f| f.byte_size()).sum();
+
+        let out = js_sys::Object::new();
+        let set = |key: &str, value: usize| -> Result<(), JsValue> {
+            js_sys::Reflect::set(
+                &out,
+                &JsValue::from_str(key),
+                &JsValue::from_f64(value as f64),
+            )?;
+            Ok(())
+        };
+        set("heapBytes", heap_bytes())?;
+        set("glyphBytes", glyph_bytes)?;
+        set("glyphRanges", glyph_ranges)?;
+        set("fontBytes", font_bytes)?;
+        set("imageBytes", image_bytes)?;
+        set("cacheBytes", self.cache.bytes())?;
+        set("cacheBudget", self.cache.byte_budget())?;
+        Ok(out)
+    }
+
     /// Render a single tile using whatever sources are currently bound.
     ///
     /// `opts` (JS object, all fields optional):
@@ -966,6 +1036,32 @@ fn tile_seed(z: u8, x: u32, y: u32) -> u64 {
 #[wasm_bindgen(js_name = simdEnabled)]
 pub fn simd_enabled() -> bool {
     cfg!(target_feature = "simd128")
+}
+
+/// Wasm linear memory currently committed to this module, in bytes.
+///
+/// This is the figure an isolate's memory cap applies to, and the one
+/// to watch to shed load before an allocation fails — a refused
+/// `memory.grow` throws [`OutOfMemory`](oom) and ends the instance.
+/// It never falls: freed Rust values return to the allocator for reuse,
+/// but wasm cannot hand pages back to the host. So a drop in demand
+/// leaves the number where its peak left it, and only a fresh instance
+/// resets it.
+///
+/// Module-wide, not per-`Renderer`. For what a given renderer is
+/// holding, and which bank to evict, call `memoryUsage()`.
+#[wasm_bindgen(js_name = heapBytes)]
+pub fn heap_bytes() -> usize {
+    #[cfg(target_arch = "wasm32")]
+    {
+        // `memory_size` counts 64 KiB pages of memory 0.
+        core::arch::wasm32::memory_size(0) * 65536
+    }
+    // Native builds (tests, docs) have no linear memory to report.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        0
+    }
 }
 
 /// Whether this build supports multithreaded rendering (compiled with

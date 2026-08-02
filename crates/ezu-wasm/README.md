@@ -11,6 +11,10 @@ binding buffer that mirrors the style's `sources` block.
 
 ```ts
 function simdEnabled(): boolean;
+// Wasm linear memory committed to the module, in bytes — what an
+// isolate's memory cap applies to. A high-water mark: it never falls,
+// since wasm cannot return pages to the host.
+function heapBytes(): number;
 // True when compiled with the `threads` feature. When true and the page
 // is cross-origin isolated, `initThreadPool` is available and rendering
 // can run in parallel; otherwise the renderer is single-threaded.
@@ -48,6 +52,18 @@ class Renderer {
   // Drop every pending tile-scoped binding. Document-scoped sources
   // (brush / image) keep their bank entries.
   clearSources(): void;
+
+  // What this renderer holds, for shedding load before an allocation
+  // fails. `heapBytes` is module-wide (same value as the free function);
+  // the rest are this renderer's. Payload sizes only — the parts sum to
+  // less than `heapBytes`.
+  memoryUsage(): {
+    heapBytes: number;
+    glyphBytes: number; glyphRanges: number;   // survive clearSources
+    fontBytes: number;
+    imageBytes: number;                        // images + sprite atlases
+    cacheBytes: number; cacheBudget: number;   // self-evicting
+  };
 
   // Names with at least one pending tile-scoped binding.
   boundSources(): string[];
@@ -198,6 +214,28 @@ from the generated glue, which names neither the cause nor the call.
 It covers allocation failure only — a host that kills the isolate for
 exceeding a cap, rather than refusing to grow the heap, still ends the
 instance with no warning.
+
+Better than catching it is not reaching it: `heapBytes()` reports the
+memory the cap applies to, so a host can retire an instance on its own
+terms while requests are still in flight elsewhere.
+
+```js
+// Workers gives an isolate 128 MB; retire well short of it.
+if (heapBytes() > 96 * 1024 * 1024) {
+  const { glyphBytes, cacheBytes } = renderer.memoryUsage();
+  console.warn(`retiring: glyphs ${glyphBytes}, cache ${cacheBytes}`);
+  renderer.free();
+  renderer = null;   // re-instantiate the module for the next request
+}
+```
+
+`memoryUsage()` says which bank grew. Glyphs are the usual answer on a
+long-lived instance: they accumulate for the renderer's life and
+`clearSources` does not touch them. The render cache evicts against its
+own budget, so `cacheBytes` sitting near `cacheBudget` is steady state.
+Note that dropping a renderer does not shrink `heapBytes` — wasm cannot
+return pages to the host — it only frees the memory for reuse by the
+next render.
 
 ```js
 try {
