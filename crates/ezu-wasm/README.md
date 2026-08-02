@@ -65,6 +65,11 @@ class Renderer {
     cacheBytes: number; cacheBudget: number;   // self-evicting
   };
 
+  // Cap the glyph bytes each bound fontstack keeps resident. Unset, a
+  // fontstack keeps every range ever bound for the life of the
+  // renderer. Trimming runs after `renderTile`, never while binding.
+  setGlyphBudget(bytes: number): void;
+
   // Names with at least one pending tile-scoped binding.
   boundSources(): string[];
 
@@ -212,6 +217,30 @@ simply absent, and its label drops that character. With whole ranges,
 binding the range covering a codepoint the font has no glyph for gives
 the same result, so this only matters if the subset builder and
 `neededCodepoints` disagree.
+
+#### Capping what glyphs cost
+
+Glyphs are the one bank that grows for the life of a renderer:
+`clearSources` is tile-scoped and does not touch them, so an instance
+serving a basemap accumulates every range every tile ever needed.
+`setGlyphBudget` puts a ceiling on it, per fontstack:
+
+```js
+r.setGlyphBudget(8 * 1024 * 1024);   // per fontstack, so ×3 for a
+                                     // regular/medium/italic style
+```
+
+Trimming runs **after** `renderTile`, never during binding, which is
+what makes the budget safe: a render cannot lose glyphs that were bound
+for it, and the tile that just drew is the most recently used, so a
+budget that fits one tile always keeps that tile's. What goes is what
+earlier tiles needed and this one did not.
+
+This host cannot refetch, so anything trimmed has to be bound again
+before the next tile that needs it. A host that binds what
+`neededCodepoints()` reports on every tile needs no other change; one
+that skips ranges it believes are still resident cannot keep that
+assumption once a budget is set.
 
 ### Missing tiles
 
