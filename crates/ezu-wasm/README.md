@@ -59,11 +59,17 @@ class Renderer {
   // Empty means the centre tile is enough.
   requestedNeighborOffsets(name: string): [number, number][];
 
-  // Glyph ranges the bound features can require, keyed by `glyphs`
-  // source name; each number is a range start, so the `{range}` in
-  // `…/{fontstack}/{range}.pbf` is `${start}-${start + 255}`. Call it
-  // after binding the vector sources and before rendering — this host
-  // cannot fetch ranges lazily. Over-approximates (see below).
+  // Codepoints the bound features can require, keyed by `glyphs`
+  // source name, sorted. For hosts that can build their own glyph PBF
+  // holding exactly these — far less to transfer than whole ranges.
+  neededCodepoints(): Record<string, number[]>;
+
+  // The same set rounded out to whole ranges: each number is a range
+  // start, so the `{range}` in `…/{fontstack}/{range}.pbf` is
+  // `${start}-${start + 255}`. For hosts fetching off a stock MapLibre
+  // glyphs endpoint. Call either after binding the vector sources and
+  // before rendering — this host cannot fetch glyphs lazily. Both
+  // over-approximate (see below).
   neededGlyphRanges(): Record<string, number[]>;
 
   // Single unified render. Format and canvas overrides go in `opts`.
@@ -163,6 +169,33 @@ it for every fontstack in that layer's fallback chain. It never omits a
 range a label needs; it may name a few that go unused. A `text` built
 from something other than a property read contributes only its literal
 strings.
+
+#### Binding a subset instead of whole ranges
+
+A range holds 256 codepoints and a tile draws a handful of them, so on
+CJK labels the loop above spends tens of megabytes to draw a few
+thousand glyphs. A host that can assemble a glyph PBF itself — from a
+font, or by repacking ranges it holds server-side — should ask for the
+codepoints instead and bind one subset per fontstack:
+
+```js
+for (const [src, codepoints] of Object.entries(r.neededCodepoints())) {
+  r.bindSource(src, await buildSubsetPbf(src, codepoints));
+}
+```
+
+`bindSource` files each glyph under its own `id`, so a subset may span
+any number of ranges in a single message; the fontstack message's
+`range` string is metadata and is not used to place glyphs. Repeated
+binds accumulate — partial messages for the same range widen it rather
+than replacing it — so a host may also split the subset however it
+likes across calls.
+
+The one behavioural difference: a codepoint the host does not ship is
+simply absent, and its label drops that character. With whole ranges,
+binding the range covering a codepoint the font has no glyph for gives
+the same result, so this only matters if the subset builder and
+`neededCodepoints` disagree.
 
 ### Missing tiles
 

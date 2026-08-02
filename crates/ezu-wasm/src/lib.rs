@@ -37,11 +37,12 @@
 //! - `geojson` → *remote* GeoJSON only: bind the fetched document
 //!   `bytes`; projected per tile at render (cleared by `clearSources`).
 //!   Inline `data` needs no bind — it's read from the style directly.
-//! - `glyphs` → decode one SDF glyph-range PBF per call into the
-//!   persistent glyph bank (repeat per range; unaffected by
-//!   `clearSources`). This host cannot fetch ranges lazily, so bind
-//!   every range the styled text will need *before* rendering — text
-//!   whose range is missing drops those glyphs with a warning.
+//! - `glyphs` → decode one SDF glyph PBF per call into the persistent
+//!   glyph bank (a whole `{range}.pbf`, or a subset spanning several
+//!   ranges — glyphs are filed by id; repeat to accumulate; unaffected
+//!   by `clearSources`). This host cannot fetch glyphs lazily, so bind
+//!   everything the styled text will need *before* rendering — text
+//!   whose glyphs are missing drops them with a warning.
 //!
 //! ## Output
 //!
@@ -401,12 +402,14 @@ impl Renderer {
                     .map_err(|e| named_err(ERR_FONT, e))?;
                 self.assets.insert_font(font.url.clone(), face);
             }
-            // Glyphs: the JS host provides one raw range PBF per call
-            // (which range is read from the message itself); repeated
-            // calls accumulate ranges into one persistent stack. This
-            // host cannot fetch lazily, so *every* range the styled
-            // text will need must be bound before rendering — a label
-            // whose range is missing drops its glyphs with a warning.
+            // Glyphs: the JS host provides one raw glyph PBF per call
+            // and repeated calls accumulate into one persistent stack.
+            // Each glyph is filed under its own id, so a message is
+            // free to be a subset spanning several ranges (see
+            // `neededCodepoints`) as well as a whole `{range}.pbf`.
+            // This host cannot fetch lazily, so *every* glyph the
+            // styled text will need must be bound before rendering — a
+            // label whose glyphs are missing drops them with a warning.
             SourceDecl::Glyphs(glyphs) => {
                 let key = glyphs.asset_key();
                 let stack = {
@@ -497,6 +500,28 @@ impl Renderer {
         Ok(out)
     }
 
+    /// Codepoints the currently bound features can require, as
+    /// `{ [glyphsSourceName]: number[] }` sorted ascending.
+    ///
+    /// This is the precise form of
+    /// [`neededGlyphRanges`](Self::needed_glyph_ranges): a host that
+    /// can build its own glyph PBF — one message holding just these
+    /// codepoints — transfers only the glyphs the tile draws instead
+    /// of the whole 256-codepoint block around each of them. On CJK
+    /// labels that is the difference between a few thousand glyphs and
+    /// a few tens of megabytes. `bindSource` files each glyph by its
+    /// own id, so such a subset may span any number of blocks and
+    /// needs no particular `range` string.
+    ///
+    /// Hosts that can only fetch whole `{range}.pbf` files off a
+    /// MapLibre glyphs endpoint want `neededGlyphRanges` instead. Both
+    /// calls see the same set of codepoints and carry the same
+    /// over-approximation caveat.
+    #[wasm_bindgen(js_name = neededCodepoints)]
+    pub fn needed_codepoints(&self) -> Result<js_sys::Object, JsValue> {
+        self.needed_glyphs_object(|cp| cp)
+    }
+
     /// Glyph ranges the currently bound features can require, as
     /// `{ [glyphsSourceName]: number[] }` where each number is a range
     /// start (`0`, `256`, `512`, …) — i.e. the `{range}` in a
@@ -506,6 +531,11 @@ impl Renderer {
     /// tile's labels touch must be bound before `renderTile`. Rather than
     /// scraping every string in the MVT, call this after binding the
     /// vector sources and bind exactly the listed ranges.
+    ///
+    /// A range holds 256 codepoints and a tile typically draws a
+    /// handful of them, so this is a coarse unit to fetch in. Hosts
+    /// that can assemble their own subset PBF should call
+    /// [`neededCodepoints`](Self::needed_codepoints) instead.
     ///
     /// It is an over-approximation, deliberately: a range is listed if
     /// *any* feature in a text layer carries the codepoint in a property
@@ -518,7 +548,32 @@ impl Renderer {
     /// contribute their literal text where it is a plain string.
     #[wasm_bindgen(js_name = neededGlyphRanges)]
     pub fn needed_glyph_ranges(&self) -> Result<js_sys::Object, JsValue> {
-        // source name → range starts.
+        self.needed_glyphs_object(|cp| cp & !0xFF)
+    }
+
+    /// Shared body of the two prepass calls: the needed codepoints per
+    /// glyphs source, mapped through `unit` (identity, or the range
+    /// start containing it) and deduped.
+    fn needed_glyphs_object(&self, unit: fn(u32) -> u32) -> Result<js_sys::Object, JsValue> {
+        let out = js_sys::Object::new();
+        for (source, codepoints) in self.needed_codepoints_by_source()? {
+            let mut units: Vec<u32> = codepoints.into_iter().map(unit).collect();
+            units.dedup();
+            let arr = js_sys::Array::new();
+            for u in units {
+                arr.push(&JsValue::from(u));
+            }
+            js_sys::Reflect::set(&out, &JsValue::from_str(source), &arr)?;
+        }
+        Ok(out)
+    }
+
+    /// Glyphs source name → the BMP codepoints its fontstacks can be
+    /// asked to shape, over-approximated as documented on
+    /// [`neededGlyphRanges`](Self::needed_glyph_ranges).
+    fn needed_codepoints_by_source(
+        &self,
+    ) -> Result<std::collections::BTreeMap<&str, std::collections::BTreeSet<u32>>, JsValue> {
         let mut needed: std::collections::BTreeMap<&str, std::collections::BTreeSet<u32>> =
             std::collections::BTreeMap::new();
 
@@ -530,11 +585,11 @@ impl Renderer {
             let Some(text) = spec.fields.get("text") else {
                 continue;
             };
-            let mut ranges: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+            let mut codepoints: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
             // A literal `text` needs no features at all.
             if let Some(lit) = text.as_str() {
                 if !lit.starts_with('@') && !lit.starts_with('$') {
-                    collect_ranges(lit, &mut ranges);
+                    collect_codepoints(lit, &mut codepoints);
                 }
             }
             let props = referenced_properties(text);
@@ -552,7 +607,7 @@ impl Renderer {
                         for f in &l.features {
                             for p in &props {
                                 if let Some(ezu_features::Value::String(s)) = f.properties.get(*p) {
-                                    collect_ranges(s, &mut ranges);
+                                    collect_codepoints(s, &mut codepoints);
                                 }
                             }
                         }
@@ -560,19 +615,10 @@ impl Renderer {
                 }
             }
             for stack in stacks {
-                needed.entry(stack).or_default().extend(ranges.iter());
+                needed.entry(stack).or_default().extend(codepoints.iter());
             }
         }
-
-        let out = js_sys::Object::new();
-        for (source, ranges) in needed {
-            let arr = js_sys::Array::new();
-            for start in ranges {
-                arr.push(&JsValue::from(start));
-            }
-            js_sys::Reflect::set(&out, &JsValue::from_str(source), &arr)?;
-        }
-        Ok(out)
+        Ok(needed)
     }
 
     /// Render a single tile using whatever sources are currently bound.
@@ -1060,14 +1106,14 @@ fn referenced_properties(expr: &serde_json::Value) -> Vec<&str> {
     out
 }
 
-/// Add the 256-codepoint range start of every character in `s`.
-/// Codepoints outside the Basic Multilingual Plane are skipped: the
-/// glyph-range scheme cannot address them.
-fn collect_ranges(s: &str, out: &mut std::collections::BTreeSet<u32>) {
+/// Add the codepoint of every character in `s`. Codepoints outside
+/// the Basic Multilingual Plane are skipped: the glyph protocol cannot
+/// address them, so nothing can serve them.
+fn collect_codepoints(s: &str, out: &mut std::collections::BTreeSet<u32>) {
     for c in s.chars() {
         let cp = c as u32;
         if cp <= 0xFFFF {
-            out.insert(cp & !0xFF);
+            out.insert(cp);
         }
     }
 }
@@ -1105,15 +1151,29 @@ mod tests {
     }
 
     #[test]
-    fn ranges_cover_each_codepoint_block_once() {
+    fn codepoints_are_collected_sorted_and_deduplicated() {
         let mut out = std::collections::BTreeSet::new();
-        collect_ranges("AZ", &mut out);
-        collect_ranges("東京", &mut out);
-        // 'A' = U+0041 → 0; '東' = U+6771 → 0x6700; '京' = U+4EAC → 0x4E00.
+        collect_codepoints("AZA", &mut out);
+        collect_codepoints("東京", &mut out);
         assert_eq!(
             out.iter().copied().collect::<Vec<_>>(),
-            vec![0x0000, 0x4E00, 0x6700]
+            vec![0x0041, 0x005A, 0x4EAC, 0x6771]
         );
+        // Astral codepoints have no glyph the protocol can address.
+        collect_codepoints("𝄞", &mut out);
+        assert_eq!(out.len(), 4);
+    }
+
+    #[test]
+    fn ranges_cover_each_codepoint_block_once() {
+        let mut out = std::collections::BTreeSet::new();
+        collect_codepoints("AZ", &mut out);
+        collect_codepoints("東京", &mut out);
+        // 'A' = U+0041 and 'Z' = U+005A share block 0; '東' = U+6771 →
+        // 0x6700; '京' = U+4EAC → 0x4E00.
+        let mut starts: Vec<u32> = out.iter().map(|cp| cp & !0xFF).collect();
+        starts.dedup();
+        assert_eq!(starts, vec![0x0000, 0x4E00, 0x6700]);
     }
 
     #[test]
