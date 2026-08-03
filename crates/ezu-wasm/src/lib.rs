@@ -70,6 +70,7 @@ pub use log::LogSink;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use ezu_core::TileId as CoreTileId;
 use ezu_features::FeatureLayer;
 use ezu_graph::{
     build_graph, Cache, CanvasInfo, Evaluator, Graph, ParamValues, PortValue, SpriteSheet, TileId,
@@ -200,7 +201,7 @@ enum SourceBinding {
     /// `coord: [0, 0]` (default); neighbours (bound with `coord`) feed
     /// cross-tile label collision and are bound under `@dx,dy` names at
     /// render time. Re-decoded at render because `DecodedTile` isn't Clone.
-    Mvt(HashMap<(i32, i32), Vec<u8>>),
+    Mvt(HashMap<(i32, i32), MvtBytes>),
     Dem(HashMap<(i32, i32), Vec<u8>>),
     /// RGBA imagery tiles per `(dx, dy)` neighbour offset, decoded +
     /// stitched at render time like DEM.
@@ -209,6 +210,17 @@ enum SourceBinding {
     /// projected into each tile frame at render time. Only needed for
     /// *remote* geojson; inline `data` is read straight from the document.
     GeoJson(HashMap<(i32, i32), Vec<u8>>),
+}
+
+/// One bound MVT payload and, when the host is overzooming, the zoom the
+/// bytes are natively encoded at.
+struct MvtBytes {
+    bytes: Vec<u8>,
+    /// `Some(z)` when these bytes belong to an ancestor of the tile being
+    /// rendered — a vector source that stops at `maxzoom` while the host
+    /// serves deeper tiles. `None` means the bytes are already in the
+    /// requested tile's frame, which is the ordinary case.
+    source_zoom: Option<u8>,
 }
 
 /// Stateful WASM renderer.
@@ -278,9 +290,28 @@ impl Renderer {
     /// - `geojson` (remote) → store raw bytes per `(dx, dy)` offset;
     ///   projected per tile (and neighbour) at render time.
     ///
-    /// `opts` is a JS object: `{ coord?: [dx, dy] }`. Throws
-    /// `UnknownSource` if `name` doesn't match any entry in the style's
-    /// `sources` block, `MvtDecode` if MVT bytes don't parse, and
+    /// `opts` is a JS object: `{ coord?: [dx, dy], sourceZoom?: number }`.
+    ///
+    /// `sourceZoom` declares that MVT bytes are natively encoded at a
+    /// *shallower* zoom than the tile being rendered — a vector source
+    /// that stops at its `maxzoom` while the host serves deeper tiles.
+    /// The renderer then reprojects each payload from its own ancestor
+    /// into the tile's frame before rendering (MVT "overzoom"), which is
+    /// what a client would otherwise do by scaling a raster up. The
+    /// ancestor is derived, not supplied: for a tile at zoom `z`, the
+    /// ancestor at `sourceZoom` is unique, so a host that binds the
+    /// `maxzoom` tile it fetched has nothing further to compute — and
+    /// each neighbour resolves against its own ancestor, which for a 3×3
+    /// window may be a different parent than the centre's.
+    ///
+    /// `sourceZoom` equal to the rendered zoom is accepted and does
+    /// nothing, so a host can pass its source's `maxzoom` unconditionally
+    /// and let shallow tiles take the ordinary path. Deeper than the
+    /// rendered zoom throws `UnknownSource`: there is no way to invent
+    /// detail the bytes do not carry.
+    ///
+    /// Throws `UnknownSource` if `name` doesn't match any entry in the
+    /// style's `sources` block, `MvtDecode` if MVT bytes don't parse, and
     /// `DemDecode` for non-image DEM bytes (the decode itself runs at
     /// render time, but obvious cases are caught here).
     #[wasm_bindgen(js_name = bindSource)]
@@ -320,12 +351,13 @@ impl Renderer {
                 // re-decode at render since `DecodedTile` isn't Clone.
                 let _ = ezu_features::mvt::decode(&bytes).map_err(|e| named_err(ERR_MVT, e))?;
                 let coord = parse_coord_opt(opts.as_ref())?;
+                let source_zoom = parse_source_zoom_opt(opts.as_ref())?;
                 let entry = self
                     .bindings
                     .entry(name.to_string())
                     .or_insert_with(|| SourceBinding::Mvt(HashMap::new()));
                 if let SourceBinding::Mvt(map) = entry {
-                    map.insert(coord, bytes);
+                    map.insert(coord, MvtBytes { bytes, source_zoom });
                 } else {
                     return Err(named_err(
                         ERR_SOURCE,
@@ -806,8 +838,9 @@ impl Renderer {
             let SourceBinding::Mvt(byte_map) = binding else {
                 continue;
             };
-            for bytes in byte_map.values() {
-                let tile = ezu_features::mvt::decode(bytes).map_err(|e| named_err(ERR_MVT, e))?;
+            for payload in byte_map.values() {
+                let tile =
+                    ezu_features::mvt::decode(&payload.bytes).map_err(|e| named_err(ERR_MVT, e))?;
                 out.push((name.as_str(), tile));
             }
         }
@@ -837,9 +870,42 @@ impl Renderer {
                     // host bound under `@dx,dy` (cross-tile collision). A
                     // host binding only the centre degrades to centre-only
                     // collision at borders — no error.
-                    for (&(dx, dy), bytes) in byte_map {
-                        let decoded =
-                            ezu_features::mvt::decode(bytes).map_err(|e| named_err(ERR_MVT, e))?;
+                    for (&(dx, dy), payload) in byte_map {
+                        let mut decoded = ezu_features::mvt::decode(&payload.bytes)
+                            .map_err(|e| named_err(ERR_MVT, e))?;
+                        // Overzoom: the bytes are an ancestor's, so put
+                        // their geometry into this tile's frame first.
+                        // Each neighbour resolves against its own
+                        // ancestor, which may or may not be the centre's.
+                        if let Some(source_zoom) = payload.source_zoom {
+                            let here = CoreTileId::new(tile_id.z, tile_id.x, tile_id.y);
+                            let target = neighbor_tile(here, dx, dy).ok_or_else(|| {
+                                named_err(
+                                    ERR_SOURCE,
+                                    format!(
+                                        "coord [{dx}, {dy}] is off the map at zoom {}, so it has \
+                                         no ancestor to overzoom from",
+                                        tile_id.z
+                                    ),
+                                )
+                            })?;
+                            if let Some(ancestor) = target.ancestor_at(source_zoom) {
+                                decoded = ezu_features::mvt::clip_to_descendant(
+                                    &decoded, ancestor, target,
+                                )
+                                .map_err(|e| named_err(ERR_MVT, e))?;
+                            } else if source_zoom > target.z {
+                                return Err(named_err(
+                                    ERR_SOURCE,
+                                    format!(
+                                        "sourceZoom {source_zoom} is deeper than the requested \
+                                         zoom {}; overzoom only reprojects downwards",
+                                        target.z
+                                    ),
+                                ));
+                            }
+                            // `sourceZoom == z` needs no transform.
+                        }
                         tile_loader.bind_mvt_neighbor(name, dx, dy, decoded);
                     }
                 }
@@ -1139,6 +1205,42 @@ fn parse_coord_opt(obj: Option<&js_sys::Object>) -> Result<(i32, i32), JsValue> 
     Ok((dx, dy))
 }
 
+/// Read `sourceZoom` off a `bindSource` options object: the zoom the
+/// bound bytes are natively encoded at, when it is shallower than the
+/// tile being rendered.
+fn parse_source_zoom_opt(obj: Option<&js_sys::Object>) -> Result<Option<u8>, JsValue> {
+    let Some(obj) = obj else {
+        return Ok(None);
+    };
+    let value = js_sys::Reflect::get(obj, &"sourceZoom".into()).unwrap_or(JsValue::UNDEFINED);
+    if value.is_undefined() || value.is_null() {
+        return Ok(None);
+    }
+    let z = value
+        .as_f64()
+        .ok_or_else(|| named_err(ERR_SOURCE, "sourceZoom must be a number"))?;
+    if !z.is_finite() || z.fract() != 0.0 || !(0.0..=30.0).contains(&z) {
+        return Err(named_err(
+            ERR_SOURCE,
+            format!("sourceZoom must be a whole zoom level in 0..=30, got {z}"),
+        ));
+    }
+    Ok(Some(z as u8))
+}
+
+/// The tile `(dx, dy)` away from `tile`, or `None` when that lands off
+/// the map. `x` wraps at the antimeridian, as tile schemes do; `y` does
+/// not, since there is nothing above the north edge or below the south.
+fn neighbor_tile(tile: CoreTileId, dx: i32, dy: i32) -> Option<CoreTileId> {
+    let axis = i64::from(tile.axis_tiles());
+    let x = (i64::from(tile.x) + i64::from(dx)).rem_euclid(axis);
+    let y = i64::from(tile.y) + i64::from(dy);
+    if y < 0 || y >= axis {
+        return None;
+    }
+    Some(CoreTileId::new(tile.z, x as u32, y as u32))
+}
+
 fn parse_and_build(style_json: &str) -> Result<(Document, Graph), JsValue> {
     let doc = Document::from_json(style_json).map_err(|e| named_err(ERR_STYLE, e))?;
     let registry = default_registry();
@@ -1335,6 +1437,42 @@ mod tests {
         // Astral codepoints have no glyph the protocol can address.
         collect_codepoints("𝄞", &mut out);
         assert_eq!(out.len(), 4);
+    }
+
+    #[test]
+    fn a_neighbor_wraps_in_x_and_stops_in_y() {
+        // Overzoom resolves each neighbour against its *own* ancestor, so
+        // the neighbour coordinate has to be right before the ancestor
+        // can be. At zoom 2 the axis is 4 tiles.
+        let centre = CoreTileId::new(2, 0, 1);
+        assert_eq!(neighbor_tile(centre, 1, 0), Some(CoreTileId::new(2, 1, 1)));
+        // West of column 0 is the far east column, not -1.
+        assert_eq!(neighbor_tile(centre, -1, 0), Some(CoreTileId::new(2, 3, 1)));
+        assert_eq!(
+            neighbor_tile(CoreTileId::new(2, 3, 1), 1, 0),
+            Some(CoreTileId::new(2, 0, 1))
+        );
+        // There is no tile above the north edge or below the south.
+        assert_eq!(neighbor_tile(CoreTileId::new(2, 1, 0), 0, -1), None);
+        assert_eq!(neighbor_tile(CoreTileId::new(2, 1, 3), 0, 1), None);
+    }
+
+    #[test]
+    fn neighbors_of_one_tile_can_want_different_ancestors() {
+        // The 3x3 window around a z16 tile straddles two z15 parents, so
+        // binding one parent's bytes for every neighbour and clipping
+        // per-neighbour is the whole point of resolving ancestors
+        // individually.
+        let centre = CoreTileId::new(16, 100, 200);
+        let parent = centre.ancestor_at(15).expect("z15 is shallower");
+        assert_eq!(parent, CoreTileId::new(15, 50, 100));
+        let east = neighbor_tile(centre, 1, 0).expect("in range");
+        assert_eq!(east.ancestor_at(15), Some(CoreTileId::new(15, 50, 100)));
+        let further = neighbor_tile(centre, 2, 0).expect("in range");
+        assert_eq!(further.ancestor_at(15), Some(CoreTileId::new(15, 51, 100)));
+        // Equal zoom has no ancestor, which is how the render path spots
+        // "these bytes already fit this tile".
+        assert_eq!(centre.ancestor_at(16), None);
     }
 
     #[test]
