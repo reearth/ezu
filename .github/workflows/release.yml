@@ -135,7 +135,7 @@ jobs:
       - name: Install wasm-bindgen-cli
         uses: taiki-e/install-action@9185c192a96ba09167ad8663015b3fbbf007ec79 # v2.62.55
         with:
-          tool: wasm-bindgen-cli@0.2.121,wasm-opt
+          tool: wasm-bindgen-cli@0.2.126,wasm-opt
 
       - name: Sync npm package version to tag
         working-directory: crates/ezu-wasm/npm
