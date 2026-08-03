@@ -242,9 +242,14 @@ pub(crate) fn resolve_layer_source(
 /// A `features` source node selecting `(source, source-layer)`, with an
 /// optional raw MapLibre `filter-expr` evaluated per feature by ezu-paint via
 /// `maplibre-expr`. `source` is the ezu vector-source key (= the MapLibre
-/// source name), so multiple vector sources coexist. `min_zoom`/`max_zoom`
-/// come from the layer's `minzoom`/`maxzoom` and gate the layer at render
-/// time (the layer is drawn only for `min_zoom <= z <= max_zoom`).
+/// source name), so multiple vector sources coexist.
+///
+/// `min_zoom`/`max_zoom` gate the layer at render time, inclusive at both
+/// ends: it is drawn only for `min_zoom <= z <= max_zoom`. They are
+/// *derived* from the layer's `minzoom`/`maxzoom` rather than copied —
+/// MapLibre's upper bound is exclusive — so take them from
+/// [`layer_zoom_range`](super::layer_zoom_range) and do not read the
+/// MapLibre keys here.
 pub(crate) fn features_node(
     source: &str,
     source_layer: &str,
