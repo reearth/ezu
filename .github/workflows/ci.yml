@@ -43,6 +43,15 @@ jobs:
 
   test:
     name: test (${{ matrix.os }})
+    # Runner choice, for whoever changes this matrix: no test may depend
+    # on a font being installed. Text rendering is covered by the OFL
+    # fixtures under `crates/ezu-core/tests/fonts/`, which travel with the
+    # repo; the one test that touches the OS font database
+    # (`system_font_resolves_whatever_the_host_has`) resolves whatever
+    # family that database reports and skips when it reports none. Runner
+    # images change their bundled fonts without notice, and a container
+    # may ship none at all, so naming a family here would be a test that
+    # fails on someone else's infrastructure rather than on our code.
     strategy:
       fail-fast: false
       matrix:

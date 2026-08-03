@@ -1690,16 +1690,37 @@ mod tests {
         }
     }
 
-    /// A real system font, off by default (installed set is host-specific).
-    /// Run with `cargo test -- --ignored` on a machine that has the family.
+    /// The real system database, which the seeded test above deliberately
+    /// bypasses: that one proves the query→bytes→face path, this one
+    /// proves [`SYSTEM_FONTS`] is populated and its faces are readable.
+    ///
+    /// It names no family. Which fonts a machine has is not this crate's
+    /// business, and on CI it varies per runner image and changes without
+    /// notice, so the test takes whatever family the database reports
+    /// first and resolves that. A host with no fonts at all — a slim
+    /// container — has nothing to resolve, which is not a failure.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    #[ignore = "depends on host-installed fonts"]
-    fn system_font_resolves_from_installed_fonts() {
-        let query = parse_system_font("Arial Unicode MS").unwrap();
-        let font = load_system_font(&query).expect("Arial Unicode MS is installed");
-        let face = font.face();
-        assert!(font.covers(&face, 'A'));
+    fn system_font_resolves_whatever_the_host_has() {
+        let Some(family) = SYSTEM_FONTS
+            .faces()
+            .find_map(|f| f.families.first().map(|(name, _)| name.clone()))
+        else {
+            eprintln!("no system fonts installed; nothing to resolve");
+            return;
+        };
+        let query = parse_system_font(&family).unwrap();
+        let font = load_system_font(&query).unwrap_or_else(|e| {
+            panic!("family '{family}' came from the system database but did not resolve: {e:?}")
+        });
+        // The face parsed, so it has real metrics. Glyph coverage is not
+        // asserted: the first family alphabetically may be an icon or
+        // emoji font with no 'A' in it, and that would be a fact about
+        // the host rather than a defect here.
+        assert!(
+            font.units_per_em() > 0.0,
+            "'{family}' resolved with a degenerate em size"
+        );
     }
 
     #[test]
