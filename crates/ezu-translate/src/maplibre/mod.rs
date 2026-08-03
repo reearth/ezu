@@ -20,7 +20,9 @@
 //!   `maplibre-expr`, with the tile's zoom in the evaluation context). The
 //!   converter never bakes them to a constant, so one recipe renders
 //!   correctly at every zoom. Layer `minzoom`/`maxzoom` become the
-//!   `features` node's `min-zoom`/`max-zoom` render-time gate.
+//!   `features` node's `min-zoom`/`max-zoom` render-time gate — converted
+//!   rather than copied, since MapLibre's upper bound is exclusive and
+//!   ezu's is not.
 //!
 //! - **sprites**: a top-level `sprite` (single URL or `[{id, url}]`
 //!   sheets) becomes `sprite` source(s); `symbol` **icons**,
@@ -124,21 +126,53 @@ impl Default for ConvertOptions {
     }
 }
 
-/// A layer's `(minzoom, maxzoom)` render-time gate, threaded onto its
-/// `features` node as `min-zoom`/`max-zoom`. `None` where the layer omits
-/// the bound.
+/// A layer's zoom gate as an ezu `features` node wants it — inclusive at
+/// both ends — threaded on as `min-zoom`/`max-zoom`. `None` where the
+/// layer omits the bound. Built by [`layer_zoom_range`], which converts
+/// MapLibre's half-open range; the two are not the same numbers.
 pub(crate) type ZoomRange = (Option<u8>, Option<u8>);
 
-/// Read a layer's `minzoom`/`maxzoom` (JSON numbers) as `u8`, clamped to
-/// ezu's `0..=24` zoom range.
-fn layer_zoom_range(layer: &Map<String, Value>) -> ZoomRange {
+/// Convert a layer's MapLibre zoom bounds into the inclusive band an ezu
+/// `features` node gates on, clamped to ezu's `0..=24` zoom range.
+///
+/// MapLibre shows a layer for `minzoom <= z < maxzoom` — inclusive below,
+/// **exclusive above** — while `features` draws for
+/// `min-zoom <= z <= max-zoom`, inclusive at both ends. Rendered zooms are
+/// whole numbers, so the exclusive bound is one level lower: `maxzoom: 12`
+/// draws through z11, not z12.
+///
+/// Both bounds take the *ceiling* rather than rounding, because a
+/// fractional bound is a threshold and not an approximate level.
+/// `minzoom: 12.4` first shows at z13 (z12 is below the threshold), and
+/// `maxzoom: 12.5` last shows at z12. Rounding would put both a level out
+/// whenever the fraction fell below .5.
+///
+/// Returns `None` when the declared band holds no whole zoom at all —
+/// `maxzoom: 0`, or a `maxzoom` at or below `minzoom`. MapLibre never
+/// shows such a layer, so there is nothing to convert.
+fn layer_zoom_range(layer: &Map<String, Value>) -> Option<ZoomRange> {
     let read = |key| {
         layer
             .get(key)
             .and_then(Value::as_f64)
-            .map(|z| z.round().clamp(0.0, 24.0) as u8)
+            .filter(|z| z.is_finite())
     };
-    (read("minzoom"), read("maxzoom"))
+    let min = read("minzoom").map(|z| z.ceil().clamp(0.0, 24.0) as u8);
+    let max = match read("maxzoom") {
+        // Clamp before stepping down so `maxzoom: 0` lands below zero and
+        // is rejected, while an over-large bound saturates instead.
+        Some(z) => match z.ceil().clamp(0.0, 25.0) - 1.0 {
+            top if top < 0.0 => return None,
+            top => Some(top.min(24.0) as u8),
+        },
+        None => None,
+    };
+    if let (Some(mn), Some(mx)) = (min, max) {
+        if mn > mx {
+            return None;
+        }
+    }
+    Some((min, max))
 }
 
 /// Non-fatal notes accumulated during conversion: layers or properties
@@ -219,8 +253,15 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
         // MapLibre shows a layer for `minzoom <= z < maxzoom`. ezu recipes
         // are zoom-independent, so rather than dropping the layer at a baked
         // zoom we thread the range onto the `features` node as a render-time
-        // gate (`min-zoom`/`max-zoom`), computed once per layer.
-        let zoom_range = layer_zoom_range(layer);
+        // gate (`min-zoom`/`max-zoom`), computed once per layer. Note the
+        // bounds are not the same numbers — see `layer_zoom_range`.
+        let Some(zoom_range) = layer_zoom_range(layer) else {
+            report.warn(format!(
+                "layer `{id}`: its minzoom/maxzoom band contains no whole zoom level, so \
+                 MapLibre would never draw it — skipped"
+            ));
+            continue;
+        };
         let ty = layer.get("type").and_then(Value::as_str).unwrap_or("");
         let out_start = outputs.len();
         match ty {

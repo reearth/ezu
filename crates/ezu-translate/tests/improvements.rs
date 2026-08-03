@@ -73,16 +73,72 @@ fn zoom_range_becomes_features_gate() {
     let (recipe, _) = convert(&style, &ConvertOptions::default()).unwrap();
 
     let feats = features(&recipe);
-    // `maxzoom: 6` → a features node with `max-zoom: 6`.
+    // MapLibre's `maxzoom` is exclusive and ezu's `max-zoom` is not, so
+    // `maxzoom: 6` draws through z5 — `max-zoom: 5`, not 6.
     assert!(
-        feats.iter().any(|f| f["max-zoom"] == 6),
-        "expected a features node with max-zoom 6: {feats:?}"
+        feats.iter().any(|f| f["max-zoom"] == 5),
+        "expected a features node with max-zoom 5 for maxzoom 6: {feats:?}"
     );
-    // `minzoom: 4` → a features node with `min-zoom: 4`.
+    assert!(
+        !feats.iter().any(|f| f["max-zoom"] == 6),
+        "max-zoom 6 would draw z6, which MapLibre hides: {feats:?}"
+    );
+    // `minzoom` is inclusive on both sides, so it carries over unchanged.
     assert!(
         feats.iter().any(|f| f["min-zoom"] == 4),
         "expected a features node with min-zoom 4: {feats:?}"
     );
+}
+
+/// The bounds that need arithmetic rather than a copy: fractional bounds
+/// are thresholds, and a band that holds no whole zoom is a layer MapLibre
+/// never draws.
+#[test]
+fn zoom_bounds_convert_from_a_half_open_range() {
+    let case = |extra: &str| {
+        let style: serde_json::Value = serde_json::from_str(&format!(
+            r##"{{
+              "version": 8, "name": "t",
+              "sources": {{ "s": {{ "type": "vector", "url": "https://example.com/t.json" }} }},
+              "layers": [{{ "id": "l", "type": "fill", "source": "s", "source-layer": "a",
+                            {extra} "paint": {{ "fill-color": "red" }} }}]
+            }}"##
+        ))
+        .unwrap();
+        let (recipe, report) = convert(&style, &ConvertOptions::default()).unwrap();
+        let f = features(&recipe);
+        let gate = f
+            .first()
+            .map(|f| (f["min-zoom"].as_u64(), f["max-zoom"].as_u64()));
+        (gate, report.warnings.len())
+    };
+
+    // `z < 12.5` last shows at z12; `z >= 12.4` first shows at z13. Rounding
+    // would put each of these a level out.
+    assert_eq!(case(r#""maxzoom": 12.5,"#).0, Some((None, Some(12))));
+    assert_eq!(case(r#""minzoom": 12.4,"#).0, Some((Some(13), None)));
+    // A whole bound still steps down by one.
+    assert_eq!(case(r#""maxzoom": 12,"#).0, Some((None, Some(11))));
+    // Both ends together.
+    assert_eq!(
+        case(r#""minzoom": 4, "maxzoom": 9,"#).0,
+        Some((Some(4), Some(8)))
+    );
+
+    // `z < 0` is empty, as is `12 <= z < 12`: MapLibre draws neither, so the
+    // layer is dropped with a warning rather than gated to nothing.
+    for degenerate in [
+        r#""maxzoom": 0,"#,
+        r#""minzoom": 12, "maxzoom": 12,"#,
+        r#""minzoom": 9, "maxzoom": 4,"#,
+    ] {
+        let (gate, warnings) = case(degenerate);
+        assert_eq!(gate, None, "{degenerate} should emit no features node");
+        assert!(warnings > 0, "{degenerate} should be reported");
+    }
+
+    // `maxzoom: 1` keeps z0 only — the smallest band that still draws.
+    assert_eq!(case(r#""maxzoom": 1,"#).0, Some((None, Some(0))));
 }
 
 /// A style that seeds the layer list with a redundant duplicate background

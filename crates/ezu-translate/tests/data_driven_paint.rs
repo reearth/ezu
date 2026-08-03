@@ -214,7 +214,9 @@ fn zoom_functions_are_emitted_raw_not_baked() {
         .find(|n| n["op"] == "features")
         .expect("a features node");
     assert_eq!(feat["min-zoom"], 5, "features node should gate min-zoom");
-    assert_eq!(feat["max-zoom"], 12, "features node should gate max-zoom");
+    // `maxzoom` is exclusive in MapLibre, `max-zoom` inclusive in ezu, so
+    // the gate sits a level lower: this layer draws z5 through z11.
+    assert_eq!(feat["max-zoom"], 11, "features node should gate max-zoom");
 
     // And the recipe still builds.
     let text = serde_json::to_string(&recipe).unwrap();
