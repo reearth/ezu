@@ -41,8 +41,11 @@ class Renderer {
   //              the centre is `[0, 0]`, the default).
   //   - raster → RGBA imagery tiles (PNG/WebP/JPEG); decode + 3×3
   //              stitch at render time, same `coord` convention as dem
+  // `sourceZoom` (mvt / pmtiles) says the bytes are natively encoded at
+  // a shallower zoom than the tile being rendered, and the renderer
+  // reprojects them into its frame — see "Overzoom" below.
   bindSource(name: string, bytes: Uint8Array,
-             opts?: { coord?: [number, number] }): void;
+             opts?: { coord?: [number, number]; sourceZoom?: number }): void;
 
   // Attribution declared by the style (document + sources), joined
   // with ` | `; undefined when none is declared. Upstream TileJSON /
@@ -242,6 +245,47 @@ before the next tile that needs it. A host that binds what
 `neededCodepoints()` reports on every tile needs no other change; one
 that skips ranges it believes are still resident cannot keep that
 assumption once a budget is set.
+
+### Overzoom: rendering deeper than the source goes
+
+A vector source usually stops at some `maxzoom` — Protomaps basemaps end
+at z15 — while a tile endpoint is expected to serve deeper. Pass
+`sourceZoom` and the renderer puts the ancestor's geometry into the
+requested tile's frame before drawing, so z16 and beyond render at full
+detail instead of a client scaling a raster up:
+
+```js
+const MAXZOOM = 15;
+
+// The ancestor is derived from the tile, so a host only has to fetch the
+// tile it already knows exists.
+const ancestor = (z, x, y) =>
+  z <= MAXZOOM ? [z, x, y] : [MAXZOOM, x >> (z - MAXZOOM), y >> (z - MAXZOOM)];
+
+r.bindSource("basemap", await fetchMvt(...ancestor(z, x, y)), { sourceZoom: MAXZOOM });
+for (const [dx, dy] of r.requestedNeighborOffsets("basemap")) {
+  const nb = await fetchMvt(...ancestor(z, x + dx, y + dy));
+  if (nb) r.bindSource("basemap", nb, { coord: [dx, dy], sourceZoom: MAXZOOM });
+}
+const png = r.renderTile(z, x, y);
+```
+
+Each binding resolves against **its own** ancestor, which is why the
+neighbour loop passes the neighbour's coordinate to `ancestor` and not
+the centre's: a 3×3 window at z16 straddles two z15 parents whenever the
+centre sits on a parent boundary, and using the centre's parent for all
+nine would shift eight of them.
+
+`sourceZoom` equal to the rendered zoom does nothing, so passing the
+source's `maxzoom` unconditionally is fine — shallow tiles take the
+ordinary path, as the `ancestor` helper above relies on. A `sourceZoom`
+deeper than the rendered zoom throws `UnknownSource`; there is no detail
+to invent. Non-integer or out-of-range values are rejected at bind time.
+
+Geometry that straddles the tile edge is passed through rather than
+clipped, matching MVT's buffer convention, and features whose bounding
+box misses the tile entirely are dropped — so an overzoomed tile costs
+less to draw the deeper it goes, not more.
 
 ### Missing tiles
 
