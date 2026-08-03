@@ -250,6 +250,49 @@ the style's paper background. `features` source nodes see no
 `tile.<layer>` binding and emit an empty layer, so downstream paint
 nodes short-circuit.
 
+### Concurrency and instance lifetime
+
+Two things are shared more widely than they look.
+
+**A `Renderer` is mutable state.** `bindSource` accumulates into it and
+`renderTile` reads whatever is bound at that moment, so two requests
+sharing one renderer interleave at every `await` between their binds and
+can render each other's tiles. Give each concurrent render its own
+`Renderer`, or serialise them behind a queue.
+
+**The generated glue is module-global.** `wasm`, the cached memory
+views, and the externref table live at module scope, and a `Renderer`
+handle is an offset into *that* instance's linear memory. Every
+`Renderer` in the isolate depends on it. So retiring an instance — the
+documented response to `OutOfMemory`, and a reasonable response to
+`heapBytes()` climbing — is only safe once **no request still holds a
+renderer**. On workerd there is no way around draining first:
+`new WebAssembly.Instance` is rejected inside a request handler, so the
+instance is necessarily per isolate and shared by every concurrent
+request in it.
+
+Each way of getting this wrong fails with its own signature, so a
+puzzling error under concurrency can be identified by matching it:
+
+| what you see | what happened |
+| --- | --- |
+| `Error: null pointer passed to rust` | a method was called on a renderer after `free()` |
+| `RuntimeError: memory access out of bounds` | a handle outlived the instance it points into (the glue was re-pointed at a fresh one) |
+| `OutOfMemory`, with `.requestedBytes` | an allocation genuinely failed; the instance is finished (see below) |
+| wrong tile, no error at all | two requests shared one renderer and interleaved their binds |
+
+CPU time separates them further: a real render costs hundreds of
+milliseconds, so a failure at a few tens of milliseconds never got as
+far as rendering, which rules out running out of memory partway through
+a tile.
+
+Anything else — in particular a `RangeError` raised inside the glue's
+own buffer handling rather than by any of the above — is worth checking
+your installed version over: `@reearth/ezu` before 0.4.1 shipped without
+the allocator that turns a failed allocation into `OutOfMemory`, so
+exhaustion surfaced as whatever the glue did next with a return value
+that was never written.
+
 ### Errors
 
 Every fallible method throws a JavaScript `Error` whose `.name`
