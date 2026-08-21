@@ -83,6 +83,134 @@ ezu bbox --style crates/ezu/examples/styles/photo-pop.json \
 
 Style: [`photo-pop.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/photo-pop.json)
 
+## atlas
+
+A plain labelled basemap, written by hand rather than translated. Every label
+layer lowers to a `text-labels` node, all three meet in one `label-placement`, and
+a `text-draw` per layer paints the winners — so a city name can knock out the road
+label underneath it, and the decision is the same from whichever tile you approach
+it. Roads are `stroke` pairs whose widths are `interpolate` expressions, so one
+recipe covers every zoom.
+
+<figure class="page-fig">
+  <img src="/ezu/figures/gallery-atlas.webp" alt="A labelled reference map of central Tokyo" width="768" height="768" loading="lazy" decoding="async" />
+  <figcaption>Central Tokyo at z13. The labels are placed per tile, yet read as one sheet — that is the shared collision index working across borders.</figcaption>
+</figure>
+
+```sh
+ezu bbox --style crates/ezu/examples/styles/atlas.json \
+  --bbox 139.72,35.66,139.80,35.72 --zoom 13 --out atlas.png
+```
+
+Style: [`atlas.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/atlas.json)
+· Cookbook: [labels and icons](/ezu/cookbook/labels-and-icons/)
+· Concepts: [padding and neighbours](/ezu/concepts/padding-and-neighbours/)
+
+## risograph
+
+Two drums and a black pass. Area fills print through a halftone screen — a
+`point-grid` of `circles` used as a `blend` mask — while linework prints solid, the
+way it does on a real duplicator. Each drum's features are `transform`ed a couple
+of pixels out of register, and a closing `quantize` snaps the whole sheet onto the
+ink palette plus its overprints, so nothing survives that the press could not mix.
+
+<figure class="page-fig">
+  <img src="/ezu/figures/gallery-risograph.webp" alt="A two-colour risograph print of central Tokyo" width="768" height="768" loading="lazy" decoding="async" />
+  <figcaption>Fluorescent pink over blue on cream stock. The dots are a masked point grid, not a texture image.</figcaption>
+</figure>
+
+```sh
+ezu bbox --style crates/ezu/examples/styles/risograph.json \
+  --bbox 139.72,35.66,139.80,35.72 --zoom 13 --out riso.png
+
+# coarser screen, fatter dots
+ezu tile --style crates/ezu/examples/styles/risograph.json \
+  --tile 13/7276/3225 --param screen-px=9 --param dot-px=3 --out riso.png
+```
+
+Style: [`risograph.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/risograph.json)
+· Cookbook: [halftone and dither](/ezu/cookbook/halftone-and-dither/)
+
+## topo
+
+The same DEM tiles as `hillshade`, read three ways: `contour` pulls isolines out of
+the elevation field as real vector features (stroked twice, thin for the interval
+and heavy for every fifth index line), `hillshade` shades the relief, and `slope`
+feeds a `levels` → `color-to-alpha` chain that darkens only the cliff faces. The
+index interval is a param, so `interval-m` and `index-every` re-cut the contours
+without touching the recipe.
+
+<figure class="page-fig">
+  <img src="/ezu/figures/gallery-topo.webp" alt="A topographic map of the Japanese Northern Alps" width="768" height="768" loading="lazy" decoding="async" />
+  <figcaption>The Northern Alps around Kamikōchi at z13 — 100 m contours, 500 m index lines, no vector contour source anywhere.</figcaption>
+</figure>
+
+```sh
+ezu bbox --style crates/ezu/examples/styles/topo.json \
+  --bbox 137.60,36.20,137.72,36.28 --zoom 13 --out topo.png
+
+# 200 m contours instead
+ezu tile --style crates/ezu/examples/styles/topo.json \
+  --tile 13/7253/3229 --param interval-m=200 --out topo.png
+```
+
+Style: [`topo.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/topo.json)
+· Cookbook: [hillshade and hypsometric tint](/ezu/cookbook/hillshade-and-hypsometric/)
+
+## poi-field
+
+Analysis rather than cartography: `density` turns the POI layer into a
+kernel-density `ScalarField`, `color-ramp` colours it through a MapLibre
+`heatmap-color` expression (`ramp-expr`), and the same field goes into `contour` a
+second time to draw isolines over the heat — including a single heavier line at the
+0.75 level. Kernel radius and isoline interval are params.
+
+<figure class="page-fig">
+  <img src="/ezu/figures/gallery-poi-field.webp" alt="A heatmap of points of interest across central Tokyo with isolines" width="768" height="768" loading="lazy" decoding="async" />
+  <figcaption>Where the shops are, at z13. Heat and isolines are two readings of one field node.</figcaption>
+</figure>
+
+```sh
+ezu bbox --style crates/ezu/examples/styles/poi-field.json \
+  --bbox 139.72,35.66,139.80,35.72 --zoom 13 --out field.png
+
+# wider kernel, coarser isolines
+ezu tile --style crates/ezu/examples/styles/poi-field.json \
+  --tile 13/7276/3225 --param radius-px=48 --param step=0.2 --out field.png
+```
+
+Style: [`poi-field.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/poi-field.json)
+· Concepts: [ports and types](/ezu/concepts/ports-and-types/)
+
+## stained-glass
+
+Geometry ops as the whole design. `voronoi-fracture` breaks the land, water, and
+park polygons into panes around seed points — the POI layer where it has points, a
+`point-grid` where it does not — and `boundary` + `stroke` turns every pane edge
+into leading. Pane colour comes from a world-anchored `worley` field mapped through
+an HCL ramp and clipped to the panes, so neighbouring glass differs without any
+per-cell attribute to key on.
+
+<figure class="page-fig">
+  <img src="/ezu/figures/gallery-stained-glass.webp" alt="Central Tokyo rendered as a stained-glass window" width="768" height="768" loading="lazy" decoding="async" />
+  <figcaption>Panes seeded from POIs, leading from their boundaries, colour from a noise field.</figcaption>
+</figure>
+
+```sh
+ezu bbox --style crates/ezu/examples/styles/stained-glass.json \
+  --bbox 139.72,35.66,139.80,35.72 --zoom 13 --out glass.png
+```
+
+Style: [`stained-glass.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/stained-glass.json)
+· Nodes: [geometry](/ezu/style/nodes/geometry/)
+
+:::caution[Voronoi cells and tile seams]
+Panes are built from the seeds visible in one tile plus its `pad`, so a cell that
+would extend past that window can differ between neighbouring tiles. It is fine for
+a single render or a print, and visible if you pan a seamless map — raise `pad`, or
+seed from a world-anchored `point-grid` alone, if you need the seams to agree.
+:::
+
 ## A translated MapLibre basemap
 
 Not painterly at all: a Protomaps basemap MapLibre style, converted with
@@ -107,8 +235,9 @@ is bundled into the library — a style names every brush it uses.
 The renders on this page are made from other people's data, and the licences ask
 for credit:
 
-- **watercolor, pencil-sketch, photo-pop (vector), the Protomaps basemap** — [OpenStreetMap](https://www.openstreetmap.org/copyright) via [Protomaps](https://protomaps.com/), © OpenStreetMap contributors.
-- **hillshade** — elevation from [Re:Earth Terrain](https://terrain.reearth.land/) (Mapterhorn-merged global DEM blended with EGM2008 geoid undulations): Re:Earth Terrain, [Mapterhorn](https://mapterhorn.com/), [EGM2008 (NGA)](https://earth-info.nga.mil/).
+- **watercolor, pencil-sketch, photo-pop (vector), atlas, risograph, poi-field, stained-glass, the Protomaps basemap** — [OpenStreetMap](https://www.openstreetmap.org/copyright) via [Protomaps](https://protomaps.com/), © OpenStreetMap contributors.
+- **hillshade, topo** — elevation from [Re:Earth Terrain](https://terrain.reearth.land/) (Mapterhorn-merged global DEM blended with EGM2008 geoid undulations): Re:Earth Terrain, [Mapterhorn](https://mapterhorn.com/), [EGM2008 (NGA)](https://earth-info.nga.mil/).
+- **atlas lettering** — [Open Sans](https://fonts.google.com/specimen/Open+Sans) by Steve Matteson, under the SIL Open Font License.
 - **photo-pop** — aerial imagery from [GSI Japan](https://maps.gsi.go.jp/development/ichiran.html), © 国土地理院.
 - **Brushes** — CC0, by [David Revoy](https://www.davidrevoy.com/).
 
