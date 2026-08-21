@@ -34,6 +34,8 @@ mod data_driven_stamp;
 mod data_driven_stroke;
 #[path = "paint/density.rs"]
 mod density;
+#[path = "paint/dot_density.rs"]
+mod dot_density;
 #[path = "paint/feature_sources.rs"]
 mod feature_sources;
 #[path = "paint/functions.rs"]

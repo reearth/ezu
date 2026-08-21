@@ -158,6 +158,20 @@ export const DEMOS = {
       ...overBase('@d', 1.6),
     },
   },
+  'dot-density': {
+    note: 'Dots spread over the landmass at 12,000 people per km², one dot per 100 people. A real dot density map reads the density from each feature with `density-expr` instead of stating one constant.',
+    nodes: {
+      d: {
+        op: 'dot-density',
+        features: '@earth_f',
+        density: 12000,
+        'dot-value': 100,
+        'spacing-px': 6,
+      },
+      draw: { op: 'circles', features: '@d', radius: 1.1, color: INK },
+      out: { op: 'blend', base: '@base', over: '@draw' },
+    },
+  },
   wave: {
     note: 'Road geometry perturbed sideways — the wobble behind hand-drawn styles.',
     nodes: {

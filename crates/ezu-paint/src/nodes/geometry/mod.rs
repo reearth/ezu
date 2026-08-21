@@ -9,6 +9,7 @@ mod centroid;
 mod contour;
 mod convex_hull;
 mod dash;
+mod dot_density;
 mod feature_boolean;
 mod hatch;
 mod medial_axis;

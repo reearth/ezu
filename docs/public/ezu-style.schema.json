@@ -1202,6 +1202,95 @@
             "type": "object"
           },
           {
+            "description": "Scatter points inside polygons at a per-feature areal density (dot density map).",
+            "properties": {
+              "density": {
+                "oneOf": [
+                  {
+                    "default": 0.0,
+                    "description": "Constant density in units per square kilometre, used where `density-expr` is absent.",
+                    "minimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "density-expr": {
+                "description": "Per-feature MapLibre expression giving density in units per square kilometre, e.g. [\"/\", [\"get\", \"POP\"], [\"get\", \"AREA_KM2\"]]."
+              },
+              "dot-value": {
+                "oneOf": [
+                  {
+                    "default": 1.0,
+                    "description": "Units one dot stands for. 100 means one dot per 100 people.",
+                    "exclusiveMinimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "features": {
+                "description": "Reference to another node (`@name`).",
+                "pattern": "^@?[A-Za-z_][A-Za-z0-9_-]*$",
+                "type": "string"
+              },
+              "jitter": {
+                "oneOf": [
+                  {
+                    "default": 1.0,
+                    "description": "How far a dot may stray from its cell centre, as a fraction of the cell. 0 leaves a visible grid.",
+                    "maximum": 1.0,
+                    "minimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "op": {
+                "const": "dot-density",
+                "description": "Selects the `dot-density` operation."
+              },
+              "seed": {
+                "description": "Lattice salt; change it to reshuffle the dots without changing their density.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "spacing-px": {
+                "oneOf": [
+                  {
+                    "default": 3.0,
+                    "description": "Lattice cell size in screen pixels. One dot per cell at most, so this caps how dense the scatter can get.",
+                    "exclusiveMinimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "op",
+              "features"
+            ],
+            "title": "op: dot-density",
+            "type": "object"
+          },
+          {
             "description": "Sobel gradient magnitude per channel, scaled by `strength` and clamped to [0, 255]. Pass-through over Raster / Sprite. Use after a hillshade for stylised outlines, or on a flat fill to derive an outline mask.",
             "properties": {
               "input": {

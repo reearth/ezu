@@ -9,7 +9,7 @@ sidebar:
 
 `Features -> Features` transforms. They rewrite geometry before anything is painted, so downstream paint ops stay simple.
 
-19 ops: `bbox`, `boundary`, `buffer`, `centroid`, `contour`, `convex-hull`, `dash`, `densify`, `feature-boolean`, `hatch`, `medial-axis`, `resample`, `simplify`, `smooth`, `transform`, `triangulate`, `voronoi`, `voronoi-fracture`, `wave`.
+20 ops: `bbox`, `boundary`, `buffer`, `centroid`, `contour`, `convex-hull`, `dash`, `densify`, `dot-density`, `feature-boolean`, `hatch`, `medial-axis`, `resample`, `simplify`, `smooth`, `transform`, `triangulate`, `voronoi`, `voronoi-fracture`, `wave`.
 
 Ops with no demo image below produce no visible result on their own — they feed other nodes rather than paint.
 
@@ -131,6 +131,27 @@ Insert intermediate vertices so no segment of any polyline or polygon ring excee
 | --- | --- | --- | --- |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
 | `target-px` | number (0…∞) | yes | — |
+
+### `dot-density`
+
+Scatter points inside polygons at a per-feature areal density (dot density map).
+
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/dot-density.webp" alt="A tile rendered with dot-density" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Dots spread over the landmass at 12,000 people per km², one dot per 100 people. A real dot density map reads the density from each feature with `density-expr` instead of stating one constant. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/dot-density.json">style</a></figcaption>
+</figure>
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `density` | number (0…∞) \| `$param` \| `@node` | no | — |
+| `density-expr` | — | no | Per-feature MapLibre expression giving density in units per square kilometre, e.g. ["/", ["get", "POP"], ["get", "AREA_KM2"]]. |
+| `dot-value` | number \| `$param` \| `@node` | no | — |
+| `features` | `@node` | yes | Reference to another node (`@name`). |
+| `jitter` | number (0…1) \| `$param` \| `@node` | no | — |
+| `seed` | integer (0…∞) | no | Lattice salt; change it to reshuffle the dots without changing their density. |
+| `spacing-px` | number \| `$param` \| `@node` | no | — |
 
 ### `feature-boolean`
 
