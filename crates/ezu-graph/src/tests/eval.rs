@@ -128,8 +128,8 @@ impl Node for Watched {
         ctx: &crate::EvalCtx<'_>,
         _inputs: &[Option<crate::PortValue>],
     ) -> Result<crate::PortValue, crate::EvalError> {
-        let size = ctx.canvas.padded_size();
-        let buf = Arc::new(crate::RasterBuf::filled(size, size, [1, 2, 3, 255]));
+        let (pw, ph) = ctx.canvas.padded_dims();
+        let buf = Arc::new(crate::RasterBuf::filled(pw, ph, [1, 2, 3, 255]));
         *self.weak.lock().unwrap() = Some(Arc::downgrade(&buf));
         Ok(crate::PortValue::Raster(buf))
     }

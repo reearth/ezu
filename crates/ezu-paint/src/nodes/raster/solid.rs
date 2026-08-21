@@ -44,10 +44,8 @@ impl Node for SolidNode {
         let rgba = color_to_premul_u8(self.color.get(ctx, inputs)?);
         match self.out_kind {
             GeneratorKind::Raster => {
-                let size = ctx.canvas.padded_size();
-                Ok(PortValue::Raster(Arc::new(RasterBuf::filled(
-                    size, size, rgba,
-                ))))
+                let (pw, ph) = ctx.canvas.padded_dims();
+                Ok(PortValue::Raster(Arc::new(RasterBuf::filled(pw, ph, rgba))))
             }
             GeneratorKind::Sprite { width, height } => Ok(PortValue::Sprite(Arc::new(
                 RasterBuf::filled(width, height, rgba),

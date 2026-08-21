@@ -1255,8 +1255,8 @@ impl TextNode {
         let const_halo_width = (self.halo_width.get(ctx, inputs)? as f32).max(0.0);
         let const_opacity = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
 
-        let tile_w = ctx.canvas.tile_size as f32;
-        let tile_h = tile_w;
+        let tile_w = ctx.canvas.tile_w as f32;
+        let tile_h = ctx.canvas.tile_h as f32;
         let extent_i = feats.extent.max(1) as i64;
         let sx = tile_w / extent_i as f32;
         let sy = tile_h / extent_i as f32;
@@ -1656,8 +1656,8 @@ impl TextNode {
         let const_halo_width = (self.halo_width.get(ctx, inputs)? as f32).max(0.0);
         let const_opacity = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
 
-        let tile_w = ctx.canvas.tile_size as f32;
-        let tile_h = tile_w;
+        let tile_w = ctx.canvas.tile_w as f32;
+        let tile_h = ctx.canvas.tile_h as f32;
         let extent_i = feats.extent.max(1) as i64;
         let sx = tile_w / extent_i as f32;
         let sy = tile_h / extent_i as f32;

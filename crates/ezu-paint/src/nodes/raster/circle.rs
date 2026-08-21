@@ -47,8 +47,8 @@ impl Node for CircleNode {
         // anchors to the shorter sprite side so the disk fits.
         let (out_w, out_h, radius_unit) = match self.out_kind {
             GeneratorKind::Raster => {
-                let size = ctx.canvas.padded_size();
-                (size, size, ctx.canvas.tile_size as f32)
+                let (pw, ph) = ctx.canvas.padded_dims();
+                (pw, ph, ctx.canvas.tile_w as f32)
             }
             GeneratorKind::Sprite { width, height } => (width, height, width.min(height) as f32),
         };

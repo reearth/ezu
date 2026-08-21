@@ -197,10 +197,7 @@ fn shared_cache_distinguishes_param_values() {
     let graph = build_graph(&doc, &registry).unwrap();
     let cache = Cache::new();
     let ev = Evaluator::new(&graph, &cache, &NoAssets);
-    let canvas = CanvasInfo {
-        tile_size: 8,
-        pad: 0,
-    };
+    let canvas = CanvasInfo::square(8, 0);
 
     let render_px = |pv: &ParamValues| {
         let out = ev.render(Z0, canvas, pv, 0).unwrap();

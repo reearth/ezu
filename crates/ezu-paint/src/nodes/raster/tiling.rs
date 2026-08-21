@@ -65,11 +65,11 @@ impl Node for TilingNode {
             .as_ref()
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
         let (src, _) = unwrap_raster_or_sprite(input, "input")?;
-        let size = ctx.canvas.padded_size();
+        let (pw, ph) = ctx.canvas.padded_dims();
         let pad = ctx.canvas.pad as f64;
-        let tile_size = ctx.canvas.tile_size as f64;
+        let tile_size = ctx.canvas.tile_w as f64;
         if src.width == 0 || src.height == 0 {
-            return Ok(PortValue::Raster(Arc::new(RasterBuf::new(size, size))));
+            return Ok(PortValue::Raster(Arc::new(RasterBuf::new(pw, ph))));
         }
 
         let (origin_x, origin_y) = match self.anchor {
@@ -98,11 +98,11 @@ impl Node for TilingNode {
         let src_h = src.height as usize;
         let opacity = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
 
-        let mut out = RasterBuf::new(size, size);
+        let mut out = RasterBuf::new(pw, ph);
         let dst = &mut out.pixels;
         let src_px = &src.pixels;
-        for y in 0..size {
-            for x in 0..size {
+        for y in 0..ph {
+            for x in 0..pw {
                 let cx = origin_x + x as f64 - pad - self.offset_px[0];
                 let cy = origin_y + y as f64 - pad - self.offset_px[1];
                 let (rx, ry) = if needs_rotation {
@@ -113,7 +113,7 @@ impl Node for TilingNode {
                 let sx = (rx * kx).rem_euclid(sw);
                 let sy = (ry * ky).rem_euclid(sh);
                 let pixel = bilinear_wrap(src_px, src_w, src_h, sx, sy);
-                let i = ((y * size + x) * 4) as usize;
+                let i = ((y * pw + x) * 4) as usize;
                 if (opacity - 1.0).abs() < 1e-6 {
                     dst[i] = pixel[0];
                     dst[i + 1] = pixel[1];

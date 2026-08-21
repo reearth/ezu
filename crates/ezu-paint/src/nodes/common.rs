@@ -584,14 +584,12 @@ pub(super) fn tint_alpha_color(c: [u8; 4], alpha_mul: f32) -> tiny_skia::Color {
 
 /// Build a fresh padded canvas matching the eval ctx.
 pub(super) fn make_canvas(ctx: &EvalCtx<'_>) -> Result<Canvas, EvalError> {
-    Canvas::new_padded(ctx.canvas.tile_size, ctx.canvas.tile_size, ctx.canvas.pad).ok_or_else(
-        || {
-            EvalError::Other(format!(
-                "canvas allocation failed for tile-size={} pad={}",
-                ctx.canvas.tile_size, ctx.canvas.pad
-            ))
-        },
-    )
+    Canvas::new_padded(ctx.canvas.tile_w, ctx.canvas.tile_h, ctx.canvas.pad).ok_or_else(|| {
+        EvalError::Other(format!(
+            "canvas allocation failed for tile={}x{} pad={}",
+            ctx.canvas.tile_w, ctx.canvas.tile_h, ctx.canvas.pad
+        ))
+    })
 }
 
 /// Consume a freshly-painted [`Canvas`] into a zero-copy [`RasterBuf`].
@@ -612,8 +610,8 @@ pub(super) fn canvas_into_raster(canvas: Canvas) -> RasterBuf {
 /// Padded transparent raster, used when a paint node has no features
 /// to draw (still returns a sized buffer so downstream blends work).
 pub(super) fn empty_raster(ctx: &EvalCtx<'_>) -> PortValue {
-    let size = ctx.canvas.padded_size();
-    PortValue::Raster(Arc::new(RasterBuf::new(size, size)))
+    let (pw, ph) = ctx.canvas.padded_dims();
+    PortValue::Raster(Arc::new(RasterBuf::new(pw, ph)))
 }
 
 pub(super) fn core_tile(ctx: &EvalCtx<'_>) -> CoreTileId {

@@ -64,6 +64,8 @@ mod pixel_filters;
 mod raster_layout;
 #[path = "paint/raster_source.rs"]
 mod raster_source;
+#[path = "paint/rect_canvas.rs"]
+mod rect_canvas;
 #[path = "paint/scalar_ops.rs"]
 mod scalar_ops;
 #[path = "paint/schema.rs"]

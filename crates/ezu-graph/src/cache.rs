@@ -28,7 +28,9 @@ pub type Hash128 = u128;
 /// Compose a cache key for one node evaluation.
 ///
 /// The key folds together:
-/// - the canvas (tile_size + pad), so cached buffers always match shape
+/// - the canvas (both tile axes + pad), so cached buffers always match
+///   shape — a buffer cached for one shape must never be handed to a
+///   render of another
 /// - the tile id (or omitted for world-anchored nodes)
 /// - the node's own param hash
 /// - each input's cache hash (Merkle-style chain)
@@ -43,7 +45,8 @@ impl CacheKey {
         inputs: &[Hash128],
     ) -> Self {
         let mut h = Xxh3::new();
-        h.update(&canvas.tile_size.to_le_bytes());
+        h.update(&canvas.tile_w.to_le_bytes());
+        h.update(&canvas.tile_h.to_le_bytes());
         h.update(&canvas.pad.to_le_bytes());
         if let Some(t) = tile {
             h.update(&[t.z]);

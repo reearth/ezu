@@ -126,7 +126,7 @@ impl Node for DotDensityNode {
         let extent = feats.extent.max(1) as f64;
         // Screen pixels to feature-extent units, as the other px-sized
         // geometry nodes do.
-        let px = extent / ctx.canvas.tile_size.max(1) as f64;
+        let px = extent / ctx.canvas.tile_w.max(1) as f64;
         let spacing = self.spacing_px.get(ctx, inputs)? * px;
         let jitter = self.jitter.get(ctx, inputs)?;
         let dot_value = self.dot_value.get(ctx, inputs)?;

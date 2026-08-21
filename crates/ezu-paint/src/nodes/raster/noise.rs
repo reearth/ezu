@@ -96,9 +96,9 @@ impl Node for NoiseNode {
         ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
-        let size = ctx.canvas.padded_size();
+        let (pw, ph) = ctx.canvas.padded_dims();
         let pad = ctx.canvas.pad as f64;
-        let tile_size = ctx.canvas.tile_size as f64;
+        let tile_size = ctx.canvas.tile_w as f64;
 
         let lacunarity = self.lacunarity.get(ctx, inputs)?;
         let gain = self.gain.get(ctx, inputs)?;
@@ -151,15 +151,15 @@ impl Node for NoiseNode {
 
         match self.out_kind {
             OutputKind::Scalar => {
-                let mut values: Vec<f32> = Vec::with_capacity((size * size) as usize);
-                for y in 0..size {
-                    for x in 0..size {
+                let mut values: Vec<f32> = Vec::with_capacity((pw * ph) as usize);
+                for y in 0..ph {
+                    for x in 0..pw {
                         values.push(sample_at(x, y) as f32);
                     }
                 }
                 Ok(PortValue::ScalarField(Arc::new(ScalarField {
-                    width: size,
-                    height: size,
+                    width: pw,
+                    height: ph,
                     values: values.into(),
                     nodata: None,
                     geo_scale: None,
@@ -169,16 +169,16 @@ impl Node for NoiseNode {
                 let [lr, lg, lb, la] = self.low.get(ctx, inputs)?;
                 let [hr, hg, hb, ha] = self.high.get(ctx, inputs)?;
                 let opacity = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
-                let mut out = RasterBuf::new(size, size);
-                for y in 0..size {
-                    for x in 0..size {
+                let mut out = RasterBuf::new(pw, ph);
+                for y in 0..ph {
+                    for x in 0..pw {
                         let n = sample_at(x, y);
                         let t = ((n * 0.5) + 0.5).clamp(0.0, 1.0) as f32;
                         let r = lr + (hr - lr) * t;
                         let g = lg + (hg - lg) * t;
                         let b = lb + (hb - lb) * t;
                         let a = (la + (ha - la) * t) * opacity;
-                        let i = ((y * size + x) * 4) as usize;
+                        let i = ((y * pw + x) * 4) as usize;
                         out.pixels[i] = (r * a * 255.0).round() as u8;
                         out.pixels[i + 1] = (g * a * 255.0).round() as u8;
                         out.pixels[i + 2] = (b * a * 255.0).round() as u8;

@@ -66,11 +66,9 @@ impl Node for Mock {
         ctx: &EvalCtx<'_>,
         _inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
-        let size = ctx.canvas.padded_size();
+        let (pw, ph) = ctx.canvas.padded_dims();
         Ok(match self.output {
-            PortKind::Raster => {
-                PortValue::Raster(Arc::new(RasterBuf::filled(size, size, self.fill)))
-            }
+            PortKind::Raster => PortValue::Raster(Arc::new(RasterBuf::filled(pw, ph, self.fill))),
             other => panic!("mock node has no default output for {other:?}"),
         })
     }
@@ -98,10 +96,7 @@ pub(super) fn passthrough(input: PortKind, output: PortKind) -> Box<dyn Node> {
 }
 
 pub(super) fn small_canvas() -> CanvasInfo {
-    CanvasInfo {
-        tile_size: 8,
-        pad: 0,
-    }
+    CanvasInfo::square(8, 0)
 }
 
 /// Node that counts how often it has been eval'd. Used by cache tests.
@@ -144,10 +139,10 @@ impl Node for Counter {
         _inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
         self.count.fetch_add(1, Ordering::SeqCst);
-        let size = ctx.canvas.padded_size();
+        let (pw, ph) = ctx.canvas.padded_dims();
         Ok(PortValue::Raster(Arc::new(RasterBuf::filled(
-            size,
-            size,
+            pw,
+            ph,
             [64, 0, 0, 64],
         ))))
     }

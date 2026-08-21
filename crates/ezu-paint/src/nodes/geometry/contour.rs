@@ -82,7 +82,7 @@ impl Node for ContourNode {
         // center (x + 0.5, y + 0.5); invert the paint-side scaling
         // `px = t · tile/extent + pad`.
         let pad = ctx.canvas.pad as f32;
-        let tile = ctx.canvas.tile_size.max(1) as f32;
+        let tile = ctx.canvas.tile_w.max(1) as f32;
         let to_tile = |(gx, gy): (f32, f32)| -> (i32, i32) {
             let ex = (gx + 0.5 - pad) / tile * OUTPUT_EXTENT as f32;
             let ey = (gy + 0.5 - pad) / tile * OUTPUT_EXTENT as f32;

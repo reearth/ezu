@@ -46,7 +46,7 @@ impl Node for DashNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
-        let scale = feats.extent as f64 / ctx.canvas.tile_size.max(1) as f64;
+        let scale = feats.extent as f64 / ctx.canvas.tile_w.max(1) as f64;
         let dash = self.dash_px.get(ctx, inputs)? * scale;
         let gap = self.gap_px.get(ctx, inputs)? * scale;
         let phase = self.phase_px.get(ctx, inputs)? * scale;

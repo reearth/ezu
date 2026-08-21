@@ -71,17 +71,20 @@ pub fn stitch_padded_field(
     canvas: CanvasInfo,
 ) -> Option<ScalarField> {
     let centre = tiles.get(&(0, 0))?;
-    let padded_size = canvas.padded_size();
+    let (pw, ph) = canvas.padded_dims();
     let pad = canvas.pad as f32;
-    let tile_px = canvas.tile_size as f32;
+    // Per axis: a pixel's position within the tile is a fraction of that
+    // axis' own extent.
+    let tile_px_x = canvas.tile_w as f32;
+    let tile_px_y = canvas.tile_h as f32;
     let dem_size = centre.size as f32;
 
-    let mut elev = vec![0f32; (padded_size * padded_size) as usize];
-    for py in 0..padded_size {
-        let ty = (py as f32 - pad) / tile_px;
+    let mut elev = vec![0f32; (pw * ph) as usize];
+    for py in 0..ph {
+        let ty = (py as f32 - pad) / tile_px_y;
         let (dy_off, ty_local) = split_fraction(ty);
-        for px in 0..padded_size {
-            let tx = (px as f32 - pad) / tile_px;
+        for px in 0..pw {
+            let tx = (px as f32 - pad) / tile_px_x;
             let (dx_off, tx_local) = split_fraction(tx);
             let sample_tile = tiles
                 .get(&(dx_off, dy_off))
@@ -97,17 +100,17 @@ pub fn stitch_padded_field(
             let sx = (tx_local * dem_size).clamp(0.0, dem_size - 1.0001);
             let sy = (ty_local * dem_size).clamp(0.0, dem_size - 1.0001);
             let v = bilinear(&sample_tile.elev, sample_tile.size, sx, sy);
-            elev[(py * padded_size + px) as usize] = v - elevation_offset;
+            elev[(py * pw + px) as usize] = v - elevation_offset;
         }
     }
 
     let lat_rad = tile_centre_lat_rad(tile);
-    let world_pixels = canvas.tile_size as f64 * (1u64 << tile.z) as f64;
+    let world_pixels = canvas.tile_w as f64 * (1u64 << tile.z) as f64;
     let mpp = (EARTH_CIRCUMFERENCE_M * lat_rad.cos() / world_pixels) as f32;
 
     Some(ScalarField {
-        width: padded_size,
-        height: padded_size,
+        width: pw,
+        height: ph,
         values: elev.into(),
         nodata: None,
         geo_scale: Some(GeoScale {

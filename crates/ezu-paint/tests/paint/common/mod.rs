@@ -23,6 +23,35 @@ pub fn render_tile(
     render_with_assets(json, tile_size, pad, tile, &NoAssets)
 }
 
+/// Render onto a canvas that need not be square — the shape a legend
+/// swatch asks for. The document's own `tile-size` is ignored; the
+/// caller states the canvas, as a host does.
+#[allow(dead_code)]
+pub fn render_shaped(
+    json: &str,
+    tile_w: u32,
+    tile_h: u32,
+    pad: u32,
+) -> std::sync::Arc<ezu_graph::RasterBuf> {
+    let doc = Document::from_json(json).expect("parse");
+    let registry = default_registry();
+    let graph = build_graph(&doc, &registry).expect("build");
+    let cache = Cache::new();
+    let ev = Evaluator::new(&graph, &cache, &NoAssets);
+    let canvas = CanvasInfo {
+        tile_w,
+        tile_h,
+        pad,
+    };
+    let out = ev
+        .render(TileId { z: 0, x: 0, y: 0 }, canvas, &ParamValues::new(), 0)
+        .expect("render");
+    match out {
+        PortValue::Raster(r) => r,
+        other => panic!("expected raster output, got {:?}", other.kind()),
+    }
+}
+
 /// Render with caller-supplied runtime parameter values.
 #[allow(dead_code)]
 pub fn render_with_params(
@@ -42,7 +71,7 @@ pub fn render_with_params(
     let cache = Cache::new();
     let ev = Evaluator::new(&graph, &cache, &NoAssets);
     let out = ev
-        .render(tile, CanvasInfo { tile_size, pad }, &pv, 0)
+        .render(tile, CanvasInfo::square(tile_size, pad), &pv, 0)
         .expect("render");
     match out {
         PortValue::Raster(r) => r,
@@ -90,7 +119,12 @@ pub fn render_with_rasters(
     }
     let ev = Evaluator::new(&graph, &cache, &loader);
     let out = ev
-        .render(tile, CanvasInfo { tile_size, pad }, &ParamValues::new(), 0)
+        .render(
+            tile,
+            CanvasInfo::square(tile_size, pad),
+            &ParamValues::new(),
+            0,
+        )
         .expect("render");
     match out {
         PortValue::Raster(r) => r,
@@ -121,7 +155,12 @@ pub fn render_with_scalar_fields(
     }
     let ev = Evaluator::new(&graph, &cache, &loader);
     let out = ev
-        .render(tile, CanvasInfo { tile_size, pad }, &ParamValues::new(), 0)
+        .render(
+            tile,
+            CanvasInfo::square(tile_size, pad),
+            &ParamValues::new(),
+            0,
+        )
         .expect("render");
     match out {
         PortValue::Raster(r) => r,
@@ -152,7 +191,12 @@ pub fn render_with_features(
     }
     let ev = Evaluator::new(&graph, &cache, &loader);
     let out = ev
-        .render(tile, CanvasInfo { tile_size, pad }, &ParamValues::new(), 0)
+        .render(
+            tile,
+            CanvasInfo::square(tile_size, pad),
+            &ParamValues::new(),
+            0,
+        )
         .expect("render");
     match out {
         PortValue::Raster(r) => r,
@@ -186,7 +230,12 @@ pub fn render_with_features_and_images(
     }
     let ev = Evaluator::new(&graph, &cache, &loader);
     let out = ev
-        .render(tile, CanvasInfo { tile_size, pad }, &ParamValues::new(), 0)
+        .render(
+            tile,
+            CanvasInfo::square(tile_size, pad),
+            &ParamValues::new(),
+            0,
+        )
         .expect("render");
     match out {
         PortValue::Raster(r) => r,
@@ -221,7 +270,12 @@ pub fn render_with_features_and_sprite(
     }
     let ev = Evaluator::new(&graph, &cache, &loader);
     let out = ev
-        .render(tile, CanvasInfo { tile_size, pad }, &ParamValues::new(), 0)
+        .render(
+            tile,
+            CanvasInfo::square(tile_size, pad),
+            &ParamValues::new(),
+            0,
+        )
         .expect("render");
     match out {
         PortValue::Raster(r) => r,
@@ -251,7 +305,7 @@ pub fn render_tile_host_seeded(
     let out = ev
         .render(
             tile,
-            CanvasInfo { tile_size, pad },
+            CanvasInfo::square(tile_size, pad),
             &ParamValues::new(),
             host_tile_seed(tile),
         )
@@ -285,7 +339,12 @@ fn render_with_assets(
     let cache = Cache::new();
     let ev = Evaluator::new(&graph, &cache, assets);
     let out = ev
-        .render(tile, CanvasInfo { tile_size, pad }, &ParamValues::new(), 0)
+        .render(
+            tile,
+            CanvasInfo::square(tile_size, pad),
+            &ParamValues::new(),
+            0,
+        )
         .expect("render");
     match out {
         PortValue::Raster(r) => r,

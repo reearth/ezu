@@ -327,7 +327,7 @@ async fn get_tile(
         }
     }
 
-    let canvas = CanvasInfo { tile_size, pad };
+    let canvas = CanvasInfo::square(tile_size, pad);
     let tile_id = TileId {
         z: tile.z,
         x: tile.x,
@@ -663,7 +663,7 @@ fn render_tile(
     let out = ev
         .render(
             tile_id,
-            CanvasInfo { tile_size, pad },
+            CanvasInfo::square(tile_size, pad),
             params,
             tile_seed(tile),
         )

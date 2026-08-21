@@ -45,11 +45,11 @@ impl Node for DemNode {
                 // No binding for this tile -> emit a zero field sized to
                 // the canvas. Consumers degrade gracefully (hillshade
                 // becomes flat-lit, slope is zero).
-                let size = ctx.canvas.padded_size();
-                let count = (size * size) as usize;
+                let (pw, ph) = ctx.canvas.padded_dims();
+                let count = (pw * ph) as usize;
                 return Ok(PortValue::ScalarField(Arc::new(ScalarField {
-                    width: size,
-                    height: size,
+                    width: pw,
+                    height: ph,
                     values: vec![0.0; count].into(),
                     nodata: None,
                     geo_scale: None,

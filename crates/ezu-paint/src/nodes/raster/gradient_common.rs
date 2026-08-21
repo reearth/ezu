@@ -19,9 +19,10 @@ use crate::nodes::raster::generator_kind::GeneratorKind;
 #[inline]
 pub(super) fn pixel_to_user(x: u32, y: u32, ctx: &EvalCtx<'_>, anchor: Anchor) -> (f32, f32) {
     let pad = ctx.canvas.pad as f32;
-    let ts = ctx.canvas.tile_size as f32;
-    let tx = (x as f32 + 0.5 - pad) / ts;
-    let ty = (y as f32 + 0.5 - pad) / ts;
+    // Per axis, so a gradient spans the canvas it is drawn on rather
+    // than running off a canvas that is not square.
+    let tx = (x as f32 + 0.5 - pad) / ctx.canvas.tile_w as f32;
+    let ty = (y as f32 + 0.5 - pad) / ctx.canvas.tile_h as f32;
     match anchor {
         Anchor::Tile => (tx, ty),
         Anchor::World => {
@@ -54,8 +55,8 @@ where
 {
     let (w, h, raster_kind) = match out_kind {
         GeneratorKind::Raster => {
-            let s = ctx.canvas.padded_size();
-            (s, s, true)
+            let (pw, ph) = ctx.canvas.padded_dims();
+            (pw, ph, true)
         }
         GeneratorKind::Sprite { width, height } => (width, height, false),
     };

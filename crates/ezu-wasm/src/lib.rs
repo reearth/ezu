@@ -77,8 +77,8 @@ use ezu_graph::{
     SpriteSheet, TileId,
 };
 use ezu_paint::host::{
-    build_sprite_icons, decode_dem_tile, decode_raster_tile, raster_to_png_with, raster_to_rgba8,
-    raster_to_webp, stitch_padded_field, stitch_padded_raster, BrushBankLoader, DemTile,
+    build_sprite_icons, crop_to_png, crop_to_rgba8, crop_to_webp, decode_dem_tile,
+    decode_raster_tile, stitch_padded_field, stitch_padded_raster, BrushBankLoader, DemTile,
     PngCompression, RasterTile, TileLoader,
 };
 use ezu_paint::nodes::default_registry;
@@ -876,7 +876,7 @@ impl Renderer {
             ),
         };
         let tile_id = TileId { z, x, y };
-        let canvas = CanvasInfo { tile_size, pad };
+        let canvas = CanvasInfo::square(tile_size, pad);
         let mut tile_loader = TileLoader::new(&self.assets, tile_id);
 
         for (name, binding) in &self.bindings {
@@ -1072,14 +1072,16 @@ fn encode_render(
             ))
         }
     };
+    // Crop by both axes: a tile canvas has them equal, and going through
+    // the general entry points means a canvas that does not stays right.
+    let (cw, ch) = (canvas.tile_w, canvas.tile_h);
     Ok(match opts.format {
-        OutputFormat::Png => {
-            raster_to_png_with(&raster, canvas.tile_size, canvas.pad, opts.png_compression)
-                .map_err(|e| named_err(ERR_PNG, e))?
+        OutputFormat::Png => crop_to_png(&raster, cw, ch, canvas.pad, opts.png_compression)
+            .map_err(|e| named_err(ERR_PNG, e))?,
+        OutputFormat::Webp => {
+            crop_to_webp(&raster, cw, ch, canvas.pad).map_err(|e| named_err(ERR_WEBP, e))?
         }
-        OutputFormat::Webp => raster_to_webp(&raster, canvas.tile_size, canvas.pad)
-            .map_err(|e| named_err(ERR_WEBP, e))?,
-        OutputFormat::Rgba => raster_to_rgba8(&raster, canvas.tile_size, canvas.pad),
+        OutputFormat::Rgba => crop_to_rgba8(&raster, cw, ch, canvas.pad),
     })
 }
 

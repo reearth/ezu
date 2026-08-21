@@ -346,10 +346,7 @@ mod tests {
         let params = ParamValues::new();
         let ctx = EvalCtx {
             tile: TileId { z: 0, x: 0, y: 0 },
-            canvas: CanvasInfo {
-                tile_size: 9,
-                pad: 0,
-            },
+            canvas: CanvasInfo::square(9, 0),
             assets: &assets,
             params: &params,
             rng_seed: 0,

@@ -395,10 +395,7 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
         ezu::graph::cache::DEFAULT_CAPACITY,
         cache_budget_bytes(),
     ));
-    let canvas = CanvasInfo {
-        tile_size: doc.tile_size,
-        pad: canvas_pad(&graph, &doc),
-    };
+    let canvas = CanvasInfo::square(doc.tile_size, canvas_pad(&graph, &doc));
 
     // CLI flags override the URL but keep the doc's source NAME, since
     // the style's `features` nodes reference sources by name.
@@ -813,8 +810,8 @@ async fn run_tile(args: TileCmd) -> Result<(), Box<dyn std::error::Error>> {
     .await
     .map_err(|e| e.to_string())?;
     let bytes = match format {
-        OutputFormat::Png => raster_to_png(&raster, prep.canvas.tile_size, prep.canvas.pad)?,
-        OutputFormat::Webp => raster_to_webp(&raster, prep.canvas.tile_size, prep.canvas.pad)?,
+        OutputFormat::Png => raster_to_png(&raster, prep.canvas.tile_w, prep.canvas.pad)?,
+        OutputFormat::Webp => raster_to_webp(&raster, prep.canvas.tile_w, prep.canvas.pad)?,
     };
     std::fs::write(&args.out, &bytes)?;
     tracing::info!("wrote {} ({} bytes)", args.out.display(), bytes.len());
@@ -874,18 +871,18 @@ async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let mut mosaic = Pixmap::new(nx * prep.canvas.tile_size, ny * prep.canvas.tile_size)
-        .ok_or("mosaic alloc")?;
+    let mut mosaic =
+        Pixmap::new(nx * prep.canvas.tile_w, ny * prep.canvas.tile_w).ok_or("mosaic alloc")?;
     for handle in try_join_all(tasks).await? {
         let (tile, raster) = handle.map_err(|e| e.to_string())?;
-        let dx = ((tile.x - x_range.start) * prep.canvas.tile_size) as i32;
-        let dy = ((tile.y - y_range.start) * prep.canvas.tile_size) as i32;
+        let dx = ((tile.x - x_range.start) * prep.canvas.tile_w) as i32;
+        let dy = ((tile.y - y_range.start) * prep.canvas.tile_w) as i32;
         blit_padded_into(
             &mut mosaic,
             &raster,
             dx,
             dy,
-            prep.canvas.tile_size,
+            prep.canvas.tile_w,
             prep.canvas.pad,
         )?;
     }
@@ -959,8 +956,8 @@ async fn run_tiles(args: TilesCmd) -> Result<(), Box<dyn std::error::Error>> {
                 let bytes = tokio::task::spawn_blocking({
                     let canvas = prep.canvas;
                     move || match format {
-                        OutputFormat::Png => raster_to_png(&raster, canvas.tile_size, canvas.pad),
-                        OutputFormat::Webp => raster_to_webp(&raster, canvas.tile_size, canvas.pad),
+                        OutputFormat::Png => raster_to_png(&raster, canvas.tile_w, canvas.pad),
+                        OutputFormat::Webp => raster_to_webp(&raster, canvas.tile_w, canvas.pad),
                     }
                 })
                 .await

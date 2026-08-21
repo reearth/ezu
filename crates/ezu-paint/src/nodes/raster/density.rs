@@ -117,8 +117,8 @@ impl Node for DensityNode {
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
 
-        let size = ctx.canvas.padded_size();
-        let mut values = vec![0.0f32; (size * size) as usize];
+        let (pw, ph) = ctx.canvas.padded_dims();
+        let mut values = vec![0.0f32; (pw * ph) as usize];
 
         // Constants, resolved once. Data-driven exprs (if present) override
         // these per feature group; whichever expr is absent uses the constant.
@@ -126,7 +126,7 @@ impl Node for DensityNode {
         let const_intensity = (self.intensity.get(ctx, inputs)? as f32).max(0.0);
 
         let pad = ctx.canvas.pad as f32;
-        let tile = ctx.canvas.tile_size as f32;
+        let tile = ctx.canvas.tile_w as f32;
         let extent = feats.extent.max(1) as f32;
         let sx = tile / extent;
         let z = ctx.tile.z;
@@ -159,13 +159,13 @@ impl Node for DensityNode {
                 // part so tile borders match the neighbours'.
                 let px = x as f32 * sx + pad;
                 let py = y as f32 * sx + pad;
-                splat(&mut values, size, px, py, radius, amplitude);
+                splat(&mut values, pw, ph, px, py, radius, amplitude);
             }
         }
 
         Ok(PortValue::ScalarField(Arc::new(ScalarField {
-            width: size,
-            height: size,
+            width: pw,
+            height: ph,
             values: values.into(),
             nodata: None,
             geo_scale: None,
@@ -195,11 +195,11 @@ impl Node for DensityNode {
 /// centers. Mirrors the maplibre-gl-js heatmap shader: the kernel's
 /// support is exactly `radius` px and the falloff is
 /// `GAUSS_COEF * exp(-0.5 * 3² * (d/radius)²)`.
-fn splat(values: &mut [f32], size: u32, px: f32, py: f32, radius: f32, amplitude: f32) {
+fn splat(values: &mut [f32], w: u32, h: u32, px: f32, py: f32, radius: f32, amplitude: f32) {
     let x0 = (px - radius - 0.5).floor().max(0.0) as u32;
     let y0 = (py - radius - 0.5).floor().max(0.0) as u32;
-    let x1 = ((px + radius - 0.5).ceil().max(0.0) as u32).min(size.saturating_sub(1));
-    let y1 = ((py + radius - 0.5).ceil().max(0.0) as u32).min(size.saturating_sub(1));
+    let x1 = ((px + radius - 0.5).ceil().max(0.0) as u32).min(w.saturating_sub(1));
+    let y1 = ((py + radius - 0.5).ceil().max(0.0) as u32).min(h.saturating_sub(1));
     if x0 > x1 || y0 > y1 {
         return;
     }
@@ -212,7 +212,7 @@ fn splat(values: &mut [f32], size: u32, px: f32, py: f32, radius: f32, amplitude
             if d2 >= 1.0 {
                 continue;
             }
-            values[(y * size + x) as usize] += amplitude * GAUSS_COEF * (-0.5 * 9.0 * d2).exp();
+            values[(y * w + x) as usize] += amplitude * GAUSS_COEF * (-0.5 * 9.0 * d2).exp();
         }
     }
 }

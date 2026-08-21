@@ -48,7 +48,7 @@ tile_loader.bind_mvt(ezu_features::mvt::decode(&bytes)?);
 let ev = ezu_graph::Evaluator::new(&graph, &cache, &tile_loader);
 let out = ev.render_parallel(
     tile_id,
-    ezu_graph::CanvasInfo { tile_size: 512, pad: 24 },
+    ezu_graph::CanvasInfo::square(512, 24),
     &ezu_graph::ParamValues::new(),
     /* rng_seed */ 0,
 )?;
@@ -129,7 +129,7 @@ extra border on the upstream raster to stay seamless. `Node::required_pad`
 declares this growth; `Graph::compute_pad` walks the topo order in
 reverse and reports the pad each source must supply.
 
-Rendering uses the single `CanvasInfo { tile_size, pad }` the host
+Rendering uses the single `CanvasInfo` the host
 supplies, so the host has to know the number before it starts — which is
 what `Graph::required_pad` answers, and why pad-determining fields must
 carry a static bound. The hosts in this workspace treat the document's

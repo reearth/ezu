@@ -74,7 +74,7 @@ impl Node for WaveNode {
         } else {
             wavelength_px.max(1.0)
         };
-        let scale = feats.extent as f64 / ctx.canvas.tile_size.max(1) as f64;
+        let scale = feats.extent as f64 / ctx.canvas.tile_w.max(1) as f64;
         let amp = amplitude_px * scale;
         let wavelen = wavelength_px * scale;
         let phase = phase_px * scale;

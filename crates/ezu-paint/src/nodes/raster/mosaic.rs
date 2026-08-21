@@ -91,7 +91,7 @@ impl Node for MosaicNode {
         let w = src.width as i64;
         let h = src.height as i64;
         let pad = ctx.canvas.pad as i64;
-        let tile_size = ctx.canvas.tile_size as i64;
+        let tile_size = ctx.canvas.tile_w as i64;
 
         // World coordinate of source pixel (0, 0).
         let (origin_x, origin_y) = match self.anchor {

@@ -10,10 +10,11 @@ use std::fmt;
 pub enum PortKind {
     /// MVT features (geometry + properties), already filtered.
     Features,
-    /// RGBA buffer matching the canvas's `padded_size`. Every node
-    /// that outputs `Raster` MUST produce a `padded_size × padded_size`
-    /// buffer so the host's final crop and other consumers' size
-    /// assumptions hold.
+    /// RGBA buffer matching the canvas's `padded_dims()`. Every node
+    /// that outputs `Raster` MUST produce a buffer of exactly that
+    /// width and height — which are equal for a map tile and need not
+    /// be for a swatch — so the host's final crop and other consumers'
+    /// size assumptions hold.
     Raster,
     /// RGBA buffer at the asset's native dimensions, NOT canvas-sized.
     /// Used as the "raw image" carrier for sprite / texture sources
@@ -37,7 +38,7 @@ pub enum PortKind {
     /// layer's draw node.
     Labels,
     /// Per-pixel single-channel `f32` grid matching the canvas's
-    /// `padded_size`. The general carrier for floating-point grids:
+    /// `padded_dims()`. The general carrier for floating-point grids:
     /// elevation (with `GeoScale` populated, produced by `dem`),
     /// signed distance, scalar noise, slope angle. Consumed by
     /// terrain ops (`hillshade`, `slope`) and scalar→raster mappers

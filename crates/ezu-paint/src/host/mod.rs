@@ -840,7 +840,7 @@ impl<'a> TileLoader<'a> {
     /// Bind a stitched per-tile RGBA raster under `name` (by
     /// convention the bare `<source>` name matching the style's
     /// `raster` sources entry). The buffer must be canvas-padded
-    /// (`padded_size × padded_size`, premultiplied RGBA8) — the
+    /// (`padded_dims()`, premultiplied RGBA8) — the
     /// `raster` node passes it straight through as a `Raster` port
     /// value.
     pub fn bind_raster(&mut self, name: impl Into<String>, raster: RasterBuf) -> &mut Self {
@@ -1086,12 +1086,28 @@ pub fn raster_to_png_with(
     pad: u32,
     compression: PngCompression,
 ) -> Result<Vec<u8>, PaintError> {
+    crop_to_png(buf, tile_size, tile_size, pad, compression)
+}
+
+/// Crop a padded raster to a `crop_w` × `crop_h` region centred on the
+/// pad and encode it as PNG.
+///
+/// The tile helpers are this with both axes equal. A legend swatch is
+/// the case that is not: its shape is whatever the legend has room for,
+/// and its geometry is synthetic, so there is no projection to distort.
+pub fn crop_to_png(
+    buf: &RasterBuf,
+    crop_w: u32,
+    crop_h: u32,
+    pad: u32,
+    compression: PngCompression,
+) -> Result<Vec<u8>, PaintError> {
     if matches!(compression, PngCompression::Default) {
         let padded = pixmap_from_raster(buf)?;
-        if pad == 0 && padded.width() == tile_size && padded.height() == tile_size {
+        if pad == 0 && padded.width() == crop_w && padded.height() == crop_h {
             return padded.encode_png().map_err(|_| PaintError::PngEncode);
         }
-        let mut out = Pixmap::new(tile_size, tile_size).ok_or(PaintError::PngEncode)?;
+        let mut out = Pixmap::new(crop_w, crop_h).ok_or(PaintError::PngEncode)?;
         out.draw_pixmap(
             -(pad as i32),
             -(pad as i32),
@@ -1102,8 +1118,8 @@ pub fn raster_to_png_with(
         );
         return out.encode_png().map_err(|_| PaintError::PngEncode);
     }
-    let rgba = raster_to_rgba8(buf, tile_size, pad);
-    encode_rgba8_png(tile_size, tile_size, &rgba, compression)
+    let rgba = crop_to_rgba8(buf, crop_w, crop_h, pad);
+    encode_rgba8_png(crop_w, crop_h, &rgba, compression)
 }
 
 fn encode_rgba8_png(
@@ -1143,10 +1159,20 @@ fn pixmap_from_raster(buf: &RasterBuf) -> Result<Pixmap, PaintError> {
 /// the same painterly tile while staying lossless, so it's the better
 /// default for cached tile pyramids.
 pub fn raster_to_webp(buf: &RasterBuf, tile_size: u32, pad: u32) -> Result<Vec<u8>, PaintError> {
+    crop_to_webp(buf, tile_size, tile_size, pad)
+}
+
+/// [`raster_to_webp`] for a crop that need not be square.
+pub fn crop_to_webp(
+    buf: &RasterBuf,
+    crop_w: u32,
+    crop_h: u32,
+    pad: u32,
+) -> Result<Vec<u8>, PaintError> {
     // The pure-Rust WebP encoder wants straight (un-premul) RGBA, which
-    // `raster_to_rgba8` already produces alongside the crop.
-    let rgba = raster_to_rgba8(buf, tile_size, pad);
-    encode_rgba8_webp(tile_size, tile_size, &rgba)
+    // `crop_to_rgba8` already produces alongside the crop.
+    let rgba = crop_to_rgba8(buf, crop_w, crop_h, pad);
+    encode_rgba8_webp(crop_w, crop_h, &rgba)
 }
 
 /// Encode a tiny-skia `Pixmap` (premultiplied RGBA8) as lossless WebP.
@@ -1181,16 +1207,21 @@ fn encode_rgba8_webp(width: u32, height: u32, straight_rgba: &[u8]) -> Result<Ve
 /// straight (un-premultiplied) 8-bit RGBA bytes — directly compatible
 /// with `new ImageData(new Uint8ClampedArray(...), w, h)` in JS.
 pub fn raster_to_rgba8(buf: &RasterBuf, tile_size: u32, pad: u32) -> Vec<u8> {
+    crop_to_rgba8(buf, tile_size, tile_size, pad)
+}
+
+/// [`raster_to_rgba8`] for a crop that need not be square.
+pub fn crop_to_rgba8(buf: &RasterBuf, crop_w: u32, crop_h: u32, pad: u32) -> Vec<u8> {
     let padded = match pixmap_from_raster(buf) {
         Ok(p) => p,
-        Err(_) => return vec![0; (tile_size * tile_size * 4) as usize],
+        Err(_) => return vec![0; (crop_w * crop_h * 4) as usize],
     };
-    let tile_pixmap = if pad == 0 && padded.width() == tile_size && padded.height() == tile_size {
+    let tile_pixmap = if pad == 0 && padded.width() == crop_w && padded.height() == crop_h {
         padded
     } else {
-        let mut out = match Pixmap::new(tile_size, tile_size) {
+        let mut out = match Pixmap::new(crop_w, crop_h) {
             Some(p) => p,
-            None => return vec![0; (tile_size * tile_size * 4) as usize],
+            None => return vec![0; (crop_w * crop_h * 4) as usize],
         };
         out.draw_pixmap(
             -(pad as i32),
@@ -1202,7 +1233,7 @@ pub fn raster_to_rgba8(buf: &RasterBuf, tile_size: u32, pad: u32) -> Vec<u8> {
         );
         out
     };
-    let mut rgba = Vec::with_capacity((tile_size * tile_size * 4) as usize);
+    let mut rgba = Vec::with_capacity((crop_w * crop_h * 4) as usize);
     for p in tile_pixmap.pixels() {
         let p = p.demultiply();
         rgba.extend_from_slice(&[p.red(), p.green(), p.blue(), p.alpha()]);

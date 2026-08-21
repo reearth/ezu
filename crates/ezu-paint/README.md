@@ -404,6 +404,8 @@ let raster = ev.render(tile_id, canvas, &params, seed)?;
 let png  = raster_to_png(&raster, tile_size, pad)?;       // cropped + PNG
 let webp = raster_to_webp(&raster, tile_size, pad)?;      // cropped + lossless WebP
 let rgba = raster_to_rgba8(&raster, tile_size, pad);      // cropped, straight RGBA
+// `crop_to_png` / `crop_to_webp` / `crop_to_rgba8` take a width and a
+// height, for a canvas that is not a square tile (a legend swatch).
 ```
 
 `BrushBankLoader` implements `AssetLoader` for document-scoped images

@@ -46,8 +46,8 @@ impl Node for RasterNode {
             Ok(a) => a,
             Err(AssetError::NotFound(_)) => {
                 // No binding for this tile -> transparent canvas.
-                let size = ctx.canvas.padded_size();
-                return Ok(PortValue::Raster(Arc::new(RasterBuf::new(size, size))));
+                let (pw, ph) = ctx.canvas.padded_dims();
+                return Ok(PortValue::Raster(Arc::new(RasterBuf::new(pw, ph))));
             }
             Err(e) => return Err(EvalError::Asset(e)),
         };
@@ -57,10 +57,10 @@ impl Node for RasterNode {
                 self.name
             )));
         };
-        let size = ctx.canvas.padded_size();
-        if buf.width != size || buf.height != size {
+        let (pw, ph) = ctx.canvas.padded_dims();
+        if buf.width != pw || buf.height != ph {
             return Err(EvalError::Other(format!(
-                "raster source `{}`: bound buffer is {}x{}, expected padded canvas {size}x{size}",
+                "raster source `{}`: bound buffer is {}x{}, expected padded canvas {pw}x{ph}",
                 self.name, buf.width, buf.height
             )));
         }

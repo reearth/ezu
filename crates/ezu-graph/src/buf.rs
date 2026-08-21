@@ -160,7 +160,7 @@ pub type OpaqueValue = Arc<dyn Any + Send + Sync>;
 /// The general carrier for single-channel floating-point data —
 /// elevation, signed distance, scalar noise, slope angle, anything
 /// "one number per pixel". Layout is row-major, one `f32` per pixel.
-/// `width` / `height` MUST match the canvas's `padded_size()` so
+/// `width` / `height` MUST match the canvas's `padded_dims()` so
 /// consumers can pair samples with the same geometry as their raster
 /// output.
 ///

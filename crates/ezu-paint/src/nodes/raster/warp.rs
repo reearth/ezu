@@ -89,7 +89,7 @@ impl Node for WarpNode {
         let ny = Sampler::build(self.kind, seed.wrapping_add(0x9E37_79B9));
 
         let pad = ctx.canvas.pad as f64;
-        let tile_size = ctx.canvas.tile_size as f64;
+        let tile_size = ctx.canvas.tile_w as f64;
         let (origin_x, origin_y) = match self.anchor {
             Anchor::World => (ctx.tile.x as f64 * tile_size, ctx.tile.y as f64 * tile_size),
             Anchor::Tile => (0.0, 0.0),

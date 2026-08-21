@@ -223,7 +223,7 @@ fn render_ezu(
 
     let cache = Cache::new();
     let tile_id = TileId { z, x, y };
-    let canvas = CanvasInfo { tile_size, pad };
+    let canvas = CanvasInfo::square(tile_size, pad);
 
     let mut tile_loader = TileLoader::new(&loader, tile_id);
     bind_tile_data(
@@ -385,10 +385,7 @@ fn bench_tile(
     load_sprites(client, &doc, &mut loader);
 
     let tile_id = TileId { z, x, y };
-    let canvas = CanvasInfo {
-        tile_size: doc.tile_size,
-        pad: doc.pad.max(graph.required_pad()?),
-    };
+    let canvas = CanvasInfo::square(doc.tile_size, doc.pad.max(graph.required_pad()?));
 
     // Prep (fetch + decode + bind) happens once; only the render is repeated.
     let mut tile_loader = TileLoader::new(&loader, tile_id);

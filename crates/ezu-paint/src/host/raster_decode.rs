@@ -47,16 +47,19 @@ pub fn stitch_padded_raster(
     canvas: CanvasInfo,
 ) -> Option<RasterBuf> {
     let centre = tiles.get(&(0, 0))?;
-    let padded_size = canvas.padded_size();
+    let (pw, ph) = canvas.padded_dims();
     let pad = canvas.pad as f32;
-    let tile_px = canvas.tile_size as f32;
+    // Each axis divides by its own extent, so the fraction of the tile a
+    // pixel sits at stays correct on a canvas that is not square.
+    let tile_px_x = canvas.tile_w as f32;
+    let tile_px_y = canvas.tile_h as f32;
 
-    let mut out = RasterBuf::new(padded_size, padded_size);
-    for py in 0..padded_size {
-        let ty = (py as f32 - pad) / tile_px;
+    let mut out = RasterBuf::new(pw, ph);
+    for py in 0..ph {
+        let ty = (py as f32 - pad) / tile_px_y;
         let (dy_off, ty_local) = split_fraction(ty);
-        for px in 0..padded_size {
-            let tx = (px as f32 - pad) / tile_px;
+        for px in 0..pw {
+            let tx = (px as f32 - pad) / tile_px_x;
             let (dx_off, tx_local) = split_fraction(tx);
             let sample_tile = tiles
                 .get(&(dx_off, dy_off))
@@ -71,7 +74,7 @@ pub fn stitch_padded_raster(
             let sx = (tx_local * size).clamp(0.0, size - 1.0001);
             let sy = (ty_local * size).clamp(0.0, size - 1.0001);
             let rgba = bilinear_rgba(&sample_tile.pixels, sample_tile.size, sx, sy);
-            let i = ((py * padded_size + px) * 4) as usize;
+            let i = ((py * pw + px) * 4) as usize;
             out.pixels[i..i + 4].copy_from_slice(&rgba);
         }
     }
@@ -157,19 +160,13 @@ mod tests {
 
     #[test]
     fn stitch_requires_centre() {
-        let canvas = CanvasInfo {
-            tile_size: 8,
-            pad: 2,
-        };
+        let canvas = CanvasInfo::square(8, 2);
         assert!(stitch_padded_raster(&HashMap::new(), canvas).is_none());
     }
 
     #[test]
     fn stitch_fills_pad_from_neighbours_and_clamps_missing() {
-        let canvas = CanvasInfo {
-            tile_size: 8,
-            pad: 2,
-        };
+        let canvas = CanvasInfo::square(8, 2);
         let centre = solid_tile(8, [255, 0, 0, 255]);
         let left = solid_tile(8, [0, 255, 0, 255]);
         let mut tiles: HashMap<(i32, i32), &RasterTile> = HashMap::new();

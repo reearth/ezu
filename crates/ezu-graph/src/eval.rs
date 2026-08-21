@@ -16,17 +16,43 @@ pub struct TileId {
 }
 
 /// Per-render canvas geometry. The padded buffer is the actual size all
-/// `Raster` ports must produce; the final tile is the inner `tile_size`
-/// region.
+/// `Raster` ports must produce; the final tile is the inner
+/// `tile_w` × `tile_h` region.
+///
+/// A map tile is square and [`square`](Self::square) is how one is
+/// asked for. The two axes are separate because not every render is a
+/// tile: a legend swatch is whatever shape the legend has room for, and
+/// its geometry is synthetic, so there is no projection to distort.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CanvasInfo {
-    pub tile_size: u32,
+    pub tile_w: u32,
+    pub tile_h: u32,
     pub pad: u32,
 }
 
 impl CanvasInfo {
-    pub fn padded_size(&self) -> u32 {
-        self.tile_size + 2 * self.pad
+    /// The usual case: a square tile of `tile_size` px with `pad` px of
+    /// margin on every side.
+    pub fn square(tile_size: u32, pad: u32) -> Self {
+        Self {
+            tile_w: tile_size,
+            tile_h: tile_size,
+            pad,
+        }
+    }
+
+    pub fn padded_w(&self) -> u32 {
+        self.tile_w + 2 * self.pad
+    }
+
+    pub fn padded_h(&self) -> u32 {
+        self.tile_h + 2 * self.pad
+    }
+
+    /// Both padded axes at once — the shape every `Raster` port must
+    /// produce.
+    pub fn padded_dims(&self) -> (u32, u32) {
+        (self.padded_w(), self.padded_h())
     }
 }
 
