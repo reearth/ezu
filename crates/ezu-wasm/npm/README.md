@@ -128,6 +128,11 @@ class Renderer {
     format?: "png" | "webp" | "rgba";      // default "png"
     tileSize?: number;
     pad?: number;
+    // Render-time overrides for the style's declared `params`, validated
+    // against the declarations (type, min/max) — an unknown name or an
+    // out-of-range value throws. Names left out keep their default. One
+    // built graph serves every combination.
+    params?: Record<string, number | boolean | string>;
     png?: { compression?: "fast" | "default" | "best" };
   }): Uint8Array;
 

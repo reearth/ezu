@@ -102,6 +102,13 @@ class Renderer {
     format?: "png" | "webp" | "rgba";       // default "png"
     tileSize?: number;                       // override style canvas
     pad?: number;
+    // Render-time overrides for the style's `params`. Validated against
+    // the declarations (type, min/max) exactly as the CLI's `--param` is;
+    // an unknown name or an out-of-range value throws. Names left out
+    // keep their declared default. One built graph serves every
+    // combination, and the cache keys on the values each node reads, so
+    // changing one re-evaluates only its subtree.
+    params?: Record<string, number | boolean | string>;
     png?: { compression?: "fast" | "default" | "best" };
     parallel?: boolean;                      // threads build: use the
                                              // parallel evaluator (set

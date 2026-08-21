@@ -278,9 +278,34 @@ struct BBox {
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() {
     #[cfg(feature = "heap-profile")]
     let _dhat = dhat::Profiler::new_heap();
+    // Returning the error from `main` would print it with `Debug`, which
+    // for a `thiserror` type means the struct dump rather than the
+    // `#[error(...)]` sentence written for exactly this moment. Print
+    // `Display` instead, then the chain of `source()`s, so a nested
+    // parse failure reads as the story it is.
+    if let Err(e) = run().await {
+        let top = e.to_string();
+        eprintln!("error: {top}");
+        let mut shown = top;
+        let mut src = e.source();
+        while let Some(cause) = src {
+            let text = cause.to_string();
+            // Several of these errors interpolate their source into their
+            // own message, so printing the chain verbatim repeats it.
+            if !shown.contains(&text) {
+                eprintln!("  caused by: {text}");
+            }
+            shown = text;
+            src = cause.source();
+        }
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let filter = if cli.verbose {
         // Bump just the per-node evaluator target — info elsewhere keeps

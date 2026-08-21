@@ -41,6 +41,26 @@ canvas.getContext('2d').putImageData(
 when the destination is a canvas; use PNG/WebP when the bytes are going into an
 `<img>`, a cache, or over the network.
 
+## Params, per render
+
+A style's [declared params](/ezu/style/params/) are overridable here the same way
+they are from the CLI or the tile server's query string:
+
+```js
+r.renderTile(z, x, y, {
+  format: 'rgba',
+  params: { paper: '#ffe0f0', softness: 2, labels: false },
+});
+```
+
+Values are validated against the declarations — the wrong type, an out-of-range
+number, or a name the style does not declare throws rather than rendering
+something quietly wrong. Names you leave out keep their declared default.
+
+One built graph serves every combination, and the cache keys on the values each
+node actually reads, so moving one slider re-evaluates only its subtree. That is
+what makes a params panel in a browser feel immediate.
+
 ## Binding sources
 
 `bindSource(name, bytes, opts?)` dispatches on the declared `type` of that

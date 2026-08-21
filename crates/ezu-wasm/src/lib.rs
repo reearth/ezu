@@ -73,7 +73,8 @@ use std::sync::Arc;
 use ezu_core::TileId as CoreTileId;
 use ezu_features::FeatureLayer;
 use ezu_graph::{
-    build_graph, Cache, CanvasInfo, Evaluator, Graph, ParamValues, PortValue, SpriteSheet, TileId,
+    build_graph, parse_param_value, Cache, CanvasInfo, Evaluator, Graph, ParamValues, PortValue,
+    SpriteSheet, TileId,
 };
 use ezu_paint::host::{
     build_sprite_icons, decode_dem_tile, decode_raster_tile, raster_to_png_with, raster_to_rgba8,
@@ -784,6 +785,10 @@ impl Renderer {
     /// - `format`: `"png"` (default) / `"webp"` / `"rgba"`
     /// - `tileSize`, `pad`: override the style's canvas size for this
     ///   call (hi-DPI / preview)
+    /// - `params`: `{ name: number | boolean | string }` — render-time
+    ///   overrides for the style's declared `params`, validated the same
+    ///   way the CLI's `--param` is. Omitted names keep their declared
+    ///   default.
     /// - `png`: `{ compression?: "fast" | "default" | "best" }`
     #[wasm_bindgen(js_name = renderTile)]
     pub fn render_tile(
@@ -1010,6 +1015,16 @@ impl Renderer {
             }
         }
 
+        // Validated against the document's declarations by the same
+        // parser `--param` uses, so a bad value fails here rather than
+        // rendering something quietly wrong.
+        let mut params = ParamValues::new();
+        for (name, raw) in opts.params.clone() {
+            let value = parse_param_value(&self.doc.params, &name, &raw)
+                .map_err(|e| named_err(ERR_STYLE, e))?;
+            params.set(name, value);
+        }
+
         encode_render(
             &self.graph,
             &self.cache,
@@ -1017,6 +1032,7 @@ impl Renderer {
             tile_id,
             canvas,
             opts,
+            &params,
         )
     }
 }
@@ -1029,9 +1045,9 @@ fn encode_render(
     tile_id: TileId,
     canvas: CanvasInfo,
     opts: RenderOptions,
+    params: &ParamValues,
 ) -> Result<Vec<u8>, JsValue> {
     let ev = Evaluator::new(graph, cache, tile_loader);
-    let params = ParamValues::new();
     let seed = tile_seed(tile_id.z, tile_id.x, tile_id.y);
     // The parallel evaluator is used only when the caller opts in with
     // `{ parallel: true }`, which the host does exactly when it has
@@ -1042,9 +1058,9 @@ fn encode_render(
     // can't be built on wasm without workers. Both paths are
     // deterministic and produce identical output.
     let out = if opts.parallel {
-        ev.render_parallel(tile_id, canvas, &params, seed)
+        ev.render_parallel(tile_id, canvas, params, seed)
     } else {
-        ev.render(tile_id, canvas, &params, seed)
+        ev.render(tile_id, canvas, params, seed)
     }
     .map_err(|e| named_err(ERR_RENDER, e))?;
     let raster = match out {
@@ -1068,7 +1084,7 @@ fn encode_render(
 }
 
 /// Parsed `renderTile` options (format + canvas + png compression).
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct RenderOptions {
     format: OutputFormat,
     tile_size: Option<u32>,
@@ -1078,6 +1094,11 @@ struct RenderOptions {
     /// builds once `initThreadPool` has resolved; otherwise ignored
     /// (`render_parallel` falls back to sequential evaluation).
     parallel: bool,
+    /// Render-time overrides for the style's `params`, as
+    /// `(name, value-as-text)` pairs. Kept as text so the same parser
+    /// the CLI's `--param` uses can validate them against the
+    /// declarations — same coercions, same error messages.
+    params: Vec<(String, String)>,
 }
 
 impl Default for RenderOptions {
@@ -1088,6 +1109,7 @@ impl Default for RenderOptions {
             pad: None,
             png_compression: PngCompression::Default,
             parallel: false,
+            params: Vec::new(),
         }
     }
 }
@@ -1128,6 +1150,34 @@ fn parse_render_options(obj: Option<&js_sys::Object>) -> RenderOptions {
     {
         out.parallel = b;
     }
+    // params: { name: number | boolean | string }
+    let params = js_sys::Reflect::get(obj, &"params".into()).unwrap_or(JsValue::UNDEFINED);
+    if let Some(params_obj) = params.dyn_ref::<js_sys::Object>() {
+        for key in js_sys::Object::keys(params_obj).iter() {
+            let Some(name) = key.as_string() else {
+                continue;
+            };
+            let value = js_sys::Reflect::get(params_obj, &key).unwrap_or(JsValue::UNDEFINED);
+            // Numbers and bools are stringified rather than matched on:
+            // `parse_param_value` owns the coercion rules, and going
+            // through text keeps this host from inventing its own.
+            let raw = if let Some(s) = value.as_string() {
+                s
+            } else if let Some(n) = value.as_f64() {
+                let mut t = n.to_string();
+                if t.ends_with(".0") {
+                    t.truncate(t.len() - 2);
+                }
+                t
+            } else if let Some(b) = value.as_bool() {
+                b.to_string()
+            } else {
+                continue;
+            };
+            out.params.push((name, raw));
+        }
+    }
+
     let png = js_sys::Reflect::get(obj, &"png".into()).unwrap_or(JsValue::UNDEFINED);
     if let Some(png_obj) = png.dyn_ref::<js_sys::Object>() {
         if let Some(s) = js_sys::Reflect::get(png_obj, &"compression".into())
