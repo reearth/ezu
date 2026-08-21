@@ -1,3 +1,18 @@
+/* Starlight's content styles put a top margin on any element that follows
+   another, which pushes the second image of a pair down by a line. Figures lay
+   their own images out, so reset it and pin them to the top of the row. */
+.op-demo__images,
+.page-fig__images {
+  align-items: start;
+}
+
+.op-demo__images img,
+.page-fig__images img,
+.page-fig > img,
+.style-strip img {
+  margin: 0;
+}
+
 /* Demo figures in the node catalog. A single image sits at its natural 384 px;
    a before/after pair splits the content width and falls back to stacking on a
    narrow screen. */
@@ -46,6 +61,12 @@
    full-width render rather than a 384 px demo. */
 .page-fig {
   margin: 1.25rem 0 1.5rem;
+}
+
+/* A single figure caps out well short of the content width: a flat colour or a
+   384 px demo gains nothing from being 768 px tall on screen. */
+.page-fig > img {
+  max-width: 34rem;
 }
 
 .page-fig img {

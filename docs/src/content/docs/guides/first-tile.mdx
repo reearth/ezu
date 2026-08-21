@@ -52,7 +52,7 @@ composite the fill over the background:
   "tile-size": 512,
   "pad": 8,
   "sources": {
-    "basemap": { "type": "mvt", "url": "https://example.com/tiles/{z}/{x}/{y}.pbf" }
+    "basemap": { "type": "mvt", "url": "https://papers.reearth.land/protomaps/tilejson.json" }
   },
   "nodes": {
     "bg":    { "op": "solid", "color": "#fbf6e6" },
@@ -68,6 +68,10 @@ composite the fill over the background:
   <img src="/ezu/figures/step-2-flat.webp" alt="The same tile with water drawn as flat blue polygons" width="768" height="768" loading="lazy" decoding="async" />
   <figcaption>Water polygons from the vector tile, filled flat and composited over the background.</figcaption>
 </figure>
+
+That URL is a live TileJSON endpoint, so the snippet renders as written — the
+data is © OpenStreetMap contributors, © Protomaps. Swap it for your own MVT or
+PMTiles source when you have one.
 
 Three things to notice:
 

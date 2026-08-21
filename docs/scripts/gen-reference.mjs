@@ -100,7 +100,11 @@ function cliHelp() {
       cwd: REPO,
       maxBuffer: 8 * 1024 * 1024,
       encoding: 'utf8',
-      env: { ...process.env, COLUMNS: '88' },
+      // clap only honours COLUMNS with its `wrap_help` feature, which this
+      // workspace does not enable, so the help text arrives at its natural
+      // width and the code block scrolls. Left as-is rather than reflowing it
+      // here and risking a mangled two-column layout.
+      env: { ...process.env, COLUMNS: '76' },
     });
   const root = run(['--help']);
   const subcommands = [...root.matchAll(/^\s{2}(\w[\w-]*)\s{2,}\S/gm)]
