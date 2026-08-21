@@ -110,8 +110,10 @@ fn fold_over(base: &RasterBuf, layers: &[Arc<RasterBuf>]) -> Result<Option<Raste
 fn composite_over_inplace(acc: &mut RasterBuf, over: &RasterBuf) {
     for (d, s) in acc
         .pixels
-        .chunks_exact_mut(4)
-        .zip(over.pixels.chunks_exact(4))
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(over.pixels.as_chunks::<4>().0)
     {
         let inv = 255 - s[3] as u32;
         for c in 0..4 {
@@ -233,7 +235,7 @@ mod tests {
     fn random_premul(w: u32, h: u32, seed: u64) -> RasterBuf {
         let mut rng = Lcg(seed);
         let mut buf = RasterBuf::new(w, h);
-        for px in buf.pixels.chunks_exact_mut(4) {
+        for px in buf.pixels.as_chunks_mut::<4>().0 {
             let a = rng.byte();
             px[0] = rng.byte().min(a);
             px[1] = rng.byte().min(a);

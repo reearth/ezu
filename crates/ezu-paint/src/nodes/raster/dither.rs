@@ -106,7 +106,7 @@ impl DitherNode {
     fn floyd_steinberg(&self, src: &RasterBuf, w: usize, h: usize, out: &mut RasterBuf) {
         // Working buffer of straight RGB; error is diffused into it.
         let mut buf = vec![[0f32; 3]; w * h];
-        for (p, px) in buf.iter_mut().zip(src.pixels.chunks_exact(4)) {
+        for (p, px) in buf.iter_mut().zip(src.pixels.as_chunks::<4>().0) {
             let a = px[3] as f32 / 255.0;
             *p = if a > 0.0 {
                 [
