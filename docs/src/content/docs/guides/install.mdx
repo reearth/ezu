@@ -67,15 +67,11 @@ checkout:
 ```sh
 git clone https://github.com/reearth/ezu && cd ezu
 ls crates/ezu/examples/styles/
-# atlas.json      photo-pop.json   poi-field.json      stained-glass.json
-# hillshade.json  pencil-sketch.json  risograph.json   topo.json
-# watercolor.json brushes/
+# hillshade.json  pencil-sketch.json  photo-pop.json  watercolor.json  brushes/
 ```
 
-Only `pencil-sketch.json` and `watercolor.json` need the checkout, for their
-brushes. Every other example style — `hillshade.json`, `topo.json`, `atlas.json`
-(its font is a URL), or anything `ezu translate` emits — renders straight from a
-URL with no checkout.
+Styles whose assets are all remote or inline — `hillshade.json`, or anything
+`ezu translate` emits — render straight from a URL with no checkout.
 
 ## Editor support
 
