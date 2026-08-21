@@ -89,10 +89,16 @@ pub(crate) fn is_expr(v: &Value) -> bool {
 pub struct ConvertOptions {
     /// Emitted `tile-size`. MapLibre uses 512px tiles.
     pub tile_size: u32,
-    /// Emitted `pad` — the buffer around the tile where overflowing
-    /// geometry (label halos, wide strokes) lands before the crop. The
-    /// default suits plain vector recipes; pad-hungry filters (blur, warp,
-    /// dab) want a larger value.
+    /// Emitted `pad` — the margin where geometry painted wider than its
+    /// own extent lands before the crop.
+    ///
+    /// A renderer sizes the canvas for how far each filter *reads* on its
+    /// own, so this is not about blur or warp. It is about how far an op
+    /// *paints*: MapLibre line widths are usually expressions, which have
+    /// no value until a tile renders, so a stroke running just outside the
+    /// tile needs a margin declared up front or the pixels it should cover
+    /// inside the tile come out unpainted. The default covers the widths a
+    /// typical basemap draws.
     pub pad: u32,
     /// How to treat `layout.visibility: "none"` layers. `false` (default)
     /// drops them. `true` keeps their nodes in the recipe but gates each

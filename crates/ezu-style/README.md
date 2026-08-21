@@ -29,6 +29,12 @@ evaluator. To execute a document, feed it to
 }
 ```
 
+`pad` is optional. Written, it is a floor: a host sizes the canvas from
+it and from how far the graph's filters read, whichever is larger (see
+[`Graph::required_pad`](../ezu-graph)). Declare it when an op paints
+wider than its geometry — a thick `stroke`, a large dab — since a width
+can be an expression and has no value until the tile renders.
+
 References inside node fields use a prefix:
 
 - `@name` — node reference (input wiring); on scalar fields this is

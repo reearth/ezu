@@ -212,9 +212,11 @@ struct TranslateCmd {
     /// Emitted `tile-size` (MapLibre uses 512).
     #[arg(long, default_value_t = 512)]
     tile_size: u32,
-    /// Emitted `pad` — the buffer around the tile for overflowing geometry
-    /// (label halos, wide strokes) before the crop. The default suits plain
-    /// vector recipes; raise it for pad-hungry filters (blur, warp, dab).
+    /// Emitted `pad` — the margin for geometry painted wider than its own
+    /// extent (a thick stroke) before the crop. Filter reach (blur, warp,
+    /// mosaic, label extent) is sized by the renderer from the graph, so
+    /// this is only about paint width, which an expression can decide per
+    /// feature. The default covers a typical basemap's line widths.
     #[arg(long, default_value_t = 16)]
     pad: u32,
     /// Keep `visibility: none` layers in the recipe, gated off behind a

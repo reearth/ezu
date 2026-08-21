@@ -82,15 +82,26 @@ a build-time upper bound:
 This is the one place where the otherwise-uniform `In<T>` flexibility is
 restricted, and the error message says so explicitly.
 
-## When to write `pad` anyway
+## What it does and does not cover
 
-- **You want a wider margin than the filters need.** Geometry that overflows the
-  tile without any filter reading it — a wide stroke, a label halo — is drawn
-  onto the margin too, and `pad` is how you make room for it. `ezu translate`
-  emits 16 for exactly this.
-- **You want a narrower one than the worst case.** A style whose blur sigma is a
-  param with a generous `max` pays for that max on every tile; pinning `pad`
-  trades edge quality at the border for pixels.
+The rule is **reading, not painting**. An op that samples pixels around the one it
+writes declares how far — `blur`, `warp`, `displace`, `mosaic`, `erode`/`dilate`,
+`sharpen`, `edge-detect`, `density`, a `fill-solid`'s own blur, and the extent a
+`text` layer reserves for labels crossing a border. Those are covered.
+
+How far an op *paints* past its geometry is not: a `stroke`'s `width-px`, a
+`fill-dabs` radius, a `stamp`'s sprite. A 24 px stroke running just outside the
+tile still colours pixels inside it, and with no margin those pixels come out
+wrong — but a width may be a `width-expr` evaluated per feature, which has no
+value until the tile renders, so there is nothing to compute in advance.
+
+So write `pad` when:
+
+- **You paint wide.** Half your widest stroke or dab radius is the floor. This is
+  why `ezu translate` emits a pad: MapLibre line widths are usually expressions.
+- **You want less than the worst case.** A blur sigma that is a param with a
+  generous `max` pays for that max on every tile; pinning `pad` trades edge
+  quality at the border for pixels.
 
 Otherwise leave it out. `ezu check` prints what the graph needs either way, so
 you can see what you are choosing between.

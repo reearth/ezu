@@ -206,7 +206,7 @@ Options:
       --out <OUT>              Output file for the ezu recipe. Writes to stdout when omitted
   -v, --verbose                Emit per-node debug logs from the graph evaluator (op name, cache hit/miss, output shape, eval duration). Overrides `RUST_LOG` for this run
       --tile-size <TILE_SIZE>  Emitted `tile-size` (MapLibre uses 512) [default: 512]
-      --pad <PAD>              Emitted `pad` — the buffer around the tile for overflowing geometry (label halos, wide strokes) before the crop. The default suits plain vector recipes; raise it for pad-hungry filters (blur, warp, dab) [default: 16]
+      --pad <PAD>              Emitted `pad` — the margin for geometry painted wider than its own extent (a thick stroke) before the crop. Filter reach (blur, warp, mosaic, label extent) is sized by the renderer from the graph, so this is only about paint width, which an expression can decide per feature. The default covers a typical basemap's line widths [default: 16]
       --keep-hidden            Keep `visibility: none` layers in the recipe, gated off behind a `switch` (instead of dropping them)
       --font <NAME=SOURCE>     Map a MapLibre fontstack entry to a font source, as `NAME=SOURCE` (repeatable). SOURCE is an installed-font reference (`system:Helvetica`, optionally `?weight=700&style=italic`) or a font-file URL (`http(s)://…`, `file:…`, `data:…`) — e.g. `--font "Noto Sans Regular=system:Noto Sans"` or `--font "Noto Sans Regular=https://example.com/NotoSans-Regular.ttf"`. Optional: unmapped `text-font` stacks fall back to the style's `glyphs` endpoint (SDF glyph ranges); a mapping wins where present and renders from the real font
       --pretty                 Pretty-print the emitted JSON

@@ -31,17 +31,25 @@ let tile_id = ezu::graph::TileId { z: 13, x: 7276, y: 3225 };
 let mut tile_loader = ezu::paint::host::TileLoader::new(&base, tile_id);
 tile_loader.bind_mvt(ezu::features::mvt::decode(&bytes)?);
 
+// The style's `pad` is a floor; the graph knows how far its filters
+// reach. Sizing the canvas from both is what the CLI and the wasm host do.
+let canvas = ezu::graph::CanvasInfo {
+    tile_size: doc.tile_size,
+    pad: doc.pad.max(graph.required_pad()?),
+};
+
 let ev = ezu::graph::Evaluator::new(&graph, &cache, &tile_loader);
 let out = ev.render_parallel(
     tile_id,
-    ezu::graph::CanvasInfo { tile_size: 512, pad: 24 },
+    canvas,
     &ezu::graph::ParamValues::new(),
     /* rng_seed */ 0,
 )?;
 ```
 
 `build_graph` is where everything static is checked: every `@ref` resolves, ports
-type-check, there are no cycles, and the computed padding fits. Failures come
+type-check, there are no cycles, and every field that decides padding carries a
+static bound. Failures come
 back as `BuildGraphError` with the offending node id attached — surface that
 string, it is the useful part.
 

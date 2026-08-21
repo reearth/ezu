@@ -117,9 +117,18 @@ wet paint:
 </figure>
 
 Blur needs pixels from beyond the tile edge to stay seamless, which is what `pad`
-is for — the graph computes the padding each source must supply and rejects the
-build if it exceeds the maximum. See
-[padding and neighbours](/ezu/concepts/padding-and-neighbours/).
+is for — and you do not have to size it. The graph knows how far each filter
+reaches and the renderer pads the canvas to match, so the `pad: 8` above could be
+left out entirely. `ezu check` prints what it settled on:
+
+```sh
+ezu check mine.json --no-fetch
+# INFO pad: 8 declared, 17 needed — rendering with 17
+```
+
+Write `pad` when you paint *wider* than your geometry — a thick `stroke`, a large
+dab radius — since a width can be an expression and so cannot be known in
+advance. See [padding and neighbours](/ezu/concepts/padding-and-neighbours/).
 
 For real brush strokes, load a brush through `sources` and use `line` or
 `stroke`:

@@ -85,7 +85,6 @@ file treated as JSON with comments — in VS Code, that means associating it wit
 {
   "name": "flat",
   "tile-size": 512,
-  "pad": 8,
   "sources": {
     "basemap": { "type": "mvt", "url": "https://papers.reearth.land/protomaps/tilejson.json" }
   },
@@ -98,6 +97,10 @@ file treated as JSON with comments — in VS Code, that means associating it wit
   "output": "@out"
 }
 ```
+
+No `pad`: the renderer sizes the canvas from how far the graph's filters reach.
+Declare it when an op paints wider than its geometry — see
+[padding and neighbours](/ezu/concepts/padding-and-neighbours/).
 
 ## Versioning
 

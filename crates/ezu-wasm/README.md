@@ -134,6 +134,11 @@ class Renderer {
 
 ### Per-call size override
 
+`opts.pad` is an override, not a floor: pass it and that is the margin.
+Left out, the renderer takes the style's `pad` or the reach of its filters,
+whichever is larger — so a style that declares none still renders with
+enough.
+
 `opts.tileSize` and `opts.pad` override the style-level canvas
 geometry for that call. Useful for hi-DPI preview rendering without
 mutating the style.

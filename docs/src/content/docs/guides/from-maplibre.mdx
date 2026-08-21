@@ -68,7 +68,7 @@ endpoint, that layer's text is skipped, with a warning.
 | Flag | Effect |
 | --- | --- |
 | `--tile-size` | emitted canvas size (default 512, matching MapLibre) |
-| `--pad` | buffer around the tile for overflowing geometry — label halos, wide strokes (default 16; raise it for pad-hungry filters) |
+| `--pad` | margin for geometry painted wider than its own extent, e.g. a thick stroke (default 16). Filter reach is sized by the renderer from the graph, so this is only about paint width — see [padding](/ezu/concepts/padding-and-neighbours/) |
 | `--keep-hidden` | keep `visibility: none` layers, gated off behind a `switch` instead of dropped |
 | `--pretty` | pretty-print the emitted JSON — do this if you intend to read it |
 | `--font NAME=SOURCE` | map a fontstack entry to a font source (repeatable) |

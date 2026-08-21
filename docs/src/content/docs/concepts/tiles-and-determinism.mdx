@@ -38,8 +38,11 @@ A blur near the edge needs pixels from beyond the edge. Rendering the tile alone
 darkens or lightens the border. ezu renders onto a **padded canvas**: `pad` pixels
 of margin all round, filled with real geometry, and cropped away at the end.
 
-The padding each source must supply is computed from the graph, not guessed —
-see [padding and neighbours](/ezu/concepts/padding-and-neighbours/).
+You do not size that margin: every filter declares how far it reads, and the
+renderer pads the canvas to the furthest of them. What it cannot know is how far
+an op *paints* past its geometry — a stroke's width can be an expression — so a
+style that draws wide lines still declares its own `pad`. See
+[padding and neighbours](/ezu/concepts/padding-and-neighbours/).
 
 ## Labels collide across borders
 
@@ -78,6 +81,7 @@ comparable between versions, and safe to render in parallel.
 
 Turn on the tile-grid overlay in `ezu serve` and look along the boundaries. Dabs
 should cross them mid-stroke, labels should never appear twice, and hillshade
-should not step. If something does break at an edge, the usual causes are too
-little `pad` for a filter chain, or a custom op that reads tile-local coordinates
-where it should read world coordinates.
+should not step. If something does break at an edge, the usual causes are a wide
+stroke or dab with no `pad` declared for it — filter reach is handled, paint width
+is not — or a custom op that reads tile-local coordinates where it should read
+world coordinates.
