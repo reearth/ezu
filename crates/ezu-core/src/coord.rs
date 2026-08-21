@@ -79,6 +79,25 @@ pub fn tile_to_world(tile: TileId, tx: f64, ty: f64, extent: f64) -> WorldPos {
     }
 }
 
+/// Length of the equator on the WGS-84 ellipsoid, in metres. One world
+/// unit of x spans this at the equator.
+pub const EARTH_CIRCUMFERENCE_M: f64 = 40_075_016.685_578_5;
+
+/// Ground metres per world unit at world y `wy`.
+///
+/// Web Mercator inflates distances away from the equator by `1 / cos(lat)`,
+/// and is conformal, so the same factor applies along both axes: a world
+/// unit square at `wy` covers `metres_per_world_unit(wy).powi(2)` square
+/// metres of ground. Callers converting a real-world density (people per
+/// km², say) into one expressed in world or tile-pixel units need this.
+#[inline]
+pub fn metres_per_world_unit(wy: f64) -> f64 {
+    // lat = atan(sinh(pi (1 - 2 wy))), and cos(atan(sinh(u))) = 1/cosh(u),
+    // so the cosine falls out without the round trip through a latitude.
+    let u = std::f64::consts::PI * (1.0 - 2.0 * wy);
+    EARTH_CIRCUMFERENCE_M / u.cosh()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,5 +124,17 @@ mod tests {
         assert!(!parent.is_ancestor_of(TileId::new(7, 44, 81))); // wrong x branch
         assert!(!parent.is_ancestor_of(parent)); // not self
         assert!(!parent.is_ancestor_of(TileId::new(4, 5, 10))); // ancestor, not descendant
+    }
+
+    #[test]
+    fn metres_per_world_unit_matches_mercator_scale() {
+        // The equator is the unscaled reference.
+        assert!((metres_per_world_unit(0.5) - EARTH_CIRCUMFERENCE_M).abs() < 1.0);
+        // 60°N sits at wy where cos(lat) = 1/2, so the scale halves.
+        let wy_60n = (1.0 - 60f64.to_radians().tan().asinh() / std::f64::consts::PI) / 2.0;
+        let ratio = metres_per_world_unit(wy_60n) / EARTH_CIRCUMFERENCE_M;
+        assert!((ratio - 0.5).abs() < 1e-9, "ratio {ratio}");
+        // Symmetric about the equator.
+        assert!((metres_per_world_unit(0.2) - metres_per_world_unit(0.8)).abs() < 1e-6);
     }
 }

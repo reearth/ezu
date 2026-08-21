@@ -5,7 +5,10 @@
 //! which tile is being rendered. That is what keeps polygon fills seamless
 //! across tile boundaries.
 
-use ezu_core::{seed::world_seed, TileId, WorldPos};
+use ezu_core::{
+    seed::{next_unit, world_seed},
+    TileId, WorldPos,
+};
 use ezu_features::Polygon;
 use hokusai::color::RgbaF32;
 use hokusai::tile_mem::MemSurface;
@@ -183,14 +186,4 @@ fn rasterize_mask(polygons: &[Polygon], extent: u32, canvas: &Canvas) -> Vec<boo
     }
 
     pixmap.pixels().iter().map(|p| p.alpha() > 0).collect()
-}
-
-/// Tiny PCG-style step on a 64-bit state, returning a float in `[0, 1)`.
-#[inline]
-fn next_unit(state: &mut u64) -> f32 {
-    *state = state
-        .wrapping_mul(6364136223846793005)
-        .wrapping_add(1442695040888963407);
-    let x = (*state >> 33) as u32;
-    (x as f32) * (1.0 / (1u64 << 32) as f32)
 }

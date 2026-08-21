@@ -19,7 +19,10 @@ use serde_json::Value;
 use tiny_skia::{PixmapPaint, PixmapRef, Transform};
 use xxhash_rust::xxh3::Xxh3;
 
-use ezu_core::{seed::world_seed, WorldPos};
+use ezu_core::{
+    seed::{next_unit, world_seed},
+    WorldPos,
+};
 
 use crate::nodes::common::{
     canvas_into_raster, downcast_features, empty_raster, make_canvas, unwrap_raster_or_sprite,
@@ -342,18 +345,6 @@ pub(super) fn resolve_sprite_atlas(
             msg: "param refs not allowed for the stamp sprite".into(),
         }),
     }
-}
-
-/// Deterministic per-point random draw in `[0, 1)`. Matches the PCG-style
-/// step used in `strokes.rs::next_unit` so jitter behavior is consistent
-/// across paint nodes.
-#[inline]
-fn next_unit(state: &mut u64) -> f32 {
-    *state = state
-        .wrapping_mul(6364136223846793005)
-        .wrapping_add(1442695040888963407);
-    let x = (*state >> 33) as u32;
-    (x as f32) * (1.0 / (1u64 << 32) as f32)
 }
 
 pub(super) struct StampFactory;

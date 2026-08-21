@@ -15,7 +15,10 @@
 //!   `MemSurface`, and the resulting Pixmaps are composited onto the
 //!   canvas in chunk order. Output is byte-identical to `paint_lines`.
 
-use ezu_core::{seed::world_seed, TileId, WorldPos};
+use ezu_core::{
+    seed::{next_unit, world_seed},
+    TileId, WorldPos,
+};
 use hokusai::tile_mem::MemSurface;
 use hokusai::{Brush, BrushInput, BrushSetting, BrushState, InputMapping};
 use tiny_skia::{PixmapPaint, Transform};
@@ -366,15 +369,6 @@ fn composite(canvas: &mut Canvas, surface: &MemSurface) {
         Transform::identity(),
         None,
     );
-}
-
-#[inline]
-fn next_unit(state: &mut u64) -> f32 {
-    *state = state
-        .wrapping_mul(6364136223846793005)
-        .wrapping_add(1442695040888963407);
-    let x = (*state >> 33) as u32;
-    (x as f32) * (1.0 / (1u64 << 32) as f32)
 }
 
 fn linear_rgb_to_hsv(rgb: [f32; 3]) -> (f32, f32, f32) {

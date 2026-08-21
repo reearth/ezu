@@ -7,10 +7,9 @@
 
 use std::collections::HashMap;
 
+use ezu_core::coord::EARTH_CIRCUMFERENCE_M;
 use ezu_graph::{CanvasInfo, GeoScale, ScalarField, TileId};
 use ezu_style::DemEncoding;
-
-const EARTH_CIRCUMFERENCE_M: f64 = 40_075_016.685_578_5;
 
 /// One decoded DEM tile at the source's native pixel size.
 pub struct DemTile {
