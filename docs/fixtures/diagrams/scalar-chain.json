@@ -1,0 +1,47 @@
+{
+  "name": "scalar-chain-diagram",
+  "tile-size": 512,
+  "pad": 8,
+  "sources": {
+    "basemap": {
+      "type": "mvt",
+      "url": "https://papers.reearth.land/protomaps/tilejson.json"
+    }
+  },
+  "params": {
+    "landuse-alpha": {
+      "type": "number",
+      "default": 0.7,
+      "min": 0,
+      "max": 1
+    }
+  },
+  "nodes": {
+    "z": {
+      "op": "zoom"
+    },
+    "zfrac": {
+      "op": "math",
+      "fn": "div",
+      "a": "@z",
+      "b": 16
+    },
+    "lu_alpha": {
+      "op": "math",
+      "fn": "mul",
+      "a": "$landuse-alpha",
+      "b": "@zfrac"
+    },
+    "landuse_f": {
+      "op": "features",
+      "layer": "landuse"
+    },
+    "out": {
+      "op": "fill-solid",
+      "features": "@landuse_f",
+      "fill": "#a6c084",
+      "fill-alpha": "@lu_alpha"
+    }
+  },
+  "output": "@out"
+}

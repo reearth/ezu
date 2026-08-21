@@ -61,6 +61,15 @@ enum Cmd {
     Translate(TranslateCmd),
     /// Start the live editor + tile server at `http://127.0.0.1:8080`.
     Serve(serve::ServeCmd),
+    /// Print the Ezu Style JSON Schema, gathered from the registered ops.
+    Schema(SchemaCmd),
+}
+
+#[derive(Args, Debug)]
+struct SchemaCmd {
+    /// Write to this path instead of stdout.
+    #[arg(long)]
+    out: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -240,8 +249,10 @@ struct TilesCmd {
     format: OutputFormat,
     /// Number of tiles rendered in parallel. Defaults to the number
     /// of logical CPU cores.
-    #[arg(long, default_value_t = default_concurrency())]
-    concurrency: usize,
+    // Resolved at run time rather than through `default_value_t`, so
+    // `--help` does not print the core count of whichever machine ran it.
+    #[arg(long)]
+    concurrency: Option<usize>,
 }
 
 fn default_concurrency() -> usize {
@@ -287,6 +298,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Cmd::Graph(args) => run_graph(args).await,
         Cmd::Translate(args) => run_translate(args).await,
         Cmd::Serve(args) => serve::run(args).await,
+        Cmd::Schema(args) => run_schema(args),
     }
 }
 
@@ -424,6 +436,20 @@ fn parse_cli_params(
         values.set(name.to_string(), v);
     }
     Ok(values)
+}
+
+/// Dump the document JSON Schema assembled from every registered op —
+/// the same document served at `/schemas/ezu-style.json` by `ezu serve`.
+/// Feed it to editor tooling, an `ajv` CI check, or a docs generator.
+fn run_schema(args: SchemaCmd) -> Result<(), Box<dyn std::error::Error>> {
+    let schema = default_registry().document_schema();
+    let mut text = serde_json::to_string_pretty(&schema)?;
+    text.push('\n');
+    match args.out {
+        Some(path) => std::fs::write(&path, text)?,
+        None => print!("{text}"),
+    }
+    Ok(())
 }
 
 async fn run_check(args: CheckCmd) -> Result<(), Box<dyn std::error::Error>> {
@@ -616,10 +642,14 @@ fn render_mermaid(doc: &ezu::style::Document) -> String {
         }
     }
 
-    s.push_str("\n  classDef asset fill:#fff4d6,stroke:#a88500;\n");
-    s.push_str("  classDef output fill:#ffe0e0,stroke:#cc3333,stroke-width:2px;\n");
+    // Each class fixes its own text colour as well as its fill. Mermaid's dark
+    // theme otherwise draws light label text, which is unreadable on these
+    // deliberately light fills — and a diagram rendered dark is the common case
+    // when it is embedded in a dark page.
+    s.push_str("\n  classDef asset fill:#fff4d6,color:#3a2e00,stroke:#a88500;\n");
+    s.push_str("  classDef output fill:#ffe0e0,color:#4a1010,stroke:#cc3333,stroke-width:2px;\n");
     s.push_str("  classDef sink fill:#cc3333,color:#ffffff,stroke:#7a1f1f,stroke-width:2px;\n");
-    s.push_str("  classDef source fill:#d9ecff,stroke:#2a6fb0;\n");
+    s.push_str("  classDef source fill:#d9ecff,color:#0d2b45,stroke:#2a6fb0;\n");
     if !doc_scoped_ids.is_empty() {
         s.push_str(&format!("  class {} asset;\n", doc_scoped_ids.join(",")));
     }
@@ -754,7 +784,8 @@ async fn run_tiles(args: TilesCmd) -> Result<(), Box<dyn std::error::Error>> {
     if args.min_zoom > args.max_zoom {
         return Err("--min-zoom must be ≤ --max-zoom".into());
     }
-    if args.concurrency == 0 {
+    let concurrency = args.concurrency.unwrap_or_else(default_concurrency);
+    if concurrency == 0 {
         return Err("--concurrency must be ≥ 1".into());
     }
     let prep = prepare(&args.common).await?;
@@ -825,7 +856,7 @@ async fn run_tiles(args: TilesCmd) -> Result<(), Box<dyn std::error::Error>> {
                 tokio::fs::write(&path, bytes).await?;
                 Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
             })
-            .buffer_unordered(args.concurrency)
+            .buffer_unordered(concurrency)
             .try_collect::<Vec<_>>()
             .await
             .map_err(|e| e.to_string())?;

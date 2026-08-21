@@ -1,0 +1,175 @@
+---
+title: Labels and icons
+description: Text placement, halos, shared collision, and pairing an icon with its label.
+sidebar:
+  order: 5
+---
+
+Text is the part of a map that has to be *correct*, not just pretty. ezu ports
+MapLibre's `symbol` layer: `rustybuzz` shaping, outline fonts or MapLibre glyph-PBF
+endpoints, point and line placement, and collision that is deterministic across
+tile boundaries.
+
+## A point label
+
+```json
+"sources": {
+  "sans": { "type": "font", "url": "https://example.com/NotoSans-Regular.ttf" }
+},
+"nodes": {
+  "places_f": { "op": "features", "layer": "places",
+                "filter-expr": ["==", ["get", "kind"], "city"] },
+  "places": {
+    "op": "text",
+    "features": "@places_f",
+    "font": ["sans"],
+    "text": ["get", "name"],
+    "size": 13,
+    "color": "#333333",
+    "halo-color": "#ffffffcc",
+    "halo-width": 1.5,
+    "source": "basemap", "layer": "places"
+  }
+}
+```
+
+`text` is a literal string or a MapLibre string expression evaluated per feature.
+`font` is an ordered fallback stack of `font` and/or `glyphs` source names — outline
+fonts and SDF stacks mix freely, and the first entry covering a character shapes it.
+
+**Set `source` and `layer`.** They are how the node names its neighbour-tile
+bindings, and without them collision is centre-tile-only, which shows up as labels
+duplicated or fighting across borders. Mirror `filter-expr`, `min-zoom`,
+`max-zoom`, and `min-zoom-field` from the upstream `features` node too, so
+neighbour candidates are filtered identically to this tile's own features.
+
+## Halos exist for a reason
+
+A halo is not decoration; it is what keeps a label readable over a busy map. 1–2 px
+of the background colour at 60–80 % alpha is usually enough. `outline-sdf` is on by
+default, which draws outline-font glyphs through the SDF path so the halo shape and
+cost match MapLibre's.
+
+## Line placement
+
+```json
+"roads_label": {
+  "op": "text", "features": "@roads_f", "font": ["sans"], "text": ["get", "name"],
+  "placement": "line",
+  "spacing-px": 250,
+  "max-angle-deg": 45,
+  "keep-upright": true,
+  "size": 11, "color": "#5a4a3a", "halo-color": "#fbf6e6", "halo-width": 1.2
+}
+```
+
+`placement: "line"` walks each polyline with tangent-rotated glyphs and per-glyph
+collision; `"line-center"` places one label at each line's arc-length midpoint.
+`spacing-px` is MapLibre's `symbol-spacing`, and `max-angle-deg` rejects anchors
+where the line bends too much over a label-length window — raise it and labels
+follow hairpins into illegibility.
+
+Line placement ignores `max-width-em`: a line label is always one line.
+
+## Wrapping and anchoring
+
+For point labels, `max-width-em` (default 10) sets the wrap target in em, `0`
+disables wrapping, and `line-height` is baseline-to-baseline in em. `anchor` puts a
+part of the block on the point; `anchor-variants` is MapLibre's
+`text-variable-anchor` — a list tried in order, first free one wins, with
+`radial-offset` pushing each variant away from the point in its own direction.
+That is much better behaved in dense areas than a single fixed anchor.
+
+## Pairing an icon with its label
+
+An icon and its text place as **one unit** against the same collision index, so a
+symbol shows both or neither:
+
+```json
+"poi": {
+  "op": "text", "features": "@poi_f", "font": ["sans"], "text": ["get", "name"],
+  "icon-sprite": "@sheet",
+  "icon-name-expr": ["get", "icon"],
+  "icon-size": 1, "icon-anchor": "center", "icon-offset": [0, -8],
+  "text-optional": true
+}
+```
+
+`text-optional` lets the icon place when the text is blocked; `icon-optional` does
+the reverse. Without either, one blocked half drops the whole symbol — which is the
+MapLibre default and the reason POIs sometimes vanish wholesale in dense areas. If
+you are losing icons you expected to keep, `text-optional: true` is usually the fix.
+
+`icon-text-fit` stretches the icon to the label's box on the named axes, using the
+sprite's `stretchX`/`stretchY`/`content` metadata so a shield keeps its corners.
+
+## Collision, shared and deterministic
+
+Every label layer in a document collides in **one** index. Each layer lowers to a
+`text-labels` (candidates) plus `text-draw` (winners) pair around a single
+`label-placement` node:
+
+```json
+"places_l": { "op": "text-labels", "features": "@places_f", "…": "…" },
+"roads_l":  { "op": "text-labels", "features": "@roads_f",  "…": "…" },
+"place":    { "op": "label-placement", "labels": ["@roads_l", "@places_l"] },
+"places_d": { "op": "text-draw", "labels": "@places_l", "placement": "@place" },
+"roads_d":  { "op": "text-draw", "labels": "@roads_l",  "placement": "@place" }
+```
+
+<figure class="diagram">
+  <img src="/ezu/diagrams/labels-split.svg" alt="Two label layers, one decision stage. Each layer’s candidates go into `label-placement`; each layer draws only the winners." loading="lazy" decoding="async" />
+  <figcaption>Two label layers, one decision stage. Each layer’s candidates go into `label-placement`; each layer draws only the winners.</figcaption>
+</figure>
+
+The single `text` op is the convenient form for one layer; the split form is what
+`ezu translate` emits, because it is what lets a POI knock out a road name the way
+MapLibre does. Candidates are gathered from the eight neighbouring tiles, deduped,
+ordered by `sort-key-expr` with ties broken by tile feature order, and placed
+greedily — so both sides of a border reach the same decision.
+
+`labels` lists the layers **bottom first**, in paint order, exactly as `stack`
+does. Priority runs the other way: the last entry places first and wins. So the
+POI layer belongs at the end of the list, and that is what lets it knock out a road
+name underneath it.
+
+<figure class="page-fig page-fig--pair">
+  <div class="page-fig__images">
+    <img src="/ezu/figures/labels-collide.webp" alt="Place labels with collision enabled — evenly spaced and legible" width="768" height="768" loading="lazy" decoding="async" />
+    <img src="/ezu/figures/labels-no-collide.webp" alt="The same labels with collision disabled — overlapping and unreadable" width="768" height="768" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>The same label layer with collision on (left) and off (right). Collision is what makes a dense area readable.</figcaption>
+</figure>
+
+`collide: false` draws every label, which is occasionally what you want for a
+diagram and never what you want for a map. The figure above is the whole
+argument for leaving it on.
+
+## Glyphs without font files
+
+Instead of a `font` source, point at a MapLibre glyph endpoint:
+
+```json
+"sources": {
+  "gl": { "type": "glyphs", "url": "https://example.com/fonts/{fontstack}/{range}.pbf" }
+},
+"nodes": {
+  "labels": { "op": "text", "features": "@f", "font": ["gl"], "text": ["get", "name"] }
+}
+```
+
+Ranges are fetched lazily, and these are the same pre-rendered SDF glyphs MapLibre
+draws — which is why `ezu translate` falls back to a style's own `glyphs` endpoint
+when no `--font` mapping is given. In a wasm host you cannot fetch lazily, so ask
+`neededGlyphRanges()` after binding features and before rendering; see
+[use in the browser](/ezu/guides/browser-wasm/).
+
+## Debugging placement
+
+- Turn on the tile-grid overlay in `ezu serve` and check borders for duplicates —
+  the symptom of a missing `source`/`layer`.
+- `max-extent-px` (default 128) is the padding the node requests; labels whose
+  bounding box exceeds it are culled with a warning. Very large text needs a
+  larger value.
+- ezu has no viewport, so there is no fade and no viewport-centre priority. See
+  [gaps and differences](/ezu/maplibre/gaps-and-differences/).

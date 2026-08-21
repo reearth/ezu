@@ -1,0 +1,110 @@
+---
+title: Use from Rust
+description: Build a graph once, render many tiles, and supply your own data.
+sidebar:
+  order: 8
+---
+
+```toml title="Cargo.toml"
+[dependencies]
+ezu = { version = "0.6", features = ["parallel"] }
+```
+
+The umbrella crate re-exports the workspace: `ezu::style`, `ezu::graph`,
+`ezu::paint`, `ezu::features`, `ezu::core`. API detail lives on
+[docs.rs](https://docs.rs/ezu); this page is the shape of a host.
+
+## The lifecycle
+
+Parse once, build once, render per tile:
+
+```rust
+let doc      = ezu::style::Document::from_json(&json)?;
+let registry = ezu::paint::nodes::default_registry();
+let graph    = ezu::graph::build_graph(&doc, &registry)?;   // once per style
+let cache    = ezu::graph::Cache::new();                    // shared across tiles
+let base     = ezu::paint::host::BrushBankLoader::default();
+
+let tile_id = ezu::graph::TileId { z: 13, x: 7276, y: 3225 };
+
+// Per-tile bindings overlay the document-scoped bank.
+let mut tile_loader = ezu::paint::host::TileLoader::new(&base, tile_id);
+tile_loader.bind_mvt(ezu::features::mvt::decode(&bytes)?);
+
+let ev = ezu::graph::Evaluator::new(&graph, &cache, &tile_loader);
+let out = ev.render_parallel(
+    tile_id,
+    ezu::graph::CanvasInfo { tile_size: 512, pad: 24 },
+    &ezu::graph::ParamValues::new(),
+    /* rng_seed */ 0,
+)?;
+```
+
+`build_graph` is where everything static is checked: every `@ref` resolves, ports
+type-check, there are no cycles, and the computed padding fits. Failures come
+back as `BuildGraphError` with the offending node id attached — surface that
+string, it is the useful part.
+
+## You own the I/O
+
+ezu never fetches anything itself. External data enters through one trait:
+
+```rust
+pub trait AssetLoader: Send + Sync {
+    fn load(&self, name: &str) -> Result<Asset, AssetError>;
+    fn hash(&self, _name: &str) -> u128 { 0 }   // for cache invalidation
+}
+```
+
+Think of it as shader uniforms: the document declares which bindings its source
+nodes sample, your host fills them, the evaluator stitches it together. Names
+beginning with `tile.` are tile-scoped by convention and rebound per render;
+bare names are document-scoped (brush and image banks).
+
+Return a real `hash()` for anything that can change. The evaluator folds each
+binding's hash into the consuming node's cache key, so a changed binding
+invalidates every dependent entry without the node having to think about it.
+
+For the common cases you do not need to implement the trait yourself:
+`ezu::paint::host` ships `BrushBankLoader`, `TileLoader`,
+`prefetch_doc_assets`, DEM/raster source registries, and PNG/WebP encoders.
+
+## Serial or parallel
+
+`Evaluator::render` walks the topological order sequentially.
+`render_parallel` (behind the `parallel` feature) buckets nodes by longest-path
+depth — no two nodes in a bucket share an edge — and fans each bucket across
+Rayon's pool. On a wide watercolour graph that is the difference between 6.3 s and
+1.3 s of wall clock for four tiles.
+
+Leave `parallel` **off** for wasm; turn it on for servers and CLIs.
+
+## Params at render time
+
+One built graph serves every parameter combination:
+
+```rust
+let mut params = ezu::graph::ParamValues::new();
+params.set("softness".into(), ezu::graph::parse_param_value(&doc.params, "softness", "2")?);
+let out = ev.render_parallel(tile_id, canvas, &params, 0)?;
+```
+
+The cache keys on the values each node actually reads, so flipping one param
+re-evaluates only the nodes downstream of it.
+
+## Cache sizing
+
+```rust
+let cache = ezu::graph::Cache::with_capacity(4096);   // entries, not bytes
+```
+
+A Mutex-protected LRU keyed by a Merkle-style content hash over
+`(canvas, tile, node param hash + asset hashes, input hashes)`. Hits are cheap to
+clone because heavy payloads sit behind `Arc`. Keep one cache per style for the
+life of that style; throw it away when the style changes.
+
+## Your own ops
+
+`NodeFactory` is public, so a downstream crate can register ops on top of the
+built-in registry and inherit the JSON Schema (and therefore editor completion)
+automatically. See [custom ops](/ezu/extending/custom-ops/).

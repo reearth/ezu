@@ -1,0 +1,108 @@
+---
+title: Expressions
+description: MapLibre expressions as node fields — where they run, and what conformance means here.
+sidebar:
+  order: 6
+---
+
+Anywhere a value should vary per feature, an ezu node takes a raw
+[MapLibre expression](https://maplibre.org/maplibre-style-spec/expressions/) on a
+`*-expr` field:
+
+```json
+"landuse": {
+  "op": "fill-solid",
+  "features": "@landuse_f",
+  "fill-expr": ["match", ["get", "kind"],
+                "park", "#a6c084",
+                "forest", "#8fae74",
+                "#e8e4d8"]
+}
+```
+
+The expression is not translated into something ezu-specific. It is evaluated by
+[`maplibre-expr`](https://github.com/reearth/maplibre-expr-rs), a pure-Rust
+parser and evaluator that scores **100 % conformance against MapLibre's official
+spec fixtures** — including the type-checking rules, `collator`, the geo
+functions, and legacy filter conversion. Same expression, same result.
+
+## Where expressions appear
+
+**Filters.** A `features` node's `filter-expr` runs per feature:
+
+```json
+"water_f": {
+  "op": "features", "layer": "water",
+  "filter-expr": ["all", ["==", ["get", "kind"], "water"], ["has", "name"]]
+}
+```
+
+Legacy-form filters (bare field names, `!in`, `!has`, `none`) are converted with
+MapLibre's own pre-compile conversion, strict-type semantics included, so an old
+style keeps working.
+
+**Paint values.** `fill-expr`, `color-expr`, `width-expr`, `opacity-expr`,
+`radius-expr`, and the text and icon paint properties. `ezu translate` emits zoom
+and data functions onto exactly these fields, which is why a translated recipe is
+zoom-independent — nothing is baked to the zoom you converted at.
+
+**Whole-tile scalars.** The `expr` op evaluates one expression per tile, with that
+tile's zoom in the context, and emits a `Scalar` you can wire into any numeric
+field. That is the idiomatic way to express a MapLibre zoom curve:
+
+```json
+"w": { "op": "expr", "expr": ["interpolate", ["linear"], ["zoom"], 10, 0.5, 16, 4] },
+"roads": { "op": "stroke", "features": "@roads_f", "width-px": "@w" }
+```
+
+## Per feature or per tile
+
+The distinction matters for cost and for what is available:
+
+| | Evaluated | Sees |
+| --- | --- | --- |
+| `*-expr` on a paint op | once per feature | the feature's properties, plus the tile's zoom |
+| `filter-expr` | once per feature | the same |
+| the `expr` op | once per tile | the tile's zoom (no feature) |
+
+So `["get", "kind"]` belongs on a paint field, and `["zoom"]`-only curves are
+cheaper as an `expr` node — evaluated once instead of once per feature, and
+cacheable as a `Scalar`.
+
+## Expressions vs the scalar ops
+
+Zoom-dependent numbers can be written two ways, and both are fine:
+
+```json
+// MapLibre-native: one expression, one node
+"a": { "op": "expr", "expr": ["interpolate", ["linear"], ["zoom"], 10, 0, 16, 1] }
+
+// ezu-native: a small scalar chain
+"z":     { "op": "zoom" },
+"zfrac": { "op": "math", "fn": "div", "a": "@z", "b": 16 },
+"a":     { "op": "math", "fn": "mul", "a": "$landuse-alpha", "b": "@zfrac" }
+```
+
+<figure class="diagram">
+  <img src="/ezu/diagrams/scalar-chain.svg" alt="`zoom` and `math` feeding a paint field through a `Scalar` port. A `$param` keeps its runtime override all the way down the chain." loading="lazy" decoding="async" />
+  <figcaption>`zoom` and `math` feeding a paint field through a `Scalar` port. A `$param` keeps its runtime override all the way down the chain.</figcaption>
+</figure>
+
+Reach for `expr` when you are porting a MapLibre curve or want the exact
+interpolation semantics. Reach for `math` when the value should be composed from
+[params](/ezu/style/params/) that a caller overrides at render time — a `$param`
+keeps its runtime-override behaviour, while an expression is fixed in the
+document.
+
+## Practical notes
+
+- The heatmap path bakes a colour expression over `heatmap-density` into a
+  256-entry ramp per tile, which is how a GL-JS-shaped colour function becomes a
+  `color-ramp`.
+- An expression is part of the node's cache key, so writing an expression instead
+  of a literal costs nothing in cacheability.
+- Errors are reported at build time where the expression can be type-checked
+  statically, and per feature at render time where it cannot.
+
+See [expression conformance](/ezu/maplibre/expression-conformance/) for what the
+100 % figure actually covers.

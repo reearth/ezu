@@ -1,0 +1,111 @@
+---
+title: Layer mapping
+description: What each MapLibre layer type and property becomes in an ezu recipe.
+sidebar:
+  order: 1
+---
+
+import Comparison from './_comparison.mdx';
+
+`ezu translate` lowers a MapLibre GL style into an ezu recipe. This page is the
+mapping table. For the workflow, see
+[from a MapLibre style](/ezu/guides/from-maplibre/); for what is approximated or
+skipped, [gaps and differences](/ezu/maplibre/gaps-and-differences/).
+
+## How close does it land?
+
+<Comparison />
+
+Two structural facts first:
+
+- The **ordered layer list becomes a `blend` chain** — painter's algorithm written
+  as a graph.
+- The recipe is **zoom-independent**. Zoom and data functions are emitted as raw
+  expressions on `*-expr` fields and evaluated per tile, so one recipe renders
+  correctly at every zoom.
+
+## Layer types
+
+| MapLibre | ezu |
+| --- | --- |
+| `background` | `solid` |
+| `fill` (solid colour, `fill-outline-color`) | `features` + `fill-solid` (outline → `edge`) |
+| `line` (+ `line-dasharray`, `line-cap`/`join`, `line-gap-width`) | `features` + crisp `stroke`, dash in px. A gap renders MapLibre's casing annulus — one stroke's footprint with the corridor knocked out — so joins, caps and dash phase behave like the GL shader |
+| `circle` (+ `circle-stroke-*`) | a `circle` sprite `stamp`ed at each point; the stroke is a larger ring stamped underneath |
+| `raster` | `raster` |
+| `hillshade` (over `raster-dem`) | `dem` + `hillshade` (tone calibration still approximate) |
+| `heatmap` | `features` → `density` (GL-JS kernel) → `color-ramp`, with the colour expression over `heatmap-density` baked to a 256-entry ramp per tile |
+| `fill-extrusion` | flat footprint `fill-solid` using `fill-extrusion-color` — no 3-D, height and base dropped |
+| `symbol` (icons) | the icon rides the layer's label: a point symbol's icon and text boxes join the shared collision index and place or drop **as one unit** |
+| `symbol` (text) | `text` node, point or line placement |
+
+## Symbol detail
+
+**Icons.** `icon-image` (including data-driven), `icon-size`/`-rotate`/`-opacity`/
+`-anchor`/`-offset`/`-padding`, `icon-allow-overlap`/`icon-overlap`/
+`-ignore-placement`, `icon-optional`/`text-optional`, and `icon-text-fit` +
+`-padding` with nine-slice `stretchX`/`stretchY`/`content` metadata all convert.
+Icon-only symbol layers place too. Line-placed icons lower to a collision-free
+`stamp`.
+
+**Text.** `symbol-placement: point` / `line` / `line-center` with `text-field`,
+`-size`/`-color`/`-halo-*`/`-opacity`, anchor, offset, justify, wrapping,
+transform, spacing, `text-variable-anchor` (with `text-radial-offset` and
+per-anchor offset mirroring), and on lines `symbol-spacing` / `text-max-angle` /
+`text-keep-upright`. Collision: `text-allow-overlap`/`-ignore-placement`/
+`-padding`, `text-overlap`, `symbol-sort-key`.
+
+Point placement labels each point; line placement walks each polyline with
+tangent-rotated glyphs and per-glyph collision, anchored on tile-clipped geometry
+with MapLibre's spacing phases.
+
+**All of a style's symbol layers collide in one shared index.** Each lowers to a
+`text-labels` (candidates) + `text-draw` (placed labels) pair around a single
+`label-placement` node, placed top layer first — so a POI can knock out a road
+name, as MapLibre does. Placement is deterministic across tiles: candidates are
+gathered from the eight neighbours, deduped, ordered by `symbol-sort-key` with ties
+broken by tile feature order, and placed greedily.
+
+**Fonts.** Zero-config: an unmapped `text-font` stack is served from the style's own
+`glyphs` endpoint as an SDF `glyphs` source — the same pre-rendered glyphs
+MapLibre draws. `--font "NAME=SOURCE"` (or `ConvertOptions::fonts`) overrides with
+a real font per entry for outline rendering. `{token}` fields are rewritten to
+expressions.
+
+## Patterns and sprites
+
+| MapLibre | ezu |
+| --- | --- |
+| `fill-pattern` (constant) | `icon` → `tiling`, clipped to the fill shape via `blend { clip: true }` |
+| `line-pattern` (constant) | `icon` → `line-stamp`, repeated along the line and fitted to `line-width` |
+| top-level `sprite` (single URL or `[{id, url}]`) | one `sprite` source per sheet — atlas `<url>.png` plus index `<url>.json`, or an inline index. `sheet:icon` names supported |
+
+## Data, filters and functions
+
+| MapLibre | ezu |
+| --- | --- |
+| layer `filter`, expression form | passes through verbatim as the `features` node's `filter-expr` |
+| layer `filter`, legacy form (bare fields, `!in`, `!has`, `none`) | converted by `maplibre_expr::convert_legacy_filter` — MapLibre's own pre-compile conversion, strict-type semantics included |
+| zoom / data functions (`stops`, `interpolate`, `step`, any expression) | emitted raw onto the target node's `*-expr` field, evaluated per tile |
+| layer `minzoom` / `maxzoom` | the `features` node's `min-zoom` / `max-zoom` render-time gate |
+| multiple `vector` sources | all emitted; each `features` node targets its `(source, layer)` |
+| inline / remote `geojson` source | a `geojson` source; the host projects it per tile and binds one layer (`features` targets `(source, source)`) |
+| CSS named colours (`steelblue`, `transparent`, …) | resolved to hex |
+| `layout.visibility: "none"` | dropped by default, or kept behind a `switch` with `--keep-hidden` (flip `select` to `b` to enable) |
+
+## Measuring your own style
+
+The figures at the top of this page were produced by `ezu-compare`, which
+converts a style, renders it with ezu, renders a maplibre-gl-js reference, and
+reports RMSE, "visibly different" pixel fraction, and SSIM per tile. Point it at
+your style rather than trusting a general claim:
+
+```sh
+cargo run --release -p ezu-compare -- \
+  --style YOUR_STYLE_URL_OR_PATH \
+  --tiles 12/3637/1613,13/7275/3225,14/14550/6452 \
+  --out out/compare
+```
+
+It writes the ezu render, the reference, a diff image, and the emitted recipe, so
+a disagreement is something you can look at rather than infer.

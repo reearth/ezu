@@ -1,0 +1,80 @@
+{
+  "name": "labels-split-diagram",
+  "tile-size": 512,
+  "pad": 32,
+  "sources": {
+    "basemap": {
+      "type": "mvt",
+      "url": "https://papers.reearth.land/protomaps/tilejson.json"
+    },
+    "sans": {
+      "type": "font",
+      "url": "system:Helvetica"
+    }
+  },
+  "nodes": {
+    "bg": {
+      "op": "solid",
+      "color": "#faf6ec"
+    },
+    "places_f": {
+      "op": "features",
+      "layer": "places"
+    },
+    "roads_f": {
+      "op": "features",
+      "layer": "roads"
+    },
+    "places_l": {
+      "op": "text-labels",
+      "features": "@places_f",
+      "font": [
+        "sans"
+      ],
+      "text": [
+        "get",
+        "name:en"
+      ],
+      "size": 13
+    },
+    "roads_l": {
+      "op": "text-labels",
+      "features": "@roads_f",
+      "font": [
+        "sans"
+      ],
+      "text": [
+        "get",
+        "name:en"
+      ],
+      "size": 11,
+      "placement": "line"
+    },
+    "place": {
+      "op": "label-placement",
+      "labels": [
+        "@roads_l",
+        "@places_l"
+      ]
+    },
+    "places_d": {
+      "op": "text-draw",
+      "labels": "@places_l",
+      "placement": "@place"
+    },
+    "roads_d": {
+      "op": "text-draw",
+      "labels": "@roads_l",
+      "placement": "@place"
+    },
+    "out": {
+      "op": "stack",
+      "layers": [
+        "@bg",
+        "@roads_d",
+        "@places_d"
+      ]
+    }
+  },
+  "output": "@out"
+}

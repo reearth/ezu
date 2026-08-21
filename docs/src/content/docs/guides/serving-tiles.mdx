@@ -1,0 +1,97 @@
+---
+title: Serve tiles
+description: Putting ezu behind a tile endpoint — caching, overzoom, and what a host owes the renderer.
+sidebar:
+  order: 10
+---
+
+There are three ways to get ezu tiles in front of a client, in increasing order
+of effort.
+
+## 1. Pre-render a pyramid
+
+The simplest thing that works. `ezu tiles` writes a plain XYZ tree; any static
+file server or object store serves it.
+
+```sh
+ezu tiles --style style.json --bbox 139.6,35.5,139.9,35.8 \
+  --min-zoom 8 --max-zoom 15 --out pyramid
+```
+
+Cheapest to operate, immune to traffic spikes, and every tile is identical for
+every request. The cost is storage and the fact that a style change means
+re-rendering. Best when the area is bounded and the style is stable.
+
+## 2. `ezu serve` behind a cache
+
+`ezu serve` is a working tile server: `/tiles/{z}/{x}/{y}.png` (and `.webp`),
+with [param overrides](/ezu/concepts/params-and-functions/) as query values. Put
+a CDN or reverse-proxy cache in front of it and you have a render-on-demand
+basemap.
+
+It is built for development, so treat it accordingly: no auth, no rate limiting,
+and one process. But it renders the same bytes a library host would.
+
+## 3. Embed the library
+
+For production, host the renderer yourself — `ezu` in a Rust service
+([use from Rust](/ezu/guides/rust-library/)) or `@reearth/ezu` in a Worker
+([use in the browser](/ezu/guides/browser-wasm/)). You own fetching, caching, and
+concurrency, which is the point: ezu does no I/O, so nothing surprises your
+network layer.
+
+## What makes tiles cacheable
+
+ezu is deliberate about determinism, and it is worth knowing why:
+
+- **World-anchored painting.** `fill-dabs`, `line`, and `noise` are functions of
+  world coordinates, so the same geometry paints the same way regardless of which
+  tile it is being drawn into.
+- **Shared label placement.** Every label layer hands candidates to one
+  placement stage, which decides them against one collision index, gathering
+  candidates from the eight neighbouring tiles. A label near an edge resolves the
+  same way from either side.
+- **No viewport input.** Nothing in the pipeline depends on where a camera is, so
+  a tile is a pure function of `(style, params, tile id, source data)` — which is
+  exactly the cache key you want.
+
+Consequence: the same style at the same zoom always yields the same bytes. Cache
+aggressively, and key your cache on the style version and any param overrides.
+
+## Overzoom
+
+Clients ask for tiles deeper than the data goes. ezu handles this rather than
+returning nothing: it walks up to `--overzoom-levels` parent zooms (default 4),
+takes the ancestor tile, and reprojects its geometry into the requested frame.
+`0` disables it and the request fails instead.
+
+Raster and DEM pyramids have their own policy per source, `on-missing`:
+
+- `empty` (default) — transparent pixels / zero elevation
+- `upsample` — walk up parent zooms and upsample the covered sub-region
+- `error` — fail the render, so a tile server can answer 404
+
+Requests past a source's declared `max-zoom` always upsample from the `max-zoom`
+ancestor, regardless of policy.
+
+In a wasm host you do the walking: bind the ancestor's bytes and tell the
+renderer which zoom they came from with `bindSource(name, bytes, { sourceZoom })`,
+and it reprojects into the tile being rendered.
+
+## Attribution
+
+A style declares attribution at the document level and per source, and inherits
+what upstream TileJSON or PMTiles metadata says. Serve the merged result —
+`Document::attributions()` in Rust, `renderer.attribution` in JS,
+`GET /style/attribution` from `ezu serve` — and render it wherever the tiles are
+displayed. Basemap data usually requires it.
+
+## Sizing notes
+
+On an Apple M1, a Protomaps basemap converted with `ezu translate` and rendered
+at 512 px evaluates in ~13–30 ms per tile single-threaded across z12–z15 (graph
+evaluation only). End to end, a 251-tile z13–z14 pyramid renders in ~9 s wall
+across 8 cores — ~37 ms/tile amortized *including* HTTP fetch, MVT decode, and
+PNG encode, which dominate at that render cost. Painterly styles cost more. See
+[benchmarks](/ezu/performance/benchmarks/) for methodology before planning
+capacity on those numbers.

@@ -1,0 +1,104 @@
+---
+title: From a MapLibre style
+description: Convert an existing MapLibre GL style into an ezu recipe and render it.
+sidebar:
+  order: 6
+---
+
+If you already have a MapLibre GL style, you do not have to write an ezu style to
+use ezu. `ezu translate` lowers the MapLibre style into an **ezu recipe** — an
+ordinary ezu document, which you can then read, diff, and edit.
+
+```sh
+ezu translate maplibre-style.json --out recipe.json
+ezu tile --style recipe.json --tile 14/14550/6452 --out basemap.png
+```
+
+Or in one pipe, validating instead of rendering:
+
+```sh
+ezu translate https://example.com/style.json | ezu check /dev/stdin --no-fetch
+```
+
+## What comes out
+
+The recipe is **zoom-independent**. Zoom and data functions are not baked to the
+zoom you converted at — they are emitted as raw MapLibre expressions on the
+target node's `*-expr` field and evaluated per tile, with that tile's zoom in the
+evaluation context. One recipe renders correctly at every zoom.
+
+The ordered layer list becomes a `blend` chain, which is the painter's algorithm
+written as a graph. Each layer becomes a `features` node (carrying the layer's
+`filter`, `minzoom`, `maxzoom`) plus the paint op it maps to. The full table is in
+[layer mapping](/ezu/maplibre/compatibility/).
+
+Warnings for anything skipped or approximated go to stderr:
+
+```sh
+ezu translate style.json --out recipe.json
+# skipped/approximated: layer "buildings-3d": fill-extrusion height dropped
+```
+
+Read them. They are the difference between "converted" and "converted the way you
+expected" — see [gaps and differences](/ezu/maplibre/gaps-and-differences/).
+
+## Fonts
+
+Text is the one place where you usually want to make a decision. By default an
+unmapped `text-font` stack is served from the style's own `glyphs` endpoint as an
+SDF `glyphs` source — the same pre-rendered glyphs MapLibre draws, zero config.
+
+For higher-fidelity outline rendering, map a fontstack entry to a real font:
+
+```sh
+ezu translate style.json --out recipe.json \
+  --font "Noto Sans Regular=https://example.com/NotoSans-Regular.ttf" \
+  --font "Noto Sans Medium=system:Noto Sans?weight=500"
+```
+
+`system:FAMILY` resolves from the machine's installed fonts, which is portable to
+write but machine-dependent to render, and unavailable on wasm. A font file URL
+(`http(s)://`, `file:`, `data:`) is the reproducible choice.
+
+If a layer's `text-font` has no mapping *and* the style declares no `glyphs`
+endpoint, that layer's text is skipped, with a warning.
+
+## Useful flags
+
+| Flag | Effect |
+| --- | --- |
+| `--tile-size` | emitted canvas size (default 512, matching MapLibre) |
+| `--pad` | buffer around the tile for overflowing geometry — label halos, wide strokes (default 16; raise it for pad-hungry filters) |
+| `--keep-hidden` | keep `visibility: none` layers, gated off behind a `switch` instead of dropped |
+| `--pretty` | pretty-print the emitted JSON — do this if you intend to read it |
+| `--font NAME=SOURCE` | map a fontstack entry to a font source (repeatable) |
+
+## Then make it yours
+
+The recipe is a normal ezu document, so the interesting move is to convert once
+and then edit. Swap a `fill-solid` for `fill-dabs`, run the finished tile through
+`blur`, or add a paper texture underneath — the data plumbing, filters, and
+expressions all keep working:
+
+```json
+// before: what translate emitted
+"landuse": { "op": "fill-solid", "features": "@landuse_f", "fill-expr": ["get", "color"] }
+
+// after: same data, painted
+"landuse": { "op": "fill-dabs", "features": "@landuse_f", "color-expr": ["get", "color"],
+             "radius-px": 6, "spacing-px": 3, "opacity": 0.3 }
+```
+
+## How close is it?
+
+`ezu-compare` (an internal, unpublished crate) converts a MapLibre style, renders
+it with ezu, and pixel-compares against a maplibre-gl-js reference render:
+
+```sh
+cargo run --release -p ezu-compare -- \
+  --style crates/ezu-compare/samples/protomaps-basemap.json \
+  --tiles 12/3637/1613,13/7275/3225,14/14550/6452
+```
+
+See [expression conformance](/ezu/maplibre/expression-conformance/) for the part
+that is exact rather than approximate.

@@ -1,0 +1,14 @@
+{
+  "name": "circle-demo",
+  "tile-size": 512,
+  "pad": 8,
+  "nodes": {
+    "out": {
+      "op": "circle",
+      "color": "#c2410c",
+      "radius-frac": 0.35,
+      "hardness": 0.9
+    }
+  },
+  "output": "@out"
+}

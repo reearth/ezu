@@ -1,0 +1,63 @@
+---
+title: Roadmap
+description: Where the gaps are, and how work gets prioritised.
+sidebar:
+  order: 5
+---
+
+ezu is pre-1.0 and developed in the open. There is no dated roadmap; the honest
+version of this page is a list of known gaps and where they are tracked.
+
+## Known gaps
+
+The authoritative, maintained lists live where they cannot drift from the code:
+
+- **[MapLibre gaps and differences](/ezu/maplibre/gaps-and-differences/)** — what
+  `ezu translate` skips or approximates, and which divergences are by design.
+  `ezu translate` reports the same information per style on stderr, which is
+  always more specific than a general list.
+- **[GitHub issues](https://github.com/reearth/ezu/issues)** — everything else.
+
+Recurring themes, at the time of writing:
+
+- **3-D.** `fill-extrusion` renders a flat footprint. There is no terrain mesh, no
+  pitch, no bearing — a tile is a plan view.
+- **Symbol edge cases.** Viewport-aligned rotation on line placement, collision
+  for line-placed icons, SDF icon recolouring.
+- **Hillshade tone calibration.** Structurally correct, not tone-matched to GL-JS.
+- **Performance on dab-heavy styles.** The painterly ops are the expensive ones;
+  see [tuning](/ezu/performance/tuning/).
+
+## How things get prioritised
+
+Mostly by what people hit. The gap list is driven by real styles that did not
+convert the way someone expected, which is why a specific report beats a feature
+request:
+
+- the style (or a minimal reduction of it),
+- the tile address,
+- what you expected and what you got — a `ezu-compare` similarity figure or two
+  renders side by side is ideal.
+
+## Contributing to direction
+
+Design discussion happens in issues before implementation, particularly for
+anything that touches the style spec, adds a port kind, or changes how a global
+stage like label placement works. If you are considering a
+[custom op](/ezu/extending/custom-ops/) or a new
+[translate frontend](/ezu/extending/translate-frontends/), an issue first is worth
+the round trip — `NodeFactory` is public specifically so that experiments do not
+need to land upstream to be useful.
+
+## Stability expectations
+
+Until 1.0, a minor version bump may break the Rust API, the style spec, or the wasm
+interface. Breaking changes are called out in the release notes. Two cheap habits
+make upgrades boring:
+
+```sh
+ezu check style.json --no-fetch            # validate every style you own
+ezu schema --out ezu-style.schema.json     # regenerate what your editor validates against
+```
+
+See [changelog](/ezu/reference/changelog/).

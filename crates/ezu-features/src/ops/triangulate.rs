@@ -24,12 +24,13 @@ pub fn triangulate(points: &[(i32, i32)]) -> Vec<Polygon> {
     let tri = delaunay(&sites);
     // `triangles` is a flat triple-of-indices array — every 3
     // consecutive entries form a CCW Delaunay triangle.
-    tri.triangles
-        .chunks_exact(3)
-        .filter_map(|t| {
-            let a = points.get(t[0])?;
-            let b = points.get(t[1])?;
-            let c = points.get(t[2])?;
+    let (triangles, _) = tri.triangles.as_chunks::<3>();
+    triangles
+        .iter()
+        .filter_map(|&[i, j, k]| {
+            let a = points.get(i)?;
+            let b = points.get(j)?;
+            let c = points.get(k)?;
             Some(Polygon {
                 exterior: vec![*a, *b, *c],
                 holes: vec![],

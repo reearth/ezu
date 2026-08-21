@@ -1,0 +1,118 @@
+---
+title: Custom ops
+description: Register your own node on top of the built-in registry, and inherit the schema.
+sidebar:
+  order: 1
+---
+
+`NodeFactory` is public. Any downstream crate can add ops to the registry and use
+them in a style exactly like a built-in one — including editor completion and
+live validation, because the schema is assembled from the registry.
+
+## The trait
+
+```rust
+struct MyOpFactory;
+
+impl ezu::graph::NodeFactory for MyOpFactory {
+    fn op_name(&self) -> &'static str { "my-op" }
+
+    fn build(
+        &self,
+        fields: &serde_json::Map<String, serde_json::Value>,
+        ctx: &ezu::graph::FactoryCtx<'_>,
+    ) -> Result<ezu::graph::BuiltNode, ezu::graph::FactoryError> {
+        let input = ezu::graph::take_input_ref(fields, "input")?;
+        let mut r = ezu::graph::InReader::new(fields, ctx, 1);
+        let k = r.number("k")?;
+        let parts = r.finish();
+        // …assemble ports and connections, return BuiltNode
+    }
+
+    fn schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "description": "What I do",
+            "properties": {
+                "input": ezu::graph::schema_frag::node_ref(),
+                "k":     ezu::graph::schema_frag::unit_number(),
+            },
+            "required": ["input", "k"],
+        })
+    }
+}
+```
+
+A factory is normally a zero-sized struct. It inspects the JSON `fields`,
+validates them, and returns a `BuiltNode`. **It must not render anything** —
+construction and evaluation are separate phases, which is what makes build-time
+validation possible.
+
+The `Node` your factory returns implements the interesting parts:
+
+| Method | Purpose |
+| --- | --- |
+| `inputs()` | the ports this node accepts, and which kinds each takes |
+| `output(input_kinds)` | the kind this node produces — may depend on its inputs, which is how the polymorphic filters pass `Raster`/`Sprite` through |
+| `eval(ctx, inputs)` | the actual work |
+| `required_pad(downstream)` | how much this node grows the padding requirement |
+| `param_hash(h)` | everything that affects the output, folded into the cache key |
+| `param_refs()` | the `$param` names this node reads |
+| `asset_inputs()` | the bindings this node samples, for automatic cache invalidation |
+
+## Registering
+
+Built-in ops self-register through inventory:
+
+```rust
+ezu_graph::submit_node!(MyOpFactory);   // at module scope
+```
+
+`NodeRegistry::from_inventory()` then collects them, which is what
+`ezu::paint::nodes::default_registry()` does. For dynamic registration, hand the
+factory over directly:
+
+```rust
+let mut registry = ezu::paint::nodes::default_registry();
+registry.register(MyOpFactory);
+let graph = ezu::graph::build_graph(&doc, &registry)?;
+```
+
+## What you get for free
+
+**Schema and editor support.** `schema()` feeds
+`NodeRegistry::document_schema()`, which is what `ezu serve` publishes at
+`/schemas/ezu-style.json` and what `ezu schema` dumps. Your op gets completion,
+field validation, and inline errors in the live editor with no extra work — and it
+appears in a locally generated schema exactly as the built-ins do.
+
+Pre-built fragments keep the schema short: `node_ref`, `asset_ref`, `color`,
+`unit_number`, `px_number`, `number`, and `in_number` for wrapping a numeric
+schema so the field also accepts `$param` and `@node` strings.
+
+**Caching.** Implement `param_hash` honestly — fold in every field that affects
+the output — and the content-addressed cache handles the rest. Declare bindings in
+`asset_inputs()` and the evaluator folds each binding's hash into your node's key,
+so a rebound layer invalidates your node automatically.
+
+**Parallelism.** Nodes are `Send + Sync` and evaluation is scheduled by the
+evaluator, so a correct `eval` participates in `render_parallel` without doing
+anything.
+
+## Getting it right
+
+- **Fold everything into `param_hash`.** A field you forget is a field that
+  silently returns a stale tile. This is the single most common bug in a custom op.
+- **Anchor in world coordinates** if your op is spatial and random. A tile-local
+  random draw produces visible seams; see
+  [tiles and determinism](/ezu/concepts/tiles-and-determinism/).
+- **Declare `required_pad`** if you read neighbouring pixels, or your output will
+  be wrong at the tile edge.
+- **No `Instant::now()`** in code that may compile to wasm — there is no monotonic
+  clock on `wasm32-unknown-unknown` and it panics at runtime. Gate timing on
+  `target_arch`.
+- **Use `In<T>` for numeric fields** (via `InReader`) so they accept literals,
+  `$param`s, and `@node` ports like every built-in op. If the field determines
+  padding, require a static bound and say so in the error message.
+
+Reading a built-in is the fastest way in — `crates/ezu-paint/src/nodes/raster/blur.rs`
+is short and exercises pad propagation, `In<f64>`, and kind pass-through.

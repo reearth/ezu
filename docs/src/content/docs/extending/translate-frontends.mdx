@@ -1,0 +1,78 @@
+---
+title: Translate frontends
+description: Adding another style language as an input to ezu.
+sidebar:
+  order: 2
+---
+
+`ezu-translate` lowers other engines' style languages into ezu recipes. MapLibre GL
+is the first frontend, under `ezu_translate::maplibre`, and it is a module rather
+than the crate's whole purpose — additional engines are sibling modules.
+
+```rust
+let style: serde_json::Value = serde_json::from_str(&maplibre_style_json)?;
+let opts = ezu_translate::maplibre::ConvertOptions::default();
+let (recipe, report) = ezu_translate::maplibre::convert(&style, &opts)?;
+
+for w in &report.warnings {
+    eprintln!("skipped/approximated: {w}");
+}
+```
+
+`recipe` is ezu `Document` JSON — feed it to `Document::from_json`, or write it out
+and render with the CLI.
+
+## The shape of a frontend
+
+Three pieces, and the third is the one people underestimate:
+
+1. **`ConvertOptions`** — the knobs a caller needs: canvas size, padding, font
+   mappings, whether to keep hidden layers.
+2. **`convert(&style, &opts) -> (Value, Report)`** — a pure function from the
+   source style to a recipe. No I/O: fetching sprite sheets or TileJSON is the
+   host's job, exactly as it is at render time.
+3. **`Report`** — what you could not reproduce. A frontend that silently drops
+   things is worse than one that converts less and says so.
+
+## Lessons from the MapLibre frontend
+
+**Do not bake zoom.** The temptation is to evaluate zoom functions at a chosen zoom
+and emit constants. That produces a recipe that is correct at exactly one zoom. The
+MapLibre frontend instead emits raw expressions onto `*-expr` fields, so the recipe
+is zoom-independent and one document renders every level. Since ezu evaluates
+MapLibre expressions natively at full conformance, passing them through is both
+easier *and* more faithful than translating them.
+
+**Map the model, not the properties.** An ordered layer list becomes a `blend`
+chain; a casing annulus becomes one stroke's footprint with the corridor knocked
+out; a `fill-pattern` becomes `icon` → `tiling` clipped by `blend { clip: true }`.
+Each of those is a structural translation, not a property rename, and each is a
+place where a naive mapping looks subtly wrong.
+
+**Global concerns need global nodes.** Label collision cannot be per layer, so
+every symbol layer lowers to a `text-labels` + `text-draw` pair around one shared
+`label-placement` node. If your source language has another global stage, expect it
+to need the same treatment.
+
+**Warn precisely.** "Layer X: `line-offset` ignored" is actionable; "some
+properties were not converted" is not.
+
+## Verifying a frontend
+
+The internal `ezu-compare` crate is the pattern: convert a style, render it with
+ezu, render a reference with the source engine, and pixel-compare. For MapLibre the
+reference comes from maplibre-gl-js driven headless by Playwright, which turns
+"looks about right" into a similarity number per tile you can watch across changes.
+
+```sh
+cargo run --release -p ezu-compare -- \
+  --style crates/ezu-compare/samples/protomaps-basemap.json \
+  --tiles 12/3637/1613,13/7275/3225,14/14550/6452
+```
+
+## Before you start
+
+A new frontend is a substantial piece of work, and the interesting design
+questions — how the source model maps onto a typed DAG, what belongs in the
+frontend versus in a new op — are worth discussing first. Open an
+[issue](https://github.com/reearth/ezu/issues) with the engine and a sample style.

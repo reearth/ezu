@@ -1,0 +1,101 @@
+---
+title: Gaps and differences
+description: What translate skips, what it approximates, and where ezu diverges from MapLibre by design.
+sidebar:
+  order: 2
+---
+
+`ezu translate` reports everything it could not reproduce in `Report::warnings`
+(stderr on the CLI). **Read those warnings** — they are the difference between
+"converted" and "converted the way you expected".
+
+Two kinds of divergence live here, and they are not the same thing: gaps, which
+may close, and design differences, which will not.
+
+## By design: no viewport
+
+MapLibre places labels per frame against a camera. ezu renders tiles, so there is
+no camera. Label collision is world-space deterministic instead of
+viewport-driven, and the consequences are visible:
+
+- **No viewport-centre priority.** MapLibre resolves tiles nearest the centre of
+  the view first. ezu has no centre, so ordering is by `symbol-sort-key` with ties
+  broken by tile feature order.
+- **No per-frame fade.** Labels are drawn or not drawn. There is no fade in or out.
+- **`text-overlap: cooperative` has no equivalent** and is treated as `never`
+  (collide), with a warning.
+- A symbol carrying both an icon and text takes **one** overlap decision — the
+  conjunction of the icon's and the text's overlap flags.
+
+What you get in exchange is that a tile is a pure function of its inputs, so it
+is cacheable and reproducible. See
+[tiles and determinism](/ezu/concepts/tiles-and-determinism/).
+
+**Zoom is integer.** A tile is rendered at its own zoom level, so a MapLibre zoom
+curve evaluates at integer steps rather than continuously. Styles that rely on
+fractional-zoom interpolation for smooth growth will look stepped between levels.
+
+## Not yet supported
+
+**Text and icons**
+
+- `text-rotation-alignment: viewport` on line placement — line-placed glyphs
+  always rotate with the line (map alignment). `icon-rotation-alignment` and
+  `icon-pitch-alignment` are ignored.
+- Line-placed icons do not collide: a `symbol-placement: line` layer's icon
+  lowers to a collision-free `stamp`, drawn independently of the line's text.
+  (Point-placed icons do collide and pair with their text.)
+- SDF (recolourable) icons: an `sdf: true` sprite entry is drawn as its raw RGBA,
+  and `icon-color` tinting is not applied.
+- An expression-valued `icon-text-fit-padding` warns — constant only.
+- A layer whose `text-font` has no `--font` mapping **and** whose style declares no
+  `glyphs` endpoint skips its text entirely.
+
+**Lines and fills**
+
+- Data-driven `fill-pattern` / `line-pattern` — only a constant pattern name
+  converts. (Data-driven `icon-image` *is* supported, as are data-driven
+  *values*: fill/line/circle colour, opacity, width, radius, and the `icon-*` and
+  text paint properties, all emitted as `*-expr`.)
+- `line-gap-width` on `line-pattern` layers — the gap applies to plain `line`
+  layers only.
+- `line-offset` and `line-blur`.
+
+**3-D**
+
+- True `fill-extrusion`: the footprint is drawn flat with
+  `fill-extrusion-color`; height and base are dropped. No terrain mesh, no
+  pitch, no bearing — a tile is a plan view.
+
+**Approximate**
+
+- `hillshade` tone calibration. The shading is correct in structure; the exact
+  tone curve does not match GL-JS.
+
+## What is exact
+
+Expression evaluation. `maplibre-expr` scores 100 % conformance against
+MapLibre's official spec fixtures, so a converted `*-expr` field produces the
+value MapLibre would — including type checking, `collator`, geo functions, and
+legacy filter conversion. See
+[expression conformance](/ezu/maplibre/expression-conformance/).
+
+## Measuring rather than guessing
+
+The [layer mapping page](/ezu/maplibre/compatibility/) opens with three tiles
+rendered both ways, at the SSIM they actually score — worth a look before reading
+this list as a warning.
+
+For a specific style, measure. `ezu-compare` renders a converted recipe and
+pixel-compares it against a maplibre-gl-js reference (Playwright headless), so
+you get a similarity figure per tile instead of an impression:
+
+```sh
+cargo run --release -p ezu-compare -- \
+  --style crates/ezu-compare/samples/protomaps-basemap.json \
+  --tiles 12/3637/1613,13/7275/3225,14/14550/6452
+```
+
+If a difference matters to you and is not listed here, it is worth an
+[issue](https://github.com/reearth/ezu/issues) — the gap list is driven by what
+people actually hit.
