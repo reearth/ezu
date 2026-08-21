@@ -1,0 +1,140 @@
+{
+  "name": "atlas",
+  "version": "1",
+  "tile-size": 512,
+  "params": {
+    "paper":   { "type": "color", "default": "#f6f3ec",
+                 "description": "Land colour." },
+    "ink":     { "type": "color", "default": "#3d3a34",
+                 "description": "Label ink." },
+    "accent":  { "type": "color", "default": "#b8532f",
+                 "description": "Motorway fill and city-label ink." }
+  },
+  "functions": {
+    "cased-road": {
+      "description": "Casing stroke with the fill on top, the usual two-pass road. Widths are number expressions, so one call covers every zoom.",
+      "inputs": {
+        "features":     { "kind": "features" },
+        "casing-color": { "kind": "scalar" },
+        "casing-width": { "kind": "scalar" },
+        "color":        { "kind": "scalar" },
+        "width":        { "kind": "scalar" }
+      },
+      "output": "@road",
+      "output-kind": "raster",
+      "nodes": {
+        "casing": { "op": "stroke", "features": "@features", "color": "@casing-color",
+                    "width-expr": "@casing-width", "cap": "round", "join": "round" },
+        "fill":   { "op": "stroke", "features": "@features", "color": "@color",
+                    "width-expr": "@width", "cap": "round", "join": "round" },
+        "road":   { "op": "stack", "layers": ["@casing", "@fill"] }
+      }
+    }
+  },
+  "sources": {
+    "basemap": { "type": "mvt", "url": "https://papers.reearth.land/protomaps/tilejson.json" },
+    "sans":    { "type": "font",
+                 "url": "https://raw.githubusercontent.com/googlefonts/opensans/main/fonts/ttf/OpenSans-Regular.ttf",
+                 "attribution": "Open Sans by Steve Matteson (OFL)" }
+  },
+  "nodes": {
+    "sea":         { "op": "solid", "color": "#cfe0e8" },
+
+    "earth_f":     { "op": "features", "layer": "earth" },
+    "earth":       { "op": "fill-solid", "features": "@earth_f", "fill": "$paper" },
+
+    "landuse_f":   { "op": "features", "layer": "landuse",
+                     "filter-expr": ["in", ["get","kind"], ["literal", ["park", "forest", "wood", "garden", "grass", "cemetery"]]] },
+    "landuse":     { "op": "fill-solid", "features": "@landuse_f", "fill": "#e3ead9" },
+
+    "water_f":     { "op": "features", "layer": "water" },
+    "water":       { "op": "fill-solid", "features": "@water_f", "fill": "#cfe0e8" },
+
+    "boundary_f":  { "op": "features", "layer": "boundaries",
+                     "filter-expr": ["<=", ["get","kind_detail"], 4] },
+    "boundary":    { "op": "stroke", "features": "@boundary_f", "color": "#a9a395",
+                     "width-px": 1.6, "dasharray": [7.0, 4.0, 2.0, 4.0], "cap": "butt" },
+
+    "minor_f":     { "op": "features", "layer": "roads",
+                     "min-zoom-field": "min_zoom", "min-zoom": 13,
+                     "filter-expr": ["==", ["get","kind"], "minor_road"] },
+    "minor":       { "op": "func", "fn": "cased-road", "features": "@minor_f",
+                     "casing-color": "#e2ddd2", "casing-width": 3.4,
+                     "color": "#ffffff", "width": 1.8 },
+
+    "major_f":     { "op": "features", "layer": "roads",
+                     "min-zoom-field": "min_zoom", "min-zoom": 10,
+                     "filter-expr": ["==", ["get","kind"], "major_road"] },
+    "major":       { "op": "func", "fn": "cased-road", "features": "@major_f",
+                     "casing-color": "#ded7c8",
+                     "casing-width": ["interpolate", ["linear"], ["zoom"], 10, 2.4, 14, 7.0],
+                     "color": "#ffffff",
+                     "width": ["interpolate", ["linear"], ["zoom"], 10, 1.2, 14, 4.2] },
+
+    "highway_f":   { "op": "features", "layer": "roads",
+                     "min-zoom-field": "min_zoom",
+                     "filter-expr": ["==", ["get","kind"], "highway"] },
+    "highway":     { "op": "func", "fn": "cased-road", "features": "@highway_f",
+                     "casing-color": "#8f3f22",
+                     "casing-width": ["interpolate", ["linear"], ["zoom"], 6, 2.6, 14, 9.0],
+                     "color": "$accent",
+                     "width": ["interpolate", ["linear"], ["zoom"], 6, 1.4, 14, 5.6] },
+
+    "rail_f":      { "op": "features", "layer": "roads",
+                     "min-zoom-field": "min_zoom", "min-zoom": 12,
+                     "filter-expr": ["==", ["get","kind"], "rail"] },
+    "rail":        { "op": "stroke", "features": "@rail_f", "color": "#b3ac9e",
+                     "width-px": 1.4, "dasharray": [5.0, 5.0], "cap": "butt" },
+
+    "ground":      { "op": "stack", "layers": [
+                       "@sea", "@earth", "@landuse", "@water", "@boundary",
+                       "@minor", "@major", "@highway", "@rail"] },
+
+    "city_f":      { "op": "features", "layer": "places",
+                     "min-zoom-field": "min_zoom",
+                     "filter-expr": ["in", ["get","kind"], ["literal", ["locality", "city"]]] },
+    "city_l":      { "op": "text-labels", "features": "@city_f",
+                     "source": "basemap", "layer": "places",
+                     "min-zoom-field": "min_zoom",
+                     "filter-expr": ["in", ["get","kind"], ["literal", ["locality", "city"]]],
+                     "font": ["sans"], "text": ["get", "name:en"],
+                     "size-expr": ["interpolate", ["linear"], ["zoom"], 8, 12, 14, 17],
+                     "color": "$accent",
+                     "halo-color": "#f6f3eccc", "halo-width": 2.0,
+                     "anchor-variants": ["center", "top", "bottom", "left", "right"],
+                     "radial-offset": 0.4, "padding-px": 3 },
+
+    "neigh_f":     { "op": "features", "layer": "places",
+                     "min-zoom-field": "min_zoom", "min-zoom": 13,
+                     "filter-expr": ["==", ["get","kind"], "neighbourhood"] },
+    "neigh_l":     { "op": "text-labels", "features": "@neigh_f",
+                     "source": "basemap", "layer": "places",
+                     "min-zoom-field": "min_zoom", "min-zoom": 13,
+                     "filter-expr": ["==", ["get","kind"], "neighbourhood"],
+                     "font": ["sans"], "text": ["get", "name:en"],
+                     "size": 11, "color": "$ink",
+                     "halo-color": "#f6f3eccc", "halo-width": 1.6,
+                     "letter-spacing-em": 0.08 },
+
+    "road_lbl_f":  { "op": "features", "layer": "roads",
+                     "min-zoom-field": "min_zoom", "min-zoom": 13,
+                     "filter-expr": ["in", ["get","kind"], ["literal", ["major_road", "highway"]]] },
+    "road_l":      { "op": "text-labels", "features": "@road_lbl_f",
+                     "source": "basemap", "layer": "roads",
+                     "min-zoom-field": "min_zoom", "min-zoom": 13,
+                     "filter-expr": ["in", ["get","kind"], ["literal", ["major_road", "highway"]]],
+                     "font": ["sans"], "text": ["get", "name:en"],
+                     "placement": "line", "spacing-px": 260, "max-angle-deg": 40,
+                     "size": 10, "color": "#6b6459",
+                     "halo-color": "#ffffffcc", "halo-width": 1.4 },
+
+    "place":       { "op": "label-placement",
+                     "labels": ["@road_l", "@neigh_l", "@city_l"] },
+    "road_d":      { "op": "text-draw", "labels": "@road_l",  "placement": "@place" },
+    "neigh_d":     { "op": "text-draw", "labels": "@neigh_l", "placement": "@place" },
+    "city_d":      { "op": "text-draw", "labels": "@city_l",  "placement": "@place" },
+    "out":         { "op": "stack", "layers": [
+                       "@ground", "@road_d", "@neigh_d", "@city_d"] }
+  },
+  "output": "@out"
+}

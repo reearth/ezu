@@ -1,0 +1,96 @@
+{
+  "name": "risograph",
+  "version": "1",
+  "tile-size": 512,
+  "params": {
+    "paper":     { "type": "color",  "default": "#f2ece0",
+                   "description": "Paper stock." },
+    "ink-blue":  { "type": "color",  "default": "#1b4fa8",
+                   "description": "First drum: water and green space." },
+    "ink-pink":  { "type": "color",  "default": "#e8437f",
+                   "description": "Second drum: the road network." },
+    "screen-px": { "type": "number", "default": 5, "min": 3, "max": 12,
+                   "description": "Halftone screen pitch, in px." },
+    "dot-px":    { "type": "number", "default": 1.6, "min": 0.5, "max": 4,
+                   "description": "Halftone dot radius, in px. Push it past half the pitch and the dots merge into a solid." }
+  },
+  "functions": {
+    "screened": {
+      "description": "Punch a halftone screen through a flat ink layer, so an area fill prints as dots instead of a flood of ink.",
+      "inputs": {
+        "ink":    { "kind": "raster" },
+        "screen": { "kind": "raster" }
+      },
+      "output": "@dots",
+      "output-kind": "raster",
+      "nodes": {
+        "clear": { "op": "solid", "color": "#00000000" },
+        "dots":  { "op": "blend", "base": "@clear", "over": "@ink", "mask": "@screen" }
+      }
+    }
+  },
+  "sources": {
+    "basemap": { "type": "mvt", "url": "https://papers.reearth.land/protomaps/tilejson.json" }
+  },
+  "nodes": {
+    "stock":       { "op": "solid", "color": "$paper" },
+    "fibre":       { "op": "noise", "type": "value", "scale-px": 1.4,
+                     "octaves": 3, "lacunarity": 2.0, "gain": 0.5,
+                     "low-color": "#ffffff00", "high-color": "#6b5c3f",
+                     "opacity": 0.16, "anchor": "world" },
+
+    "screen_pts":  { "op": "point-grid", "spacing": "$screen-px",
+                     "extent": 512, "anchor": "world" },
+    "screen":      { "op": "circles", "features": "@screen_pts",
+                     "radius": "$dot-px", "color": "#ffffff" },
+
+    "water_f":     { "op": "features", "layer": "water" },
+    "water_geo":   { "op": "transform", "features": "@water_f",
+                     "translate": [-2, 2] },
+    "green_f":     { "op": "features", "layer": "landuse",
+                     "filter-expr": ["in", ["get","kind"], ["literal", ["park", "forest", "wood", "garden", "grass", "cemetery", "scrub"]]] },
+    "green_geo":   { "op": "transform", "features": "@green_f",
+                     "translate": [-2, 2] },
+    "blue_water":  { "op": "fill-solid", "features": "@water_geo", "fill": "$ink-blue" },
+    "blue_green":  { "op": "fill-solid", "features": "@green_geo",
+                     "fill": "$ink-blue", "fill-alpha": 0.55 },
+    "blue_flat":   { "op": "stack", "layers": ["@blue_green", "@blue_water"] },
+    "blue_drum":   { "op": "func", "fn": "screened",
+                     "ink": "@blue_flat", "screen": "@screen" },
+
+    "roads_f":     { "op": "features", "layer": "roads",
+                     "min-zoom-field": "min_zoom",
+                     "filter-expr": ["in", ["get","kind"], ["literal", ["highway", "major_road", "minor_road"]]] },
+    "roads_geo":   { "op": "transform", "features": "@roads_f",
+                     "translate": [2, -2] },
+    "pink_flat":   { "op": "stroke", "features": "@roads_geo", "color": "$ink-pink",
+                     "width-expr": ["match", ["get","kind"],
+                                     "highway", 7.0,
+                                     "major_road", 4.0,
+                                     2.0],
+                     "cap": "round", "join": "round" },
+
+    "rail_f":      { "op": "features", "layer": "roads",
+                     "min-zoom-field": "min_zoom", "min-zoom": 12,
+                     "filter-expr": ["==", ["get","kind"], "rail"] },
+    "rail":        { "op": "stroke", "features": "@rail_f", "color": "#2f2b26",
+                     "width-px": 1.2, "dasharray": [4.0, 4.0], "cap": "butt" },
+
+    "coast_f":     { "op": "features", "layer": "earth" },
+    "coast_line":  { "op": "boundary", "features": "@coast_f" },
+    "coast":       { "op": "stroke", "features": "@coast_line", "color": "#2f2b26",
+                     "width-px": 1.0, "cap": "round" },
+
+    "pressed":     { "op": "stack", "layers": ["@stock", "@fibre"] },
+    "run_blue":    { "op": "blend", "base": "@pressed", "over": "@blue_drum",
+                     "mode": "multiply" },
+    "run_pink":    { "op": "blend", "base": "@run_blue", "over": "@pink_flat",
+                     "mode": "multiply" },
+    "run_black":   { "op": "stack", "layers": ["@run_pink", "@coast", "@rail"] },
+
+    "out":         { "op": "quantize", "input": "@run_black", "space": "lab",
+                     "palette": ["#f2ece0", "#1b4fa8", "#e8437f", "#2f2b26",
+                                 "#7a4a86", "#b7c0d8", "#f4b8cd", "#c8d2c0"] }
+  },
+  "output": "@out"
+}

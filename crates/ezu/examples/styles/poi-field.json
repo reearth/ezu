@@ -1,0 +1,59 @@
+{
+  "name": "poi-field",
+  "version": "1",
+  "tile-size": 512,
+  "params": {
+    "radius-px": { "type": "number", "default": 26, "min": 8, "max": 80,
+                   "description": "Kernel radius of the density estimate, in px." },
+    "intensity": { "type": "number", "default": 1.1, "min": 0.1, "max": 4,
+                   "description": "Density multiplier — how fast the field saturates." },
+    "step":      { "type": "number", "default": 0.12, "min": 0.02, "max": 0.5,
+                   "description": "Isoline interval, in field units." }
+  },
+  "sources": {
+    "basemap": { "type": "mvt", "url": "https://papers.reearth.land/protomaps/tilejson.json" }
+  },
+  "nodes": {
+    "night":      { "op": "solid", "color": "#101a24" },
+
+    "earth_f":    { "op": "features", "layer": "earth" },
+    "land":       { "op": "fill-solid", "features": "@earth_f", "fill": "#16222e" },
+    "water_f":    { "op": "features", "layer": "water" },
+    "water":      { "op": "fill-solid", "features": "@water_f", "fill": "#0c141c" },
+
+    "roads_f":    { "op": "features", "layer": "roads",
+                    "min-zoom-field": "min_zoom",
+                    "filter-expr": ["in", ["get","kind"], ["literal", ["highway", "major_road"]]] },
+    "roads":      { "op": "stroke", "features": "@roads_f", "color": "#2b3d4e",
+                    "width-expr": ["match", ["get","kind"], "highway", 2.4, 1.4],
+                    "cap": "round", "join": "round" },
+
+    "base":       { "op": "stack", "layers": ["@night", "@land", "@water", "@roads"] },
+
+    "poi_f":      { "op": "features", "layer": "pois", "min-zoom-field": "min_zoom" },
+    "field":      { "op": "density", "features": "@poi_f",
+                    "radius": "$radius-px", "intensity": "$intensity" },
+
+    "heat":       { "op": "color-ramp", "field": "@field",
+                    "ramp-expr": ["interpolate", ["linear"], ["heatmap-density"],
+                                   0.0,  "rgba(0, 0, 0, 0)",
+                                   0.15, "rgba(38, 84, 132, 0.55)",
+                                   0.35, "rgba(52, 168, 158, 0.72)",
+                                   0.6,  "rgba(196, 200, 78, 0.82)",
+                                   0.85, "rgba(233, 138, 58, 0.9)",
+                                   1.0,  "rgba(240, 92, 92, 0.95)"] },
+
+    "iso":        { "op": "contour", "field": "@field",
+                    "interval": "$step", "base": 0, "min": 0.12 },
+    "iso_line":   { "op": "stroke", "features": "@iso", "color": "#dfe9f2",
+                    "width-px": 0.9, "opacity": 0.5, "cap": "round", "join": "round" },
+
+    "peak_iso":   { "op": "contour", "field": "@field", "levels": [0.75] },
+    "peak_line":  { "op": "stroke", "features": "@peak_iso", "color": "#ffffff",
+                    "width-px": 1.8, "opacity": 0.85, "cap": "round" },
+
+    "out":        { "op": "stack", "layers": [
+                     "@base", "@heat", "@iso_line", "@peak_line"] }
+  },
+  "output": "@out"
+}

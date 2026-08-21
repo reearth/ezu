@@ -1,0 +1,83 @@
+{
+  "name": "stained-glass",
+  "version": "1",
+  "tile-size": 512,
+  "params": {
+    "lead":      { "type": "color",  "default": "#1b1a22",
+                   "description": "Leading (the metal between panes)." },
+    "lead-px":   { "type": "number", "default": 2.2, "min": 0.5, "max": 6,
+                   "description": "Leading width, in px." },
+    "pane-px":   { "type": "number", "default": 34, "min": 12, "max": 96,
+                   "description": "Fallback pane pitch where there are no POIs to seed cells, in px." },
+    "glow":      { "type": "number", "default": 0.35, "min": 0, "max": 1,
+                   "description": "How much light bleeds through the glass." }
+  },
+  "sources": {
+    "basemap": { "type": "mvt", "url": "https://papers.reearth.land/protomaps/tilejson.json" }
+  },
+  "nodes": {
+    "backlight":   { "op": "solid", "color": "$lead" },
+
+    "poi_seeds":   { "op": "features", "layer": "pois", "min-zoom-field": "min_zoom" },
+    "grid_seeds":  { "op": "point-grid", "spacing": "$pane-px",
+                     "extent": 512, "anchor": "world" },
+
+    "earth_f":     { "op": "features", "layer": "earth" },
+    "water_f":     { "op": "features", "layer": "water" },
+    "green_f":     { "op": "features", "layer": "landuse",
+                     "filter-expr": ["in", ["get","kind"], ["literal", ["park", "forest", "wood", "garden", "grass", "cemetery"]]] },
+
+    "land_panes":  { "op": "voronoi-fracture", "features": "@earth_f", "seeds": "@poi_seeds" },
+    "water_panes": { "op": "voronoi-fracture", "features": "@water_f", "seeds": "@grid_seeds" },
+    "green_panes": { "op": "voronoi-fracture", "features": "@green_f", "seeds": "@poi_seeds" },
+
+    "land_flat":   { "op": "fill-solid", "features": "@land_panes", "fill": "#c9762e" },
+    "water_flat":  { "op": "fill-solid", "features": "@water_panes", "fill": "#1d5fa8" },
+    "green_flat":  { "op": "fill-solid", "features": "@green_panes", "fill": "#2f7d4f" },
+
+    "pigment":     { "op": "noise", "type": "worley", "kind": "scalar",
+                     "scale-px": 26.0, "anchor": "world",
+                     "warp-amp": 6.0, "warp-freq": 1.4 },
+    "pane_tint":   { "op": "color-ramp", "field": "@pigment",
+                     "stops": [{ "value": 0.00, "color": "#ffd27a" },
+                               { "value": 0.30, "color": "#ff8a3d" },
+                               { "value": 0.55, "color": "#c0407a" },
+                               { "value": 0.78, "color": "#5b3fa8" },
+                               { "value": 1.00, "color": "#2fa8b0" }],
+                     "space": "hcl", "opacity": 0.7 },
+
+    "land_glass":  { "op": "blend", "base": "@land_flat", "over": "@pane_tint",
+                     "mode": "overlay", "clip": true },
+    "green_glass": { "op": "blend", "base": "@green_flat", "over": "@pane_tint",
+                     "mode": "overlay", "clip": true },
+    "water_glass": { "op": "blend", "base": "@water_flat", "over": "@pane_tint",
+                     "mode": "soft-light", "clip": true },
+
+    "glass":       { "op": "stack", "layers": ["@land_glass", "@water_glass", "@green_glass"] },
+    "bleed":       { "op": "blur", "input": "@glass", "sigma": 6.0 },
+    "lit_glass":   { "op": "blend", "base": "@glass", "over": "@bleed",
+                     "mode": "screen", "opacity": "$glow" },
+
+    "land_lead":   { "op": "boundary", "features": "@land_panes" },
+    "water_lead":  { "op": "boundary", "features": "@water_panes" },
+    "green_lead":  { "op": "boundary", "features": "@green_panes" },
+    "lead_land":   { "op": "stroke", "features": "@land_lead", "color": "$lead",
+                     "width-px": "$lead-px", "cap": "round", "join": "round" },
+    "lead_water":  { "op": "stroke", "features": "@water_lead", "color": "$lead",
+                     "width-px": "$lead-px", "cap": "round", "join": "round" },
+    "lead_green":  { "op": "stroke", "features": "@green_lead", "color": "$lead",
+                     "width-px": "$lead-px", "cap": "round", "join": "round" },
+
+    "roads_f":     { "op": "features", "layer": "roads",
+                     "min-zoom-field": "min_zoom",
+                     "filter-expr": ["in", ["get","kind"], ["literal", ["highway", "major_road"]]] },
+    "road_lead":   { "op": "stroke", "features": "@roads_f", "color": "$lead",
+                     "width-expr": ["match", ["get","kind"], "highway", 4.5, 3.0],
+                     "cap": "round", "join": "round" },
+
+    "out":         { "op": "stack", "layers": [
+                      "@backlight", "@lit_glass",
+                      "@lead_land", "@lead_water", "@lead_green", "@road_lead"] }
+  },
+  "output": "@out"
+}

@@ -1,0 +1,73 @@
+{
+  "name": "topo",
+  "version": "1",
+  "tile-size": 512,
+  "params": {
+    "interval-m": { "type": "number", "default": 100, "min": 20, "max": 500,
+                    "description": "Contour interval, in metres." },
+    "index-every": { "type": "number", "default": 5, "min": 2, "max": 10,
+                     "description": "Every Nth contour is drawn as a heavier index line." },
+    "relief":     { "type": "number", "default": 1.4, "min": 0.2, "max": 4,
+                    "description": "Hillshade exaggeration." }
+  },
+  "sources": {
+    "terrain": {
+      "type": "dem",
+      "url": "https://terrain.reearth.land/mapterhorn-egm08/terrarium/ellipsoid/{z}/{x}/{y}.webp",
+      "encoding": "terrarium",
+      "tile-size": 512,
+      "max-zoom": 14,
+      "neighbor-fetch": true
+    }
+  },
+  "nodes": {
+    "dem":        { "op": "dem", "source": "terrain" },
+
+    "band":       { "op": "color-ramp", "field": "@dem",
+                    "stops": [
+                      { "value": -100, "color": "#b8d4e6" },
+                      { "value": 0,    "color": "#e8efd8" },
+                      { "value": 400,  "color": "#d8e4bc" },
+                      { "value": 900,  "color": "#e6dcae" },
+                      { "value": 1600, "color": "#e3caa0" },
+                      { "value": 2400, "color": "#dcb9a2" },
+                      { "value": 3200, "color": "#f4f0ea" }
+                    ] },
+
+    "shade":      { "op": "hillshade", "field": "@dem",
+                    "azimuth-deg": 315, "altitude-deg": 45,
+                    "exaggeration": "$relief", "mode": "relief",
+                    "multidirectional": true },
+    "ground":     { "op": "blend", "base": "@band", "over": "@shade",
+                    "opacity": 0.32 },
+
+    "steepness":  { "op": "slope", "field": "@dem", "max-deg": 45, "invert": true },
+    "steep_only": { "op": "levels", "input": "@steepness",
+                    "in-black": 0.55, "in-white": 1.0 },
+    "crag_ink":   { "op": "color-to-alpha", "input": "@steep_only",
+                    "color": "#ffffff", "threshold": 0.05, "softness": 0.5 },
+    "crags":      { "op": "blend", "base": "@ground", "over": "@crag_ink",
+                    "mode": "multiply", "opacity": 0.14 },
+
+    "minor_c":    { "op": "contour", "field": "@dem",
+                    "interval": "$interval-m", "base": 0, "min": 0 },
+    "minor_line": { "op": "stroke", "features": "@minor_c",
+                    "color": "#7d5f3c", "width-px": 0.8, "opacity": 0.55,
+                    "cap": "round", "join": "round" },
+
+    "index_int":  { "op": "math", "fn": "mul", "a": "$interval-m", "b": "$index-every" },
+    "index_c":    { "op": "contour", "field": "@dem",
+                    "interval": "@index_int", "base": 0, "min": 0 },
+    "index_line": { "op": "stroke", "features": "@index_c",
+                    "color": "#6b5230", "width-px": 1.5,
+                    "cap": "round", "join": "round" },
+
+    "coast_c":    { "op": "contour", "field": "@dem", "levels": [0] },
+    "coast":      { "op": "stroke", "features": "@coast_c",
+                    "color": "#3f6b86", "width-px": 1.6, "cap": "round" },
+
+    "out":        { "op": "stack", "layers": [
+                      "@crags", "@minor_line", "@index_line", "@coast"] }
+  },
+  "output": "@out"
+}
