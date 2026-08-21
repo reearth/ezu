@@ -75,6 +75,15 @@
                 "description": "The node that draws this symbol; must produce a Raster.",
                 "type": "string"
               },
+              "geometry": {
+                "description": "Geometry the swatch's stand-in feature carries. Defaults to all three; name one when a geometry op between the source and this node would otherwise make the node draw twice.",
+                "enum": [
+                  "all",
+                  "polygon",
+                  "line",
+                  "point"
+                ]
+              },
               "label": {
                 "description": "What the reader sees.",
                 "type": "string"

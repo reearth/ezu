@@ -182,11 +182,14 @@ Arguments:
   <STYLE>  Ezu Style JSON document — local path or http(s):// URL
 
 Options:
-  -v, --verbose      Emit per-node debug logs from the graph evaluator (op name, cache hit/miss, output shape, eval duration). Overrides `RUST_LOG` for this run
-      --zoom <ZOOM>  Keep only the entries that apply at this zoom
-      --out <OUT>    Output file. Writes to stdout when omitted
-      --pretty       Pretty-print the emitted JSON
-  -h, --help         Print help
+  -v, --verbose                    Emit per-node debug logs from the graph evaluator (op name, cache hit/miss, output shape, eval duration). Overrides `RUST_LOG` for this run
+      --zoom <ZOOM>                Keep only the entries that apply at this zoom. Also the zoom the swatches are drawn at, since a symbol may change with scale
+      --out <OUT>                  Output file. Writes to stdout when omitted
+      --pretty                     Pretty-print the emitted JSON
+      --swatch-dir <SWATCH_DIR>    Draw each entry's symbol into this directory as a PNG, and add its path to that entry in the emitted JSON
+      --swatch-size <SWATCH_SIZE>  Swatch size as `WIDTHxHEIGHT` (or one number for a square) [default: 48x32]
+      --assets-dir <ASSETS_DIR>    Base directory for resolving relative asset `src` paths, for swatches whose symbol needs a brush, font or sprite
+  -h, --help                       Print help
 ```
 
 ## `ezu translate`

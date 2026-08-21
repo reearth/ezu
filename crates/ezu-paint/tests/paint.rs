@@ -52,6 +52,8 @@ mod graticule;
 mod icon_labels;
 #[path = "paint/label_placement.rs"]
 mod label_placement;
+#[path = "paint/legend_swatch.rs"]
+mod legend_swatch;
 #[path = "paint/morphology.rs"]
 mod morphology;
 #[path = "paint/noise_warp.rs"]

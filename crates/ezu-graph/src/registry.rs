@@ -262,7 +262,11 @@ impl NodeRegistry {
                                     "properties": { "type": "object", "description": "Feature properties selecting this entry's case." },
                                     "note": { "type": "string" },
                                     "min-zoom": { "type": "integer", "minimum": 0 },
-                                    "max-zoom": { "type": "integer", "minimum": 0 }
+                                    "max-zoom": { "type": "integer", "minimum": 0 },
+                                    "geometry": {
+                                        "enum": ["all", "polygon", "line", "point"],
+                                        "description": "Geometry the swatch's stand-in feature carries. Defaults to all three; name one when a geometry op between the source and this node would otherwise make the node draw twice."
+                                    }
                                 }
                             }
                         }

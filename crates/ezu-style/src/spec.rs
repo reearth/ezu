@@ -86,6 +86,62 @@ impl Document {
         out
     }
 
+    /// A document that produces just `target`: that node, everything it
+    /// transitively references, and nothing else. `None` when `target`
+    /// is not a node in this document.
+    ///
+    /// Rendering one node of a style — a legend swatch is the reason to
+    /// want that — needs no special support from the evaluator if the
+    /// document handed to it says that node is the output. Nodes the
+    /// target does not depend on are left out rather than evaluated and
+    /// discarded, which also keeps a swatch from failing on a DEM or
+    /// raster source that belongs to some other layer.
+    ///
+    /// `params`, `functions` and `sources` come along whole — they are
+    /// declarations, and an unused one costs nothing. The `legend` does
+    /// not: its entries point at nodes that are probably no longer here.
+    pub fn subgraph(&self, target: &str) -> Option<Document> {
+        if !self.nodes.contains_key(target) {
+            return None;
+        }
+        let mut keep: IndexMap<String, NodeSpec> = IndexMap::new();
+        let mut queue = vec![target.to_string()];
+        while let Some(id) = queue.pop() {
+            if keep.contains_key(&id) {
+                continue;
+            }
+            let Some(spec) = self.nodes.get(&id) else {
+                // A `@name` that is not a node is a source reference, or
+                // an error the graph builder will report with context.
+                continue;
+            };
+            queue.extend(spec.refs());
+            keep.insert(id, spec.clone());
+        }
+        // Emit in the original declaration order, so error messages and
+        // any order-sensitive diagnostics read the same as they would
+        // against the whole document.
+        let nodes = self
+            .nodes
+            .iter()
+            .filter(|(id, _)| keep.contains_key(*id))
+            .map(|(id, spec)| (id.clone(), spec.clone()))
+            .collect();
+        Some(Document {
+            name: self.name.clone(),
+            version: self.version.clone(),
+            tile_size: self.tile_size,
+            pad: self.pad,
+            params: self.params.clone(),
+            attribution: self.attribution.clone(),
+            functions: self.functions.clone(),
+            legend: None,
+            sources: self.sources.clone(),
+            nodes,
+            output: NodeRef(target.to_string()),
+        })
+    }
+
     /// JSON Schema describing the *parameter values* object a caller
     /// may pass when rendering this style (CLI `--param`, server query
     /// string, library `ParamValues`). Derived from the document's
@@ -199,6 +255,29 @@ pub struct LegendEntry {
     pub min_zoom: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_zoom: Option<u8>,
+    /// Which geometry the swatch's stand-in feature carries. Absent
+    /// leaves it to whoever draws the swatch, which offers all three.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geometry: Option<LegendGeometry>,
+}
+
+/// The geometry a legend swatch's stand-in feature is given.
+///
+/// A swatch is drawn by handing the entry's node one synthetic feature.
+/// [`All`](Self::All) gives it a polygon, a line and a point at once: a
+/// fill node reads the polygon, a stroke the line, a circle or stamp the
+/// point, and each ignores the rest. Naming one is for when a geometry
+/// op sits between the source and the entry's node — `boundary` turns
+/// the polygon into a rectangle outline, which a stroke would then draw
+/// as well as the line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LegendGeometry {
+    #[default]
+    All,
+    Polygon,
+    Line,
+    Point,
 }
 
 impl LegendDecl {
@@ -691,6 +770,38 @@ impl Serialize for NodeRef {
     }
 }
 
+impl NodeSpec {
+    /// Every `@name` this node's fields mention, in traversal order and
+    /// with duplicates kept.
+    ///
+    /// The scan is over the raw JSON rather than a per-op field list,
+    /// because that is what the wiring is: any string field may carry a
+    /// reference, at any depth, including inside an expression array. A
+    /// name here has not been resolved — it may be a node, a source, or
+    /// nothing at all.
+    pub fn refs(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for v in self.fields.values() {
+            collect_refs(v, &mut out);
+        }
+        out
+    }
+}
+
+/// Recursively scan a JSON value for `@name` strings.
+fn collect_refs(v: &serde_json::Value, out: &mut Vec<String>) {
+    match v {
+        serde_json::Value::String(s) => {
+            if let Some(rest) = s.strip_prefix('@') {
+                out.push(rest.to_string());
+            }
+        }
+        serde_json::Value::Array(a) => a.iter().for_each(|x| collect_refs(x, out)),
+        serde_json::Value::Object(m) => m.values().for_each(|x| collect_refs(x, out)),
+        _ => {}
+    }
+}
+
 /// Classify a string field on a node: a node reference, a param
 /// reference, or a literal string. The classification is by prefix:
 ///
@@ -776,6 +887,72 @@ mod tests {
             panic!("expected a JSON parse error");
         };
         assert_eq!(e.line(), 5, "{e}");
+    }
+
+    #[test]
+    fn subgraph_keeps_the_target_and_its_ancestors() {
+        let json = r##"{
+          "name": "demo",
+          "legend": { "entries": [{ "label": "x", "from": "@out" }] },
+          "nodes": {
+            "bg":    { "op": "solid", "color": "#ffffff" },
+            "src":   { "op": "image", "src": "x.png" },
+            "blur":  { "op": "blur", "input": "@src", "sigma": 3 },
+            "other": { "op": "image", "src": "unrelated.png" },
+            "out":   { "op": "blend", "base": "@bg", "over": "@blur" }
+          },
+          "output": "@out"
+        }"##;
+        let doc = Document::from_json(json).unwrap();
+
+        let sub = doc.subgraph("blur").unwrap();
+        assert_eq!(sub.output.as_str(), "blur");
+        let ids: Vec<&str> = sub.nodes.keys().map(String::as_str).collect();
+        assert_eq!(ids, ["src", "blur"], "kept in declaration order");
+        // The legend cannot come along: its entry names a node this
+        // document no longer has.
+        assert!(sub.legend.is_none());
+
+        // The whole chain, minus the branch nothing reaches.
+        let sub = doc.subgraph("out").unwrap();
+        let ids: Vec<&str> = sub.nodes.keys().map(String::as_str).collect();
+        assert_eq!(ids, ["bg", "src", "blur", "out"]);
+
+        assert!(doc.subgraph("nope").is_none());
+    }
+
+    #[test]
+    fn subgraph_survives_a_reference_inside_an_expression() {
+        let json = r##"{
+          "name": "demo",
+          "nodes": {
+            "fade": { "op": "expr", "expr": ["interpolate", ["linear"], ["zoom"], 13, 1, 15, 0] },
+            "src":  { "op": "image", "src": "x.png" },
+            "out":  { "op": "blur", "input": "@src", "sigma": 1, "opacity": "@fade" }
+          },
+          "output": "@out"
+        }"##;
+        let doc = Document::from_json(json).unwrap();
+        let sub = doc.subgraph("out").unwrap();
+        let mut ids: Vec<&str> = sub.nodes.keys().map(String::as_str).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["fade", "out", "src"]);
+    }
+
+    #[test]
+    fn node_refs_reads_nested_fields() {
+        let json = r##"{
+          "name": "demo",
+          "nodes": {
+            "out": { "op": "stack", "layers": ["@a", "@b"], "mask": "@c",
+                     "curve": [["@d", 1]], "literal": "plain", "param": "$k" }
+          },
+          "output": "@out"
+        }"##;
+        let doc = Document::from_json(json).unwrap();
+        let mut refs = doc.nodes["out"].refs();
+        refs.sort_unstable();
+        assert_eq!(refs, ["a", "b", "c", "d"]);
     }
 
     #[test]

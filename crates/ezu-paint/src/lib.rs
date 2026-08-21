@@ -47,6 +47,7 @@ use tiny_skia::{
 /// operations work in the padded coordinate space, and [`encode_png`] crops
 /// back down to the actual tile.
 pub mod host;
+pub mod legend;
 pub mod nodes;
 
 pub struct Canvas {

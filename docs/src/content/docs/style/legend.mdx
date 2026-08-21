@@ -50,6 +50,7 @@ And on an entry:
 | `properties` | object | feature properties that select this case |
 | `note` | string | prose for this entry alone |
 | `min-zoom` / `max-zoom` | integer | zooms this entry applies to; absent means all |
+| `geometry` | `all` \| `polygon` \| `line` \| `point` | which geometry the swatch's stand-in feature carries; see below |
 
 ## Why an entry names a node
 
@@ -87,8 +88,47 @@ ezu legend style.json --zoom 4
 
 ## Drawing the swatches
 
-The JSON says which node draws each entry, not what the symbol looks like — a
-painterly fill made of brush dabs and hatching does not reduce to one hex
-colour. Rendering a swatch through the same pipeline the map uses is not part of
-the CLI yet; for now a host either shows labels alone, or draws its own
-approximation.
+A symbol in this renderer is rarely a colour. A watercolour fill is brush dabs;
+a sketched road is a jittered stroke; a dot density layer is a scatter. None of
+that reduces to a hex value a host could put in a `<div>`, so swatches are drawn
+by the renderer, through the same node the map uses:
+
+```sh
+ezu legend style.json --swatch-dir out/ --swatch-size 64x24 --zoom 11 --pretty
+```
+
+Each entry's symbol lands in `out/<n>.png`, and the emitted JSON gains a
+`swatch` path per entry. `--swatch-size` takes `WIDTHxHEIGHT`, or one number for
+a square — a swatch is not a map tile, so it need not be square.
+
+Two things make this work, and both are worth knowing because both are visible
+in the result.
+
+**The entry's node is rendered on its own.** Only that node and what it
+depends on are drawn, so there is no basemap under the symbol and everywhere the
+symbol does not cover is transparent — a host can put a swatch on whatever
+background its legend has. Sources belonging to other layers are never touched,
+so a swatch cannot fail on a DEM it has nothing to do with.
+
+**The features are stood in for.** The graph is handed one synthetic feature
+carrying the entry's `properties`, filling the swatch: a polygon, a line across
+the middle, and a point at the centre, all at once. A fill node reads the
+polygon, a stroke the line, a circle or stamp the point, and each ignores the
+rest.
+
+When a geometry op sits between the source and the entry's node that can double
+up — `boundary` turns the polygon into a rectangle outline, which a stroke then
+draws *as well as* the line. Name the geometry on the entry to stop it:
+
+```json
+{ "label": "coastline", "from": "@coast", "geometry": "line" }
+```
+
+Because the whole node runs, a swatch shows what that node draws for one
+feature — not a curated illustration of it. A `dot-density` layer's swatch is a
+patch of scattered dots at the true density for that zoom, which reads as a
+texture rather than as "one dot = 100 people". If you want the second thing,
+give the legend an entry pointing at a node that draws a single dot.
+
+Swatches are drawn at one zoom, since a symbol may change with scale; `--zoom`
+picks it and defaults to 12.

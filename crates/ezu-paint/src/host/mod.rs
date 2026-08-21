@@ -950,8 +950,10 @@ impl AssetLoader for TileLoader<'_> {
 }
 
 /// `true` iff `name` looks like a URL/file/builtin asset src (i.e.
-/// has a `scheme:` prefix). Tile bindings never carry a scheme.
-fn looks_like_asset_src(name: &str) -> bool {
+/// has a `scheme:` prefix). Tile bindings never carry a scheme, and an
+/// asset src always does — a bare relative path is rejected with a
+/// "missing a scheme" error — so this cleanly separates the two.
+pub(crate) fn looks_like_asset_src(name: &str) -> bool {
     name.contains(':')
 }
 

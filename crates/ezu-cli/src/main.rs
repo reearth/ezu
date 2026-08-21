@@ -161,7 +161,8 @@ struct GraphCmd {
 struct LegendCmd {
     /// Ezu Style JSON document — local path or http(s):// URL.
     style: String,
-    /// Keep only the entries that apply at this zoom.
+    /// Keep only the entries that apply at this zoom. Also the zoom the
+    /// swatches are drawn at, since a symbol may change with scale.
     #[arg(long)]
     zoom: Option<u8>,
     /// Output file. Writes to stdout when omitted.
@@ -170,6 +171,34 @@ struct LegendCmd {
     /// Pretty-print the emitted JSON.
     #[arg(long)]
     pretty: bool,
+    /// Draw each entry's symbol into this directory as a PNG, and add
+    /// its path to that entry in the emitted JSON.
+    #[arg(long)]
+    swatch_dir: Option<PathBuf>,
+    /// Swatch size as `WIDTHxHEIGHT` (or one number for a square).
+    #[arg(long, default_value = "48x32", value_parser = parse_wxh)]
+    swatch_size: (u32, u32),
+    /// Base directory for resolving relative asset `src` paths, for
+    /// swatches whose symbol needs a brush, font or sprite.
+    #[arg(long)]
+    assets_dir: Option<PathBuf>,
+}
+
+/// Parse `WIDTHxHEIGHT`, or a single number as a square.
+fn parse_wxh(s: &str) -> Result<(u32, u32), String> {
+    let parse = |v: &str| {
+        v.trim()
+            .parse::<u32>()
+            .map_err(|_| format!("`{s}`: expected WIDTHxHEIGHT in whole pixels"))
+            .and_then(|n| (n > 0).then_some(n).ok_or_else(|| format!("`{s}`: zero")))
+    };
+    match s.split_once(['x', 'X']) {
+        Some((w, h)) => Ok((parse(w)?, parse(h)?)),
+        None => {
+            let n = parse(s)?;
+            Ok((n, n))
+        }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -626,10 +655,34 @@ async fn run_legend(args: LegendCmd) -> Result<(), Box<dyn std::error::Error>> {
         entries: legend.entries_at(z).cloned().collect(),
     });
     let legend = filtered.as_ref().unwrap_or(legend);
+
+    let swatches = match &args.swatch_dir {
+        Some(dir) => draw_swatches(&doc, legend, dir, &args).await?,
+        None => vec![None; legend.entries.len()],
+    };
+    let out = LegendOut {
+        title: legend.title.as_deref(),
+        note: legend.note.as_deref(),
+        entries: legend
+            .entries
+            .iter()
+            .zip(&swatches)
+            .map(|(e, swatch)| EntryOut {
+                label: &e.label,
+                from: &e.from,
+                properties: &e.properties,
+                note: e.note.as_deref(),
+                min_zoom: e.min_zoom,
+                max_zoom: e.max_zoom,
+                geometry: e.geometry,
+                swatch: swatch.as_deref(),
+            })
+            .collect(),
+    };
     let json = if args.pretty {
-        serde_json::to_string_pretty(legend)?
+        serde_json::to_string_pretty(&out)?
     } else {
-        serde_json::to_string(legend)?
+        serde_json::to_string(&out)?
     };
     match &args.out {
         Some(p) => {
@@ -639,6 +692,103 @@ async fn run_legend(args: LegendCmd) -> Result<(), Box<dyn std::error::Error>> {
         None => println!("{json}"),
     }
     Ok(())
+}
+
+/// The emitted legend: the declaration as written, plus where each
+/// entry's swatch was drawn.
+///
+/// Spelled out rather than `#[serde(flatten)]`-ed onto `LegendEntry`,
+/// because flattening routes serialization through a `serde_json::Map`,
+/// which sorts its keys — and a legend read by a human wants its title
+/// before its entries.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct LegendOut<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<&'a str>,
+    entries: Vec<EntryOut<'a>>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct EntryOut<'a> {
+    label: &'a str,
+    from: &'a ezu::style::NodeRef,
+    #[serde(skip_serializing_if = "serde_json::Map::is_empty")]
+    properties: &'a serde_json::Map<String, serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    min_zoom: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_zoom: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    geometry: Option<ezu::style::LegendGeometry>,
+    /// Path of the PNG this entry's symbol was drawn to, when
+    /// `--swatch-dir` asked for one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    swatch: Option<&'a str>,
+}
+
+/// Draw every entry's symbol into `dir`, returning each one's path.
+///
+/// One cache serves the whole legend: entries that share upstream nodes
+/// share the work, and the entry's own identity is in the cache key so
+/// they cannot be confused for one another.
+async fn draw_swatches(
+    doc: &Document,
+    legend: &ezu::style::LegendDecl,
+    dir: &Path,
+    args: &LegendCmd,
+) -> Result<Vec<Option<String>>, Box<dyn std::error::Error>> {
+    use ezu::paint::host::{crop_to_png, PngCompression};
+    use ezu::paint::legend::{render_swatch, SwatchOptions};
+
+    std::fs::create_dir_all(dir)?;
+    let base_dir = args.assets_dir.clone().unwrap_or_else(|| {
+        if is_url(&args.style) {
+            PathBuf::from(".")
+        } else {
+            Path::new(&args.style)
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| PathBuf::from("."))
+        }
+    });
+    let assets = build_asset_loader(doc, &base_dir).await?;
+    let registry = default_registry();
+    let cache = Cache::new();
+    let params = ParamValues::new();
+    let (width, height) = args.swatch_size;
+    let opts = SwatchOptions {
+        width,
+        height,
+        // A symbol may change with scale, so a swatch is only true for
+        // one zoom. `--zoom` picks it; without one, mid-scale.
+        zoom: args.zoom.unwrap_or(12),
+        pad: 0,
+        geometry: Default::default(),
+    };
+
+    let mut out = Vec::with_capacity(legend.entries.len());
+    for (i, entry) in legend.entries.iter().enumerate() {
+        let (raster, canvas) =
+            render_swatch(doc, entry, &registry, &assets, &params, &cache, &opts)?;
+        let png = crop_to_png(
+            &raster,
+            canvas.tile_w,
+            canvas.tile_h,
+            canvas.pad,
+            PngCompression::Default,
+        )?;
+        let path = dir.join(format!("{i}.png"));
+        std::fs::write(&path, &png)?;
+        tracing::info!("wrote {} ({} bytes)", path.display(), png.len());
+        out.push(Some(path.to_string_lossy().into_owned()));
+    }
+    Ok(out)
 }
 
 async fn run_translate(args: TranslateCmd) -> Result<(), Box<dyn std::error::Error>> {
@@ -744,10 +894,8 @@ fn render_mermaid(doc: &ezu::style::Document) -> String {
 
     s.push('\n');
     for (id, spec) in &doc.nodes {
-        let mut refs: Vec<String> = Vec::new();
-        collect_refs(&serde_json::Value::Object(spec.fields.clone()), &mut refs);
         let mut seen = HashSet::new();
-        for r in refs {
+        for r in spec.refs() {
             if !seen.insert(r.clone()) {
                 continue;
             }
@@ -772,21 +920,6 @@ fn render_mermaid(doc: &ezu::style::Document) -> String {
         s.push_str(&format!("  class {} source;\n", source_ids.join(",")));
     }
     s
-}
-
-/// Recursively scan a JSON value for `@name` strings — these are the
-/// node/asset references the style spec uses for cross-node wiring.
-fn collect_refs(v: &serde_json::Value, out: &mut Vec<String>) {
-    match v {
-        serde_json::Value::String(s) => {
-            if let Some(rest) = s.strip_prefix('@') {
-                out.push(rest.to_string());
-            }
-        }
-        serde_json::Value::Array(a) => a.iter().for_each(|x| collect_refs(x, out)),
-        serde_json::Value::Object(m) => m.values().for_each(|x| collect_refs(x, out)),
-        _ => {}
-    }
 }
 
 async fn run_tile(args: TileCmd) -> Result<(), Box<dyn std::error::Error>> {
