@@ -75,8 +75,9 @@ fn value_from_proto(v: tile::Value) -> Value {
 
 fn feature_from_proto(f: tile::Feature, keys: &[String], values: &[Value]) -> Feature {
     let mut properties = HashMap::with_capacity(f.tags.len() / 2);
-    for chunk in f.tags.chunks_exact(2) {
-        if let (Some(k), Some(v)) = (keys.get(chunk[0] as usize), values.get(chunk[1] as usize)) {
+    let (tags, _) = f.tags.as_chunks::<2>();
+    for &[key, value] in tags {
+        if let (Some(k), Some(v)) = (keys.get(key as usize), values.get(value as usize)) {
             properties.insert(k.clone(), v.clone());
         }
     }

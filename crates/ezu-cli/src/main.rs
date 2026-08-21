@@ -249,8 +249,10 @@ struct TilesCmd {
     format: OutputFormat,
     /// Number of tiles rendered in parallel. Defaults to the number
     /// of logical CPU cores.
-    #[arg(long, default_value_t = default_concurrency())]
-    concurrency: usize,
+    // Resolved at run time rather than through `default_value_t`, so
+    // `--help` does not print the core count of whichever machine ran it.
+    #[arg(long)]
+    concurrency: Option<usize>,
 }
 
 fn default_concurrency() -> usize {
@@ -782,7 +784,8 @@ async fn run_tiles(args: TilesCmd) -> Result<(), Box<dyn std::error::Error>> {
     if args.min_zoom > args.max_zoom {
         return Err("--min-zoom must be ≤ --max-zoom".into());
     }
-    if args.concurrency == 0 {
+    let concurrency = args.concurrency.unwrap_or_else(default_concurrency);
+    if concurrency == 0 {
         return Err("--concurrency must be ≥ 1".into());
     }
     let prep = prepare(&args.common).await?;
@@ -853,7 +856,7 @@ async fn run_tiles(args: TilesCmd) -> Result<(), Box<dyn std::error::Error>> {
                 tokio::fs::write(&path, bytes).await?;
                 Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
             })
-            .buffer_unordered(args.concurrency)
+            .buffer_unordered(concurrency)
             .try_collect::<Vec<_>>()
             .await
             .map_err(|e| e.to_string())?;
