@@ -77,6 +77,23 @@ npm run gen       # regenerate both (needs a Rust toolchain)
 CI regenerates and fails on a diff, the same way snapshot tests do. If you add or
 change an op's fields or description, run `npm run gen` and commit the result.
 
+The images are generated too, but **not** in CI — they need a release build and
+network access to a tile source:
+
+```sh
+cargo build --release -p ezu-cli
+cd docs
+npm run images            # the node catalog's per-op demos
+npm run images -- blur    # just these ops
+npm run figures           # the guides', cookbook's and gallery's figures
+```
+
+Each demo expands into a complete standalone style under `docs/fixtures/`, so the
+image a reader sees and the JSON they can copy are the same artifact. Adding a
+demo for an op means adding an entry to `scripts/node-demos.mjs`; ops that
+produce nothing visible on their own are listed in `NO_IMAGE` there, and the
+catalog says so on the page rather than leaving a silent gap.
+
 ## Pull requests
 
 - Keep the change and its tests together.
