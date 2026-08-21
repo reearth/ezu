@@ -35,15 +35,10 @@ ezu-translate = { workspace = true, optional = true }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "fs"] }
 tiny-skia = { workspace = true }
 hokusai = { workspace = true, features = ["myb-json"] }
-futures = "0.3"
 # Examples talk to remote PMTiles archives; the library itself does not.
 pmtiles = { workspace = true }
 reqwest = { workspace = true }
 bytes = { workspace = true }
-
-[[example]]
-name = "tokyo"
-required-features = ["features", "paint", "parallel", "http"]
 
 [[example]]
 name = "inspect"

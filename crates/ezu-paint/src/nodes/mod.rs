@@ -31,8 +31,9 @@
 //! The `features` node resolves tile-scoped layers through the
 //! unified [`AssetLoader`](ezu_graph::AssetLoader) under reserved
 //! `tile.<layer>` names — like sampling a shader uniform. The host
-//! (e.g. the `tokyo` example) decodes its MVT/GeoJSON input into
-//! [`ezu_features::FeatureLayer`] and binds each layer before rendering.
+//! (`ezu-cli`, `ezu-wasm`, or your own) decodes its MVT/GeoJSON input
+//! into [`ezu_features::FeatureLayer`] and binds each layer before
+//! rendering.
 //!
 //! Shared helpers (parameter parsing, color conversion, Canvas
 //! plumbing, payload downcasting) live in [`common`].
