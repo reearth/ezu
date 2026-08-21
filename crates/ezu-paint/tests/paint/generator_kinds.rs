@@ -4,8 +4,7 @@
 //! the sprite variants are validated by routing through `place` (a
 //! Sprite consumer).
 
-mod common;
-use common::render;
+use crate::common::render;
 
 #[test]
 fn noise_scalar_renders_through_color_ramp() {

@@ -1,8 +1,7 @@
 //! The `raster` source node: host-bound RGBA imagery as a `Raster`,
 //! transparent fallback when unbound, and downstream filtering.
 
-mod common;
-use common::{render_with_rasters, solid_sprite};
+use crate::common::{render_with_rasters, solid_sprite};
 
 use ezu_graph::TileId;
 
@@ -51,7 +50,7 @@ fn unbound_raster_source_is_transparent() {
     }"##;
     // No binding -> the raster node emits transparent pixels; the
     // background shows through unchanged.
-    let r = common::render(json, 8, 0);
+    let r = crate::common::render(json, 8, 0);
     assert_eq!(r.pixel(4, 4), [0x10, 0x20, 0x30, 0xff]);
 }
 

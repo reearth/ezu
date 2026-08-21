@@ -1,8 +1,7 @@
 //! `text` node: point-placed labels shaped via the ezu-core `text`
 //! module, loaded from a `font` source with a `file:` URL.
 
-mod common;
-use common::render_with_features_and_images;
+use crate::common::render_with_features_and_images;
 use ezu_features::{Feature, FeatureLayer, Geometry, Value};
 use ezu_graph::TileId;
 use std::collections::HashMap;

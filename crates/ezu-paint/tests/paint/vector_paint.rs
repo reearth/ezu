@@ -1,7 +1,6 @@
 //! Vector-driven paint nodes: brush-solid + line, dash, wave, stamp.
 
-mod common;
-use common::{disk_sprite, render, render_with_images};
+use crate::common::{disk_sprite, render, render_with_images};
 use ezu_graph::TileId;
 
 #[test]

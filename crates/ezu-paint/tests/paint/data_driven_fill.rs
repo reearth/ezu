@@ -2,8 +2,7 @@
 //! evaluated per feature group, plus color-conversion parity with the
 //! constant `fill` path.
 
-mod common;
-use common::render_with_features;
+use crate::common::render_with_features;
 use ezu_features::{Feature, FeatureLayer, Geometry, Polygon, Value};
 use ezu_graph::TileId;
 use std::collections::HashMap;

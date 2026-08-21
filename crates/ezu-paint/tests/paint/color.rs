@@ -1,7 +1,6 @@
 //! Color-adjustment nodes: invert, brightness-contrast, hsl, color-to-alpha.
 
-mod common;
-use common::render;
+use crate::common::render;
 
 #[test]
 fn invert_negates_rgb_preserving_alpha() {

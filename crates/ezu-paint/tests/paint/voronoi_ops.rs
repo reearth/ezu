@@ -6,8 +6,7 @@
 //! All three are driven through `literal-geometry` so the tests are
 //! hermetic — no asset bindings, no network.
 
-mod common;
-use common::render;
+use crate::common::render;
 
 /// A 32-canvas with: three-seed point set → `voronoi` → `line`.
 /// Should render at least one visible line pixel.

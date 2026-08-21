@@ -3,8 +3,7 @@
 //! the list instead of being dropped. The pure fallback logic is unit-tested
 //! in `ezu_core::text::collide`; this exercises the whole render path.
 
-mod common;
-use common::render_with_features_and_images;
+use crate::common::render_with_features_and_images;
 use ezu_features::{Feature, FeatureLayer, Geometry, Value};
 use ezu_graph::TileId;
 use std::collections::HashMap;

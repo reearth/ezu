@@ -1,7 +1,6 @@
 //! Solid / circle / blur / blend variants — the core compositing pipeline.
 
-mod common;
-use common::render;
+use crate::common::render;
 
 #[test]
 fn solid_only_produces_uniform_raster() {

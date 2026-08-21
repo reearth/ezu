@@ -3,8 +3,7 @@
 //! `feature-boolean`, `triangulate`. All driven through
 //! `literal-geometry` to stay hermetic.
 
-mod common;
-use common::render;
+use crate::common::render;
 
 /// `bbox` over a sparse point set, filled, should colour the
 /// rectangle covering the points.

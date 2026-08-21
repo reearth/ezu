@@ -2,8 +2,7 @@
 //! `edge-detect`. All operate as pass-through filters over
 //! `Raster|Sprite`.
 
-mod common;
-use common::render;
+use crate::common::render;
 
 #[test]
 fn erode_shrinks_disk_alpha() {

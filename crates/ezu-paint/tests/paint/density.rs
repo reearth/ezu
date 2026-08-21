@@ -2,8 +2,7 @@
 //! a `color-ramp` grayscale mapping (the field itself isn't a renderable
 //! output, so tests read it back as pixel intensity).
 
-mod common;
-use common::render_with_features;
+use crate::common::render_with_features;
 use ezu_features::{Feature, FeatureLayer, Geometry, Value};
 use ezu_graph::TileId;
 use std::collections::HashMap;

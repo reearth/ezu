@@ -1,7 +1,6 @@
 //! Noise source and the displace/warp distortion nodes.
 
-mod common;
-use common::{render, render_tile};
+use crate::common::{render, render_tile};
 use ezu_graph::TileId;
 
 #[test]

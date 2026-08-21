@@ -3,8 +3,7 @@
 //! (canvas-padded). These tests use an in-memory image bank so they
 //! don't touch the filesystem.
 
-mod common;
-use common::{disk_sprite, render_with_images, solid_sprite};
+use crate::common::{disk_sprite, render_with_images, solid_sprite};
 use ezu_graph::{build_graph, BuildError, PortKind, TileId};
 use ezu_paint::nodes::default_registry;
 use ezu_style::Document;

@@ -1,7 +1,6 @@
 //! Gradient nodes: linear, radial, conic, diamond.
 
-mod common;
-use common::render;
+use crate::common::render;
 
 #[test]
 fn gradient_linear_top_to_bottom() {

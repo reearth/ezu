@@ -2,8 +2,7 @@
 //! `threshold`. Both are validated by piping through `color-ramp` so
 //! the test asserts on rendered pixel colour.
 
-mod common;
-use common::render;
+use crate::common::render;
 
 #[test]
 fn map_range_normalises_zero_field_via_color_ramp() {

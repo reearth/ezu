@@ -3,8 +3,7 @@
 //! for testing the stop-table mapping without spinning up a fake
 //! AssetLoader.
 
-mod common;
-use common::{render, render_with_features};
+use crate::common::{render, render_with_features};
 
 #[test]
 fn color_ramp_clamps_zero_field_to_first_stop() {
@@ -258,7 +257,7 @@ fn expr_node_drives_opacity_as_a_zoom_curve() {
       },
       "output": "@out"
     }"##;
-    use common::render_tile;
+    use crate::common::render_tile;
     use ezu_graph::TileId;
     let opaque = render(json, 8, 0);
     assert_eq!(opaque.pixel(4, 4), [0xff, 0x00, 0x00, 0xff]);

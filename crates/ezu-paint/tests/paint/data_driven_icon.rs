@@ -2,8 +2,7 @@
 //! `icon-image` expression) picks each feature's icon by name and crops it
 //! from a bound sprite sheet, instead of stamping one fixed `image`.
 
-mod common;
-use common::render_with_features_and_sprite;
+use crate::common::render_with_features_and_sprite;
 use ezu_features::{Feature, FeatureLayer, Geometry, Value};
 use ezu_graph::{RasterBuf, SpriteRect, SpriteSheet, TileId};
 use std::collections::HashMap;

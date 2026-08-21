@@ -3,8 +3,7 @@
 //! `ezu_core::text::collide`; these tests exercise the whole render path —
 //! including the neighbour-binding seam that keeps tile borders seamless.
 
-mod common;
-use common::render_with_features_and_images;
+use crate::common::render_with_features_and_images;
 use ezu_features::{Feature, FeatureLayer, Geometry, Value};
 use ezu_graph::TileId;
 use std::collections::HashMap;

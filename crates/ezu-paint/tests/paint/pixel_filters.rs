@@ -2,8 +2,7 @@
 //! `channel-shuffle`, `sharpen`. All operate as pass-through over
 //! `Raster|Sprite`.
 
-mod common;
-use common::render;
+use crate::common::render;
 
 #[test]
 fn levels_with_gamma_lifts_midtones() {

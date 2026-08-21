@@ -1,8 +1,7 @@
 //! User-defined functions: end-to-end expansion + render parity,
 //! `$param` arguments, declared-kind verification, recursion errors.
 
-mod common;
-use common::{render, render_with_params};
+use crate::common::{render, render_with_params};
 
 use ezu_graph::{build_graph, ScalarValue, TileId};
 use ezu_paint::nodes::default_registry;

@@ -2,8 +2,7 @@
 //! collision-box inflation is evaluated per feature, so a zoom-varying padding
 //! tightens or loosens label spacing by zoom.
 
-mod common;
-use common::render_with_features_and_images;
+use crate::common::render_with_features_and_images;
 use ezu_features::{Feature, FeatureLayer, Geometry, Value};
 use ezu_graph::TileId;
 use std::collections::HashMap;

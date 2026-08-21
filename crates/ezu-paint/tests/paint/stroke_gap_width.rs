@@ -2,8 +2,7 @@
 //! `line-gap-width`) render two parallel bands around a hole on the
 //! centreline.
 
-mod common;
-use common::render_with_features;
+use crate::common::render_with_features;
 use ezu_features::{Feature, FeatureLayer, Geometry, Value};
 use ezu_graph::TileId;
 use std::collections::HashMap;

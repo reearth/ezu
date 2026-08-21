@@ -1,8 +1,7 @@
 //! Data-driven `stamp` paint: a `scale-expr` MapLibre number expression
 //! evaluated per feature group scales the sprite differently per feature.
 
-mod common;
-use common::{disk_sprite, render_with_features_and_images};
+use crate::common::{disk_sprite, render_with_features_and_images};
 use ezu_features::{Feature, FeatureLayer, Geometry, Value};
 use ezu_graph::TileId;
 use std::collections::HashMap;

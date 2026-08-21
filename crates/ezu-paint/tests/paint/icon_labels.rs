@@ -3,8 +3,7 @@
 //! `*-optional` flags admit the half that fits, and an icon blocks other
 //! layers' labels the way its text does.
 
-mod common;
-use common::render_with_features_and_sprite;
+use crate::common::render_with_features_and_sprite;
 use ezu_features::{Feature, FeatureLayer, Geometry, Value};
 use ezu_graph::{RasterBuf, SpriteRect, SpriteSheet, TileId};
 use std::collections::HashMap;

@@ -5,8 +5,7 @@
 //! already guaranteed — a lone layer placing exactly as the self-contained
 //! `text` node does, and adjacent tiles agreeing on the seam.
 
-mod common;
-use common::render_with_features_and_images;
+use crate::common::render_with_features_and_images;
 use ezu_features::{Feature, FeatureLayer, Geometry, Value};
 use ezu_graph::TileId;
 use std::collections::HashMap;

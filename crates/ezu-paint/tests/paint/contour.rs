@@ -3,8 +3,7 @@
 //! coordinate round-trip: contour converts canvas px → tile units, and
 //! stroke scales them back onto the same pixels).
 
-mod common;
-use common::render_with_scalar_fields;
+use crate::common::render_with_scalar_fields;
 use ezu_graph::{ScalarField, TileId};
 
 const TILE: TileId = TileId { z: 0, x: 0, y: 0 };

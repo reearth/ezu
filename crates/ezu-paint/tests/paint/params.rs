@@ -2,8 +2,7 @@
 //! overrides, min/max clamping, `@node` scalar ports (`math`, `zoom`),
 //! and cache invalidation across param changes.
 
-mod common;
-use common::{render, render_with_params};
+use crate::common::{render, render_with_params};
 
 use ezu_graph::{
     build_graph, Cache, CanvasInfo, Evaluator, NoAssets, ParamValues, PortValue, ScalarValue,
@@ -129,8 +128,9 @@ fn zoom_node_makes_output_zoom_dependent() {
       },
       "output": "@out"
     }"##;
-    let at =
-        |z: u8| common::render_tile(json, 8, 0, TileId { z, x: 0, y: 0 }).pixel(4, 4)[3] as f64;
+    let at = |z: u8| {
+        crate::common::render_tile(json, 8, 0, TileId { z, x: 0, y: 0 }).pixel(4, 4)[3] as f64
+    };
     let a4 = at(4);
     let a8 = at(8);
     assert!(

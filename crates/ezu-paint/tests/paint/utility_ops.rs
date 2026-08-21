@@ -1,7 +1,6 @@
 //! Smoke tests for utility ops: `switch`, `pick-channel`.
 
-mod common;
-use common::render;
+use crate::common::render;
 
 #[test]
 fn switch_default_picks_a() {
