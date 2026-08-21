@@ -23,6 +23,17 @@
     "glazing": { "type": "brush", "src": "file:brushes/watercolor_glazing.myb" },
     "basemap": { "type": "mvt", "url": "https://papers.reearth.land/protomaps/tilejson.json" }
   },
+  "legend": {
+    "title": "Watercolour",
+    "note": "Washes, not categories: the landuse wash fades in with zoom, so the green means \"more built-up than not\" rather than any one class.",
+    "entries": [
+      { "label": "water",      "from": "@water",       "geometry": "polygon" },
+      { "label": "green space", "from": "@landuse",    "geometry": "polygon" },
+      { "label": "trunk road", "from": "@roads_trunk", "geometry": "line",
+        "properties": { "kind_detail": "trunk", "min_zoom": 0 },
+        "note": "Drawn with the glazing brush, so the stroke thins and thickens along its length." }
+    ]
+  },
   "nodes": {
     "bg":              { "op": "solid", "color": "$paper" },
 

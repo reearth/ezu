@@ -133,7 +133,7 @@ pub fn render_swatch(
     // The entry's own choice wins; the option is the default for the
     // entries that do not make one.
     let geometry = entry.geometry.unwrap_or(opts.geometry);
-    let loader = SwatchLoader::new(assets, synthetic_layer(entry, geometry), entry);
+    let loader = SwatchLoader::new(assets, stand_in_layer(entry, geometry), entry);
     let ev = Evaluator::new(&graph, cache, &loader);
     let required = graph.required_pad().unwrap_or(0);
     let canvas = CanvasInfo {
@@ -166,8 +166,23 @@ pub fn render_swatch(
     }
 }
 
-/// One feature filling the swatch, carrying the entry's properties.
-fn synthetic_layer(entry: &LegendEntry, geometry: LegendGeometry) -> FeatureLayer {
+/// How many vertices the stand-in line carries.
+///
+/// Not two. A brush stroke is painted by walking the polyline's vertices
+/// and handing each to the brush as one event; the dabs in between are
+/// interpolated from the distance and the time step. Real road geometry
+/// arrives finely sampled, so the dab train is dense. A line made of two
+/// points is one enormous hop, which emits almost nothing — a swatch
+/// that came out blank at legend sizes and visible only when the canvas
+/// grew, because the hop grew with it.
+const LINE_VERTICES: usize = 64;
+
+/// The stand-in feature a swatch is drawn from: one feature filling the
+/// swatch, carrying the entry's declared properties.
+///
+/// Public because a host drawing its own swatches needs the same
+/// stand-in to get the same answer as `ezu legend` does.
+pub fn stand_in_layer(entry: &LegendEntry, geometry: LegendGeometry) -> FeatureLayer {
     let e = EXTENT as i32;
     let mid = e / 2;
     let mut g = Geometry::default();
@@ -178,7 +193,12 @@ fn synthetic_layer(entry: &LegendEntry, geometry: LegendGeometry) -> FeatureLaye
         });
     }
     if matches!(geometry, LegendGeometry::All | LegendGeometry::Line) {
-        g.lines.push(vec![(0, mid), (e, mid)]);
+        let last = LINE_VERTICES - 1;
+        g.lines.push(
+            (0..LINE_VERTICES)
+                .map(|i| ((e as i64 * i as i64 / last as i64) as i32, mid))
+                .collect(),
+        );
     }
     if matches!(geometry, LegendGeometry::All | LegendGeometry::Point) {
         g.points.push((mid, mid));
@@ -263,5 +283,87 @@ impl AssetLoader for SwatchLoader<'_> {
             return self.base.hash(name);
         }
         self.hash
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ezu_style::NodeRef;
+
+    fn entry(props: &[(&str, serde_json::Value)]) -> LegendEntry {
+        let mut properties = serde_json::Map::new();
+        for (k, v) in props {
+            properties.insert((*k).to_string(), v.clone());
+        }
+        LegendEntry {
+            label: "e".into(),
+            from: NodeRef("n".into()),
+            properties,
+            note: None,
+            min_zoom: None,
+            max_zoom: None,
+            geometry: None,
+        }
+    }
+
+    /// The regression behind `LINE_VERTICES`: a two-point line is one
+    /// hop, and a brush walking it emits next to nothing, so a
+    /// brush-stroked entry came out blank at legend sizes.
+    #[test]
+    fn the_stand_in_line_is_finely_sampled() {
+        let layer = stand_in_layer(&entry(&[]), LegendGeometry::Line);
+        let line = &layer.features[0].geometry.lines[0];
+        assert!(
+            line.len() >= 32,
+            "a brush needs many events along a stroke, got {}",
+            line.len()
+        );
+        // Spanning the full extent, along the middle, in order.
+        assert_eq!(line.first().unwrap().0, 0);
+        assert_eq!(line.last().unwrap().0, EXTENT as i32);
+        assert!(line.iter().all(|&(_, y)| y == EXTENT as i32 / 2));
+        assert!(line.windows(2).all(|w| w[0].0 < w[1].0));
+    }
+
+    #[test]
+    fn geometry_selects_what_the_stand_in_carries() {
+        for (geometry, polys, lines, points) in [
+            (LegendGeometry::All, 1, 1, 1),
+            (LegendGeometry::Polygon, 1, 0, 0),
+            (LegendGeometry::Line, 0, 1, 0),
+            (LegendGeometry::Point, 0, 0, 1),
+        ] {
+            let layer = stand_in_layer(&entry(&[]), geometry);
+            let g = &layer.features[0].geometry;
+            assert_eq!(
+                (g.polygons.len(), g.lines.len(), g.points.len()),
+                (polys, lines, points),
+                "{geometry:?}"
+            );
+        }
+    }
+
+    /// Numbers keep their integer-ness, because `["get", …]` comparisons
+    /// can tell the difference. Arrays and objects are dropped — a
+    /// feature property is a scalar.
+    #[test]
+    fn properties_become_feature_values() {
+        let layer = stand_in_layer(
+            &entry(&[
+                ("cls", "trunk".into()),
+                ("min_zoom", 0.into()),
+                ("density", 12.5.into()),
+                ("on", true.into()),
+                ("nope", serde_json::json!([1, 2])),
+            ]),
+            LegendGeometry::All,
+        );
+        let p = &layer.features[0].properties;
+        assert!(matches!(p.get("cls"), Some(FeatureValue::String(s)) if s == "trunk"));
+        assert!(matches!(p.get("min_zoom"), Some(FeatureValue::Int(0))));
+        assert!(matches!(p.get("density"), Some(FeatureValue::Double(d)) if *d == 12.5));
+        assert!(matches!(p.get("on"), Some(FeatureValue::Bool(true))));
+        assert!(p.get("nope").is_none(), "an array is not a property value");
     }
 }

@@ -11,7 +11,7 @@
 // network access — and its output is committed.
 
 import { execFile } from 'node:child_process';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -163,6 +163,17 @@ const FIGURES = {
 
   // ── gallery + landing ─────────────────────────────────────────────────────
   'gallery-watercolor': { mode: 'bbox', file: 'crates/ezu/examples/styles/watercolor.json' },
+
+  // ── style/legend ──────────────────────────────────────────────────────────
+  // The watercolour example's own three entries. On paper so the washes
+  // read as washes; a legend host would place them on its own ground.
+  'legend-swatches-watercolor': {
+    mode: 'swatches',
+    file: 'crates/ezu/examples/styles/watercolor.json',
+    size: '240x44',
+    zoom: 13,
+    background: '#fbf6e6',
+  },
   'gallery-pencil-sketch': { mode: 'bbox', file: 'crates/ezu/examples/styles/pencil-sketch.json' },
   'gallery-photo-pop': { mode: 'bbox', file: 'crates/ezu/examples/styles/photo-pop.json' },
   'gallery-hillshade': {
@@ -198,6 +209,41 @@ async function renderFigure(name, fig) {
     );
     await sharp(png).resize(width).webp({ quality: 84 }).toFile(out);
     rmSync(png, { force: true });
+    return;
+  }
+
+  if (fig.mode === 'swatches') {
+    // A legend's own swatches, drawn by `ezu legend` and stacked into one
+    // strip in entry order. Kept at 1:1 — a swatch is small on purpose,
+    // and downscaling one would misrepresent the texture that is the
+    // reason to render it at all.
+    const dir = join(TMP, `${name}-swatches`);
+    rmSync(dir, { recursive: true, force: true });
+    const [w, h] = (fig.size ?? '128x32').split('x').map(Number);
+    await run(
+      EZU,
+      // prettier-ignore
+      ['legend', path, '--swatch-dir', dir, '--swatch-size', fig.size ?? '128x32',
+       '--zoom', String(fig.zoom ?? TILE.z)],
+      { cwd: REPO, maxBuffer: 32 * 1024 * 1024 }
+    );
+    const files = readdirSync(dir)
+      .filter((f) => f.endsWith('.png'))
+      .sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
+    const gap = 8;
+    const buffers = await Promise.all(files.map((f) => sharp(join(dir, f)).png().toBuffer()));
+    await sharp({
+      create: {
+        width: w,
+        height: files.length * h + (files.length - 1) * gap,
+        channels: 4,
+        background: fig.background ?? '#00000000',
+      },
+    })
+      .composite(buffers.map((input, i) => ({ input, left: 0, top: i * (h + gap) })))
+      .webp({ quality: 90 })
+      .toFile(out);
+    rmSync(dir, { recursive: true, force: true });
     return;
   }
 

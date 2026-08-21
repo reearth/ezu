@@ -132,3 +132,102 @@ give the legend an entry pointing at a node that draws a single dot.
 
 Swatches are drawn at one zoom, since a symbol may change with scale; `--zoom`
 picks it and defaults to 12.
+
+## Give the stand-in whatever the layer filters on
+
+The entry's node is rendered *with everything it depends on*, and that includes
+the `features` node's `filter-expr` and `min-zoom-field`. The stand-in feature
+has only the properties the entry declares, so a filter it cannot satisfy drops
+it and the swatch comes out empty.
+
+The watercolour example's roads are filtered:
+
+```json
+"roads_trunk_f": {
+  "op": "features", "layer": "roads", "min-zoom-field": "min_zoom",
+  "filter-expr": ["in", ["get", "kind_detail"], ["literal", ["trunk", "primary", "motorway"]]]
+}
+```
+
+so its entry has to say enough to pass:
+
+```json
+{ "label": "trunk road", "from": "@roads_trunk", "geometry": "line",
+  "properties": { "kind_detail": "trunk", "min_zoom": 0 } }
+```
+
+An empty swatch almost always means this. Read the `features` node feeding the
+entry and give the stand-in what it asks for.
+
+## A worked example
+
+The `watercolor` example ships with the legend above. Drawn at 240×44:
+
+```sh
+ezu legend crates/ezu/examples/styles/watercolor.json \
+  --swatch-dir out/ --swatch-size 240x44 --zoom 13 --pretty
+```
+
+<figure>
+  <img src="/ezu/figures/legend-swatches-watercolor.webp"
+       alt="Three swatches: a mottled blue wash, a flat green wash, and a faint train of brown brush dabs"
+       width="240" height="140" />
+  <figcaption>
+    The three entries, at 1:1. Water is a dab fill, so its swatch is mottled the
+    way the map is. The trunk road is a single glazing-brush stroke at the map's
+    own 1.6&nbsp;px radius and 0.6 opacity — at legend size that reads as a faint
+    train of dabs, which is what the map draws rather than an artifact of the
+    swatch.
+  </figcaption>
+</figure>
+
+And the JSON, with `swatch` paths added:
+
+```json
+{
+  "title": "Watercolour",
+  "note": "Washes, not categories: the landuse wash fades in with zoom, so the green means \"more built-up than not\" rather than any one class.",
+  "entries": [
+    {
+      "label": "water",
+      "from": "water",
+      "geometry": "polygon",
+      "swatch": "out/0.png"
+    },
+    {
+      "label": "green space",
+      "from": "landuse",
+      "geometry": "polygon",
+      "swatch": "out/1.png"
+    },
+    {
+      "label": "trunk road",
+      "from": "roads_trunk",
+      "properties": { "kind_detail": "trunk", "min_zoom": 0 },
+      "note": "Drawn with the glazing brush, so the stroke thins and thickens along its length.",
+      "geometry": "line",
+      "swatch": "out/2.png"
+    }
+  ]
+}
+```
+
+`from` comes back without its `@`: it is an id to look up, not a reference to
+resolve. Absent fields stay absent rather than coming through as nulls, so a
+host can test for them.
+
+## The whole command
+
+```sh
+ezu legend STYLE [--zoom Z] [--out FILE] [--pretty]
+                 [--swatch-dir DIR] [--swatch-size WxH] [--assets-dir DIR]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--zoom` | keep only the entries that apply at this zoom, and draw swatches at it |
+| `--out` | write the JSON to a file instead of stdout |
+| `--pretty` | indent the JSON |
+| `--swatch-dir` | draw each entry's symbol into this directory as `<n>.png` |
+| `--swatch-size` | `WIDTHxHEIGHT`, or one number for a square (default `48x32`) |
+| `--assets-dir` | where to resolve relative asset paths, for symbols needing a brush, font or sprite |
