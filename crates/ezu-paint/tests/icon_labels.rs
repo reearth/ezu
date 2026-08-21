@@ -51,8 +51,8 @@ fn layer(name: &str, features: Vec<Feature>) -> FeatureLayer {
 /// A sheet with one 16×16 opaque green icon, `dot`.
 fn dot_sheet() -> SpriteSheet {
     let mut atlas = RasterBuf::new(16, 16);
-    for px in atlas.pixels.chunks_exact_mut(4) {
-        px.copy_from_slice(&[0, 255, 0, 255]);
+    for px in atlas.pixels.as_chunks_mut::<4>().0 {
+        *px = [0, 255, 0, 255];
     }
     let mut icons = HashMap::new();
     icons.insert(
