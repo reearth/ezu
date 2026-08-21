@@ -640,10 +640,14 @@ fn render_mermaid(doc: &ezu::style::Document) -> String {
         }
     }
 
-    s.push_str("\n  classDef asset fill:#fff4d6,stroke:#a88500;\n");
-    s.push_str("  classDef output fill:#ffe0e0,stroke:#cc3333,stroke-width:2px;\n");
+    // Each class fixes its own text colour as well as its fill. Mermaid's dark
+    // theme otherwise draws light label text, which is unreadable on these
+    // deliberately light fills — and a diagram rendered dark is the common case
+    // when it is embedded in a dark page.
+    s.push_str("\n  classDef asset fill:#fff4d6,color:#3a2e00,stroke:#a88500;\n");
+    s.push_str("  classDef output fill:#ffe0e0,color:#4a1010,stroke:#cc3333,stroke-width:2px;\n");
     s.push_str("  classDef sink fill:#cc3333,color:#ffffff,stroke:#7a1f1f,stroke-width:2px;\n");
-    s.push_str("  classDef source fill:#d9ecff,stroke:#2a6fb0;\n");
+    s.push_str("  classDef source fill:#d9ecff,color:#0d2b45,stroke:#2a6fb0;\n");
     if !doc_scoped_ids.is_empty() {
         s.push_str(&format!("  class {} asset;\n", doc_scoped_ids.join(",")));
     }
