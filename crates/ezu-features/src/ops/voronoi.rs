@@ -76,20 +76,47 @@ impl VoronoiBBox {
 /// triangulation (the backbone of voronoice) is undefined below that
 /// count, so the diagram would be empty anyway.
 fn build_voronoi(points: &[(i32, i32)], bbox: VoronoiBBox) -> Option<Voronoi> {
-    if points.len() < 3 {
-        return None;
-    }
+    // Duplicate sites are meaningless to a Voronoi diagram — a repeated
+    // site owns no area — but they make `voronoice` build a degenerate
+    // cell and assert its way out of it ("Edge crosses box, intersection
+    // must exist"), taking the whole render with it. Real tile geometry
+    // reaches that: rings arrive with their closing vertex repeated, MVT
+    // polygons carry coincident vertices, and densified boundary samples
+    // round to the same integer when the spacing is fine. Dedupe first.
+    //
+    // No caller maps cells back to input indices, so dropping duplicates
+    // here is safe for all of them.
+    let mut seen = HashSet::with_capacity(points.len());
     let sites: Vec<VPoint> = points
         .iter()
+        .filter(|p| seen.insert(**p))
         .map(|&(x, y)| VPoint {
             x: x as f64,
             y: y as f64,
         })
         .collect();
-    VoronoiBuilder::default()
-        .set_sites(sites)
-        .set_bounding_box(bbox.to_voronoice())
-        .build()
+    if sites.len() < 3 {
+        return None;
+    }
+
+    // Deduping is not enough on its own: `voronoice` (0.2.0, last released
+    // in 2022) asserts rather than errors on inputs its cell clipping
+    // cannot handle, and real MVT rings still reach that assertion. A
+    // geometry op that returns nothing costs one layer of a tile; a panic
+    // costs the whole tile, and on a tile server the whole request — so
+    // contain it here rather than letting a third-party assertion decide
+    // whether the map renders.
+    //
+    // wasm32 aborts on panic instead of unwinding, so this guard only
+    // holds on native hosts.
+    let bounding_box = bbox.to_voronoice();
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        VoronoiBuilder::default()
+            .set_sites(sites)
+            .set_bounding_box(bounding_box)
+            .build()
+    }))
+    .unwrap_or(None)
 }
 
 /// All Voronoi cell edges for `points`, clipped to `bbox` and
