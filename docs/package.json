@@ -10,7 +10,8 @@
     "check": "astro check",
     "gen": "node scripts/gen-reference.mjs",
     "links": "node scripts/check-links.mjs",
-    "figures": "node scripts/page-figures.mjs"
+    "figures": "node scripts/page-figures.mjs",
+    "compare": "node scripts/compare-figures.mjs"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.41.7",

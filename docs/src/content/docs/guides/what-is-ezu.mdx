@@ -58,9 +58,10 @@ flags.
 
 - You need an interactive, continuously-zooming client map. Render tiles with ezu
   and let MapLibre or any raster client display them.
-- You need pixel-identical MapLibre output. ezu gets close (`ezu-compare`
-  measures it) but it is a different renderer; see
-  [gaps and differences](/ezu/maplibre/gaps-and-differences/).
+- You need pixel-identical MapLibre output. ezu gets close — a 68-layer Protomaps
+  theme scores SSIM 0.80–0.87 against maplibre-gl-js, labels and icons in place
+  ([see the tiles](/ezu/maplibre/compatibility/)) — but it is a different
+  renderer; see [gaps and differences](/ezu/maplibre/gaps-and-differences/).
 - You need true 3-D (`fill-extrusion` height, terrain meshes). Footprints render
   flat.
 

@@ -5,10 +5,16 @@ sidebar:
   order: 1
 ---
 
+import Comparison from './_comparison.mdx';
+
 `ezu translate` lowers a MapLibre GL style into an ezu recipe. This page is the
 mapping table. For the workflow, see
 [from a MapLibre style](/ezu/guides/from-maplibre/); for what is approximated or
 skipped, [gaps and differences](/ezu/maplibre/gaps-and-differences/).
+
+## How close does it land?
+
+<Comparison />
 
 Two structural facts first:
 
@@ -87,13 +93,19 @@ expressions.
 | CSS named colours (`steelblue`, `transparent`, …) | resolved to hex |
 | `layout.visibility: "none"` | dropped by default, or kept behind a `switch` with `--keep-hidden` (flip `select` to `b` to enable) |
 
-## Measuring the result
+## Measuring your own style
 
-`ezu-compare` converts a style, renders it with ezu, and pixel-compares against a
-maplibre-gl-js reference:
+The figures at the top of this page were produced by `ezu-compare`, which
+converts a style, renders it with ezu, renders a maplibre-gl-js reference, and
+reports RMSE, "visibly different" pixel fraction, and SSIM per tile. Point it at
+your style rather than trusting a general claim:
 
 ```sh
 cargo run --release -p ezu-compare -- \
-  --style crates/ezu-compare/samples/protomaps-basemap.json \
-  --tiles 12/3637/1613,13/7275/3225,14/14550/6452
+  --style YOUR_STYLE_URL_OR_PATH \
+  --tiles 12/3637/1613,13/7275/3225,14/14550/6452 \
+  --out out/compare
 ```
+
+It writes the ezu render, the reference, a diff image, and the emitted recipe, so
+a disagreement is something you can look at rather than infer.

@@ -82,6 +82,10 @@ legacy filter conversion. See
 
 ## Measuring rather than guessing
 
+The [layer mapping page](/ezu/maplibre/compatibility/) opens with three tiles
+rendered both ways, at the SSIM they actually score — worth a look before reading
+this list as a warning.
+
 For a specific style, measure. `ezu-compare` renders a converted recipe and
 pixel-compares it against a maplibre-gl-js reference (Playwright headless), so
 you get a similarity figure per tile instead of an impression:
