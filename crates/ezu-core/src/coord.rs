@@ -83,6 +83,41 @@ pub fn tile_to_world(tile: TileId, tx: f64, ty: f64, extent: f64) -> WorldPos {
 /// unit of x spans this at the equator.
 pub const EARTH_CIRCUMFERENCE_M: f64 = 40_075_016.685_578_5;
 
+/// The latitude Web Mercator runs out at, in degrees. The projection
+/// sends the poles to infinity, so the world square stops here.
+pub const MERCATOR_MAX_LAT: f64 = 85.051_128_779_8;
+
+/// World x of a longitude in degrees. `-180` is `0.0`, `180` is `1.0`.
+#[inline]
+pub fn lon_to_world_x(lon_deg: f64) -> f64 {
+    (lon_deg + 180.0) / 360.0
+}
+
+/// World y of a latitude in degrees, clamped to the Mercator domain.
+/// North is `0.0`, south is `1.0`, matching the y-down tile grid.
+#[inline]
+pub fn lat_to_world_y(lat_deg: f64) -> f64 {
+    let lat = lat_deg
+        .clamp(-MERCATOR_MAX_LAT, MERCATOR_MAX_LAT)
+        .to_radians();
+    (1.0 - lat.tan().asinh() / std::f64::consts::PI) / 2.0
+}
+
+/// Longitude in degrees of a world x. Inverse of [`lon_to_world_x`].
+#[inline]
+pub fn world_x_to_lon(wx: f64) -> f64 {
+    wx * 360.0 - 180.0
+}
+
+/// Latitude in degrees of a world y. Inverse of [`lat_to_world_y`].
+#[inline]
+pub fn world_y_to_lat(wy: f64) -> f64 {
+    (std::f64::consts::PI * (1.0 - 2.0 * wy))
+        .sinh()
+        .atan()
+        .to_degrees()
+}
+
 /// Ground metres per world unit at world y `wy`.
 ///
 /// Web Mercator inflates distances away from the equator by `1 / cos(lat)`,
@@ -124,6 +159,23 @@ mod tests {
         assert!(!parent.is_ancestor_of(TileId::new(7, 44, 81))); // wrong x branch
         assert!(!parent.is_ancestor_of(parent)); // not self
         assert!(!parent.is_ancestor_of(TileId::new(4, 5, 10))); // ancestor, not descendant
+    }
+
+    #[test]
+    fn lon_lat_round_trip_through_world_coords() {
+        for lon in [-180.0, -74.0, 0.0, 139.7, 180.0] {
+            let wx = lon_to_world_x(lon);
+            assert!((world_x_to_lon(wx) - lon).abs() < 1e-9, "lon {lon}");
+        }
+        for lat in [-80.0, -35.7, 0.0, 51.5, 80.0] {
+            let wy = lat_to_world_y(lat);
+            assert!((world_y_to_lat(wy) - lat).abs() < 1e-9, "lat {lat}");
+        }
+        // North is y = 0 and the equator is the middle of the square.
+        assert!(lat_to_world_y(80.0) < lat_to_world_y(-80.0));
+        assert!((lat_to_world_y(0.0) - 0.5).abs() < 1e-12);
+        // Beyond the projection's domain the value saturates.
+        assert_eq!(lat_to_world_y(89.0), lat_to_world_y(MERCATOR_MAX_LAT));
     }
 
     #[test]

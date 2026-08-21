@@ -87,6 +87,15 @@ export const DEMOS = {
       out: { op: 'blend', base: '@base', over: '@dots' },
     },
   },
+  graticule: {
+    crop: false,
+    note: 'Parallels and meridians at the interval the zoom implies — every 0.01° here. Each line also carries a `label` property (`35.68°N`), so `text` can annotate them.',
+    nodes: {
+      g: { op: 'graticule' },
+      draw: { op: 'stroke', features: '@g', color: INK, 'width-px': 1 },
+      out: { op: 'blend', base: '@base', over: '@draw' },
+    },
+  },
 
   // ── geometry ──────────────────────────────────────────────────────────────
   centroid: {

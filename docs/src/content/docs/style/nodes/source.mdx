@@ -9,7 +9,7 @@ sidebar:
 
 Ops with no upstream input: features bound by the host, synthesized geometry, images, DEM and raster tiles.
 
-8 ops: `dem`, `features`, `icon`, `image`, `literal-geometry`, `point-grid`, `raster`, `tile-bounds`.
+9 ops: `dem`, `features`, `graticule`, `icon`, `image`, `literal-geometry`, `point-grid`, `raster`, `tile-bounds`.
 
 Ops with no demo image below produce no visible result on their own — they feed other nodes rather than paint.
 
@@ -40,6 +40,23 @@ Sample features from a host-bound feature layer. `source` names an `mvt`/`pmtile
 | `min-zoom` | integer (0…24) | no | Style-level minimum zoom. Below this zoom the node emits an empty layer (the asset is not even loaded). |
 | `min-zoom-field` | string | no | Per-feature property name carrying its data-side `min_zoom`. Features with `<field> > z` are dropped. |
 | `source` | string | no | Name of an `mvt`, `pmtiles`, or `geojson` entry in the document's `sources`. Optional — defaults to the only such source when the document declares exactly one. |
+
+### `graticule`
+
+Parallels and meridians crossing the tile, as labelled polylines.
+
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/graticule.webp" alt="A tile rendered with graticule" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Parallels and meridians at the interval the zoom implies — every 0.01° here. Each line also carries a `label` property (`35.68°N`), so `text` can annotate them. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/graticule.json">style</a></figcaption>
+</figure>
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `axes` | `both` \| `parallels` \| `meridians` | no | — |
+| `extent` | integer (1…∞) | no | — |
+| `interval-deg` | number \| `$param` \| `@node` | no | — |
 
 ### `icon`
 

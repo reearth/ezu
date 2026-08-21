@@ -2041,6 +2041,48 @@
             "type": "object"
           },
           {
+            "description": "Parallels and meridians crossing the tile, as labelled polylines.",
+            "properties": {
+              "axes": {
+                "default": "both",
+                "enum": [
+                  "both",
+                  "parallels",
+                  "meridians"
+                ],
+                "type": "string"
+              },
+              "extent": {
+                "default": 4096,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "interval-deg": {
+                "oneOf": [
+                  {
+                    "description": "Spacing in degrees. Omit to pick one from the zoom along the 30/10/5/2/1 ladder.",
+                    "exclusiveMinimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "op": {
+                "const": "graticule",
+                "description": "Selects the `graticule` operation."
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "title": "op: graticule",
+            "type": "object"
+          },
+          {
             "description": "Parallel-line hatching of input polygons.",
             "properties": {
               "angle-deg": {

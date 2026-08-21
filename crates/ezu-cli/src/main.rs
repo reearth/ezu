@@ -1224,10 +1224,13 @@ fn blit_padded_into(
 /// clamped to the Web Mercator domain.
 fn bbox_to_tiles(b: BBox, z: u8) -> (std::ops::Range<u32>, std::ops::Range<u32>) {
     let n = 2f64.powi(z as i32);
-    let xt = |lng: f64| ((lng + 180.0) / 360.0 * n).floor().clamp(0.0, n - 1.0) as u32;
+    let xt = |lng: f64| {
+        (ezu::core::coord::lon_to_world_x(lng) * n)
+            .floor()
+            .clamp(0.0, n - 1.0) as u32
+    };
     let yt = |lat: f64| {
-        let lat = lat.clamp(-85.0511287798, 85.0511287798).to_radians();
-        ((1.0 - (lat.tan().asinh() / std::f64::consts::PI)) / 2.0 * n)
+        (ezu::core::coord::lat_to_world_y(lat) * n)
             .floor()
             .clamp(0.0, n - 1.0) as u32
     };

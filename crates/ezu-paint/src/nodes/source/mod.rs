@@ -4,6 +4,7 @@
 
 mod dem;
 mod features;
+mod graticule;
 mod icon;
 mod image;
 mod literal_geometry;

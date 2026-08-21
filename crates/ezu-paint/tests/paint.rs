@@ -46,6 +46,8 @@ mod generator_kinds;
 mod geometry_ops;
 #[path = "paint/gradient.rs"]
 mod gradient;
+#[path = "paint/graticule.rs"]
+mod graticule;
 #[path = "paint/icon_labels.rs"]
 mod icon_labels;
 #[path = "paint/label_placement.rs"]
