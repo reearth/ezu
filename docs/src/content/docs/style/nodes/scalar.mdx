@@ -11,6 +11,8 @@ Number producers wired into other nodes’ `In<T>` fields through an `@node` ref
 
 3 ops: `expr`, `math`, `zoom`.
 
+Ops with no demo image below produce no visible result on their own — they feed other nodes rather than paint.
+
 ### `expr`
 
 Evaluate a MapLibre expression once per tile (the tile's zoom is in the context) and emit the result as a Scalar — feed it to any node's scalar field via `@node`. Use for zoom curves (`interpolate`/`step`/legacy `{stops}`); per-feature expressions belong on the consuming node's `*-expr` fields instead.

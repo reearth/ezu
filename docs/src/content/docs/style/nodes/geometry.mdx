@@ -11,9 +11,18 @@ sidebar:
 
 19 ops: `bbox`, `boundary`, `buffer`, `centroid`, `contour`, `convex-hull`, `dash`, `densify`, `feature-boolean`, `hatch`, `medial-axis`, `resample`, `simplify`, `smooth`, `transform`, `triangulate`, `voronoi`, `voronoi-fracture`, `wave`.
 
+Ops with no demo image below produce no visible result on their own — they feed other nodes rather than paint.
+
 ### `bbox`
 
 Axis-aligned bounding box of every input vertex (pooled across polygons, lines, and points), emitted as a single rectangular polygon.
+
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/bbox.webp" alt="A tile rendered with bbox" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>The bounding box of every input vertex — here, a shrunken cloud of water centroids. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/bbox.json">style</a></figcaption>
+</figure>
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -23,6 +32,13 @@ Axis-aligned bounding box of every input vertex (pooled across polygons, lines, 
 
 Convert each polygon to its boundary rings (exterior + holes) as polylines. Existing polylines and points pass through.
 
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/boundary.webp" alt="A tile rendered with boundary" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Polygon rings turned into lines — the coastline of every water body. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/boundary.json">style</a></figcaption>
+</figure>
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
@@ -30,6 +46,13 @@ Convert each polygon to its boundary rings (exterior + holes) as polylines. Exis
 ### `buffer`
 
 Minkowski sum / offset with a disk. Polygons accept negative distance for erosion; lines and points are inflated by |distance|.
+
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/buffer.webp" alt="A tile rendered with buffer" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Roads dilated into polygons, then filled. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/buffer.json">style</a></figcaption>
+</figure>
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -40,6 +63,13 @@ Minkowski sum / offset with a disk. Polygons accept negative distance for erosio
 ### `centroid`
 
 Replace input geometry with one point per polygon / polyline centroid.
+
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/centroid.webp" alt="A tile rendered with centroid" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>One point per input polygon, drawn as a dot. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/centroid.json">style</a></figcaption>
+</figure>
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -64,6 +94,13 @@ Isolines from a ScalarField (marching squares with linear sub-cell interpolation
 
 Convex hull of every input vertex as a single polygon.
 
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/convex-hull.webp" alt="A tile rendered with convex-hull" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>The convex hull of every input vertex — here, a shrunken cloud of water centroids. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/convex-hull.json">style</a></figcaption>
+</figure>
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
@@ -71,6 +108,13 @@ Convex hull of every input vertex as a single polygon.
 ### `dash`
 
 Cut polylines into dash/gap segments. Lengths are in canvas pixels (consistent with `*-px` brush parameters). Polygons and points pass through unchanged.
+
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/dash.webp" alt="A tile rendered with dash" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Coastlines cut into dashes before painting. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/dash.json">style</a></figcaption>
+</figure>
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -101,6 +145,13 @@ Polygon boolean operation between two Features inputs. Subject = `a`, clip = `b`
 
 Parallel-line hatching of input polygons.
 
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/hatch.webp" alt="A tile rendered with hatch" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Parallel-line hatching of the landmass polygons. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/hatch.json">style</a></figcaption>
+</figure>
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `angle-deg` | number \| `$param` \| `@node` | no | — |
@@ -111,6 +162,13 @@ Parallel-line hatching of input polygons.
 ### `medial-axis`
 
 Approximate medial axis of each input polygon, emitted as polylines. Smaller `densify-px` → more accurate but slower; `min-branch-px` prunes short side branches after stitching.
+
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/medial-axis.webp" alt="A tile rendered with medial-axis" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>The skeleton of each polygon — a river’s centreline from its bank. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/medial-axis.json">style</a></figcaption>
+</figure>
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -131,6 +189,13 @@ Resample each polyline / polygon ring to evenly-spaced vertices at `spacing-px` 
 
 Douglas-Peucker simplify polylines and polygon rings; points pass through.
 
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/simplify.webp" alt="A tile rendered with simplify" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Coastlines simplified with a generous tolerance, so the loss is visible. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/simplify.json">style</a></figcaption>
+</figure>
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `epsilon` | number (0…∞) \| `$param` \| `@node` | yes | — |
@@ -140,6 +205,13 @@ Douglas-Peucker simplify polylines and polygon rings; points pass through.
 
 Chaikin corner-smoothing over each input polyline and polygon ring. Each iteration roughly doubles the vertex count; 2–3 iterations are usually enough.
 
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/smooth.webp" alt="A tile rendered with smooth" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Coastlines smoothed, rounding off the vertex-to-vertex corners. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/smooth.json">style</a></figcaption>
+</figure>
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
@@ -148,6 +220,13 @@ Chaikin corner-smoothing over each input polyline and polygon ring. Each iterati
 ### `transform`
 
 Translate / rotate / scale every input vertex. Rotation happens around `pivot` (defaults to the origin) before the final translation. `scale-xy` overrides the uniform `scale` when both are present.
+
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/transform.webp" alt="A tile rendered with transform" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Water polygons scaled about their own centre. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/transform.json">style</a></figcaption>
+</figure>
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -162,6 +241,13 @@ Translate / rotate / scale every input vertex. Rotation happens around `pivot` (
 
 Delaunay triangulation of the input's point set. Each triangle becomes a closed polygon. Polygons and lines on input are ignored.
 
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/triangulate.webp" alt="A tile rendered with triangulate" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Building footprints decomposed into triangles, drawn as an outline mesh. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/triangulate.json">style</a></figcaption>
+</figure>
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
@@ -169,6 +255,13 @@ Delaunay triangulation of the input's point set. Each triangle becomes a closed 
 ### `voronoi`
 
 Voronoi diagram of the input's point set. Output is a Features value carrying the Voronoi edges as polylines (each polyline is a single 2-point edge). Polygons and lines in the input are ignored — use `centroid` to derive points from them.
+
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/voronoi.webp" alt="A tile rendered with voronoi" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Voronoi cells around each input point. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/voronoi.json">style</a></figcaption>
+</figure>
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -178,6 +271,13 @@ Voronoi diagram of the input's point set. Output is a Features value carrying th
 
 Fracture each polygon in `features` into Voronoi sub-cells using the points in `seeds` as Voronoi sites. Cells are clipped against the source polygon. Lines/points on `features` and lines/polygons on `seeds` are ignored.
 
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/voronoi-fracture.webp" alt="A tile rendered with voronoi-fracture" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Polygons shattered into Voronoi shards — the crackle-glaze effect. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/voronoi-fracture.json">style</a></figcaption>
+</figure>
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
@@ -186,6 +286,13 @@ Fracture each polygon in `features` into Voronoi sub-cells using the points in `
 ### `wave`
 
 Displace polylines laterally with a sine wave. Lengths in canvas pixels. Sharp corners may kink (no tangent smoothing). Polygons/points pass through.
+
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/wave.webp" alt="A tile rendered with wave" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Road geometry perturbed sideways — the wobble behind hand-drawn styles. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/wave.json">style</a></figcaption>
+</figure>
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |

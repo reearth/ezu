@@ -11,6 +11,8 @@ Plumbing: pick a channel, switch a branch on or off.
 
 2 ops: `pick-channel`, `switch`.
 
+Ops with no demo image below produce no visible result on their own — they feed other nodes rather than paint.
+
 ### `pick-channel`
 
 Extract a single channel of an RGBA raster as a [0, 1] ScalarField. RGB channels are read in non-premultiplied space; `luminance` is Rec. 601 luma over the non-premultiplied colour. Bridges the raster pipeline into scalar-field ops (`map-range`, `threshold`, `color-ramp`).

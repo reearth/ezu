@@ -1,0 +1,16 @@
+{
+  "name": "noise-demo",
+  "tile-size": 512,
+  "pad": 8,
+  "nodes": {
+    "out": {
+      "op": "noise",
+      "scale-px": 96,
+      "octaves": 4,
+      "anchor": "world",
+      "low-color": "#faf6ec",
+      "high-color": "#8a5a3b"
+    }
+  },
+  "output": "@out"
+}

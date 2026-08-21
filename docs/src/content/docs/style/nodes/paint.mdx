@@ -11,6 +11,8 @@ Ops that consume `Features` and put pixels on a canvas — flat fills, scatter d
 
 12 ops: `brush-file`, `circles`, `fill-dabs`, `fill-solid`, `label-placement`, `line`, `line-stamp`, `stamp`, `stroke`, `text`, `text-draw`, `text-labels`.
 
+Ops with no demo image below produce no visible result on their own — they feed other nodes rather than paint.
+
 ### `brush-file`
 
 Brush source. `src` is an `@asset` ref or a literal path/name resolved by the host's AssetLoader.
@@ -22,6 +24,13 @@ Brush source. `src` is an `@asset` ref or a literal path/name resolved by the ho
 ### `circles`
 
 Filled disks at every feature point (tiny-skia), with per-feature radius, color, opacity, and optional stroke ring. The crisp vector counterpart to MapLibre's `circle` layer. Each paint property has an optional `*-expr` MapLibre-expression sibling evaluated per feature group.
+
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/circles.webp" alt="A tile rendered with circles" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>A filled circle at every input point, with a stroke. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/circles.json">style</a></figcaption>
+</figure>
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -41,6 +50,13 @@ Filled disks at every feature point (tiny-skia), with per-feature radius, color,
 
 Watercolor scatter-dab fill with world-deterministic jitter (seamless across tiles).
 
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/fill-dabs.webp" alt="A tile rendered with fill-dabs" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>The same polygons as scatter dabs — many soft, faint stamps instead of coverage. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/fill-dabs.json">style</a></figcaption>
+</figure>
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `color` | color \| `$param` \| `@node` | yes | sRGB hex color, `$param` reference, or `@node` scalar port. |
@@ -58,6 +74,13 @@ Watercolor scatter-dab fill with world-deterministic jitter (seamless across til
 ### `fill-solid`
 
 Solid polygon fill with optional outline and Gaussian blur.
+
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/fill-solid.webp" alt="A tile rendered with fill-solid" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Flat polygon fill, with an outline. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/fill-solid.json">style</a></figcaption>
+</figure>
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -132,6 +155,13 @@ Stamp a sprite at every input point. Lines and polygons are ignored. Jitter is w
 ### `stroke`
 
 Crisp constant-width vector stroke along feature polylines (tiny-skia), with cap/join and optional pixel `dasharray`. The sharp counterpart to `line` (painterly brush) — for clean cartographic road/boundary lines.
+
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/stroke.webp" alt="A tile rendered with stroke" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Crisp constant-width stroke, with a dash pattern. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/stroke.json">style</a></figcaption>
+</figure>
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |

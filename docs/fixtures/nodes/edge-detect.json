@@ -1,0 +1,75 @@
+{
+  "name": "edge-detect-demo",
+  "tile-size": 512,
+  "pad": 8,
+  "sources": {
+    "basemap": {
+      "type": "mvt",
+      "url": "https://papers.reearth.land/protomaps/tilejson.json"
+    }
+  },
+  "nodes": {
+    "base": {
+      "op": "stack",
+      "layers": [
+        "@bg",
+        "@base_earth",
+        "@base_water",
+        "@base_roads"
+      ]
+    },
+    "base_earth": {
+      "op": "fill-solid",
+      "features": "@base_earth_f",
+      "fill": "#ece1c6"
+    },
+    "base_earth_f": {
+      "op": "features",
+      "layer": "earth"
+    },
+    "base_roads": {
+      "op": "stroke",
+      "features": "@base_roads_f",
+      "color": "#b09a80",
+      "width-px": 1.2
+    },
+    "base_roads_f": {
+      "op": "features",
+      "layer": "roads",
+      "min-zoom-field": "min_zoom"
+    },
+    "base_water": {
+      "op": "fill-solid",
+      "features": "@base_water_f",
+      "fill": "#8fb4d9"
+    },
+    "base_water_f": {
+      "op": "features",
+      "layer": "water"
+    },
+    "bg": {
+      "op": "solid",
+      "color": "#faf6ec"
+    },
+    "e": {
+      "op": "edge-detect",
+      "input": "@mask",
+      "strength": 3
+    },
+    "mask": {
+      "op": "fill-solid",
+      "features": "@water_f",
+      "fill": "#c2410c"
+    },
+    "out": {
+      "op": "blend",
+      "base": "@base",
+      "over": "@e"
+    },
+    "water_f": {
+      "op": "features",
+      "layer": "water"
+    }
+  },
+  "output": "@out"
+}

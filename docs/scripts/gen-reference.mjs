@@ -17,10 +17,14 @@ import { readdirSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'nod
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { DEMOS, NO_IMAGE } from './node-demos.mjs';
+
 const DOCS = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const REPO = resolve(DOCS, '..');
 const NODES_DIR = join(REPO, 'crates/ezu-paint/src/nodes');
 const OUT_DIR = join(DOCS, 'src/content/docs/style/nodes');
+/** Must match `base` in astro.config.mjs — these are static `public/` paths. */
+const BASE = '/ezu';
 
 /** Human-facing name and blurb per node module, plus sidebar order. */
 const CATEGORIES = {
@@ -148,6 +152,47 @@ function mdx(text) {
     .trim();
 }
 
+/**
+ * Whether the op's own node consumes the shared basemap, in which case the
+ * catalog shows the basemap as a "before" next to the result.
+ */
+function consumesBase(op, demo) {
+  const node = Object.values(demo.nodes).find((n) => n.op === op);
+  if (!node) return false;
+  return Object.entries(node).some(([field, value]) =>
+    field === 'over' ? false : Array.isArray(value) ? value.includes('@base') : value === '@base'
+  );
+}
+
+const FIXTURE_URL = 'https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes';
+
+/** The demo image (or before/after pair) plus its caption, as raw HTML. */
+function figure(op) {
+  const demo = DEMOS[op];
+  if (!demo) return '';
+  const pair = consumesBase(op, demo);
+  const img = (file, alt) =>
+    `<img src="${BASE}/nodes/${file}.webp" alt="${alt}" width="384" height="384" loading="lazy" decoding="async" />`;
+  const images = pair
+    ? `${img('_base', `The shared basemap, before ${op}`)}\n    ${img(op, `The same tile after ${op}`)}`
+    : img(op, `A tile rendered with ${op}`);
+  const caption = [
+    mdx(demo.note ?? ''),
+    `<a href="${FIXTURE_URL}/${op}.json">style</a>`,
+  ]
+    .filter(Boolean)
+    .join(' ');
+  return [
+    `<figure class="op-demo${pair ? ' op-demo--pair' : ''}">`,
+    `  <div class="op-demo__images">`,
+    `    ${images}`,
+    `  </div>`,
+    `  <figcaption>${caption}</figcaption>`,
+    `</figure>`,
+    '',
+  ].join('\n');
+}
+
 function opSection(op, variant) {
   const props = variant.properties ?? {};
   const required = new Set(variant.required ?? []);
@@ -159,6 +204,8 @@ function opSection(op, variant) {
     );
   const out = [`### \`${op}\``, ''];
   if (variant.description) out.push(mdx(variant.description), '');
+  const fig = figure(op);
+  if (fig) out.push(fig);
   if (rows.length) {
     out.push('| Field | Type | Required | Description |', '| --- | --- | --- | --- |', ...rows, '');
   } else {
@@ -226,6 +273,13 @@ function main() {
       meta.blurb,
       '',
       `${ops.length} op${ops.length === 1 ? '' : 's'}: ${ops.map(([op]) => `\`${op}\``).join(', ')}.`,
+      '',
+      ...(ops.some(([op]) => NO_IMAGE.has(op))
+        ? [
+            'Ops with no demo image below produce no visible result on their own —' +
+              ' they feed other nodes rather than paint.',
+          ]
+        : []),
       '',
       ...ops.map(([op, variant]) => opSection(op, variant)),
     ].join('\n');

@@ -11,9 +11,18 @@ Image-processing ops over `Raster` (and, where noted, `Sprite`): generators, com
 
 37 ops: `blend`, `blur`, `brightness-contrast`, `channel-shuffle`, `circle`, `color-ramp`, `color-to-alpha`, `density`, `dilate`, `displace`, `dither`, `edge-detect`, `erode`, `gradient-conic`, `gradient-diamond`, `gradient-linear`, `gradient-radial`, `hillshade`, `hsl`, `invert`, `levels`, `map-range`, `mix`, `mosaic`, `noise`, `place`, `posterize`, `quantize`, `saturate`, `sharpen`, `slope`, `solid`, `stack`, `threshold`, `tiling`, `vibrance`, `warp`.
 
+
 ### `blend`
 
 Composite `over` onto `base` with a W3C blend mode. `clip: true` clips result to base alpha (Photoshop-style clipping mask). `composite: "destination-out"` makes `over` erase `base` (brush-eraser effect when `over` is a brush-shaped raster). Optional `mask` raster's alpha modulates source coverage.
+
+<figure class="op-demo op-demo--pair">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/_base.webp" alt="The shared basemap, before blend" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/nodes/blend.webp" alt="The same tile after blend" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>A colour multiplied over the base — one of sixteen W3C blend modes. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/blend.json">style</a></figcaption>
+</figure>
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -29,6 +38,14 @@ Composite `over` onto `base` with a W3C blend mode. `clip: true` clips result to
 
 Gaussian blur on a raster (libblur, exact). Grows upstream pad by 3σ; a `$param` sigma needs a declared `max`.
 
+<figure class="op-demo op-demo--pair">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/_base.webp" alt="The shared basemap, before blur" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/nodes/blur.webp" alt="The same tile after blur" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Gaussian blur, σ = 6 px. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/blur.json">style</a></figcaption>
+</figure>
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
@@ -37,6 +54,14 @@ Gaussian blur on a raster (libblur, exact). Grows upstream pad by 3σ; a `$param
 ### `brightness-contrast`
 
 Linear brightness shift and contrast slope around mid-gray. Both in [-1, 1], 0 = no change.
+
+<figure class="op-demo op-demo--pair">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/_base.webp" alt="The shared basemap, before brightness-contrast" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/nodes/brightness-contrast.webp" alt="The same tile after brightness-contrast" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Darkened, with contrast raised around mid-grey. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/brightness-contrast.json">style</a></figcaption>
+</figure>
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -47,6 +72,14 @@ Linear brightness shift and contrast slope around mid-gray. Both in [-1, 1], 0 =
 ### `channel-shuffle`
 
 Rearrange RGBA channels. Each output (`r`/`g`/`b`/`a`) names which input channel feeds it, or a constant (`0`/`1`). Identity by default. Operates in non-premultiplied sRGB.
+
+<figure class="op-demo op-demo--pair">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/_base.webp" alt="The shared basemap, before channel-shuffle" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/nodes/channel-shuffle.webp" alt="The same tile after channel-shuffle" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Channels permuted — red and blue swapped. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/channel-shuffle.json">style</a></figcaption>
+</figure>
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -59,6 +92,13 @@ Rearrange RGBA channels. Each output (`r`/`g`/`b`/`a`) names which input channel
 ### `circle`
 
 Centred disk source. `kind: raster` (default) renders at canvas size with radius = `radius-frac × tile-size`. `kind: sprite` renders at `width-px × height-px` with radius = `radius-frac × min(width, height)`.
+
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/circle.webp" alt="A tile rendered with circle" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>A canvas-sized circle — the sprite behind MapLibre’s `circle` layers. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/circle.json">style</a></figcaption>
+</figure>
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -85,6 +125,14 @@ Map a `ScalarField` (or a `Raster`, by its luminance — a gradient map) to colo
 
 Make pixels close to `color` transparent. Distance ≤ `threshold` → alpha 0, distance ≥ `threshold + softness` → alpha unchanged, linear in between. Distance is Chebyshev (max per-channel) in non-premultiplied sRGB.
 
+<figure class="op-demo op-demo--pair">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/_base.webp" alt="The shared basemap, before color-to-alpha" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/nodes/color-to-alpha.webp" alt="The same tile after color-to-alpha" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>The paper colour knocked out to transparency. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/color-to-alpha.json">style</a></figcaption>
+</figure>
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `color` | color \| `$param` \| `@node` | yes | sRGB hex color, `$param` reference, or `@node` scalar port. |
@@ -109,6 +157,13 @@ Kernel-density estimate of the input's point features as a ScalarField (the MapL
 
 Per-channel morphological max over a square kernel. Grows bright / opaque regions; pair with `erode` to clean up speckle noise (open / close). Separable box implementation; grows upstream pad by `radius-px`.
 
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/dilate.webp" alt="A tile rendered with dilate" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Dilation of a water mask — coverage grows by the kernel radius. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/dilate.json">style</a></figcaption>
+</figure>
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
@@ -117,6 +172,14 @@ Per-channel morphological max over a square kernel. Grows bright / opaque region
 ### `displace`
 
 Photoshop-style displacement map. Output pixel reads `input` at a position offset by the `displacement` raster's R/G channels (0.5 means no offset). Grows upstream pad by `amp-px` so warped samples stay seamless across tile borders, provided the displacement source is itself seamless (e.g. `noise` with `anchor: world`).
+
+<figure class="op-demo op-demo--pair">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/_base.webp" alt="The shared basemap, before displace" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/nodes/displace.webp" alt="The same tile after displace" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Displaced by a separate low-frequency noise raster. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/displace.json">style</a></figcaption>
+</figure>
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -131,6 +194,14 @@ Photoshop-style displacement map. Output pixel reads `input` at a position offse
 
 Reduce to a fixed `palette` with dithering so gradients survive a small palette. `method: "floyd-steinberg"` (default) diffuses error to neighbours; `method: "ordered"` uses a 4×4 Bayer matrix with strength `amount` (0..1). Nearest-colour distance uses `space` (`lab` default / `rgb`). Alpha preserved.
 
+<figure class="op-demo op-demo--pair">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/_base.webp" alt="The shared basemap, before dither" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/nodes/dither.webp" alt="The same tile after dither" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>The same four inks, error-diffused — gradients survive the reduction. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/dither.json">style</a></figcaption>
+</figure>
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `amount` | number (0…1) | no | Ordered-dither strength (ignored for floyd-steinberg). |
@@ -143,6 +214,13 @@ Reduce to a fixed `palette` with dithering so gradients survive a small palette.
 
 Sobel gradient magnitude per channel, scaled by `strength` and clamped to [0, 255]. Pass-through over Raster / Sprite. Use after a hillshade for stylised outlines, or on a flat fill to derive an outline mask.
 
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/edge-detect.webp" alt="A tile rendered with edge-detect" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Sobel over a flat water fill — the outline mask the op is usually used for. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/edge-detect.json">style</a></figcaption>
+</figure>
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
@@ -152,6 +230,13 @@ Sobel gradient magnitude per channel, scaled by `strength` and clamped to [0, 25
 
 Per-channel morphological min over a square kernel. Shrinks bright / opaque regions; classic mask cleanup after `color-to-alpha`. Separable box implementation; grows upstream pad by `radius-px`.
 
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/erode.webp" alt="A tile rendered with erode" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Erosion of the same mask — coverage shrinks, and the narrow channels vanish. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/erode.json">style</a></figcaption>
+</figure>
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
@@ -160,6 +245,13 @@ Per-channel morphological min over a square kernel. Shrinks bright / opaque regi
 ### `gradient-conic`
 
 Conic (sweep) gradient around `center`. Gradient parameter is the clockwise angle from `start-angle` (degrees) normalized to [0, 1). 0° points along +x. `kind: sprite` switches to sprite-local [0, 1] coords.
+
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/gradient-conic.webp" alt="A tile rendered with gradient-conic" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>A conic gradient sweeping around the centre. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/gradient-conic.json">style</a></figcaption>
+</figure>
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -176,6 +268,13 @@ Conic (sweep) gradient around `center`. Gradient parameter is the clockwise angl
 
 Diamond gradient from `center`. Gradient parameter is Manhattan (|dx| + |dy|) distance / radius. `kind: sprite` switches to sprite-local [0, 1] coords.
 
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/gradient-diamond.webp" alt="A tile rendered with gradient-diamond" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>A diamond gradient — square distance rather than radial. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/gradient-diamond.json">style</a></figcaption>
+</figure>
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `anchor` | `tile` \| `world` | no | — |
@@ -191,6 +290,13 @@ Diamond gradient from `center`. Gradient parameter is Manhattan (|dx| + |dy|) di
 
 Linear gradient from `start` to `end` (fractional coords). `kind: raster` (default) samples in tile/world coords; `kind: sprite` samples in [0, 1] sprite coords at `width-px × height-px`.
 
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/gradient-linear.webp" alt="A tile rendered with gradient-linear" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>A linear gradient across the canvas. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/gradient-linear.json">style</a></figcaption>
+</figure>
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `anchor` | `tile` \| `world` | no | — |
@@ -205,6 +311,13 @@ Linear gradient from `start` to `end` (fractional coords). `kind: raster` (defau
 ### `gradient-radial`
 
 Radial gradient from `center` outward. Gradient parameter is Euclidean distance / radius. `aspect > 1` stretches the ellipse along X, `< 1` along Y. `kind: sprite` switches to sprite-local [0, 1] coords.
+
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/gradient-radial.webp" alt="A tile rendered with gradient-radial" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>A radial gradient from the canvas centre. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/gradient-radial.json">style</a></figcaption>
+</figure>
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -238,6 +351,14 @@ Analytical hillshade (Horn 1981) from a ScalarField. `mode: shade` outputs grays
 
 HSL adjustment: rotate hue by `hue-shift` degrees, shift saturation/lightness in [-1, 1] (0 = no change, +1 = toward max, -1 = toward 0).
 
+<figure class="op-demo op-demo--pair">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/_base.webp" alt="The shared basemap, before hsl" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/nodes/hsl.webp" alt="The same tile after hsl" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Hue rotated and saturation raised. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/hsl.json">style</a></figcaption>
+</figure>
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `hue-shift` | number \| `$param` \| `@node` | no | — |
@@ -249,6 +370,14 @@ HSL adjustment: rotate hue by `hue-shift` degrees, shift saturation/lightness in
 
 Negate RGB channels (1 - c). Alpha is preserved.
 
+<figure class="op-demo op-demo--pair">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/_base.webp" alt="The shared basemap, before invert" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/nodes/invert.webp" alt="The same tile after invert" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Every channel inverted. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/invert.json">style</a></figcaption>
+</figure>
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
@@ -256,6 +385,14 @@ Negate RGB channels (1 - c). Alpha is preserved.
 ### `levels`
 
 Photoshop-style levels: remap input range [in-black, in-white] through `gamma` onto output range [out-black, out-white]. All values in [0, 1] (non-premultiplied sRGB). `gamma > 1` lightens midtones; `gamma < 1` darkens them.
+
+<figure class="op-demo op-demo--pair">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/_base.webp" alt="The shared basemap, before levels" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/nodes/levels.webp" alt="The same tile after levels" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Input range remapped — the tonal-range expansion before a screen. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/levels.json">style</a></figcaption>
+</figure>
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -283,6 +420,14 @@ Linearly remap scalar field values from [in-min, in-max] to [out-min, out-max]. 
 
 Interpolate two rasters per-pixel by scalar `t` (0..1) in colour `space`. A straight colour tween (contrast with `blend`, which composites with alpha). `t` accepts a literal, `$param`, or `@node` scalar for param-driven theming.
 
+<figure class="op-demo op-demo--pair">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/_base.webp" alt="The shared basemap, before mix" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/nodes/mix.webp" alt="The same tile after mix" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>A straight crossfade between two rasters. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/mix.json">style</a></figcaption>
+</figure>
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `a` | `@node` | yes | Reference to another node (`@name`). |
@@ -294,6 +439,14 @@ Interpolate two rasters per-pixel by scalar `t` (0..1) in colour `space`. A stra
 
 Quantize a raster into uniform square blocks. `mode` selects how each block is summarized: `average` (default) takes the mean of covered pixels (smooth, classic mosaic); `nearest` takes the block's centre pixel (crisp, no inter-colour blending). World-anchored by default so adjacent map tiles share the same block grid.
 
+<figure class="op-demo op-demo--pair">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/_base.webp" alt="The shared basemap, before mosaic" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/nodes/mosaic.webp" alt="The same tile after mosaic" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Averaged into 8 px blocks, on a world-anchored grid. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/mosaic.json">style</a></figcaption>
+</figure>
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `anchor` | `world` \| `tile` | no | `world` (default) makes the block grid seamless across map tiles by growing the upstream pad. `tile` restarts the grid at every map tile's top-left and requires no extra padding. |
@@ -304,6 +457,13 @@ Quantize a raster into uniform square blocks. `mode` selects how each block is s
 ### `noise`
 
 Procedural noise source. With `kind: raster` (default) the noise is mapped to RGBA via `low-color`/`high-color`/`opacity`. With `kind: scalar` it emits a `ScalarField` of raw fBm values (~[-1, 1] for value/perlin/simplex) — compose with `map-range` before feeding `hillshade`/`color-ramp`. `anchor=world` (default) keeps the field seamless across tile borders.
+
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/noise.webp" alt="A tile rendered with noise" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Fractal noise, world-anchored so it is continuous across tiles. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/noise.json">style</a></figcaption>
+</figure>
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -339,6 +499,14 @@ Draw the source raster onto the canvas exactly once. `fit:none` (default) uses p
 
 Quantise each RGB channel into `steps` evenly-spaced levels (in non-premultiplied sRGB). Alpha preserved. Pair with `levels` to control which tonal band gets the strongest banding.
 
+<figure class="op-demo op-demo--pair">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/_base.webp" alt="The shared basemap, before posterize" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/nodes/posterize.webp" alt="The same tile after posterize" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Each channel snapped to four levels. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/posterize.json">style</a></figcaption>
+</figure>
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
@@ -347,6 +515,14 @@ Quantise each RGB channel into `steps` evenly-spaced levels (in non-premultiplie
 ### `quantize`
 
 Snap each pixel to the nearest colour in `palette`, measuring distance in `space` (`lab` = perceptual ΔE, default; or `rgb`). Alpha is preserved. Use for limited-palette / poster / pixel-art looks; see `dither` for the error-diffused variant.
+
+<figure class="op-demo op-demo--pair">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/_base.webp" alt="The shared basemap, before quantize" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/nodes/quantize.webp" alt="The same tile after quantize" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Mapped to a four-ink palette, no dithering. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/quantize.json">style</a></figcaption>
+</figure>
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -358,6 +534,14 @@ Snap each pixel to the nearest colour in `palette`, measuring distance in `space
 
 Scale CIELAB chroma uniformly by `amount` (1 = identity, 0 = greyscale, &gt;1 = more saturated). Hue and lightness are preserved.
 
+<figure class="op-demo op-demo--pair">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/_base.webp" alt="The shared basemap, before saturate" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/nodes/saturate.webp" alt="The same tile after saturate" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Saturation pushed up. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/saturate.json">style</a></figcaption>
+</figure>
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `amount` | number (0…∞) \| `$param` \| `@node` | no | — |
@@ -366,6 +550,14 @@ Scale CIELAB chroma uniformly by `amount` (1 = identity, 0 = greyscale, &gt;1 = 
 ### `sharpen`
 
 4-neighbour Laplacian sharpen: amplifies each pixel relative to its orthogonal neighbours by `amount`. Around 0.5–1.0 is a typical unsharp-mask look; negative values give a soft halo. Grows upstream pad by 1.
+
+<figure class="op-demo op-demo--pair">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/_base.webp" alt="The shared basemap, before sharpen" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/nodes/sharpen.webp" alt="The same tile after sharpen" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Unsharp-mask style sharpening. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/sharpen.json">style</a></figcaption>
+</figure>
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -386,6 +578,13 @@ Slope angle as grayscale, normalised to 0..1 against `max-deg`.
 
 Solid-colour source. `kind: raster` (default) fills the full canvas; `kind: sprite` emits a Sprite at `width-px × height-px` for use as a synthetic placement/tiling source.
 
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/solid.webp" alt="A tile rendered with solid" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>A single flat colour over the whole canvas. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/solid.json">style</a></figcaption>
+</figure>
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `color` | color \| `$param` \| `@node` | yes | sRGB hex color, `$param` reference, or `@node` scalar port. |
@@ -396,6 +595,14 @@ Solid-colour source. `kind: raster` (default) fills the full canvas; `kind: spri
 ### `stack`
 
 Composite an ordered list of raster `layers` bottom-to-top with plain source-over (equivalent to a chain of `blend` nodes with `mode: normal`, `composite: over`, `opacity: 1`), folded into one pass over a single accumulator. Fully-transparent layers are skipped. For per-layer opacity, blend modes, clipping, masks, or the eraser composite, use `blend`.
+
+<figure class="op-demo op-demo--pair">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/_base.webp" alt="The shared basemap, before stack" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/nodes/stack.webp" alt="The same tile after stack" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Several rasters composited bottom-to-top in one pass. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/stack.json">style</a></figcaption>
+</figure>
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -430,6 +637,14 @@ Repeat a raster across the canvas with bilinear wrap-around sampling. Primary us
 
 Adaptively boost CIELAB chroma — low-chroma pixels rise more than already-vivid ones (`amount` = strength, 0 = identity). Hue and lightness preserved.
 
+<figure class="op-demo op-demo--pair">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/_base.webp" alt="The shared basemap, before vibrance" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/nodes/vibrance.webp" alt="The same tile after vibrance" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Saturation raised on muted colours only, leaving saturated ones alone. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/vibrance.json">style</a></figcaption>
+</figure>
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `amount` | number (0…∞) \| `$param` \| `@node` | no | — |
@@ -438,6 +653,14 @@ Adaptively boost CIELAB chroma — low-chroma pixels rise more than already-vivi
 ### `warp`
 
 Domain warp via an internal noise field. With `anchor: world` (default) the warp is seamless across tile borders; the upstream pad grows by `amp-px` to keep samples inside the available raster.
+
+<figure class="op-demo op-demo--pair">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/_base.webp" alt="The shared basemap, before warp" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/nodes/warp.webp" alt="The same tile after warp" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Pixels pushed around by internal noise — the paper-wobble op. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/warp.json">style</a></figcaption>
+</figure>
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
