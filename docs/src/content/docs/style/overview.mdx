@@ -30,7 +30,7 @@ An Ezu Style document is a JSON object. Two fields are required — `nodes` and
 | `output` | `@node` | required — must resolve to a `Raster` |
 | `version` | string | the style's own version, yours to use |
 | `tile-size` | integer | rendered tile edge in px (512 matches MapLibre) |
-| `pad` | integer | margin around the tile for filters and overflowing geometry |
+| `pad` | integer | margin around the tile, in px. A **floor**: the renderer uses this or what the graph's filters need, whichever is larger. Leave it out to let the graph decide — see [padding](/ezu/concepts/padding-and-neighbours/) |
 | `attribution` | string | document-level attribution, merged with each source's |
 | `params` | map | [typed knobs](/ezu/style/params/) resolved at render time |
 | `functions` | map | [reusable subgraphs](/ezu/style/functions/) expanded at build time |

@@ -858,7 +858,18 @@ impl Renderer {
         opts: RenderOptions,
     ) -> Result<Vec<u8>, JsValue> {
         let tile_size = opts.tile_size.unwrap_or(self.doc.tile_size);
-        let pad = opts.pad.unwrap_or(self.doc.pad);
+        // `opts.pad` is an explicit override. Otherwise the style's `pad`
+        // acts as a floor under what the graph actually reaches, so a
+        // margin too narrow for the filters cannot silently clamp the
+        // tile's edge pixels.
+        let pad = match opts.pad {
+            Some(pad) => pad,
+            None => self.doc.pad.max(
+                self.graph
+                    .required_pad()
+                    .map_err(|e| named_err(ERR_STYLE, e))?,
+            ),
+        };
         let tile_id = TileId { z, x, y };
         let canvas = CanvasInfo { tile_size, pad };
         let mut tile_loader = TileLoader::new(&self.assets, tile_id);

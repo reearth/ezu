@@ -57,8 +57,8 @@ let out = ev.render_parallel(
 `build_graph` validates everything statically: every `@ref` resolves,
 ports type-check, no cycles, and every pad-determining field carries a
 static bound. Failures come back as `BuildGraphError` with the offending
-node id attached. Padding itself is reported, not enforced — see
-[pad propagation](#pad-propagation).
+node id attached. The canvas margin the graph needs is a question the
+host asks separately — see [pad propagation](#pad-propagation).
 
 ## Evaluation
 
@@ -129,13 +129,20 @@ extra border on the upstream raster to stay seamless. `Node::required_pad`
 declares this growth; `Graph::compute_pad` walks the topo order in
 reverse and reports the pad each source must supply.
 
-Nothing grows the canvas on its own: rendering uses the single
-`CanvasInfo { tile_size, pad }` the host supplies, and a filter reaching
-past that margin samples clamped edge pixels — a seam between tiles
-rather than an error. `compute_pad` is how a host learns the right
-number: call it and size the canvas from the answer, or report it, as
-`ezu check` does. It errors when a graph asks for more than `MAX_PAD`,
-which catches an accidental "blur σ=200".
+Rendering uses the single `CanvasInfo { tile_size, pad }` the host
+supplies, so the host has to know the number before it starts — which is
+what `Graph::required_pad` answers, and why pad-determining fields must
+carry a static bound. The hosts in this workspace treat the document's
+`pad` as a floor:
+
+```rust
+let pad = doc.pad.max(graph.required_pad()?);
+```
+
+so a style that declares nothing gets a canvas that fits its filters, and
+one that declares a generous margin keeps it. `required_pad` errors above
+`MAX_PAD`, which catches an accidental "blur σ=200"; `compute_pad` is the
+per-node detail behind it.
 
 ## Custom ops
 

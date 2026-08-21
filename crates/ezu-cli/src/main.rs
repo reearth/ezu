@@ -325,12 +325,11 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
     let style_text = fetch_text(&common.style).await?;
     let doc = Document::from_json(&style_text)?;
     tracing::info!(
-        "style: {} v{} ({} nodes, tile={}, pad={})",
+        "style: {} v{} ({} nodes, tile={})",
         doc.name,
         doc.version,
         doc.nodes.len(),
         doc.tile_size,
-        doc.pad,
     );
 
     let assets_dir = common.assets_dir.clone().unwrap_or_else(|| {
@@ -347,13 +346,14 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
 
     let registry = default_registry();
     let graph = Arc::new(build_graph(&doc, &registry)?);
+    report_pad(&graph, &doc);
     let cache = Arc::new(Cache::with_limits(
         ezu::graph::cache::DEFAULT_CAPACITY,
         cache_budget_bytes(),
     ));
     let canvas = CanvasInfo {
         tile_size: doc.tile_size,
-        pad: doc.pad,
+        pad: canvas_pad(&graph, &doc),
     };
 
     // CLI flags override the URL but keep the doc's source NAME, since
@@ -452,37 +452,38 @@ fn run_schema(args: SchemaCmd) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Report whether the document's `pad` covers what its filters read.
+/// The canvas margin to render with: whichever is larger of what the
+/// style asks for and what its filters actually read.
 ///
-/// Rendering happens on one canvas of `tile-size + 2 * pad`, and nothing
-/// grows it. A filter reading past the margin samples clamped edge pixels
-/// instead, which shows up as a seam between tiles rather than as an
-/// error — so the margin has to be at least as wide as the furthest any
-/// node reaches, or the tile's own edge pixels are wrong.
-///
-/// That distance is `compute_pad(0)`: the growth the chain adds, with no
-/// margin asked for at the output. Passing `doc.pad` instead would answer
-/// a different question — what sources must supply to keep the *padded
-/// canvas* clean out to its corners — and since the crop throws that
-/// margin away, comparing it against `doc.pad` counts the same pixels
-/// twice.
+/// A style's `pad` is a floor, not the answer. Rendering happens on one
+/// canvas of `tile-size + 2 * pad` and nothing grows it mid-render, so a
+/// margin narrower than the furthest a node reaches leaves the tile's own
+/// edge pixels computed from clamped data — a seam between tiles rather
+/// than an error. The graph knows the distance, so use it, and let a
+/// style that wants a deliberately wider margin keep it.
+pub(crate) fn canvas_pad(graph: &Graph, doc: &Document) -> u32 {
+    match graph.required_pad() {
+        Ok(needed) => doc.pad.max(needed),
+        // Only a graph over `MAX_PAD` gets here; `report_pad` has already
+        // said so, and rendering with what the style asked for is a more
+        // useful answer than refusing.
+        Err(_) => doc.pad,
+    }
+}
+
+/// Say what the canvas margin will be and where it came from.
 fn report_pad(graph: &Graph, doc: &Document) {
-    let growth = match graph.compute_pad(0) {
-        Ok(pads) => pads,
+    let needed = match graph.required_pad() {
+        Ok(needed) => needed,
         Err(e) => {
             tracing::warn!("pad: {e}");
             return;
         }
     };
-    let Some((ix, &needed)) = growth.iter().enumerate().max_by_key(|(_, &p)| p) else {
-        return;
-    };
     if needed > doc.pad {
-        tracing::warn!(
-            "pad: {} declared, {needed} needed by `{}` — filters will sample clamped \
-             edge pixels, which shows as a seam between tiles",
+        tracing::info!(
+            "pad: {} declared, {needed} needed — rendering with {needed}",
             doc.pad,
-            graph.node_id(ix),
         );
     } else {
         tracing::info!("pad: {} declared, {needed} needed", doc.pad);

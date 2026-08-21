@@ -303,7 +303,7 @@ async fn get_tile(
             Arc::clone(&snap.raster_sources),
             geojson_inline,
             snap.doc.tile_size,
-            snap.doc.pad,
+            snap.pad,
             params,
         )
     };

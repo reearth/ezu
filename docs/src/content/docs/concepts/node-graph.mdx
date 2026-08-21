@@ -62,8 +62,8 @@ graph model is a superset, not an alternative.
 - a field that decides padding at build time has no static upper bound.
 
 Errors carry the offending node id. `ezu check` is exactly this pass, run on its
-own — plus a report of the canvas padding the graph needs, which is a warning
-rather than an error since a short `pad` renders, just with clamped edges. See
+own — plus a report of the canvas padding the graph needs, which the renderer
+uses as the floor under the style's own `pad`. See
 [padding and neighbours](/ezu/concepts/padding-and-neighbours/).
 
 ## Composition beyond wiring

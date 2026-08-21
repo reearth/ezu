@@ -509,8 +509,38 @@ impl Graph {
         self.output_kinds[ix]
     }
 
+    /// The canvas margin this graph needs, in pixels.
+    ///
+    /// Every node that reads beyond the pixel it writes declares how far
+    /// ([`Node::required_pad`]), and the fields those distances depend on
+    /// must carry a static bound — precisely so this is answerable before
+    /// anything renders. A host can therefore size its canvas from the
+    /// graph instead of asking the style's author to work it out:
+    ///
+    /// ```ignore
+    /// let pad = doc.pad.max(graph.required_pad()?);
+    /// ```
+    ///
+    /// Treating the document's `pad` as a floor rather than the answer
+    /// keeps a deliberately generous margin intact while removing the
+    /// failure mode where too small a one silently clamps edges.
+    ///
+    /// It is a worst case: a `$param` contributes its declared `max`, so
+    /// a blur whose sigma can reach 16 costs 48 px of margin on every
+    /// render, not only the ones that use it. Pin `pad` explicitly to
+    /// trade that back.
+    pub fn required_pad(&self) -> Result<u32, BuildError> {
+        Ok(self.compute_pad(0)?.into_iter().max().unwrap_or(0))
+    }
+
     /// Compute the canvas padding each node must supply, given the
-    /// document-level `pad` requested at the output.
+    /// margin requested at the output.
+    ///
+    /// Pass `0` to learn what the chain itself adds — see
+    /// [`Graph::required_pad`]. Passing the document's `pad` answers a
+    /// different question: what sources must supply for the *padded
+    /// canvas* to be clean out to its own corners, which the final crop
+    /// discards.
     pub fn compute_pad(&self, doc_pad: u32) -> Result<Vec<u32>, BuildError> {
         let mut required = vec![0u32; self.len()];
         required[self.output] = doc_pad;

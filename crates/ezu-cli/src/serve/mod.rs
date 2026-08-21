@@ -96,7 +96,7 @@ pub async fn run(args: ServeCmd) -> Result<(), Box<dyn std::error::Error>> {
         snapshot.doc.name,
         snapshot.doc.nodes.len(),
         snapshot.doc.tile_size,
-        snapshot.doc.pad,
+        snapshot.pad,
         snapshot.assets.bank.len(),
         snapshot.assets.images.len(),
         snapshot.dem_sources.len(),

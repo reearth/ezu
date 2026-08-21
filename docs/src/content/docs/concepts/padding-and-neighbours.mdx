@@ -23,32 +23,50 @@ margin is cropped off at the end.
 Every `Raster` and `ScalarField` in the graph is this padded size, which is why
 those kinds are described as "padded canvas-sized".
 
-## You declare it; the graph can tell you what it needs
+## You do not have to compute it
 
-`pad` is a number you write. Nothing grows it for you: rendering happens on one
-canvas of `tile-size + 2 × pad`, and a filter whose kernel reaches past that
-margin samples clamped edge pixels instead — which shows up as a seam between
-tiles, not as an error.
+Leave `pad` out and the renderer works it out. Each node declares how far it
+reads past the pixel it writes — `blur` asks for `3σ`, `mosaic` for a block, a
+`text` layer for the extent a label may cross a border by — and those distances
+depend only on fields with a **static bound**, which is exactly why the answer is
+knowable before anything renders:
 
-You do not have to work the number out by hand, though. Each node declares how it
-grows the requirement — `blur` asks for `3σ`, and so on — and
-`Graph::compute_pad` walks the topological order in reverse to arrive at what each
-node needs. `ezu check` reports it:
-
-```sh
-ezu check watercolor.json --no-fetch
-# WARN pad: 24 declared, 36 needed by `c4` — filters will sample clamped
-#      edge pixels, which shows as a seam between tiles
-# INFO ok: watercolor v1 (18 nodes, 2 sources) [parse + graph only]
+```json
+{
+  "name": "soft",
+  "tile-size": 512,
+  "nodes": {
+    "f":    { "op": "features", "layer": "earth" },
+    "fill": { "op": "fill-solid", "features": "@f", "fill": "#c2410c" },
+    "out":  { "op": "blur", "input": "@fill", "sigma": 12 }
+  },
+  "output": "@out"
+}
 ```
 
-Take the number it gives you and put it in `pad`. A host embedding the library can
-call `compute_pad` itself and size its canvas from the answer instead of trusting
-the document.
+```sh
+ezu tile --style soft.json --tile 6/57/25 --out soft.png
+# INFO pad: 0 declared, 36 needed — rendering with 36
+```
 
-There is a ceiling — `MAX_PAD`, 256 px — and `compute_pad` reports a graph that
-asks for more. A `blur` with `sigma: 200` wants ~600 px of margin on every side,
-so `ezu check` says so rather than letting you wonder why the edges look wrong.
+When you *do* write `pad`, it is a **floor**, not the answer: the renderer takes
+whichever is larger of your number and what the graph reaches. So a style asking
+for a deliberately generous margin keeps it, and a style asking for too little
+cannot silently end up with clamped edge pixels at the tile border.
+
+:::note[It is a worst case]
+A `$param` contributes its declared `max`. A blur whose sigma can reach 16 costs
+48 px of margin on every render, including the ones that use `sigma: 0`. Two ways
+to trade that back: declare a tighter `max`, or pin `pad` to a smaller number and
+accept the edges you get. The canvas grows quadratically — 512+2×64 is 1.6× the
+pixels of 512+2×16 — so it is worth a thought on a hot tile server, and worth
+ignoring everywhere else.
+:::
+
+There is a ceiling, `MAX_PAD` at 256 px. A graph asking for more than that is
+reported by `ezu check` and rendered with the style's own `pad` instead — a
+`blur` with `sigma: 200` wants ~600 px of margin, which is a style bug rather
+than a canvas size.
 
 ## Why static bounds are required
 
@@ -64,18 +82,18 @@ a build-time upper bound:
 This is the one place where the otherwise-uniform `In<T>` flexibility is
 restricted, and the error message says so explicitly.
 
-## Setting `pad` in practice
+## When to write `pad` anyway
 
-- **Plain vector recipes** — 8–16 px covers wide strokes and label halos.
-  `ezu translate` emits 16.
-- **Painterly styles** — 24 px and up. Dab radius, warp amplitude, and blur sigma
-  all eat margin.
-- **Too small** shows as darkened or clipped edges. **Too large** costs render
-  time on pixels you throw away — the canvas grows quadratically, so 512+2×64 is
-  1.6× the pixels of 512+2×16.
+- **You want a wider margin than the filters need.** Geometry that overflows the
+  tile without any filter reading it — a wide stroke, a label halo — is drawn
+  onto the margin too, and `pad` is how you make room for it. `ezu translate`
+  emits 16 for exactly this.
+- **You want a narrower one than the worst case.** A style whose blur sigma is a
+  param with a generous `max` pays for that max on every tile; pinning `pad`
+  trades edge quality at the border for pixels.
 
-Let `ezu check` tell you the floor rather than guessing at it — the reference
-styles in this repository were all a little under theirs until the check existed.
+Otherwise leave it out. `ezu check` prints what the graph needs either way, so
+you can see what you are choosing between.
 
 ## Neighbour tiles
 

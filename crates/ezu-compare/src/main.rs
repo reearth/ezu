@@ -213,9 +213,11 @@ fn render_ezu(
 ) -> R<(Vec<u8>, u32, f64)> {
     let doc = Document::from_json(recipe_text)?;
     let tile_size = doc.tile_size;
-    let pad = doc.pad;
     let registry = default_registry();
     let graph = build_graph(&doc, &registry)?;
+    // Same rule as the CLI: the style's `pad` is a floor under what the
+    // graph reaches, so a comparison never measures clamped edges.
+    let pad = doc.pad.max(graph.required_pad()?);
     let mut loader = BrushBankLoader::new();
     load_sprites(client, &doc, &mut loader);
 
@@ -385,7 +387,7 @@ fn bench_tile(
     let tile_id = TileId { z, x, y };
     let canvas = CanvasInfo {
         tile_size: doc.tile_size,
-        pad: doc.pad,
+        pad: doc.pad.max(graph.required_pad()?),
     };
 
     // Prep (fetch + decode + bind) happens once; only the render is repeated.

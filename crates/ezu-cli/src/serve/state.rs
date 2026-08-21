@@ -59,6 +59,11 @@ pub struct StyleReload {
 pub struct StyleSnapshot {
     pub doc: Document,
     pub graph: Arc<Graph>,
+    /// Canvas margin to render this style with — the document's `pad`
+    /// raised to whatever its filters actually reach (see
+    /// `crate::canvas_pad`). Resolved once per snapshot so every tile
+    /// request uses the same canvas.
+    pub pad: u32,
     pub cache: Arc<Cache>,
     pub assets: Arc<BrushBankLoader>,
     /// One fetcher per `dem` entry in the document's `sources` block.
@@ -91,9 +96,11 @@ impl StyleSnapshot {
             .map_err(BuildSnapshotError::Assets)?;
         let dem_sources = Arc::new(build_dem_sources(&doc));
         let raster_sources = Arc::new(build_raster_sources(&doc, Some(assets_dir.to_path_buf())));
+        let pad = crate::canvas_pad(&graph, &doc);
         Ok(Self {
             doc,
             graph: Arc::new(graph),
+            pad,
             cache: Arc::new(Cache::new()),
             assets: Arc::new(loader),
             dem_sources,

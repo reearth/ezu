@@ -10,10 +10,10 @@ a port type mismatch, a cycle, a blur sigma with no static bound, a brush URL
 that 404s. `ezu check` runs exactly the validation the renderer runs, without
 rendering, and exits non-zero on any of it.
 
-It also reports what it cannot call a failure: the canvas padding the graph
-needs. A `pad` below that still renders, with filters sampling clamped edge
-pixels near the tile border, so it comes out as a warning naming the node —
-see [padding and neighbours](/ezu/concepts/padding-and-neighbours/).
+It also reports the canvas padding the graph needs, which is worth reading even
+when it passes: the renderer takes that or the style's `pad`, whichever is
+larger, so the line tells you which one you are getting — see
+[padding and neighbours](/ezu/concepts/padding-and-neighbours/).
 
 ```sh
 ezu check style.json              # parse + build graph + resolve every asset
