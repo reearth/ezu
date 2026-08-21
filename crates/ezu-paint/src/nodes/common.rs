@@ -105,6 +105,14 @@ pub type BrushPayload = Brush;
 
 /// Resolve a node field: if it's a string starting with `$`, look it up
 /// in the document's `params`. Returns the resolved JSON value.
+///
+/// The value resolved here is the param's **declared default**, baked in
+/// when the graph is built — a caller's render-time override does not
+/// reach it. That is the right behaviour for a field the graph has to
+/// know before it can evaluate anything (a layout constant, a generator
+/// kind), and a trap everywhere else, so it says so out loud. Fields
+/// that should follow a param per render read it through
+/// [`ezu_graph::InReader`] instead, which keeps it as an `In<T>`.
 pub(super) fn resolve_field(
     fields: &serde_json::Map<String, Value>,
     name: &str,
@@ -120,6 +128,12 @@ pub(super) fn resolve_field(
                     .params
                     .get(p)
                     .ok_or_else(|| FactoryError::UnknownParam(p.to_string()))?;
+                tracing::warn!(
+                    "field `{name}`: `${p}` is read when the graph is built, so its \
+                     declared default ({}) is baked in and render-time overrides of \
+                     `{p}` will not change this field",
+                    decl.default,
+                );
                 return Ok(decl.default.clone());
             }
             spec::FieldRef::Node(_) => {

@@ -4902,7 +4902,7 @@
             "type": "object"
           },
           {
-            "description": "Translate / rotate / scale every input vertex. Rotation happens around `pivot` (defaults to the origin) before the final translation. `scale-xy` overrides the uniform `scale` when both are present.",
+            "description": "Translate / rotate / scale every input vertex. Rotation happens around `pivot` (defaults to the origin) before the final translation. The scalar fields take a `$param` or an `@node` port and follow it per render; the `[x, y]` arrays are literal, and seed the matching scalars. Uniform `scale` multiplies the per-axis factors.",
             "properties": {
               "features": {
                 "description": "Reference to another node (`@name`).",
@@ -4914,6 +4914,7 @@
                 "description": "Selects the `transform` operation."
               },
               "pivot": {
+                "description": "Literal [x, y] rotation centre in feature space.",
                 "items": {
                   "type": "number"
                 },
@@ -4922,14 +4923,43 @@
                 "type": "array"
               },
               "rotation-deg": {
-                "default": 0.0,
-                "type": "number"
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "scale": {
-                "default": 1.0,
-                "type": "number"
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "scale-x": {
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "scale-xy": {
+                "description": "Literal per-axis scale. `scale-x` / `scale-y` override it; uniform `scale` multiplies it.",
                 "items": {
                   "type": "number"
                 },
@@ -4937,13 +4967,50 @@
                 "minItems": 2,
                 "type": "array"
               },
+              "scale-y": {
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
               "translate": {
+                "description": "Literal [x, y] shift. `translate-x` / `translate-y` override it.",
                 "items": {
                   "type": "number"
                 },
                 "maxItems": 2,
                 "minItems": 2,
                 "type": "array"
+              },
+              "translate-x": {
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "translate-y": {
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               }
             },
             "required": [

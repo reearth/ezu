@@ -2,24 +2,35 @@
 //! rotate + scale) transform to every vertex. Rotation happens around
 //! `pivot` (in feature-space coordinates, default = origin) before
 //! the final translation. Scale is per-axis.
+//!
+//! The scalar forms — `translate-x` / `translate-y`, `rotation-deg`,
+//! `scale` / `scale-x` / `scale-y` — are `In<f64>` fields, so they take a
+//! literal, a `$param` a caller overrides per render, or an `@node`
+//! scalar port. Nothing here decides canvas padding, so there is no
+//! static-bound requirement. The `[x, y]` array forms (`translate`,
+//! `scale-xy`, `pivot`) stay literal: an array is not a scalar, so a
+//! param cannot stand in for one.
 
 use ezu_features::ops::transform::transform;
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{
-    downcast_features, features_value, read_number_or, read_xy, FeatureGroup,
-};
+use crate::nodes::common::{downcast_features, features_value, read_xy, FeatureGroup};
 
 struct TransformNode {
-    translate: (f64, f64),
-    rotation_rad: f64,
-    scale: (f64, f64),
+    translate_x: In<f64>,
+    translate_y: In<f64>,
+    rotation_deg: In<f64>,
+    scale: In<f64>,
+    scale_x: In<f64>,
+    scale_y: In<f64>,
     pivot: (f64, f64),
+    ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
 
 impl Node for TransformNode {
@@ -27,12 +38,7 @@ impl Node for TransformNode {
         "transform"
     }
     fn inputs(&self) -> &[PortSpec] {
-        static SPECS: &[PortSpec] = &[PortSpec {
-            name: "features",
-            accepts: &[PortKind::Features],
-            optional: false,
-        }];
-        SPECS
+        &self.ports
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Features
@@ -42,7 +48,7 @@ impl Node for TransformNode {
     }
     fn eval(
         &self,
-        _ctx: &EvalCtx<'_>,
+        ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
         let feats = downcast_features(
@@ -50,6 +56,16 @@ impl Node for TransformNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
+        let translate = (
+            self.translate_x.get(ctx, inputs)?,
+            self.translate_y.get(ctx, inputs)?,
+        );
+        let rotation_rad = self.rotation_deg.get(ctx, inputs)?.to_radians();
+        let uniform = self.scale.get(ctx, inputs)?;
+        let scale = (
+            uniform * self.scale_x.get(ctx, inputs)?,
+            uniform * self.scale_y.get(ctx, inputs)?,
+        );
         // Per group: apply the affine to each feature's vertices, carrying
         // properties.
         let mut out_groups = Vec::with_capacity(feats.groups.len());
@@ -61,10 +77,10 @@ impl Node for TransformNode {
                 &mut points,
                 &mut lines,
                 &mut polygons,
-                self.scale,
-                self.rotation_rad,
+                scale,
+                rotation_rad,
                 self.pivot,
-                self.translate,
+                translate,
             );
             out_groups.push(FeatureGroup {
                 properties: g.properties.clone(),
@@ -77,13 +93,17 @@ impl Node for TransformNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"transform");
-        h.update(&self.translate.0.to_le_bytes());
-        h.update(&self.translate.1.to_le_bytes());
-        h.update(&self.rotation_rad.to_le_bytes());
-        h.update(&self.scale.0.to_le_bytes());
-        h.update(&self.scale.1.to_le_bytes());
+        self.translate_x.param_hash(h);
+        self.translate_y.param_hash(h);
+        self.rotation_deg.param_hash(h);
+        self.scale.param_hash(h);
+        self.scale_x.param_hash(h);
+        self.scale_y.param_hash(h);
         h.update(&self.pivot.0.to_le_bytes());
         h.update(&self.pivot.1.to_le_bytes());
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -98,39 +118,66 @@ impl NodeFactory for TransformFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let features = take_input_ref(fields, "features")?;
+        // The `[x, y]` arrays are literal-only, and seed the per-axis
+        // scalars that a caller can drive per render.
         let tx = read_xy(fields, "translate", ctx, [0.0, 0.0])?;
-        let rotation_deg = read_number_or(fields, "rotation-deg", ctx, 0.0)?;
-        let scale_uniform = read_number_or(fields, "scale", ctx, 1.0)?;
-        let scale_xy = read_xy(
-            fields,
-            "scale-xy",
-            ctx,
-            [scale_uniform as f32, scale_uniform as f32],
-        )?;
         let pivot = read_xy(fields, "pivot", ctx, [0.0, 0.0])?;
+
+        let mut r = InReader::new(fields, ctx, 1);
+        let translate_x = r.number_or("translate-x", tx[0] as f64)?;
+        let translate_y = r.number_or("translate-y", tx[1] as f64)?;
+        let rotation_deg = r.number_or("rotation-deg", 0.0)?;
+        // Uniform `scale` multiplies the per-axis factors, and the literal
+        // `scale-xy` array seeds those factors. All three default to 1, so
+        // `scale: 0.5` and `scale-xy: [2, 1]` mean exactly what they did
+        // before, and `scale-x: "$sx"` now works alongside them.
+        let scale_xy = read_xy(fields, "scale-xy", ctx, [1.0, 1.0])?;
+        let scale = r.number_or("scale", 1.0)?;
+        let scale_x = r.number_or("scale-x", scale_xy[0] as f64)?;
+        let scale_y = r.number_or("scale-y", scale_xy[1] as f64)?;
+        let parts = r.finish();
+
+        let mut ports = vec![PortSpec {
+            name: "features",
+            accepts: &[PortKind::Features],
+            optional: false,
+        }];
+        ports.extend(parts.ports);
+        let mut connections = vec![Connection {
+            port: "features".into(),
+            src: features,
+        }];
+        connections.extend(parts.connections);
+
         Ok(BuiltNode {
             node: Box::new(TransformNode {
-                translate: (tx[0] as f64, tx[1] as f64),
-                rotation_rad: rotation_deg.to_radians(),
-                scale: (scale_xy[0] as f64, scale_xy[1] as f64),
+                translate_x,
+                translate_y,
+                rotation_deg,
+                scale,
+                scale_x,
+                scale_y,
                 pivot: (pivot[0] as f64, pivot[1] as f64),
+                ports,
+                param_refs: parts.param_refs,
             }),
-            connections: vec![Connection {
-                port: "features".into(),
-                src: features,
-            }],
+            connections,
         })
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Translate / rotate / scale every input vertex. Rotation happens around `pivot` (defaults to the origin) before the final translation. `scale-xy` overrides the uniform `scale` when both are present.",
+            "description": "Translate / rotate / scale every input vertex. Rotation happens around `pivot` (defaults to the origin) before the final translation. The scalar fields take a `$param` or an `@node` port and follow it per render; the `[x, y]` arrays are literal, and seed the matching scalars. Uniform `scale` multiplies the per-axis factors.",
             "properties": {
                 "features": schema_frag::node_ref(),
-                "translate": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
-                "rotation-deg": { "type": "number", "default": 0.0 },
-                "scale": { "type": "number", "default": 1.0 },
-                "scale-xy": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
-                "pivot": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+                "translate": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "Literal [x, y] shift. `translate-x` / `translate-y` override it." },
+                "translate-x": schema_frag::number(),
+                "translate-y": schema_frag::number(),
+                "rotation-deg": schema_frag::number(),
+                "scale": schema_frag::number(),
+                "scale-xy": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "Literal per-axis scale. `scale-x` / `scale-y` override it; uniform `scale` multiplies it." },
+                "scale-x": schema_frag::number(),
+                "scale-y": schema_frag::number(),
+                "pivot": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "Literal [x, y] rotation centre in feature space." },
             },
             "required": ["features"],
         })

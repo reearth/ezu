@@ -219,7 +219,7 @@ Chaikin corner-smoothing over each input polyline and polygon ring. Each iterati
 
 ### `transform`
 
-Translate / rotate / scale every input vertex. Rotation happens around `pivot` (defaults to the origin) before the final translation. `scale-xy` overrides the uniform `scale` when both are present.
+Translate / rotate / scale every input vertex. Rotation happens around `pivot` (defaults to the origin) before the final translation. The scalar fields take a `$param` or an `@node` port and follow it per render; the `[x, y]` arrays are literal, and seed the matching scalars. Uniform `scale` multiplies the per-axis factors.
 
 <figure class="op-demo">
   <div class="op-demo__images">
@@ -231,11 +231,15 @@ Translate / rotate / scale every input vertex. Rotation happens around `pivot` (
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
-| `pivot` | array of number | no | — |
-| `rotation-deg` | number | no | — |
-| `scale` | number | no | — |
-| `scale-xy` | array of number | no | — |
-| `translate` | array of number | no | — |
+| `pivot` | array of number | no | Literal [x, y] rotation centre in feature space. |
+| `rotation-deg` | number \| `$param` \| `@node` | no | — |
+| `scale` | number \| `$param` \| `@node` | no | — |
+| `scale-x` | number \| `$param` \| `@node` | no | — |
+| `scale-xy` | array of number | no | Literal per-axis scale. `scale-x` / `scale-y` override it; uniform `scale` multiplies it. |
+| `scale-y` | number \| `$param` \| `@node` | no | — |
+| `translate` | array of number | no | Literal [x, y] shift. `translate-x` / `translate-y` override it. |
+| `translate-x` | number \| `$param` \| `@node` | no | — |
+| `translate-y` | number \| `$param` \| `@node` | no | — |
 
 ### `triangulate`
 
