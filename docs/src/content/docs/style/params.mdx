@@ -78,13 +78,17 @@ The live editor's panel is generated from exactly this.
 ## Padding-determining fields need `max`
 
 Canvas padding is fixed at build time, so a field that decides it — blur sigma and
-friends — must carry a static upper bound. A literal qualifies; a `$param`
-qualifies **only if it declares `max`**; a `@node` port never does.
+friends — must carry an upper bound the build can see. A literal is its own; a
+`$param` qualifies **only if it declares `max`**:
 
 ```json
 "softness": { "type": "number", "default": 0, "min": 0, "max": 4 }   // ✅ usable as a blur sigma
 "softness": { "type": "number", "default": 0 }                       // ❌ build error
 ```
+
+A `@node` port carries no bound, so the style states one beside it with a
+`<field>-max` — see
+[padding and neighbours](/ezu/concepts/padding-and-neighbours/#why-these-fields-need-an-upper-bound).
 
 The bound is what the graph budgets padding for, so keep it as tight as the style
 actually needs — an unnecessarily large `max` costs render time on every tile.

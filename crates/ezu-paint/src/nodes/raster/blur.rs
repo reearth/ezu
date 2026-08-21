@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    FactoryError, InReader, Node, NodeFactory, PaddingIn, PortKind, PortSpec, PortValue, RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -22,9 +22,7 @@ use crate::nodes::common::{
 };
 
 struct BlurNode {
-    sigma: In<f64>,
-    /// Build-time upper bound on sigma, for pad propagation.
-    sigma_bound: f32,
+    sigma: PaddingIn,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
 }
@@ -40,7 +38,7 @@ impl Node for BlurNode {
         raster_or_sprite_output(input_kinds)
     }
     fn required_pad(&self, downstream: u32) -> u32 {
-        downstream + (3.0 * self.sigma_bound).ceil() as u32
+        downstream + (3.0 * self.sigma.bound() as f32).ceil() as u32
     }
     fn eval(
         &self,
@@ -102,14 +100,8 @@ impl NodeFactory for BlurFactory {
     ) -> Result<BuiltNode, FactoryError> {
         let input = take_input_ref(fields, "input")?;
         let mut r = InReader::new(fields, ctx, 1);
-        let sigma = r.number("sigma")?;
+        let sigma = PaddingIn::read(&mut r, fields, "sigma")?;
         let parts = r.finish();
-        let sigma_bound = sigma.static_bound().ok_or_else(|| FactoryError::BadField {
-            field: "sigma".into(),
-            msg: "pad depends on sigma at build time: use a literal, or a `$param` with `max` \
-                  (a `@node` port has no static bound)"
-                .into(),
-        })? as f32;
 
         let mut ports = vec![PortSpec {
             name: "input",
@@ -126,7 +118,6 @@ impl NodeFactory for BlurFactory {
         Ok(BuiltNode {
             node: Box::new(BlurNode {
                 sigma,
-                sigma_bound,
                 ports,
                 param_refs: parts.param_refs,
             }),
@@ -135,10 +126,11 @@ impl NodeFactory for BlurFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Gaussian blur on a raster (libblur, exact). Grows upstream pad by 3σ; a `$param` sigma needs a declared `max`.",
+            "description": "Gaussian blur on a raster (libblur, exact). Grows upstream pad by 3σ, so `sigma` needs an upper bound the build can see: a literal, a `$param` with `max`, or `sigma-max` alongside an `@node` port (the port's value is then clamped to it).",
             "properties": {
                 "input": schema_frag::node_ref(),
                 "sigma": schema_frag::px_number(),
+                "sigma-max": { "type": "number", "minimum": 0.0, "description": "Upper bound on `sigma` for padding, required when `sigma` is an `@node` port. Values above it are clamped." },
             },
             "required": ["input", "sigma"],
         })

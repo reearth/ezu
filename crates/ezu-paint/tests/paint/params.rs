@@ -2,7 +2,7 @@
 //! overrides, min/max clamping, `@node` scalar ports (`math`, `zoom`),
 //! and cache invalidation across param changes.
 
-use crate::common::{render, render_with_params};
+use crate::common::{render, render_tile, render_with_params};
 
 use ezu_graph::{
     build_graph, Cache, CanvasInfo, Evaluator, NoAssets, ParamValues, PortValue, ScalarValue,
@@ -216,4 +216,90 @@ fn shared_cache_distinguishes_param_values() {
 
     // And back: the original entry is still valid in the cache.
     assert_eq!(render_px(&ParamValues::new()), [0x10, 0x20, 0x30, 0xff]);
+}
+
+/// A padding-determining field takes an `@node` port when the style
+/// declares the ceiling padding is computed from.
+///
+/// Without one there is nothing to size the canvas by, since a computed
+/// value does not exist until the tile renders — and a computed value
+/// cannot be a `$param`, so `<field>-max` is the only way to say it.
+#[test]
+fn padding_field_accepts_a_port_with_a_declared_ceiling() {
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 16,
+      "nodes": {
+        "z":   { "op": "zoom" },
+        "s":   { "op": "math", "fn": "mul", "a": "@z", "b": 1.0 },
+        "bg":  { "op": "solid", "color": "#ffffff" },
+        "out": { "op": "blur", "input": "@bg", "sigma": "@s", "sigma-max": 6 }
+      },
+      "output": "@out"
+    }"##;
+    let doc = Document::from_json(json).unwrap();
+    let graph = build_graph(&doc, &default_registry()).expect("builds with a ceiling");
+    // Padding comes from the ceiling, not from whatever the port yields.
+    assert_eq!(graph.required_pad().unwrap(), 18, "3 × sigma-max");
+
+    // And it renders: z=4 asks for sigma 4, inside the ceiling.
+    let r = render_tile(json, 16, 18, TileId { z: 4, x: 0, y: 0 });
+    assert_eq!(r.pixel(8, 8), [0xff, 0xff, 0xff, 0xff]);
+}
+
+#[test]
+fn padding_field_rejects_a_port_with_no_ceiling() {
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 16,
+      "nodes": {
+        "z":   { "op": "zoom" },
+        "bg":  { "op": "solid", "color": "#ffffff" },
+        "out": { "op": "blur", "input": "@bg", "sigma": "@z" }
+      },
+      "output": "@out"
+    }"##;
+    let doc = Document::from_json(json).unwrap();
+    let err = build_graph(&doc, &default_registry())
+        .expect_err("a port with no bound cannot size the canvas");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("sigma-max"),
+        "the error should name the way out, got: {msg}"
+    );
+}
+
+/// A port that exceeds the declared ceiling is clamped to it: the canvas
+/// was padded for the ceiling, and reading past the margin would sample
+/// clamped edge pixels instead — a worse lie than a weaker blur.
+#[test]
+fn padding_field_clamps_a_port_above_its_ceiling() {
+    let doc_at = |ceiling: f64| {
+        format!(
+            r##"{{
+      "name": "demo",
+      "tile-size": 16,
+      "nodes": {{
+        "z":   {{ "op": "zoom" }},
+        "s":   {{ "op": "math", "fn": "mul", "a": "@z", "b": 4.0 }},
+        "dot": {{ "op": "circle", "color": "#000000", "radius-frac": 0.2 }},
+        "out": {{ "op": "blur", "input": "@dot", "sigma": "@s", "sigma-max": {ceiling} }}
+      }},
+      "output": "@out"
+    }}"##
+        )
+    };
+    // z=2 asks for sigma 8. Clamped to 2, the render must match a
+    // literal sigma of 2 — the ceiling, not the request.
+    let clamped = render_tile(&doc_at(2.0), 16, 24, TileId { z: 2, x: 0, y: 0 });
+    let literal = render_tile(
+        &doc_at(2.0).replace(r#""sigma": "@s""#, r#""sigma": 2"#),
+        16,
+        24,
+        TileId { z: 2, x: 0, y: 0 },
+    );
+    assert_eq!(
+        clamped.pixels, literal.pixels,
+        "a port above its ceiling should render as the ceiling"
+    );
 }

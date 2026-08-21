@@ -12,7 +12,8 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    FactoryError, In, InReader, Node, NodeFactory, PaddingIn, PortKind, PortSpec, PortValue,
+    RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -30,11 +31,8 @@ struct WarpNode {
     octaves: u32,
     lacunarity: In<f64>,
     gain: In<f64>,
-    amp_x: In<f64>,
-    amp_y: In<f64>,
-    /// Build-time upper bounds on `amp-x-px` / `amp-y-px`, for pad.
-    amp_x_bound: f64,
-    amp_y_bound: f64,
+    amp_x: PaddingIn,
+    amp_y: PaddingIn,
     seed: Option<u32>,
     anchor: Anchor,
     boundary: BoundaryMode,
@@ -59,7 +57,12 @@ impl Node for WarpNode {
         }
     }
     fn required_pad(&self, downstream: u32) -> u32 {
-        let bump = self.amp_x_bound.abs().max(self.amp_y_bound.abs()).ceil() as u32;
+        let bump = self
+            .amp_x
+            .bound()
+            .abs()
+            .max(self.amp_y.bound().abs())
+            .ceil() as u32;
         downstream + bump
     }
     fn eval(
@@ -201,6 +204,10 @@ impl NodeFactory for WarpFactory {
         } else {
             amp.clone()
         };
+        // `amp-px` seeds both axes, so the bound is attached to the
+        // resulting value rather than re-read from the field.
+        let amp_x = PaddingIn::from_value(amp_x, fields, "amp-x-px")?;
+        let amp_y = PaddingIn::from_value(amp_y, fields, "amp-y-px")?;
         let parts = r.finish();
 
         // scale-px must be > 0; check the static bound (literal value, or a
@@ -214,18 +221,6 @@ impl NodeFactory for WarpFactory {
                 });
             }
         }
-        let amp_x_bound = amp_x.static_bound().ok_or_else(|| FactoryError::BadField {
-            field: "amp-x-px".into(),
-            msg: "pad depends on amp-x-px (or amp-px) at build time: use a literal, or a \
-                  `$param` with `max` (a `@node` port has no static bound)"
-                .into(),
-        })?;
-        let amp_y_bound = amp_y.static_bound().ok_or_else(|| FactoryError::BadField {
-            field: "amp-y-px".into(),
-            msg: "pad depends on amp-y-px (or amp-px) at build time: use a literal, or a \
-                  `$param` with `max` (a `@node` port has no static bound)"
-                .into(),
-        })?;
 
         let seed = match fields.get("seed") {
             None => None,
@@ -268,8 +263,6 @@ impl NodeFactory for WarpFactory {
                 gain,
                 amp_x,
                 amp_y,
-                amp_x_bound,
-                amp_y_bound,
                 seed,
                 anchor,
                 boundary,
@@ -294,6 +287,8 @@ impl NodeFactory for WarpFactory {
                 "lacunarity": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 2.0 })),
                 "gain": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 0.5 })),
                 "amp-px": schema_frag::px_number(),
+                "amp-x-px-max": { "type": "number", "minimum": 0.0, "description": "Upper bound on `amp-x-px` for padding, required when `amp-x-px` is an `@node` port. Values above it are clamped." },
+                "amp-y-px-max": { "type": "number", "minimum": 0.0, "description": "Upper bound on `amp-y-px` for padding, required when `amp-y-px` is an `@node` port. Values above it are clamped." },
                 "amp-x-px": schema_frag::px_number(),
                 "amp-y-px": schema_frag::px_number(),
                 "seed": { "type": "integer", "minimum": 0, "description": "Field seed. Omitted, `anchor: world` uses a fixed seed so every tile samples the same field, and `anchor: tile` uses the host's per-tile seed so each tile gets its own. Set it to pin either." },

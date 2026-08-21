@@ -13,14 +13,16 @@
 //!
 //! `radius` is an `In<f64>` field, but pad is computed at build time —
 //! so it must carry a static upper bound (a literal, or a `$param` with
-//! `max`), exactly like `blur`'s sigma. A per-feature `radius-expr` is
+//! `max`, or a `radius-max` beside an `@node` port), exactly like
+//! `blur`'s sigma. A per-feature `radius-expr` is
 //! clamped to that bound at eval time so the pad stays sound.
 
 use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, ScalarField,
+    FactoryError, In, InReader, Node, NodeFactory, PaddingIn, PortKind, PortSpec, PortValue,
+    ScalarField,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -73,7 +75,7 @@ fn eval_number(
 }
 
 struct DensityNode {
-    radius: In<f64>,
+    radius: PaddingIn,
     intensity: In<f64>,
     /// Build-time upper bound on the kernel radius, for pad propagation.
     /// Per-group `radius-expr` results are clamped to it.
@@ -229,18 +231,10 @@ impl NodeFactory for DensityFactory {
     ) -> Result<BuiltNode, FactoryError> {
         let features = take_input_ref(fields, "features")?;
         let mut r = InReader::new(fields, ctx, 1);
-        let radius = r.number_or("radius", 30.0)?;
+        let radius = PaddingIn::read_or(&mut r, fields, "radius", 30.0)?;
         let intensity = r.number_or("intensity", 1.0)?;
         let parts = r.finish();
-        let radius_bound = radius
-            .static_bound()
-            .ok_or_else(|| FactoryError::BadField {
-                field: "radius".into(),
-                msg:
-                    "pad depends on radius at build time: use a literal, or a `$param` with `max` \
-                  (a `@node` port has no static bound)"
-                        .into(),
-            })? as f32;
+        let radius_bound = radius.bound() as f32;
 
         let (radius_expr, radius_expr_src) =
             parse_expr_field(fields, "radius-expr", &maplibre_expr::Type::Number)?;
@@ -284,6 +278,7 @@ impl NodeFactory for DensityFactory {
             "properties": {
                 "features": schema_frag::node_ref(),
                 "radius": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0, "default": 30,
+                "radius-max": { "type": "number", "minimum": 0.0, "description": "Upper bound on `radius` for padding, required when `radius` is an `@node` port. Values above it are clamped." },
                             "description": "Kernel radius in px. Pad is computed at build time, so this needs a static bound: a literal, or a `$param` with `max`." })),
                 "radius-expr": {
                     "description": "A MapLibre number expression (px), evaluated per feature group; overrides the constant `radius`. Evaluated values are clamped to `radius`'s static bound so the pad stays sound.",

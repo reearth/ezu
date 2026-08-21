@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    FactoryError, In, InReader, Node, NodeFactory, PaddingIn, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -22,9 +22,7 @@ struct FillSolidNode {
     fill_alpha: In<f64>,
     edge: Option<In<[f32; 4]>>,
     edge_width: In<f64>,
-    blur_sigma: In<f64>,
-    /// Build-time upper bound on `blur-sigma`, for pad propagation.
-    blur_sigma_bound: f32,
+    blur_sigma: PaddingIn,
     /// Optional data-driven fill: a MapLibre color expression evaluated per
     /// feature group. When set, it overrides the constant `fill` (each group
     /// paints in its own resolved color).
@@ -50,7 +48,7 @@ impl Node for FillSolidNode {
         PortKind::Raster
     }
     fn required_pad(&self, downstream: u32) -> u32 {
-        downstream + (3.0 * self.blur_sigma_bound.max(0.0)).ceil() as u32
+        downstream + (3.0 * self.blur_sigma.bound().max(0.0)).ceil() as u32
     }
     fn eval(
         &self,
@@ -167,7 +165,7 @@ impl NodeFactory for FillSolidFactory {
         let fill_alpha = r.number_or("fill-alpha", 1.0)?;
         let edge = r.color_opt("edge")?;
         let edge_width = r.number_or("edge-width", 1.0)?;
-        let blur_sigma = r.number_or("blur-sigma", 0.0)?;
+        let blur_sigma = PaddingIn::read_or(&mut r, fields, "blur-sigma", 0.0)?;
         // `fill-expr`: a raw MapLibre color expression, compiled once and
         // evaluated per feature group at paint time. Overrides `fill`.
         let (fill_expr, fill_expr_src) = match fields.get("fill-expr") {
@@ -208,14 +206,6 @@ impl NodeFactory for FillSolidFactory {
             None => (None, None),
         };
         let parts = r.finish();
-        let blur_sigma_bound = blur_sigma
-            .static_bound()
-            .ok_or_else(|| FactoryError::BadField {
-                field: "blur-sigma".into(),
-                msg: "pad depends on blur-sigma at build time: use a literal, or a `$param` \
-                          with `max` (a `@node` port has no static bound)"
-                    .into(),
-            })? as f32;
 
         let mut ports = vec![PortSpec {
             name: "features",
@@ -236,7 +226,6 @@ impl NodeFactory for FillSolidFactory {
                 edge,
                 edge_width,
                 blur_sigma,
-                blur_sigma_bound,
                 fill_expr,
                 opacity_expr,
                 fill_expr_src,
@@ -263,6 +252,7 @@ impl NodeFactory for FillSolidFactory {
                 "edge": schema_frag::color(),
                 "edge-width": schema_frag::px_number(),
                 "blur-sigma": schema_frag::px_number(),
+                "blur-sigma-max": { "type": "number", "minimum": 0.0, "description": "Upper bound on `blur-sigma` for padding, required when `blur-sigma` is an `@node` port. Values above it are clamped." },
             },
             "required": ["features", "fill"],
         })

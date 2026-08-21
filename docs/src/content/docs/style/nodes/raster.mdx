@@ -36,7 +36,7 @@ Composite `over` onto `base` with a W3C blend mode. `clip: true` clips result to
 
 ### `blur`
 
-Gaussian blur on a raster (libblur, exact). Grows upstream pad by 3σ; a `$param` sigma needs a declared `max`.
+Gaussian blur on a raster (libblur, exact). Grows upstream pad by 3σ, so `sigma` needs an upper bound the build can see: a literal, a `$param` with `max`, or `sigma-max` alongside an `@node` port (the port's value is then clamped to it).
 
 <figure class="op-demo op-demo--pair">
   <div class="op-demo__images">
@@ -50,6 +50,7 @@ Gaussian blur on a raster (libblur, exact). Grows upstream pad by 3σ; a `$param
 | --- | --- | --- | --- |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
 | `sigma` | number (0…∞) \| `$param` \| `@node` | yes | — |
+| `sigma-max` | number (0…∞) | no | Upper bound on `sigma` for padding, required when `sigma` is an `@node` port. Values above it are clamped. |
 
 ### `brightness-contrast`
 
@@ -168,6 +169,7 @@ Per-channel morphological max over a square kernel. Grows bright / opaque region
 | --- | --- | --- | --- |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
 | `radius-px` | integer (0…256) \| `$param` \| `@node` | yes | — |
+| `radius-px-max` | number (0…∞) | no | Upper bound on `radius-px` for padding, required when `radius-px` is an `@node` port. Values above it are clamped. |
 
 ### `displace`
 
@@ -185,7 +187,9 @@ Photoshop-style displacement map. Output pixel reads `input` at a position offse
 | --- | --- | --- | --- |
 | `amp-px` | number (0…∞) \| `$param` \| `@node` | yes | — |
 | `amp-x-px` | number (0…∞) \| `$param` \| `@node` | no | — |
+| `amp-x-px-max` | number (0…∞) | no | Upper bound on `amp-x-px` for padding, required when `amp-x-px` is an `@node` port. Values above it are clamped. |
 | `amp-y-px` | number (0…∞) \| `$param` \| `@node` | no | — |
+| `amp-y-px-max` | number (0…∞) | no | Upper bound on `amp-y-px` for padding, required when `amp-y-px` is an `@node` port. Values above it are clamped. |
 | `boundary` | `clamp` \| `transparent` \| `mirror` | no | — |
 | `displacement` | `@node` | yes | Reference to another node (`@name`). |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
@@ -241,6 +245,7 @@ Per-channel morphological min over a square kernel. Shrinks bright / opaque regi
 | --- | --- | --- | --- |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
 | `radius-px` | integer (0…256) \| `$param` \| `@node` | yes | — |
+| `radius-px-max` | number (0…∞) | no | Upper bound on `radius-px` for padding, required when `radius-px` is an `@node` port. Values above it are clamped. |
 
 ### `gradient-conic`
 
@@ -450,7 +455,8 @@ Quantize a raster into uniform square blocks. `mode` selects how each block is s
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `anchor` | `world` \| `tile` | no | `world` (default) makes the block grid seamless across map tiles by growing the upstream pad. `tile` restarts the grid at every map tile's top-left and requires no extra padding. |
-| `block` | integer (1…∞) \| `$param` \| `@node` | yes | Block edge length in canvas pixels. Takes a literal or a `$param` with a declared `max`, but not an `@node` port: with `anchor: world` the block size sets the canvas padding, which has to be known before anything renders. |
+| `block` | integer (1…∞) \| `$param` \| `@node` | yes | Block edge length in canvas pixels. With `anchor: world` the block size sets the canvas padding, which is fixed before anything renders — so this needs an upper bound the build can see: a literal, a `$param` with `max`, or `block-max` beside an `@node` port. |
+| `block-max` | number (0…∞) | no | Upper bound on `block` for padding, required when `block` is an `@node` port. Values above it are clamped. |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
 | `mode` | `average` \| `nearest` | no | `average` (default) blends covered pixels into a mean colour. `nearest` samples the block's centre pixel verbatim — produces hard block edges without inter-colour averaging. |
 
@@ -666,7 +672,9 @@ Domain warp via an internal noise field. With `anchor: world` (default) the warp
 | --- | --- | --- | --- |
 | `amp-px` | number (0…∞) \| `$param` \| `@node` | yes | — |
 | `amp-x-px` | number (0…∞) \| `$param` \| `@node` | no | — |
+| `amp-x-px-max` | number (0…∞) | no | Upper bound on `amp-x-px` for padding, required when `amp-x-px` is an `@node` port. Values above it are clamped. |
 | `amp-y-px` | number (0…∞) \| `$param` \| `@node` | no | — |
+| `amp-y-px-max` | number (0…∞) | no | Upper bound on `amp-y-px` for padding, required when `amp-y-px` is an `@node` port. Values above it are clamped. |
 | `anchor` | `tile` \| `world` | no | — |
 | `boundary` | `clamp` \| `transparent` \| `mirror` | no | — |
 | `gain` | number \| `$param` \| `@node` | no | — |

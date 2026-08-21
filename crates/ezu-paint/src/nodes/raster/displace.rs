@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    FactoryError, InReader, Node, NodeFactory, PaddingIn, PortKind, PortSpec, PortValue, RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -29,11 +29,8 @@ use crate::nodes::common::{
 };
 
 struct DisplaceNode {
-    amp_x: In<f64>,
-    amp_y: In<f64>,
-    /// Build-time upper bounds on `amp-x-px` / `amp-y-px`, for pad.
-    amp_x_bound: f64,
-    amp_y_bound: f64,
+    amp_x: PaddingIn,
+    amp_y: PaddingIn,
     boundary: BoundaryMode,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
@@ -52,7 +49,12 @@ impl Node for DisplaceNode {
         raster_or_sprite_output(input_kinds)
     }
     fn required_pad(&self, downstream: u32) -> u32 {
-        let bump = self.amp_x_bound.abs().max(self.amp_y_bound.abs()).ceil() as u32;
+        let bump = self
+            .amp_x
+            .bound()
+            .abs()
+            .max(self.amp_y.bound().abs())
+            .ceil() as u32;
         downstream + bump
     }
     fn eval(
@@ -146,20 +148,11 @@ impl NodeFactory for DisplaceFactory {
         } else {
             amp.clone()
         };
+        // `amp-px` seeds both axes, so the bound is attached to the
+        // resulting value rather than re-read from the field.
+        let amp_x = PaddingIn::from_value(amp_x, fields, "amp-x-px")?;
+        let amp_y = PaddingIn::from_value(amp_y, fields, "amp-y-px")?;
         let parts = r.finish();
-
-        let amp_x_bound = amp_x.static_bound().ok_or_else(|| FactoryError::BadField {
-            field: "amp-x-px".into(),
-            msg: "pad depends on amp-x-px (or amp-px) at build time: use a literal, or a \
-                  `$param` with `max` (a `@node` port has no static bound)"
-                .into(),
-        })?;
-        let amp_y_bound = amp_y.static_bound().ok_or_else(|| FactoryError::BadField {
-            field: "amp-y-px".into(),
-            msg: "pad depends on amp-y-px (or amp-px) at build time: use a literal, or a \
-                  `$param` with `max` (a `@node` port has no static bound)"
-                .into(),
-        })?;
 
         let mut ports = vec![
             PortSpec {
@@ -190,8 +183,6 @@ impl NodeFactory for DisplaceFactory {
             node: Box::new(DisplaceNode {
                 amp_x,
                 amp_y,
-                amp_x_bound,
-                amp_y_bound,
                 boundary,
                 ports,
                 param_refs: parts.param_refs,
@@ -206,6 +197,8 @@ impl NodeFactory for DisplaceFactory {
                 "input": schema_frag::node_ref(),
                 "displacement": schema_frag::node_ref(),
                 "amp-px": schema_frag::px_number(),
+                "amp-x-px-max": { "type": "number", "minimum": 0.0, "description": "Upper bound on `amp-x-px` for padding, required when `amp-x-px` is an `@node` port. Values above it are clamped." },
+                "amp-y-px-max": { "type": "number", "minimum": 0.0, "description": "Upper bound on `amp-y-px` for padding, required when `amp-y-px` is an `@node` port. Values above it are clamped." },
                 "amp-x-px": schema_frag::px_number(),
                 "amp-y-px": schema_frag::px_number(),
                 "boundary": {

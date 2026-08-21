@@ -418,3 +418,125 @@ impl<'a, 'c> InReader<'a, 'c> {
         self.parts
     }
 }
+
+/// A numeric field whose value decides how much canvas padding the graph
+/// needs — a blur's sigma, a morphology radius, a warp amplitude.
+///
+/// Padding is fixed before evaluation starts, so the build has to know an
+/// upper bound for these. A literal or a `$param` with a declared `max`
+/// carries one ([`In::static_bound`]); an `@node` port does not, and used
+/// to be rejected outright — which left no way to drive a blur from a
+/// `math` chain, since a computed value cannot be a param.
+///
+/// So the bound becomes something the style can state on its own, as a
+/// literal `<field>-max` sibling. Padding is computed from that, and the
+/// value the port produces is clamped to it at render time: the canvas
+/// cannot grow mid-render, so a larger value would read past the margin
+/// and clamp the tile's edge pixels instead. Clamping is reported once
+/// per node — quietly weakening a filter the style asked for is worth a
+/// line in the log, but not one per tile.
+pub struct PaddingIn {
+    value: In<f64>,
+    bound: f64,
+    field: &'static str,
+    clamped: std::sync::atomic::AtomicBool,
+}
+
+impl PaddingIn {
+    /// Read a required padding-determining field.
+    pub fn read(
+        r: &mut InReader<'_, '_>,
+        fields: &serde_json::Map<String, Value>,
+        field: &'static str,
+    ) -> Result<Self, FactoryError> {
+        let value = r.number(field)?;
+        Self::from_value(value, fields, field)
+    }
+
+    /// Read an optional padding-determining field with a default.
+    pub fn read_or(
+        r: &mut InReader<'_, '_>,
+        fields: &serde_json::Map<String, Value>,
+        field: &'static str,
+        default: f64,
+    ) -> Result<Self, FactoryError> {
+        let value = r.number_or(field, default)?;
+        Self::from_value(value, fields, field)
+    }
+
+    /// Pair an already-read `In` with its bound — for fields whose value
+    /// comes from a fallback chain (`amp-px` seeding `amp-x-px`).
+    pub fn from_value(
+        value: In<f64>,
+        fields: &serde_json::Map<String, Value>,
+        field: &'static str,
+    ) -> Result<Self, FactoryError> {
+        let ceiling = format!("{field}-max");
+        let declared = fields.get(&ceiling).and_then(Value::as_f64);
+        let bound = match (value.static_bound(), declared) {
+            // A declared ceiling wins even over a literal: it is the
+            // author saying "no more than this", and clamping to it is
+            // then a no-op for a literal within range.
+            (_, Some(d)) => d,
+            (Some(b), None) => b,
+            (None, None) => {
+                return Err(FactoryError::BadField {
+                    field: field.to_string(),
+                    msg: format!(
+                        "canvas padding is fixed before rendering, so `{field}` needs an \
+                         upper bound at build time: use a literal, a `$param` with `max`, \
+                         or declare `{ceiling}` alongside the `@node` port"
+                    ),
+                })
+            }
+        };
+        Ok(Self {
+            value,
+            bound,
+            field,
+            clamped: std::sync::atomic::AtomicBool::new(false),
+        })
+    }
+
+    /// The bound padding was computed from.
+    pub fn bound(&self) -> f64 {
+        self.bound
+    }
+
+    /// The value for this render, clamped to [`PaddingIn::bound`].
+    pub fn get(
+        &self,
+        ctx: &crate::EvalCtx<'_>,
+        inputs: &[Option<crate::PortValue>],
+    ) -> Result<f64, crate::EvalError> {
+        let raw = self.value.get(ctx, inputs)?;
+        if raw > self.bound {
+            if !self
+                .clamped
+                .swap(true, std::sync::atomic::Ordering::Relaxed)
+            {
+                tracing::warn!(
+                    "`{}`: {raw} exceeds the {} the canvas was padded for; clamping. \
+                     Raise `{}-max` to let it through.",
+                    self.field,
+                    self.bound,
+                    self.field,
+                );
+            }
+            return Ok(self.bound);
+        }
+        Ok(raw)
+    }
+
+    pub fn param_hash(&self, h: &mut xxhash_rust::xxh3::Xxh3) {
+        self.value.param_hash(h);
+        h.update(&self.bound.to_le_bytes());
+    }
+
+    pub fn param_refs(&self) -> Vec<String> {
+        match &self.value {
+            In::Param { name, .. } => vec![name.clone()],
+            _ => Vec::new(),
+        }
+    }
+}

@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    FactoryError, InReader, Node, NodeFactory, PaddingIn, PortKind, PortSpec, PortValue, RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -36,8 +36,8 @@ enum Mode {
 }
 
 struct MosaicNode {
-    block: In<f64>,
-    /// Build-time upper bound on `block`, for pad propagation.
+    block: PaddingIn,
+    /// `block`'s bound rounded to whole pixels, for pad propagation.
     block_bound: u32,
     anchor: Anchor,
     mode: Mode,
@@ -204,14 +204,9 @@ impl NodeFactory for MosaicFactory {
     ) -> Result<BuiltNode, FactoryError> {
         let input = take_input_ref(fields, "input")?;
         let mut r = InReader::new(fields, ctx, 1);
-        let block = r.number("block")?;
+        let block = PaddingIn::read(&mut r, fields, "block")?;
         let parts = r.finish();
-        let block_bound_raw = block.static_bound().ok_or_else(|| FactoryError::BadField {
-            field: "block".into(),
-            msg: "pad depends on block at build time: use a literal, or a `$param` with \
-                          `max` (a `@node` port has no static bound)"
-                .into(),
-        })?;
+        let block_bound_raw = block.bound();
         if !(block_bound_raw.is_finite() && block_bound_raw >= 1.0) {
             return Err(FactoryError::BadField {
                 field: "block".into(),
@@ -270,8 +265,9 @@ impl NodeFactory for MosaicFactory {
                 "input": schema_frag::node_ref(),
                 "block": schema_frag::in_number(serde_json::json!({
                     "type": "integer", "minimum": 1,
-                    "description": "Block edge length in canvas pixels. Takes a literal or a `$param` with a declared `max`, but not an `@node` port: with `anchor: world` the block size sets the canvas padding, which has to be known before anything renders."
+                    "description": "Block edge length in canvas pixels. With `anchor: world` the block size sets the canvas padding, which is fixed before anything renders — so this needs an upper bound the build can see: a literal, a `$param` with `max`, or `block-max` beside an `@node` port."
                 })),
+                "block-max": { "type": "number", "minimum": 0.0, "description": "Upper bound on `block` for padding, required when `block` is an `@node` port. Values above it are clamped." },
                 "anchor": { "type": "string", "enum": ["world", "tile"], "default": "world",
                             "description": "`world` (default) makes the block grid seamless across map tiles by growing the upstream pad. `tile` restarts the grid at every map tile's top-left and requires no extra padding." },
                 "mode": { "type": "string", "enum": ["average", "nearest"], "default": "average",

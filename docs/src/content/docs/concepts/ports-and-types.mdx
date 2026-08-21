@@ -66,10 +66,10 @@ That is how zoom-dependent styling works without a special syntax: `zoom` emits
 the tile's zoom, `math` does arithmetic, `expr` evaluates a whole MapLibre
 expression once per tile — all of them producing `Scalar`.
 
-One constraint. Fields that decide canvas padding at build time — blur sigma and
-friends — need a **static upper bound**: a literal, or a `$param` whose
-declaration has `max`. Wiring those from a `@node` port is a build error, because
-padding must be known before anything is evaluated. See
+One constraint. Fields that decide canvas padding — blur sigma and friends — need
+an **upper bound the build can see**, because padding is fixed before anything is
+evaluated. A literal or a `$param` with `max` carries one; a `@node` port needs a
+`<field>-max` beside it, and its value is clamped to that. See
 [padding and neighbours](/ezu/concepts/padding-and-neighbours/).
 
 ## Reading type errors

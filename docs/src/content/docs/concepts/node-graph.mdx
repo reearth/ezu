@@ -59,7 +59,8 @@ graph model is a superset, not an alternative.
 - two connected ports disagree on type (see
   [ports and types](/ezu/concepts/ports-and-types/)),
 - the references contain a cycle,
-- a field that decides padding at build time has no static upper bound.
+- a field that decides padding has no upper bound the build can see (no literal,
+  no `$param` `max`, no `<field>-max` beside the port).
 
 Errors carry the offending node id. `ezu check` is exactly this pass, run on its
 own — plus a report of the canvas padding the graph needs, which the renderer

@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    FactoryError, InReader, Node, NodeFactory, PaddingIn, PortKind, PortSpec, PortValue, RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -51,9 +51,7 @@ impl Op {
 
 struct MorphNode {
     op: Op,
-    radius: In<f64>,
-    /// Build-time upper bound on `radius-px`, for pad propagation.
-    radius_bound: u32,
+    radius: PaddingIn,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
 }
@@ -72,7 +70,7 @@ impl Node for MorphNode {
         raster_or_sprite_output(input_kinds)
     }
     fn required_pad(&self, downstream: u32) -> u32 {
-        downstream + self.radius_bound
+        downstream + self.radius.bound().round() as u32
     }
     fn eval(
         &self,
@@ -191,17 +189,9 @@ fn build_morph(
 ) -> Result<BuiltNode, FactoryError> {
     let input = take_input_ref(fields, "input")?;
     let mut r = InReader::new(fields, ctx, 1);
-    let radius = r.number("radius-px")?;
+    let radius = PaddingIn::read(&mut r, fields, "radius-px")?;
     let parts = r.finish();
-    let radius_bound = radius
-        .static_bound()
-        .ok_or_else(|| FactoryError::BadField {
-            field: "radius-px".into(),
-            msg: "pad depends on radius-px at build time: use a literal, or a `$param` with \
-                  `max` (a `@node` port has no static bound)"
-                .into(),
-        })?
-        .round();
+    let radius_bound = radius.bound().round();
     if !(0.0..=256.0).contains(&radius_bound) {
         return Err(FactoryError::BadField {
             field: "radius-px".into(),
@@ -225,7 +215,6 @@ fn build_morph(
         node: Box::new(MorphNode {
             op,
             radius,
-            radius_bound: radius_bound as u32,
             ports,
             param_refs: parts.param_refs,
         }),
@@ -241,6 +230,7 @@ fn morph_schema(description: &str) -> Value {
             "radius-px": schema_frag::in_number(serde_json::json!({
                 "type": "integer", "minimum": 0, "maximum": 256
             })),
+            "radius-px-max": { "type": "number", "minimum": 0.0, "description": "Upper bound on `radius-px` for padding, required when `radius-px` is an `@node` port. Values above it are clamped." },
         },
         "required": ["input", "radius-px"],
     })

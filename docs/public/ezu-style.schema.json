@@ -240,7 +240,7 @@
             "type": "object"
           },
           {
-            "description": "Gaussian blur on a raster (libblur, exact). Grows upstream pad by 3σ; a `$param` sigma needs a declared `max`.",
+            "description": "Gaussian blur on a raster (libblur, exact). Grows upstream pad by 3σ, so `sigma` needs an upper bound the build can see: a literal, a `$param` with `max`, or `sigma-max` alongside an `@node` port (the port's value is then clamped to it).",
             "properties": {
               "input": {
                 "description": "Reference to another node (`@name`).",
@@ -263,6 +263,11 @@
                     "type": "string"
                   }
                 ]
+              },
+              "sigma-max": {
+                "description": "Upper bound on `sigma` for padding, required when `sigma` is an `@node` port. Values above it are clamped.",
+                "minimum": 0.0,
+                "type": "number"
               }
             },
             "required": [
@@ -1075,6 +1080,11 @@
                     "default": 30,
                     "description": "Kernel radius in px. Pad is computed at build time, so this needs a static bound: a literal, or a `$param` with `max`.",
                     "minimum": 0.0,
+                    "radius-max": {
+                      "description": "Upper bound on `radius` for padding, required when `radius` is an `@node` port. Values above it are clamped.",
+                      "minimum": 0.0,
+                      "type": "number"
+                    },
                     "type": "number"
                   },
                   {
@@ -1123,6 +1133,11 @@
                     "type": "string"
                   }
                 ]
+              },
+              "radius-px-max": {
+                "description": "Upper bound on `radius-px` for padding, required when `radius-px` is an `@node` port. Values above it are clamped.",
+                "minimum": 0.0,
+                "type": "number"
               }
             },
             "required": [
@@ -1162,6 +1177,11 @@
                   }
                 ]
               },
+              "amp-x-px-max": {
+                "description": "Upper bound on `amp-x-px` for padding, required when `amp-x-px` is an `@node` port. Values above it are clamped.",
+                "minimum": 0.0,
+                "type": "number"
+              },
               "amp-y-px": {
                 "oneOf": [
                   {
@@ -1174,6 +1194,11 @@
                     "type": "string"
                   }
                 ]
+              },
+              "amp-y-px-max": {
+                "description": "Upper bound on `amp-y-px` for padding, required when `amp-y-px` is an `@node` port. Values above it are clamped.",
+                "minimum": 0.0,
+                "type": "number"
               },
               "boundary": {
                 "default": "clamp",
@@ -1409,6 +1434,11 @@
                     "type": "string"
                   }
                 ]
+              },
+              "radius-px-max": {
+                "description": "Upper bound on `radius-px` for padding, required when `radius-px` is an `@node` port. Values above it are clamped.",
+                "minimum": 0.0,
+                "type": "number"
               }
             },
             "required": [
@@ -1683,6 +1713,11 @@
                     "type": "string"
                   }
                 ]
+              },
+              "blur-sigma-max": {
+                "description": "Upper bound on `blur-sigma` for padding, required when `blur-sigma` is an `@node` port. Values above it are clamped.",
+                "minimum": 0.0,
+                "type": "number"
               },
               "edge": {
                 "description": "sRGB hex color, `$param` reference, or `@node` scalar port.",
@@ -3143,7 +3178,7 @@
               "block": {
                 "oneOf": [
                   {
-                    "description": "Block edge length in canvas pixels. Takes a literal or a `$param` with a declared `max`, but not an `@node` port: with `anchor: world` the block size sets the canvas padding, which has to be known before anything renders.",
+                    "description": "Block edge length in canvas pixels. With `anchor: world` the block size sets the canvas padding, which is fixed before anything renders — so this needs an upper bound the build can see: a literal, a `$param` with `max`, or `block-max` beside an `@node` port.",
                     "minimum": 1,
                     "type": "integer"
                   },
@@ -3153,6 +3188,11 @@
                     "type": "string"
                   }
                 ]
+              },
+              "block-max": {
+                "description": "Upper bound on `block` for padding, required when `block` is an `@node` port. Values above it are clamped.",
+                "minimum": 0.0,
+                "type": "number"
               },
               "input": {
                 "description": "Reference to another node (`@name`).",
@@ -5348,6 +5388,11 @@
                   }
                 ]
               },
+              "amp-x-px-max": {
+                "description": "Upper bound on `amp-x-px` for padding, required when `amp-x-px` is an `@node` port. Values above it are clamped.",
+                "minimum": 0.0,
+                "type": "number"
+              },
               "amp-y-px": {
                 "oneOf": [
                   {
@@ -5360,6 +5405,11 @@
                     "type": "string"
                   }
                 ]
+              },
+              "amp-y-px-max": {
+                "description": "Upper bound on `amp-y-px` for padding, required when `amp-y-px` is an `@node` port. Values above it are clamped.",
+                "minimum": 0.0,
+                "type": "number"
               },
               "anchor": {
                 "default": "world",

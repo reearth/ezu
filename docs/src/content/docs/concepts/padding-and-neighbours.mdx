@@ -68,19 +68,38 @@ reported by `ezu check` and rendered with the style's own `pad` instead — a
 `blur` with `sigma: 200` wants ~600 px of margin, which is a style bug rather
 than a canvas size.
 
-## Why static bounds are required
+## Why these fields need an upper bound
 
-Padding must be known before evaluation, so a field that determines it must have
-a build-time upper bound:
+Padding is fixed before evaluation starts, so a field that decides it has to have
+a bound the build can see:
 
 ```json
-"sigma": 3                              // ✅ literal
-"sigma": "$softness"                    // ✅ if the param declares `max`
-"sigma": "@computed"                    // ❌ build error — a port has no static bound
+"sigma": 3                                       // ✅ literal
+"sigma": "$softness"                             // ✅ if the param declares `max`
+"sigma": "@computed", "sigma-max": 12            // ✅ the ceiling states the bound
+"sigma": "@computed"                             // ❌ nothing to pad for
 ```
 
-This is the one place where the otherwise-uniform `In<T>` flexibility is
-restricted, and the error message says so explicitly.
+A literal is its own bound and a `$param` carries one in its declaration. A
+computed value — `math`, `zoom`, `expr` — has neither, and cannot be a `$param`
+either, so the style states the ceiling itself with a `<field>-max` sibling.
+Padding is computed from that, and a value above it is **clamped** at render time:
+the canvas cannot grow mid-render, so a larger sigma would read past the margin
+and take the tile's edge pixels with it. Clamping is logged once per node, since
+quietly weakening a filter the style asked for is worth knowing about.
+
+Seven fields work this way — `blur`'s `sigma`, `fill-solid`'s `blur-sigma`,
+`warp` and `displace`'s `amp-x-px` / `amp-y-px`, `mosaic`'s `block`,
+`erode`/`dilate`'s `radius-px`, and `density`'s `radius` — each with a matching
+`-max`.
+
+```json
+"z":   { "op": "zoom" },
+"s":   { "op": "math", "fn": "mul", "a": "@z", "b": 1.5 },
+"out": { "op": "blur", "input": "@c", "sigma": "@s", "sigma-max": 12 }
+```
+
+That pads for 36 px (3 × 12) at every zoom, and blurs by 1.5 × zoom up to that.
 
 ## What it does and does not cover
 

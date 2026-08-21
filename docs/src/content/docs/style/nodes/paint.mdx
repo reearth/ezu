@@ -85,6 +85,7 @@ Solid polygon fill with optional outline and Gaussian blur.
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `blur-sigma` | number (0…∞) \| `$param` \| `@node` | no | — |
+| `blur-sigma-max` | number (0…∞) | no | Upper bound on `blur-sigma` for padding, required when `blur-sigma` is an `@node` port. Values above it are clamped. |
 | `edge` | color \| `$param` \| `@node` | no | sRGB hex color, `$param` reference, or `@node` scalar port. |
 | `edge-width` | number (0…∞) \| `$param` \| `@node` | no | — |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
