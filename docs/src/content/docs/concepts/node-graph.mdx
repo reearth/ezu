@@ -59,12 +59,12 @@ graph model is a superset, not an alternative.
 - two connected ports disagree on type (see
   [ports and types](/ezu/concepts/ports-and-types/)),
 - the references contain a cycle,
-- the computed canvas padding exceeds the maximum (catches an accidental
-  `blur σ=200` before it allocates anything),
 - a field that decides padding at build time has no static upper bound.
 
 Errors carry the offending node id. `ezu check` is exactly this pass, run on its
-own.
+own — plus a report of the canvas padding the graph needs, which is a warning
+rather than an error since a short `pad` renders, just with clamped edges. See
+[padding and neighbours](/ezu/concepts/padding-and-neighbours/).
 
 ## Composition beyond wiring
 

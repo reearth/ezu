@@ -55,9 +55,10 @@ let out = ev.render_parallel(
 ```
 
 `build_graph` validates everything statically: every `@ref` resolves,
-ports type-check, no cycles, and the required canvas padding doesn't
-exceed `MAX_PAD`. Failures come back as `BuildGraphError` with the
-offending node id attached.
+ports type-check, no cycles, and every pad-determining field carries a
+static bound. Failures come back as `BuildGraphError` with the offending
+node id attached. Padding itself is reported, not enforced — see
+[pad propagation](#pad-propagation).
 
 ## Evaluation
 
@@ -128,8 +129,13 @@ extra border on the upstream raster to stay seamless. `Node::required_pad`
 declares this growth; `Graph::compute_pad` walks the topo order in
 reverse and reports the pad each source must supply.
 
-If the requested pad exceeds `MAX_PAD` the graph rejects the build —
-catches accidental "blur σ=200" before any rendering happens.
+Nothing grows the canvas on its own: rendering uses the single
+`CanvasInfo { tile_size, pad }` the host supplies, and a filter reaching
+past that margin samples clamped edge pixels — a seam between tiles
+rather than an error. `compute_pad` is how a host learns the right
+number: call it and size the canvas from the answer, or report it, as
+`ezu check` does. It errors when a graph asks for more than `MAX_PAD`,
+which catches an accidental "blur σ=200".
 
 ## Custom ops
 

@@ -452,11 +452,43 @@ fn run_schema(args: SchemaCmd) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Report whether the document's `pad` covers what its filters read.
+///
+/// Rendering happens on one canvas of `tile-size + 2 * pad`, and nothing
+/// grows it: a `blur` whose kernel reaches past the margin quietly samples
+/// clamped edge pixels instead, which shows up as a seam between tiles
+/// rather than as an error. `Graph::compute_pad` knows what each node
+/// needs, so say so here — this is the one place a style is inspected
+/// without rendering it.
+fn report_pad(graph: &Graph, doc: &Document) {
+    let pads = match graph.compute_pad(doc.pad) {
+        Ok(pads) => pads,
+        Err(e) => {
+            tracing::warn!("pad: {e}");
+            return;
+        }
+    };
+    let Some((ix, &needed)) = pads.iter().enumerate().max_by_key(|(_, &p)| p) else {
+        return;
+    };
+    if needed > doc.pad {
+        tracing::warn!(
+            "pad: {} declared, {needed} needed by `{}` — filters will sample clamped \
+             edge pixels, which shows as a seam between tiles",
+            doc.pad,
+            graph.node_id(ix),
+        );
+    } else {
+        tracing::info!("pad: {} declared, {needed} needed", doc.pad);
+    }
+}
+
 async fn run_check(args: CheckCmd) -> Result<(), Box<dyn std::error::Error>> {
     let text = fetch_text(&args.style).await?;
     let doc = Document::from_json(&text)?;
     let registry = default_registry();
     let graph = build_graph(&doc, &registry)?;
+    report_pad(&graph, &doc);
     let attributions = doc.attributions();
     if !attributions.is_empty() {
         tracing::info!("attribution: {}", attributions.join(" | "));

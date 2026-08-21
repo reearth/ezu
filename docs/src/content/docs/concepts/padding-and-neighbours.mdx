@@ -23,16 +23,32 @@ margin is cropped off at the end.
 Every `Raster` and `ScalarField` in the graph is this padded size, which is why
 those kinds are described as "padded canvas-sized".
 
-## Padding is computed, not guessed
+## You declare it; the graph can tell you what it needs
 
-You do not have to work out how much margin a chain needs. Each node declares how
-it grows the requirement — `blur` asks for `3σ`, and so on — and
+`pad` is a number you write. Nothing grows it for you: rendering happens on one
+canvas of `tile-size + 2 × pad`, and a filter whose kernel reaches past that
+margin samples clamped edge pixels instead — which shows up as a seam between
+tiles, not as an error.
+
+You do not have to work the number out by hand, though. Each node declares how it
+grows the requirement — `blur` asks for `3σ`, and so on — and
 `Graph::compute_pad` walks the topological order in reverse to arrive at what each
-source must supply.
+node needs. `ezu check` reports it:
 
-If the result exceeds the maximum, the build fails. A `blur` with `sigma: 200`
-wants ~600 px of margin on every side; being told that at build time is better
-than discovering it in a memory profile.
+```sh
+ezu check watercolor.json --no-fetch
+# WARN pad: 24 declared, 36 needed by `c4` — filters will sample clamped
+#      edge pixels, which shows as a seam between tiles
+# INFO ok: watercolor v1 (18 nodes, 2 sources) [parse + graph only]
+```
+
+Take the number it gives you and put it in `pad`. A host embedding the library can
+call `compute_pad` itself and size its canvas from the answer instead of trusting
+the document.
+
+There is a ceiling — `MAX_PAD`, 256 px — and `compute_pad` reports a graph that
+asks for more. A `blur` with `sigma: 200` wants ~600 px of margin on every side,
+so `ezu check` says so rather than letting you wonder why the edges look wrong.
 
 ## Why static bounds are required
 
@@ -58,7 +74,8 @@ restricted, and the error message says so explicitly.
   time on pixels you throw away — the canvas grows quadratically, so 512+2×64 is
   1.6× the pixels of 512+2×16.
 
-Start from what the filters need and only raise it if edges look wrong.
+Let `ezu check` tell you the floor rather than guessing at it — the reference
+styles in this repository were all a little under theirs until the check existed.
 
 ## Neighbour tiles
 
