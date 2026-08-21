@@ -135,3 +135,28 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* Graph diagrams, generated from real styles by `ezu graph` + mermaid. The
+   palette `ezu graph` emits is chosen for a light background, so the diagram
+   sits on a light card in both site themes rather than being recoloured. */
+.diagram {
+  margin: 1.25rem 0 1.5rem;
+}
+
+.diagram img {
+  width: 100%;
+  height: auto;
+  margin: 0;
+  display: block;
+  padding: 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--sl-color-gray-5);
+  background: #fbfaf7;
+}
+
+.diagram figcaption {
+  margin-top: 0.5rem;
+  font-size: var(--sl-text-sm);
+  color: var(--sl-color-gray-3);
+  line-height: 1.5;
+}

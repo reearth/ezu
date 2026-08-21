@@ -83,6 +83,11 @@ Zoom-dependent numbers can be written two ways, and both are fine:
 "a":     { "op": "math", "fn": "mul", "a": "$landuse-alpha", "b": "@zfrac" }
 ```
 
+<figure class="diagram">
+  <img src="/ezu/diagrams/scalar-chain.svg" alt="`zoom` and `math` feeding a paint field through a `Scalar` port. A `$param` keeps its runtime override all the way down the chain." loading="lazy" decoding="async" />
+  <figcaption>`zoom` and `math` feeding a paint field through a `Scalar` port. A `$param` keeps its runtime override all the way down the chain.</figcaption>
+</figure>
+
 Reach for `expr` when you are porting a MapLibre curve or want the exact
 interpolation semantics. Reach for `math` when the value should be composed from
 [params](/ezu/style/params/) that a caller overrides at render time — a `$param`

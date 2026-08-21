@@ -1,0 +1,40 @@
+{
+  "name": "node-graph-diagram",
+  "tile-size": 512,
+  "pad": 24,
+  "sources": {
+    "basemap": {
+      "type": "mvt",
+      "url": "https://papers.reearth.land/protomaps/tilejson.json"
+    }
+  },
+  "nodes": {
+    "bg": {
+      "op": "solid",
+      "color": "#fbf6e6"
+    },
+    "water_f": {
+      "op": "features",
+      "layer": "water"
+    },
+    "water": {
+      "op": "fill-dabs",
+      "features": "@water_f",
+      "color": "#5876a0",
+      "opacity": 0.22,
+      "radius-px": 7,
+      "spacing-px": 3
+    },
+    "soft": {
+      "op": "blur",
+      "input": "@water",
+      "sigma": 3
+    },
+    "out": {
+      "op": "blend",
+      "base": "@bg",
+      "over": "@soft"
+    }
+  },
+  "output": "@out"
+}

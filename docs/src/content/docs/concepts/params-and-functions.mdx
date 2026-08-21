@@ -88,6 +88,11 @@ kind. `op: "func"` calls it.
 }
 ```
 
+<figure class="diagram">
+  <img src="/ezu/diagrams/function-expansion.svg" alt="One function called twice. `ezu graph` shows the call sites; each one expands inline into its own copy of the body." loading="lazy" decoding="async" />
+  <figcaption>One function called twice. `ezu graph` shows the call sites; each one expands inline into its own copy of the body.</figcaption>
+</figure>
+
 Expansion is inline at build time, like a hygienic macro:
 
 - **Closed over inputs.** Inside a body, `@name` resolves to a function input,

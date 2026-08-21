@@ -117,6 +117,11 @@ Every label layer in a document collides in **one** index. Each layer lowers to 
 "roads_d":  { "op": "text-draw", "labels": "@roads_l",  "placement": "@place" }
 ```
 
+<figure class="diagram">
+  <img src="/ezu/diagrams/labels-split.svg" alt="Two label layers, one decision stage. Each layer’s candidates go into `label-placement`; each layer draws only the winners." loading="lazy" decoding="async" />
+  <figcaption>Two label layers, one decision stage. Each layer’s candidates go into `label-placement`; each layer draws only the winners.</figcaption>
+</figure>
+
 The single `text` op is the convenient form for one layer; the split form is what
 `ezu translate` emits, because it is what lets a POI knock out a road name the way
 MapLibre does. Candidates are gathered from the eight neighbouring tiles, deduped,

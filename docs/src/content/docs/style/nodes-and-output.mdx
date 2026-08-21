@@ -68,6 +68,11 @@ filter and zoom gates live, and is shared by every consumer of that layer:
 
 For many layers at once, `stack` composites a list in one node.
 
+<figure class="diagram">
+  <img src="/ezu/diagrams/blend-chain.svg" alt="Three layers stacked as a `blend` chain — the shape `ezu translate` emits from an ordered MapLibre layer list." loading="lazy" decoding="async" />
+  <figcaption>Three layers stacked as a `blend` chain — the shape `ezu translate` emits from an ordered MapLibre layer list.</figcaption>
+</figure>
+
 **Masking.** `blend` with `clip: true` clips the result to the base's alpha —
 Photoshop's clipping mask, and how a `fill-pattern` gets confined to its polygon.
 

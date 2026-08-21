@@ -1,0 +1,83 @@
+{
+  "name": "function-expansion-diagram",
+  "tile-size": 512,
+  "pad": 16,
+  "sources": {
+    "basemap": {
+      "type": "mvt",
+      "url": "https://papers.reearth.land/protomaps/tilejson.json"
+    }
+  },
+  "functions": {
+    "wobbly": {
+      "inputs": {
+        "features": {
+          "kind": "features"
+        },
+        "color": {
+          "kind": "scalar"
+        },
+        "width": {
+          "kind": "scalar",
+          "default": 1.2
+        }
+      },
+      "output": "@draw",
+      "output-kind": "raster",
+      "nodes": {
+        "wob": {
+          "op": "wave",
+          "features": "@features",
+          "amplitude-px": 1.5,
+          "wavelength-px": 28
+        },
+        "draw": {
+          "op": "stroke",
+          "features": "@wob",
+          "color": "@color",
+          "width-px": "@width"
+        }
+      }
+    }
+  },
+  "nodes": {
+    "bg": {
+      "op": "solid",
+      "color": "#faf6ec"
+    },
+    "roads_f": {
+      "op": "features",
+      "layer": "roads"
+    },
+    "water_f": {
+      "op": "features",
+      "layer": "water"
+    },
+    "coast_f": {
+      "op": "boundary",
+      "features": "@water_f"
+    },
+    "roads": {
+      "op": "func",
+      "fn": "wobbly",
+      "features": "@roads_f",
+      "color": "#6a4f3a"
+    },
+    "coast": {
+      "op": "func",
+      "fn": "wobbly",
+      "features": "@coast_f",
+      "color": "#5876a0",
+      "width": 1.6
+    },
+    "out": {
+      "op": "stack",
+      "layers": [
+        "@bg",
+        "@coast",
+        "@roads"
+      ]
+    }
+  },
+  "output": "@out"
+}

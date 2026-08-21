@@ -29,6 +29,11 @@ fields, and references to other nodes. There is no ordering in the document: the
 Read it backwards from `output` and you get the dependency chain: `out` needs
 `bg` and `soft`, `soft` needs `water`, `water` needs `water_f`.
 
+<figure class="diagram">
+  <img src="/ezu/diagrams/node-graph.svg" alt="The same document as a graph. Rounded nodes are sources, the double arrow is `output`. `ezu graph style.json` emits this." loading="lazy" decoding="async" />
+  <figcaption>The same document as a graph. Rounded nodes are sources, the double arrow is `output`. `ezu graph style.json` emits this.</figcaption>
+</figure>
+
 ## Why this shape
 
 **Painterly rendering is a pipeline, not a property.** A watercolour wash is

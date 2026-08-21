@@ -86,7 +86,18 @@ cd docs
 npm run images            # the node catalog's per-op demos
 npm run images -- blur    # just these ops
 npm run figures           # the guides', cookbook's and gallery's figures
+npm run compare           # ezu vs maplibre-gl-js, via ezu-compare
+npm run diagrams          # graph diagrams, via `ezu graph` + mermaid
 ```
+
+`npm run compare` additionally needs the Playwright reference renderer
+(`cd tools/mlgl-ref && npm install && npx playwright install chromium`), and
+`npm run diagrams` needs a Chromium that Puppeteer can drive — Playwright's
+counts. mermaid-cli is fetched on demand rather than being a dependency, so
+`npm ci` stays light in CI.
+
+Diagrams come from `ezu graph` run over the styles in `docs/fixtures/diagrams/`,
+so a diagram cannot disagree with a graph ezu actually builds.
 
 Each demo expands into a complete standalone style under `docs/fixtures/`, so the
 image a reader sees and the JSON they can copy are the same artifact. Adding a
