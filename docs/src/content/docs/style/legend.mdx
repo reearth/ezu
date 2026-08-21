@@ -1,0 +1,94 @@
+---
+title: legend
+description: Declaring what the map's symbols mean, for a host to draw beside the map.
+sidebar:
+  order: 6
+---
+
+A legend is not part of a tile. It sits beside the map, at a size and in a
+layout only the host knows — a sidebar on a web page, a corner of a print
+layout, a collapsible panel next to a zoom control. Baking one into the raster
+would freeze all of that at render time.
+
+So the style declares the legend's *content*, and the host draws it. `ezu legend`
+emits the declaration as JSON:
+
+```sh
+ezu legend style.json --pretty
+ezu legend style.json --zoom 12     # only the entries that apply at z12
+```
+
+## The block
+
+```json
+{
+  "legend": {
+    "title": "Median household income",
+    "note": "ACS 5-year estimates, classified by natural breaks. County-level, so neighbourhood differences are averaged away.",
+    "entries": [
+      { "label": "under $40,000",  "from": "@income", "properties": { "income": 30000 } },
+      { "label": "$40,000–60,000", "from": "@income", "properties": { "income": 50000 } },
+      { "label": "over $60,000",   "from": "@income", "properties": { "income": 80000 } },
+      { "label": "county line", "from": "@borders", "min-zoom": 6 }
+    ]
+  }
+}
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `title` | string | heading — usually what is being mapped |
+| `note` | string | prose below the entries: sources, classification, what is left out |
+| `entries` | array | rows, in reading order |
+
+And on an entry:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `label` | string | required — what the reader sees |
+| `from` | `@node` | required — the node that draws this symbol |
+| `properties` | object | feature properties that select this case |
+| `note` | string | prose for this entry alone |
+| `min-zoom` / `max-zoom` | integer | zooms this entry applies to; absent means all |
+
+## Why an entry names a node
+
+The obvious way to write a legend row is to restate its colour. That colour is
+then free to drift: change the map's palette and the legend keeps explaining the
+old one, with nothing to catch it.
+
+So an entry names **the node that draws the symbol** and **the feature that
+selects the case** instead. `{ "income": 30000 }` is not the value being
+labelled — it is a value inside the class, fed to the node's `-expr` fields the
+way a real feature would be, so that whatever the map draws for a county with
+that income is what the entry stands for.
+
+`from` is checked when the graph is built: the node must exist and must produce
+a `Raster`, so an entry cannot point at something that draws nothing. `ezu check`
+reports a broken legend the same way it reports a broken node reference.
+
+What this does *not* pin down is the labels. Nothing checks that
+`"under $40,000"` matches the break in your expression — the breaks are stated
+in two places and it is on you to keep them agreeing. That is the cost of
+declaring a legend rather than deriving one, and the reason to declare it is the
+same reason to state a classification method at all: the choice of where the
+classes fall is the author's, and a reader can only weigh a map whose author
+says what those choices were.
+
+## Zoom
+
+A web map's symbols come and go with scale, and a legend that explains symbols
+the reader cannot see is noise. Gate an entry with `min-zoom` / `max-zoom` and
+ask for one zoom's worth at a time:
+
+```sh
+ezu legend style.json --zoom 4
+```
+
+## Drawing the swatches
+
+The JSON says which node draws each entry, not what the symbol looks like — a
+painterly fill made of brush dabs and hatching does not reduce to one hex
+colour. Rendering a swatch through the same pipeline the map uses is not part of
+the CLI yet; for now a host either shows labels alone, or draws its own
+approximation.

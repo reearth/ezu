@@ -88,6 +88,80 @@ fn round_trip_parse_and_build() {
     assert!(pads[src_ix] >= 20);
 }
 
+/// A legend entry naming a node that draws a raster is fine, and the
+/// declaration comes through the build untouched.
+#[test]
+fn build_accepts_a_legend_pointing_at_a_drawing_node() {
+    let json = r##"{
+      "name": "demo",
+      "legend": {
+        "title": "Median household income",
+        "note": "ACS 5-year estimates, classified by natural breaks.",
+        "entries": [
+          { "label": "under $40,000", "from": "@blur", "properties": { "income": 30000 } },
+          { "label": "detail", "from": "@blur", "min-zoom": 8 }
+        ]
+      },
+      "nodes": {
+        "src":  { "op": "image", "src": "x.png" },
+        "blur": { "op": "blur", "input": "@src", "sigma": 4 }
+      },
+      "output": "@blur"
+    }"##;
+    let doc = ezu_style::Document::from_json(json).unwrap();
+    build_graph(&doc, &test_registry()).unwrap();
+    let legend = doc.legend.as_ref().unwrap();
+    assert_eq!(legend.entries.len(), 2);
+    assert_eq!(legend.entries[0].from.as_str(), "blur");
+    assert_eq!(legend.entries[0].properties["income"], 30000);
+    // The zoom-gated entry drops out below its floor.
+    assert_eq!(legend.entries_at(4).count(), 1);
+    assert_eq!(legend.entries_at(10).count(), 2);
+}
+
+#[test]
+fn build_rejects_a_legend_entry_naming_no_node() {
+    let json = r##"{
+      "name": "demo",
+      "legend": { "entries": [ { "label": "water", "from": "@nope" } ] },
+      "nodes": { "src": { "op": "image", "src": "x.png" } },
+      "output": "@src"
+    }"##;
+    let doc = ezu_style::Document::from_json(json).unwrap();
+    match build_graph(&doc, &test_registry()) {
+        Err(BuildGraphError::LegendUnknownNode { label, src }) => {
+            assert_eq!(label, "water");
+            assert_eq!(src, "nope");
+        }
+        other => panic!("expected LegendUnknownNode, got {other:?}"),
+    }
+}
+
+/// An entry may only name something that draws. Pointing at a brush or a
+/// feature set would give a legend row with no symbol to show.
+#[test]
+fn build_rejects_a_legend_entry_naming_a_non_raster() {
+    let mut reg = test_registry();
+    reg.register(SrcFactory("bsrc", PortKind::Brush));
+    let json = r##"{
+      "name": "demo",
+      "legend": { "entries": [ { "label": "water", "from": "@b" } ] },
+      "nodes": {
+        "b":   { "op": "bsrc" },
+        "src": { "op": "image", "src": "x.png" }
+      },
+      "output": "@src"
+    }"##;
+    let doc = ezu_style::Document::from_json(json).unwrap();
+    match build_graph(&doc, &reg) {
+        Err(BuildGraphError::LegendNodeKind { label, got, .. }) => {
+            assert_eq!(label, "water");
+            assert_eq!(got, PortKind::Brush);
+        }
+        other => panic!("expected LegendNodeKind, got {other:?}"),
+    }
+}
+
 #[test]
 fn build_unknown_op_errors() {
     let json = r##"{

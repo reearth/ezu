@@ -17,6 +17,7 @@ An Ezu Style document is a JSON object. Two fields are required — `nodes` and
   "attribution": "© OpenStreetMap contributors",
   "params":    { },
   "functions": { },
+  "legend":    { },
   "sources":   { },
   "nodes":     { },
   "output": "@out"
@@ -34,6 +35,7 @@ An Ezu Style document is a JSON object. Two fields are required — `nodes` and
 | `attribution` | string | document-level attribution, merged with each source's |
 | `params` | map | [typed knobs](/ezu/style/params/) resolved at render time |
 | `functions` | map | [reusable subgraphs](/ezu/style/functions/) expanded at build time |
+| `legend` | object | [what the symbols mean](/ezu/style/legend/), for a host to draw beside the map |
 | `sources` | map | [every external resource](/ezu/style/sources/) the style pulls in |
 
 ## The two reference prefixes

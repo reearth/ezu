@@ -6,7 +6,7 @@
 // (one entry per registered op) anyway. Derive serde only for now.
 
 use indexmap::IndexMap;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::StyleError;
 
@@ -36,6 +36,10 @@ pub struct Document {
     /// graph-build time — see [`expand_functions`](crate::expand_functions).
     #[serde(default)]
     pub functions: IndexMap<String, FuncDecl>,
+    /// What the map's symbols mean. Never rendered into a tile — hosts
+    /// read it to draw a legend beside the map. See [`LegendDecl`].
+    #[serde(default)]
+    pub legend: Option<LegendDecl>,
     /// External data the host provides. Mixes document-scoped resources
     /// (`brush`, `image`, `sprite`, `font`) — resolved once per style —
     /// and tile-scoped
@@ -142,6 +146,68 @@ fn default_version() -> String {
 }
 fn default_tile_size() -> u32 {
     512
+}
+
+/// A declared legend: what the map's symbols mean, in the order they
+/// should be read.
+///
+/// A legend is not drawn into a tile — it belongs beside the map, at a
+/// size and in a layout only the host knows. What the style owes the
+/// host is the content, and above all the correspondence between an
+/// entry and the symbol it explains. An entry states that by naming the
+/// node that draws the symbol and the feature that selects the case,
+/// rather than by restating a colour that would then be free to drift
+/// from the map.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct LegendDecl {
+    /// Heading for the legend as a whole — usually what is being mapped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Prose below the entries: data source, the classification method
+    /// and why it was chosen, what the map leaves out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// Entries in reading order.
+    #[serde(default)]
+    pub entries: Vec<LegendEntry>,
+}
+
+/// One row of a legend: a label, and the symbol it explains identified
+/// by where that symbol comes from.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct LegendEntry {
+    /// What the reader sees. Write it for someone who has not read the
+    /// style: `under $40,000`, not `bin 0`.
+    pub label: String,
+    /// The node that draws this symbol on the map. Verified at
+    /// graph-build time to exist and to produce a `Raster`, so an entry
+    /// cannot point at something that draws nothing.
+    pub from: NodeRef,
+    /// Feature properties that select this entry's case, fed to the
+    /// node's `*-expr` fields the way a real feature would be. For a
+    /// choropleth, a value inside the class: `{ "income": 30000 }`.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub properties: serde_json::Map<String, serde_json::Value>,
+    /// Prose for this entry alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// Zooms this entry applies to, for a map whose symbols come and go
+    /// with scale. Absent means every zoom.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_zoom: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_zoom: Option<u8>,
+}
+
+impl LegendDecl {
+    /// The entries visible at zoom `z`, in declaration order.
+    pub fn entries_at(&self, z: u8) -> impl Iterator<Item = &LegendEntry> {
+        self.entries.iter().filter(move |e| {
+            e.min_zoom.is_none_or(|min| z >= min) && e.max_zoom.is_none_or(|max| z <= max)
+        })
+    }
 }
 
 /// A user-defined function: a reusable node subgraph with declared
@@ -614,6 +680,14 @@ impl<'de> Deserialize<'de> for NodeRef {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let s = String::deserialize(d)?;
         Ok(NodeRef(s.strip_prefix('@').unwrap_or(&s).to_string()))
+    }
+}
+
+impl Serialize for NodeRef {
+    /// Emits the bare node id. The `@` is style-authoring syntax; a
+    /// consumer reading a serialized reference wants the id itself.
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.0)
     }
 }
 

@@ -64,6 +64,56 @@
       "description": "User-defined functions: reusable node subgraphs called via `op: func`.",
       "type": "object"
     },
+    "legend": {
+      "description": "What the map's symbols mean. Never rendered into a tile — hosts read it to draw a legend beside the map.",
+      "properties": {
+        "entries": {
+          "description": "Entries in reading order.",
+          "items": {
+            "properties": {
+              "from": {
+                "description": "The node that draws this symbol; must produce a Raster.",
+                "type": "string"
+              },
+              "label": {
+                "description": "What the reader sees.",
+                "type": "string"
+              },
+              "max-zoom": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "min-zoom": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "note": {
+                "type": "string"
+              },
+              "properties": {
+                "description": "Feature properties selecting this entry's case.",
+                "type": "object"
+              }
+            },
+            "required": [
+              "label",
+              "from"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "note": {
+          "description": "Prose below the entries: sources, classification method, what the map leaves out.",
+          "type": "string"
+        },
+        "title": {
+          "description": "Heading — usually what is being mapped.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "name": {
       "type": "string"
     },

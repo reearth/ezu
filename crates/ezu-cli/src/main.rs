@@ -57,6 +57,9 @@ enum Cmd {
     Check(CheckCmd),
     /// Emit a Mermaid `graph LR` diagram of the style's node dependencies.
     Graph(GraphCmd),
+    /// Emit the style's declared legend as JSON, for a host to lay out
+    /// beside the map.
+    Legend(LegendCmd),
     /// Translate a map-engine style (MapLibre GL) into an ezu recipe.
     Translate(TranslateCmd),
     /// Start the live editor + tile server at `http://127.0.0.1:8080`.
@@ -152,6 +155,21 @@ struct GraphCmd {
     /// Output file. Writes to stdout when omitted.
     #[arg(long)]
     out: Option<PathBuf>,
+}
+
+#[derive(Args, Debug)]
+struct LegendCmd {
+    /// Ezu Style JSON document — local path or http(s):// URL.
+    style: String,
+    /// Keep only the entries that apply at this zoom.
+    #[arg(long)]
+    zoom: Option<u8>,
+    /// Output file. Writes to stdout when omitted.
+    #[arg(long)]
+    out: Option<PathBuf>,
+    /// Pretty-print the emitted JSON.
+    #[arg(long)]
+    pretty: bool,
 }
 
 #[derive(Args, Debug)]
@@ -321,6 +339,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Cmd::Tiles(args) => run_tiles(args).await,
         Cmd::Check(args) => run_check(args).await,
         Cmd::Graph(args) => run_graph(args).await,
+        Cmd::Legend(args) => run_legend(args).await,
         Cmd::Translate(args) => run_translate(args).await,
         Cmd::Serve(args) => serve::run(args).await,
         Cmd::Schema(args) => run_schema(args),
@@ -586,6 +605,41 @@ async fn run_graph(args: GraphCmd) -> Result<(), Box<dyn std::error::Error>> {
             tracing::info!("wrote {} ({} bytes)", p.display(), mermaid.len());
         }
         None => print!("{mermaid}"),
+    }
+    Ok(())
+}
+
+async fn run_legend(args: LegendCmd) -> Result<(), Box<dyn std::error::Error>> {
+    let text = fetch_text(&args.style).await?;
+    let doc = Document::from_json(&text)?;
+    // Build the graph too: it is what verifies that every entry names a
+    // node that exists and draws something, so a legend emitted here has
+    // already been checked against the map it describes.
+    build_graph(&doc, &default_registry())?;
+
+    let Some(legend) = &doc.legend else {
+        return Err(format!("{} declares no `legend` block", args.style).into());
+    };
+    // Serialized straight from the declaration, never through
+    // `serde_json::Value`, so the emitted keys keep the order the type
+    // declares them in rather than coming out alphabetized.
+    let filtered = args.zoom.map(|z| ezu::style::LegendDecl {
+        title: legend.title.clone(),
+        note: legend.note.clone(),
+        entries: legend.entries_at(z).cloned().collect(),
+    });
+    let legend = filtered.as_ref().unwrap_or(legend);
+    let json = if args.pretty {
+        serde_json::to_string_pretty(legend)?
+    } else {
+        serde_json::to_string(legend)?
+    };
+    match &args.out {
+        Some(p) => {
+            std::fs::write(p, &json)?;
+            tracing::info!("wrote {} ({} bytes)", p.display(), json.len());
+        }
+        None => println!("{json}"),
     }
     Ok(())
 }

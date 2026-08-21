@@ -193,6 +193,7 @@ pub fn expand_functions(doc: &Document) -> Result<Option<Expanded>, ExpandError>
             params: doc.params.clone(),
             attribution: doc.attribution.clone(),
             functions: IndexMap::new(),
+            legend: doc.legend.clone(),
             sources: doc.sources.clone(),
             nodes: cx.out,
             output: doc.output.clone(),

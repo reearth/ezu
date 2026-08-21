@@ -23,6 +23,7 @@ Commands:
   tiles      Bulk-render an XYZ tile pyramid into `<out>/<z>/<x>/<y>.png`
   check      Validate an Ezu Style document without rendering — exits non-zero on parse / graph / asset errors. Suitable for CI + pre-commit hooks
   graph      Emit a Mermaid `graph LR` diagram of the style's node dependencies
+  legend     Emit the style's declared legend as JSON, for a host to lay out beside the map
   translate  Translate a map-engine style (MapLibre GL) into an ezu recipe
   serve      Start the live editor + tile server at `http://127.0.0.1:8080`
   schema     Print the Ezu Style JSON Schema, gathered from the registered ops
@@ -168,6 +169,24 @@ Options:
       --out <OUT>  Output file. Writes to stdout when omitted
   -v, --verbose    Emit per-node debug logs from the graph evaluator (op name, cache hit/miss, output shape, eval duration). Overrides `RUST_LOG` for this run
   -h, --help       Print help
+```
+
+## `ezu legend`
+
+```text
+Emit the style's declared legend as JSON, for a host to lay out beside the map
+
+Usage: ezu legend [OPTIONS] <STYLE>
+
+Arguments:
+  <STYLE>  Ezu Style JSON document — local path or http(s):// URL
+
+Options:
+  -v, --verbose      Emit per-node debug logs from the graph evaluator (op name, cache hit/miss, output shape, eval duration). Overrides `RUST_LOG` for this run
+      --zoom <ZOOM>  Keep only the entries that apply at this zoom
+      --out <OUT>    Output file. Writes to stdout when omitted
+      --pretty       Pretty-print the emitted JSON
+  -h, --help         Print help
 ```
 
 ## `ezu translate`

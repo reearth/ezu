@@ -244,6 +244,30 @@ impl NodeRegistry {
                         }
                     }
                 },
+                "legend": {
+                    "type": "object",
+                    "description": "What the map's symbols mean. Never rendered into a tile — hosts read it to draw a legend beside the map.",
+                    "properties": {
+                        "title": { "type": "string", "description": "Heading — usually what is being mapped." },
+                        "note": { "type": "string", "description": "Prose below the entries: sources, classification method, what the map leaves out." },
+                        "entries": {
+                            "type": "array",
+                            "description": "Entries in reading order.",
+                            "items": {
+                                "type": "object",
+                                "required": ["label", "from"],
+                                "properties": {
+                                    "label": { "type": "string", "description": "What the reader sees." },
+                                    "from": { "type": "string", "description": "The node that draws this symbol; must produce a Raster." },
+                                    "properties": { "type": "object", "description": "Feature properties selecting this entry's case." },
+                                    "note": { "type": "string" },
+                                    "min-zoom": { "type": "integer", "minimum": 0 },
+                                    "max-zoom": { "type": "integer", "minimum": 0 }
+                                }
+                            }
+                        }
+                    }
+                },
                 "functions": {
                     "type": "object",
                     "description": "User-defined functions: reusable node subgraphs called via `op: func`.",

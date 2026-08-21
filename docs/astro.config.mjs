@@ -64,6 +64,7 @@ export default defineConfig({
             { label: 'params', link: '/style/params/' },
             { label: 'functions', link: '/style/functions/' },
             { label: 'nodes and output', link: '/style/nodes-and-output/' },
+            { label: 'legend', link: '/style/legend/' },
             { label: 'Expression fields', link: '/style/expression-fields/' },
             { label: 'JSON Schema', link: '/style/json-schema/' },
             { label: 'Node catalog', items: [{ autogenerate: { directory: 'style/nodes' } }] },

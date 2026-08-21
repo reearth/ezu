@@ -42,6 +42,17 @@ pub enum BuildGraphError {
         got: PortKind,
     },
 
+    #[error("legend entry `{label}` names `@{src}`, which is not a node in this style")]
+    LegendUnknownNode { label: String, src: String },
+
+    #[error("legend entry `{label}` names `@{src}`, which produces {got} — a legend entry must name a node that draws something ({expected})")]
+    LegendNodeKind {
+        label: String,
+        src: String,
+        expected: PortKind,
+        got: PortKind,
+    },
+
     #[error(transparent)]
     Graph(#[from] BuildError),
 }
@@ -135,6 +146,32 @@ pub fn build_graph(
                     got,
                 },
             });
+        }
+    }
+
+    // The legend is not part of the graph, but its entries point into
+    // it: each one names the node that draws the symbol it explains. A
+    // dangling or non-drawing reference is a broken legend, and a broken
+    // legend is worse than none — check it here, where every caller
+    // already passes.
+    if let Some(legend) = &doc.legend {
+        for entry in &legend.entries {
+            let src = entry.from.as_str();
+            let Some(ix) = graph.index_of(src) else {
+                return Err(BuildGraphError::LegendUnknownNode {
+                    label: entry.label.clone(),
+                    src: src.to_string(),
+                });
+            };
+            let got = graph.output_kind(ix);
+            if got != PortKind::Raster {
+                return Err(BuildGraphError::LegendNodeKind {
+                    label: entry.label.clone(),
+                    src: src.to_string(),
+                    expected: PortKind::Raster,
+                    got,
+                });
+            }
         }
     }
     Ok(graph)
