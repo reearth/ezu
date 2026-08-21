@@ -272,10 +272,12 @@ impl NodeFactory for GraticuleFactory {
         serde_json::json!({
             "description": "Parallels and meridians crossing the tile, as labelled polylines.",
             "properties": {
-                "extent": { "type": "integer", "minimum": 1, "default": DEFAULT_EXTENT },
+                "extent": { "type": "integer", "minimum": 1, "default": DEFAULT_EXTENT,
+                            "description": "Coordinate extent of the emitted geometry, matching the features it is drawn alongside." },
                 "interval-deg": schema_frag::in_number(serde_json::json!({ "type": "number", "exclusiveMinimum": 0.0,
                                    "description": "Spacing in degrees. Omit to pick one from the zoom along the 30/10/5/2/1 ladder." })),
-                "axes": { "type": "string", "enum": ["both", "parallels", "meridians"], "default": "both" },
+                "axes": { "type": "string", "enum": ["both", "parallels", "meridians"], "default": "both",
+                          "description": "Which families to emit: parallels of latitude, meridians of longitude, or both." },
             },
         })
     }

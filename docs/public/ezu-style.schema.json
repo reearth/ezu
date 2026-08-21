@@ -2095,6 +2095,7 @@
             "properties": {
               "axes": {
                 "default": "both",
+                "description": "Which families to emit: parallels of latitude, meridians of longitude, or both.",
                 "enum": [
                   "both",
                   "parallels",
@@ -2104,6 +2105,7 @@
               },
               "extent": {
                 "default": 4096,
+                "description": "Coordinate extent of the emitted geometry, matching the features it is drawn alongside.",
                 "minimum": 1,
                 "type": "integer"
               },

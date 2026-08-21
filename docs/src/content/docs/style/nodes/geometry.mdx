@@ -145,13 +145,13 @@ Scatter points inside polygons at a per-feature areal density (dot density map).
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `density` | number (0…∞) \| `$param` \| `@node` | no | — |
+| `density` | number (0…∞) \| `$param` \| `@node` | no | Constant density in units per square kilometre, used where `density-expr` is absent. |
 | `density-expr` | — | no | Per-feature MapLibre expression giving density in units per square kilometre, e.g. ["/", ["get", "POP"], ["get", "AREA_KM2"]]. |
-| `dot-value` | number \| `$param` \| `@node` | no | — |
+| `dot-value` | number \| `$param` \| `@node` | no | Units one dot stands for. 100 means one dot per 100 people. |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
-| `jitter` | number (0…1) \| `$param` \| `@node` | no | — |
+| `jitter` | number (0…1) \| `$param` \| `@node` | no | How far a dot may stray from its cell centre, as a fraction of the cell. 0 leaves a visible grid. |
 | `seed` | integer (0…∞) | no | Lattice salt; change it to reshuffle the dots without changing their density. |
-| `spacing-px` | number \| `$param` \| `@node` | no | — |
+| `spacing-px` | number \| `$param` \| `@node` | no | Lattice cell size in screen pixels. One dot per cell at most, so this caps how dense the scatter can get. |
 
 ### `feature-boolean`
 
