@@ -12,9 +12,14 @@ colour, render again.
 Ten wave-then-line stroke layers, factored into one user-defined function, plus a
 `water-hatch` function for the sea. This is the front-page render.
 
+<figure class="page-fig">
+  <img src="/ezu/figures/gallery-pencil-sketch.webp" alt="A pencil-sketch render of central Tokyo" width="768" height="768" loading="lazy" decoding="async" />
+  <figcaption>Central Tokyo at z13, three tiles across.</figcaption>
+</figure>
+
 ```sh
-ezu tile --style crates/ezu/examples/styles/pencil-sketch.json \
-  --tile 13/7276/3225 --out pencil.png
+ezu bbox --style crates/ezu/examples/styles/pencil-sketch.json \
+  --bbox 139.72,35.66,139.80,35.72 --zoom 13 --out pencil.png
 ```
 
 Style: [`pencil-sketch.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/pencil-sketch.json)
@@ -26,7 +31,16 @@ Scatter-dab fills through the `hokusai` brush engine, anchored in world
 coordinates so the wash continues across tile edges. Parametric: `paper` and
 `softness` are declared knobs.
 
+<figure class="page-fig">
+  <img src="/ezu/figures/gallery-watercolor.webp" alt="A watercolour render of central Tokyo" width="768" height="768" loading="lazy" decoding="async" />
+  <figcaption>The same ground in `watercolor.json`, at its declared defaults.</figcaption>
+</figure>
+
 ```sh
+ezu bbox --style crates/ezu/examples/styles/watercolor.json \
+  --bbox 139.72,35.66,139.80,35.72 --zoom 13 --out water.png
+
+# …or with the knobs turned
 ezu tile --style crates/ezu/examples/styles/watercolor.json \
   --tile 13/7276/3225 --param 'paper=#ffe0f0' --param softness=2 --out water.png
 ```
@@ -37,6 +51,11 @@ Style: [`watercolor.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/e
 
 Raster-DEM tiles → `hillshade` + hypsometric tint. All-remote assets, so it
 renders straight from a URL with no checkout.
+
+<figure class="page-fig">
+  <img src="/ezu/figures/gallery-hillshade.webp" alt="Shaded relief of Mount Fuji" width="768" height="768" loading="lazy" decoding="async" />
+  <figcaption>Mount Fuji at z11 — hypsometric tint under shaded relief, from DEM tiles alone.</figcaption>
+</figure>
 
 ```sh
 ezu tile --style https://raw.githubusercontent.com/reearth/ezu/main/crates/ezu/examples/styles/hillshade.json \
@@ -51,9 +70,14 @@ Style: [`hillshade.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/ex
 Raster imagery run through the colour and palette ops — posterize, quantize,
 dither — rather than through the brush engine.
 
+<figure class="page-fig">
+  <img src="/ezu/figures/gallery-photo-pop.webp" alt="A high-contrast posterized render of central Tokyo" width="768" height="768" loading="lazy" decoding="async" />
+  <figcaption>Colour and palette ops rather than brushes — the same data, pushed hard.</figcaption>
+</figure>
+
 ```sh
-ezu tile --style crates/ezu/examples/styles/photo-pop.json \
-  --tile 13/7276/3225 --out pop.png
+ezu bbox --style crates/ezu/examples/styles/photo-pop.json \
+  --bbox 139.72,35.66,139.80,35.72 --zoom 13 --out pop.png
 ```
 
 Style: [`photo-pop.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/photo-pop.json)

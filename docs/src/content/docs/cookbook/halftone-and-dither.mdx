@@ -32,6 +32,14 @@ it to you directly.
 
 Alpha is preserved, so a dithered layer still composites.
 
+<figure class="page-fig page-fig--pair">
+  <div class="page-fig__images">
+    <img src="/ezu/nodes/_base.webp" alt="The basemap before reduction" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/nodes/dither.webp" alt="The same tile reduced to four inks with error diffusion" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Four inks, error-diffused. The stipple is what keeps the gradients readable.</figcaption>
+</figure>
+
 ## Reduce without dithering
 
 ```json
@@ -44,6 +52,14 @@ Alpha is preserved, so a dithered layer still composites.
 `quantize` maps every pixel to its nearest palette entry with no error diffusion:
 flat, graphic, cheaper than `dither`. Same palette, very different feel — dither
 keeps gradients readable, quantize destroys them on purpose.
+
+<figure class="page-fig page-fig--pair">
+  <div class="page-fig__images">
+    <img src="/ezu/nodes/posterize.webp" alt="The tile posterized to four levels per channel" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/nodes/quantize.webp" alt="The tile mapped to a four-ink palette without dithering" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption><code>posterize</code> (left) bands each channel; <code>quantize</code> (right) snaps to a palette. Neither diffuses error, so both go flat.</figcaption>
+</figure>
 
 ## A newsprint stack
 
@@ -66,6 +82,11 @@ if you want to lift the blacks the way ink on newsprint does.
 ```json
 "screen": { "op": "mosaic", "input": "@composite", "block": 4, "anchor": "world" }
 ```
+
+<figure class="page-fig">
+  <img src="/ezu/nodes/mosaic.webp" alt="The tile averaged into square blocks" width="384" height="384" loading="lazy" decoding="async" />
+  <figcaption>An 8&nbsp;px world-anchored block grid.</figcaption>
+</figure>
 
 `anchor: "world"` keeps the block grid continuous across map tiles, at the cost of
 extra padding; `anchor: "tile"` restarts the grid at each tile's corner and needs no

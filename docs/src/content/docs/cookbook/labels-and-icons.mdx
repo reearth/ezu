@@ -128,8 +128,17 @@ does. Priority runs the other way: the last entry places first and wins. So the
 POI layer belongs at the end of the list, and that is what lets it knock out a road
 name underneath it.
 
+<figure class="page-fig page-fig--pair">
+  <div class="page-fig__images">
+    <img src="/ezu/figures/labels-collide.webp" alt="Place labels with collision enabled — evenly spaced and legible" width="768" height="768" loading="lazy" decoding="async" />
+    <img src="/ezu/figures/labels-no-collide.webp" alt="The same labels with collision disabled — overlapping and unreadable" width="768" height="768" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>The same label layer with collision on (left) and off (right). Collision is what makes a dense area readable.</figcaption>
+</figure>
+
 `collide: false` draws every label, which is occasionally what you want for a
-diagram and never what you want for a map.
+diagram and never what you want for a map. The figure above is the whole
+argument for leaving it on.
 
 ## Glyphs without font files
 

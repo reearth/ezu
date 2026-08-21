@@ -38,6 +38,11 @@ else is required. Start with a solid colour:
 ezu tile --style mine.json --tile 13/7276/3225 --out mine.png
 ```
 
+<figure class="page-fig">
+  <img src="/ezu/figures/step-1-solid.webp" alt="A tile filled with a flat cream colour" width="768" height="768" loading="lazy" decoding="async" />
+  <figcaption>One node, one colour. Every style starts here.</figcaption>
+</figure>
+
 A cream square. Now add data. Declare an MVT source, select a layer, fill it, and
 composite the fill over the background:
 
@@ -58,6 +63,11 @@ composite the fill over the background:
   "output": "@out"
 }
 ```
+
+<figure class="page-fig">
+  <img src="/ezu/figures/step-2-flat.webp" alt="The same tile with water drawn as flat blue polygons" width="768" height="768" loading="lazy" decoding="async" />
+  <figcaption>Water polygons from the vector tile, filled flat and composited over the background.</figcaption>
+</figure>
 
 Three things to notice:
 
@@ -83,6 +93,11 @@ Swap the flat fill for a scatter-dab fill and the map stops looking styled:
 }
 ```
 
+<figure class="page-fig">
+  <img src="/ezu/figures/step-3-dabs.webp" alt="The same tile with water painted as soft overlapping dabs" width="768" height="768" loading="lazy" decoding="async" />
+  <figcaption>The same water, painted as scatter dabs instead of filled.</figcaption>
+</figure>
+
 `fill-dabs` places dabs on a world-anchored grid, so the wash continues across
 tile borders instead of restarting at each edge. Blur the result and it reads as
 wet paint:
@@ -91,6 +106,11 @@ wet paint:
 "soft": { "op": "blur", "input": "@water", "sigma": 3 },
 "out":  { "op": "blend", "base": "@bg", "over": "@soft" }
 ```
+
+<figure class="page-fig">
+  <img src="/ezu/figures/step-4-soft.webp" alt="The dabbed tile softened with a blur" width="768" height="768" loading="lazy" decoding="async" />
+  <figcaption>A small blur over the composite reads as the paper wicking.</figcaption>
+</figure>
 
 Blur needs pixels from beyond the tile edge to stay seamless, which is what `pad`
 is for — the graph computes the padding each source must supply and rejects the

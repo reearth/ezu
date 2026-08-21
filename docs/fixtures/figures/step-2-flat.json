@@ -1,0 +1,32 @@
+{
+  "name": "figure",
+  "tile-size": 512,
+  "pad": 8,
+  "sources": {
+    "basemap": {
+      "type": "mvt",
+      "url": "https://papers.reearth.land/protomaps/tilejson.json"
+    }
+  },
+  "nodes": {
+    "bg": {
+      "op": "solid",
+      "color": "#fbf6e6"
+    },
+    "water_f": {
+      "op": "features",
+      "layer": "water"
+    },
+    "water": {
+      "op": "fill-solid",
+      "features": "@water_f",
+      "fill": "#5876a0"
+    },
+    "out": {
+      "op": "blend",
+      "base": "@bg",
+      "over": "@water"
+    }
+  },
+  "output": "@out"
+}
