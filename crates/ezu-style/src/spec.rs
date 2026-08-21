@@ -54,8 +54,13 @@ pub struct Document {
 }
 
 impl Document {
+    /// Parse a style document. `//` line and `/* … */` block comments are
+    /// allowed anywhere JSON allows whitespace; they are blanked in place
+    /// before parsing, so an error's line and column still point into the
+    /// text as written.
     pub fn from_json(s: &str) -> Result<Self, StyleError> {
-        Ok(serde_json::from_str(s)?)
+        let source = crate::blank_comments(s)?;
+        Ok(serde_json::from_str(&source)?)
     }
 
     /// Every attribution string declared in the document: the style's
@@ -656,6 +661,47 @@ mod tests {
         assert_eq!(doc.output.as_str(), "blur");
         assert_eq!(doc.nodes["blur"].op, "blur");
         assert_eq!(doc.nodes["blur"].fields["input"], "@src");
+    }
+
+    #[test]
+    fn parses_a_commented_document() {
+        // Comments in the places an author actually wants them: above a
+        // block, at the end of a line, and inside an expression array.
+        let json = r##"{
+          // What this style is for.
+          "name": "demo",
+          "nodes": {
+            "src":  { "op": "image", "src": "assets/bg.png" },
+            /* Three was as far as we could go before the coastline
+               dissolved. */
+            "blur": { "op": "blur", "input": "@src", "sigma": 3 }, // keep
+            "fade": { "op": "expr", "expr": ["interpolate", ["linear"], ["zoom"],
+                                             13, 1,   // fully on in town
+                                             15, 0] }
+          },
+          "output": "@blur"
+        }"##;
+        let doc = Document::from_json(json).unwrap();
+        assert_eq!(doc.name, "demo");
+        assert_eq!(doc.nodes.len(), 3);
+        assert_eq!(doc.nodes["blur"].fields["sigma"], 3);
+        // The comment inside the array did not disturb it.
+        assert_eq!(
+            doc.nodes["fade"].fields["expr"].as_array().unwrap().len(),
+            7
+        );
+    }
+
+    /// Comments are blanked rather than removed, so a parse error still
+    /// names the line it is on in the author's file.
+    #[test]
+    fn an_error_after_a_comment_keeps_its_line_number() {
+        let json = "{\n  // a note\n  /* and\n     another */\n  \"name\": oops\n}";
+        let err = Document::from_json(json).unwrap_err();
+        let StyleError::Parse(e) = err else {
+            panic!("expected a JSON parse error");
+        };
+        assert_eq!(e.line(), 5, "{e}");
     }
 
     #[test]

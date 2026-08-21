@@ -48,6 +48,35 @@ There are exactly two, and the prefix tells you when it resolves:
 A field name ending in `-expr` takes a raw
 [MapLibre expression](/ezu/style/expression-fields/) instead.
 
+## Comments
+
+A style may carry `//` line comments and `/* … */` block comments, anywhere JSON
+allows whitespace — including inside an expression array.
+
+```json
+{
+  // Sea-and-ink, for the coastal atlas.
+  "name": "atlas",
+  "nodes": {
+    /* Roads fade out below z13, where the classes stop being
+       distinguishable and the ink turns to mud. */
+    "fade": { "op": "expr", "expr": ["interpolate", ["linear"], ["zoom"],
+                                     13, 0,   // off in the countryside
+                                     15, 1] }
+  },
+  "output": "@fade"
+}
+```
+
+Comments are blanked out before parsing, so a parse error still reports the line
+and column of the file as you wrote it. Nothing rewrites your style, so nothing
+can drop them.
+
+Only comments are added to JSON: trailing commas and unquoted keys stay errors.
+Editors validating against the [JSON Schema](/ezu/style/json-schema/) need the
+file treated as JSON with comments — in VS Code, that means associating it with
+`jsonc`.
+
 ## A complete minimal style
 
 ```json
