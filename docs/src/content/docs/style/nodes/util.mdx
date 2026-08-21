@@ -24,11 +24,11 @@ Extract a single channel of an RGBA raster as a [0, 1] ScalarField. RGB channels
 
 ### `switch`
 
-Pick `a` or `b` based on `select` (default `a`). Both inputs accept any port kind; the output's kind mirrors the selected input. Useful for A/B comparison and param-driven branching.
+Pick `a` or `b` based on `select` (default `a`). Both inputs accept any port kind. A literal `select` is resolved when the graph is built, and the output mirrors the chosen input's kind — so the two inputs may be different kinds. A `$param` or `@node` `select` is read per render instead, which requires both inputs to be the same kind.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `a` | `@node` | yes | Reference to another node (`@name`). |
 | `b` | `@node` | yes | Reference to another node (`@name`). |
-| `select` | `a` \| `b` \| boolean \| integer (0…1) | no | — |
+| `select` | `a` \| `b` \| boolean \| integer (0…1) \| `$param` \| `@node` | no | — |
 

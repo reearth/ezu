@@ -26,6 +26,9 @@ pub enum BuildError {
     #[error("port `{node}.{port}` already connected")]
     DuplicateEdge { node: NodeId, port: String },
 
+    #[error("node `{node}` cannot serve these input kinds: {msg}")]
+    UnsupportedKinds { node: NodeId, msg: String },
+
     #[error(
         "type mismatch on `{node}.{port}`: expected one of [{}], source `{src}` produces {got}",
         accepts.iter().map(|k| k.to_string()).collect::<Vec<_>>().join(", ")
@@ -242,6 +245,12 @@ impl GraphBuilder {
                     }
                     None => input_kinds.push(None),
                 }
+            }
+            if let Err(msg) = node.validate_kinds(&input_kinds) {
+                return Err(BuildError::UnsupportedKinds {
+                    node: id.clone(),
+                    msg,
+                });
             }
             output_kinds[ix] = node.output(&input_kinds);
         }

@@ -3905,7 +3905,7 @@
             "type": "object"
           },
           {
-            "description": "Pick `a` or `b` based on `select` (default `a`). Both inputs accept any port kind; the output's kind mirrors the selected input. Useful for A/B comparison and param-driven branching.",
+            "description": "Pick `a` or `b` based on `select` (default `a`). Both inputs accept any port kind. A literal `select` is resolved when the graph is built, and the output mirrors the chosen input's kind — so the two inputs may be different kinds. A `$param` or `@node` `select` is read per render instead, which requires both inputs to be the same kind.",
             "properties": {
               "a": {
                 "description": "Reference to another node (`@name`).",
@@ -3938,6 +3938,11 @@
                     "maximum": 1,
                     "minimum": 0,
                     "type": "integer"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port, read per render. `true` / non-zero picks `b`.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
                   }
                 ]
               }

@@ -32,6 +32,19 @@ pub trait Node: Send + Sync {
     /// is called.
     fn output(&self, input_kinds: &[Option<PortKind>]) -> PortKind;
 
+    /// Reject a combination of upstream kinds this node cannot serve,
+    /// with a message explaining why.
+    ///
+    /// [`Node::output`] has to answer with *some* kind, so a node whose
+    /// requirement spans several ports — `switch` with a runtime
+    /// `select`, which can only promise one output kind if both of its
+    /// inputs share one — says so here instead. Called once per node at
+    /// build time, right after the upstream kinds are resolved and
+    /// before `output`.
+    fn validate_kinds(&self, _input_kinds: &[Option<PortKind>]) -> Result<(), String> {
+        Ok(())
+    }
+
     /// Coordinate space the node operates in. Defaults to inheriting
     /// from inputs.
     fn coord_space(&self) -> CoordSpace {
