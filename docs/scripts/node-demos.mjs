@@ -183,9 +183,10 @@ export const DEMOS = {
     },
   },
   triangulate: {
-    note: 'Building footprints decomposed into triangles, drawn as an outline mesh.',
+    note: 'Delaunay mesh over the building centroids. The op triangulates points, so polygons come through `centroid` first.',
     nodes: {
-      t: { op: 'triangulate', features: '@buildings_f' },
+      c: { op: 'centroid', features: '@buildings_f' },
+      t: { op: 'triangulate', features: '@c' },
       b: { op: 'boundary', features: '@t' },
       ...overBase('@b', 0.8),
     },
@@ -480,9 +481,6 @@ export const DEMOS = {
 /** Ops with nothing meaningful to show on their own — documented in prose. */
 export const NO_IMAGE = new Set([
   'densify',
-  // Emits triangles the downstream paint ops draw nothing for — see
-  // https://github.com/reearth/ezu/issues (tracked separately).
-  'triangulate',
   'expr',
   'math',
   'zoom',

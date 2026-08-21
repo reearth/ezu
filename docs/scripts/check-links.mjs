@@ -1,7 +1,12 @@
-// Verifies that every internal link in the built site resolves to a page.
-// Starlight rewrites base-prefixed hrefs at build time, so this runs against
-// `dist/` rather than the Markdown sources — which also catches links that
-// only exist in generated pages.
+// Verifies that every internal link and asset reference in the built site
+// resolves. Starlight rewrites base-prefixed URLs at build time, so this runs
+// against `dist/` rather than the Markdown sources — which also catches links
+// that only exist in generated pages.
+//
+// `src` counts as much as `href`: the generated node catalog references one
+// render per op by path, and dropping a demo from the image generator without
+// dropping it from the catalog left a 404 image that an href-only check could
+// not see.
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
@@ -29,25 +34,25 @@ let checked = 0;
 
 for (const file of htmlFiles(DIST)) {
   const html = readFileSync(file, 'utf8');
-  for (const match of html.matchAll(/href="([^"]+)"/g)) {
-    const href = match[1];
-    if (!href.startsWith(`${BASE}/`)) continue; // external, anchor, or asset-relative
-    const path = href.split('#')[0].split('?')[0].slice(BASE.length);
+  for (const match of html.matchAll(/(?:href|src)="([^"]+)"/g)) {
+    const url = match[1];
+    if (!url.startsWith(`${BASE}/`)) continue; // external, anchor, or asset-relative
+    const path = url.split('#')[0].split('?')[0].slice(BASE.length);
     checked++;
     const target = join(DIST, path);
     if (existsSync(target) || existsSync(join(target, 'index.html'))) continue;
-    if (!broken.has(href)) broken.set(href, new Set());
-    broken.get(href).add(relative(DIST, file));
+    if (!broken.has(url)) broken.set(url, new Set());
+    broken.get(url).add(relative(DIST, file));
   }
 }
 
 if (broken.size === 0) {
-  console.log(`all ${checked} internal links resolve`);
+  console.log(`all ${checked} internal links and assets resolve`);
   process.exit(0);
 }
 
-for (const [href, sources] of broken) {
-  console.error(`broken: ${href}\n  linked from: ${[...sources].join(', ')}`);
+for (const [url, sources] of broken) {
+  console.error(`broken: ${url}\n  referenced from: ${[...sources].join(', ')}`);
 }
-console.error(`\n${broken.size} broken internal link(s)`);
+console.error(`\n${broken.size} broken internal reference(s)`);
 process.exit(1);
