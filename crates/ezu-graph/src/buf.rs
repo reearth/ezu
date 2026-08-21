@@ -29,8 +29,8 @@ impl RasterBuf {
 
     pub fn filled(width: u32, height: u32, rgba: [u8; 4]) -> Self {
         let mut s = Self::new(width, height);
-        for px in s.pixels.chunks_exact_mut(4) {
-            px.copy_from_slice(&rgba);
+        for px in s.pixels.as_chunks_mut::<4>().0 {
+            *px = rgba;
         }
         s
     }
@@ -269,10 +269,20 @@ mod tests {
 
         let right = sheet.crop("right").expect("named icon");
         assert_eq!((right.width, right.height), (2, 2));
-        assert!(right.pixels.chunks_exact(4).all(|p| p == [0, 255, 0, 255]));
+        assert!(right
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|&p| p == [0, 255, 0, 255]));
 
         let left = sheet.crop("left").unwrap();
-        assert!(left.pixels.chunks_exact(4).all(|p| p == [255, 0, 0, 255]));
+        assert!(left
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|&p| p == [255, 0, 0, 255]));
 
         // Unknown name / out-of-bounds rect → None.
         assert!(sheet.crop("missing").is_none());

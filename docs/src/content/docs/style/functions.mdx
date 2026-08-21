@@ -1,0 +1,90 @@
+---
+title: functions
+description: Reusable subgraphs with typed inputs, expanded inline at build time.
+sidebar:
+  order: 4
+---
+
+Ten stroke layers that differ only in their source layer and colour should be one
+thing declared once. The `functions` block declares a subgraph with typed input
+ports and an output kind; `op: "func"` calls it.
+
+```json
+{
+  "functions": {
+    "sketchy-line": {
+      "inputs": {
+        "features": { "kind": "features" },
+        "brush":    { "kind": "brush" },
+        "color":    { "kind": "scalar" },
+        "radius":   { "kind": "scalar", "default": 1.0 }
+      },
+      "output": "@draw",
+      "output-kind": "raster",
+      "nodes": {
+        "wob":  { "op": "wave", "features": "@features", "amplitude-px": 0.8 },
+        "draw": { "op": "line", "features": "@wob", "brush": "@brush",
+                  "color": "@color", "radius-px": "@radius" }
+      }
+    }
+  },
+  "nodes": {
+    "roads": { "op": "func", "fn": "sketchy-line",
+               "features": "@roads_f", "brush": "@pencil", "color": "$ink" },
+    "rail":  { "op": "func", "fn": "sketchy-line",
+               "features": "@rail_f", "brush": "@pencil", "color": "#555", "radius": 0.7 }
+  }
+}
+```
+
+## Declaration
+
+| Field | Meaning |
+| --- | --- |
+| `inputs` | map of port name → `{ "kind": …, "default": … }`. Kinds: `features`, `raster`, `sprite`, `brush`, `scalar`, `scalar-field` |
+| `nodes` | the body — same syntax as the document's `nodes` |
+| `output` | body node whose value the call produces |
+| `output-kind` | the port kind of that output, checked against the call site |
+
+An input with a `default` is optional at the call site. A `default` of `null`
+means "remove the substituted field entirely", which matters for op fields whose
+*absence* is meaningful.
+
+## Calling
+
+`{ "op": "func", "fn": "<name>", …arguments }`. Each remaining field is an
+argument named after an input port. The call node's id names the result, so
+`@roads` above refers to the function's output.
+
+## Expansion semantics
+
+Functions expand inline at graph-build time, like hygienic macros.
+
+- **Closed over inputs.** Inside a body, `@name` resolves to a function input,
+  another body node, or a document-scoped source — nothing else. A typo cannot
+  silently capture a caller's node.
+- **Structural substitution.** Literals stay literals. `$param` references keep
+  their runtime-override behaviour. `@node` arguments become port connections.
+  Scalar arguments substitute *verbatim*, so they reach places a plain `$param`
+  cannot — gradient stops, stroke-curve arrays.
+- **Nesting allowed.** Functions may call functions. Cyclic calls are a build
+  error, reported with the path (`a → b → a`).
+- **Namespaced ids.** Body nodes become `<call>/<node>`, with the output node
+  taking the call id — so build errors and `--verbose` logs read naturally
+  (`roads/wob`).
+- **No duplicated work.** The intermediate cache is content-addressed, so two
+  calls with identical arguments share cache entries. Inlining costs nothing at
+  evaluation time.
+
+## Functions or params?
+
+They solve different problems and compose well:
+
+- The **structure** repeats → function.
+- A **value** should change per render → [param](/ezu/style/params/).
+- Usually both: declare params for the knobs, then pass them as function
+  arguments.
+
+[`pencil-sketch.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/pencil-sketch.json)
+is the live demo — ten wave-then-line stroke layers are one `sketchy-line`
+function, and the water hatching is a `water-hatch` function that calls it.

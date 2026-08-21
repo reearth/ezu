@@ -1,0 +1,125 @@
+---
+title: Halftone and dither
+description: Reducing a map to a small palette on purpose — risograph, newsprint, screen-print looks.
+sidebar:
+  order: 4
+---
+
+Modern maps have millions of colours. Print did not, and the techniques it used to
+cope — halftone screens, limited inks, dithering — are a look. The palette ops give
+it to you directly.
+
+## Dither to a fixed palette
+
+```json
+"riso": {
+  "op": "dither",
+  "input": "@composite",
+  "palette": ["#0c1b33", "#f5f0e6", "#e04a3f", "#4a7bb7"],
+  "method": "floyd-steinberg",
+  "space": "lab"
+}
+```
+
+- **`method: "floyd-steinberg"`** (default) diffuses quantization error to
+  neighbouring pixels. Organic and non-repeating — closest to a photographic
+  reproduction. It is inherently scan-ordered, so keep it for single images and
+  bbox renders rather than pyramids where you will study the seams.
+- **`method: "ordered"`** uses a 4×4 Bayer matrix, with `amount` (0–1) setting
+  strength. Regular, screen-like, position-deterministic — the choice for tiles.
+- **`space`** is `lab` (default, perceptual nearest-colour) or `rgb` (numeric).
+  Lab is nearly always right; rgb is faster and sometimes harder-edged.
+
+Alpha is preserved, so a dithered layer still composites.
+
+<figure class="page-fig page-fig--pair">
+  <div class="page-fig__images">
+    <img src="/ezu/nodes/_base.webp" alt="The basemap before reduction" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/nodes/dither.webp" alt="The same tile reduced to four inks with error diffusion" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Four inks, error-diffused. The stipple is what keeps the gradients readable.</figcaption>
+</figure>
+
+## Reduce without dithering
+
+```json
+"flat": { "op": "posterize", "input": "@composite", "steps": 4 },
+"inks": { "op": "quantize",  "input": "@composite",
+          "palette": ["#0c1b33", "#f5f0e6", "#e04a3f"], "space": "lab" }
+```
+
+`posterize` snaps each channel to `steps` levels — banding, deliberately.
+`quantize` maps every pixel to its nearest palette entry with no error diffusion:
+flat, graphic, cheaper than `dither`. Same palette, very different feel — dither
+keeps gradients readable, quantize destroys them on purpose.
+
+<figure class="page-fig page-fig--pair">
+  <div class="page-fig__images">
+    <img src="/ezu/nodes/posterize.webp" alt="The tile posterized to four levels per channel" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/nodes/quantize.webp" alt="The tile mapped to a four-ink palette without dithering" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption><code>posterize</code> (left) bands each channel; <code>quantize</code> (right) snaps to a palette. Neither diffuses error, so both go flat.</figcaption>
+</figure>
+
+## A newsprint stack
+
+```json
+"grey":  { "op": "hsl", "input": "@composite", "saturation": -1 },
+"boost": { "op": "levels", "input": "@grey", "in-black": 0.15, "in-white": 0.85 },
+"dots":  { "op": "dither", "input": "@boost", "method": "ordered", "amount": 0.8,
+           "palette": ["#111111", "#f7f5ef"] }
+```
+
+Desaturate, expand the tonal range so the two-colour screen has something to bite
+on, then screen. The `levels` step is the one people skip, and it is the difference
+between legible and mud. `levels` also takes `gamma`, `out-black`, and `out-white`
+if you want to lift the blacks the way ink on newsprint does.
+
+## Halftone blocks
+
+`mosaic` averages the image into square blocks, which is a coarse screen:
+
+```json
+"screen": { "op": "mosaic", "input": "@composite", "block": 4, "anchor": "world" }
+```
+
+<figure class="page-fig">
+  <img src="/ezu/nodes/mosaic.webp" alt="The tile averaged into square blocks" width="384" height="384" loading="lazy" decoding="async" />
+  <figcaption>An 8&nbsp;px world-anchored block grid.</figcaption>
+</figure>
+
+`anchor: "world"` keeps the block grid continuous across map tiles, at the cost of
+extra padding; `anchor: "tile"` restarts the grid at each tile's corner and needs no
+padding — fine for a single image, visible as a grid-of-grids in a pyramid.
+`mode: "nearest"` samples each block's centre instead of averaging, for hard blocks
+with no colour blending.
+
+## Plate wobble
+
+Print looks convincing partly because the plates are never perfectly registered.
+`displace` pushes pixels around according to a displacement raster, so
+low-frequency noise gives a gently misregistered plate:
+
+```json
+"wob_src": { "op": "noise", "scale-px": 64, "octaves": 2, "anchor": "world" },
+"wobbled": { "op": "displace", "input": "@composite",
+             "displacement": "@wob_src", "amp-px": 1.5, "boundary": "mirror" }
+```
+
+Keep `amp-px` under about 2. More reads as a bug; less is invisible. `anchor:
+"world"` on the noise is what keeps the wobble continuous across tiles — see
+[tiles and determinism](/ezu/concepts/tiles-and-determinism/).
+
+## Where in the graph
+
+Palette reduction belongs **at the end**, over the finished composite, for the same
+reason a print shop screens assembled artwork rather than each element: dithering
+per layer and then blending gives you dithered dithering, and the palette stops
+meaning anything.
+
+The exception is when one layer should look printed *on* an otherwise smooth map —
+then dither that layer alone and blend it over.
+
+Padding is computed across the whole chain, so you never add it up by hand; but if
+edges look wrong after adding `displace` or a world-anchored `mosaic`, `pad` is the
+first thing to check.

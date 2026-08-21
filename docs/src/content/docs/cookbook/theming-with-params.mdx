@@ -1,0 +1,113 @@
+---
+title: Theming with params
+description: One style, many looks — declared knobs, generated UI, and render-time overrides.
+sidebar:
+  order: 6
+---
+
+A "dark variant" should not be a second style file. Declare what varies, and let
+the caller decide.
+
+```json
+"params": {
+  "paper":         { "type": "color",  "default": "#fbf6e6",
+                     "description": "Paper (background) color." },
+  "earth":         { "type": "color",  "default": "#e8d9b0",
+                     "description": "Landmass wash color." },
+  "landuse-alpha": { "type": "number", "default": 0.7, "min": 0, "max": 1,
+                     "description": "Peak landuse wash opacity (scaled by zoom)." },
+  "softness":      { "type": "number", "default": 0, "min": 0, "max": 4,
+                     "description": "Gaussian blur over the finished tile, in px." }
+}
+```
+
+```json
+"bg":  { "op": "solid", "color": "$paper" },
+"out": { "op": "blur", "input": "@c4", "sigma": "$softness" }
+```
+
+From
+[`watercolor.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/watercolor.json).
+
+## Three ways in, one meaning
+
+```sh
+ezu bbox --style watercolor.json --bbox 139.7,35.6,139.8,35.7 --zoom 13 \
+  --param 'paper=#1b1a17' --param 'earth=#2c2a24' --out dark.png
+```
+
+```sh
+curl 'http://127.0.0.1:8080/tiles/13/7276/3225.png?paper=%231b1a17&softness=2'
+```
+
+```rust
+params.set("paper".into(), parse_param_value(&doc.params, "paper", "#1b1a17")?);
+```
+
+All three validate against the declarations, and all three hit the same built
+graph — nothing rebuilds when a value changes.
+
+## Write descriptions
+
+`description` is not a comment. It appears in the generated schema, and therefore
+in the live editor's params panel and in any UI you build off
+`Document::params_schema()`:
+
+```sh
+curl http://127.0.0.1:8080/style/params
+```
+
+Drive sliders and colour pickers off that schema instead of parsing the style
+yourself. Bounded numbers become sliders, colours become pickers, bools become
+toggles — which is exactly why `min`/`max` are worth declaring even when you do not
+strictly need the validation.
+
+## Shipping named themes
+
+Params compose into presets on the *caller's* side. A tiny wrapper is usually all a
+theme is:
+
+```sh
+# themes/dark.args
+--param paper=#1b1a17 --param earth=#2c2a24 --param landuse-alpha=0.35
+```
+
+```sh
+ezu tiles --style watercolor.json $(cat themes/dark.args) \
+  --bbox 139.6,35.5,139.9,35.8 --min-zoom 10 --max-zoom 14 --out pyramid/dark
+```
+
+Key your tile cache on the param values as well as the style version, since two
+renders of the same tile with different params are different bytes. See
+[serve tiles](/ezu/guides/serving-tiles/).
+
+## Params that feed computed values
+
+A param is an input, not an expression. Combine them by wiring scalars — and a
+`$param` keeps its runtime-override behaviour all the way through the chain:
+
+```json
+"z":        { "op": "zoom" },
+"zfrac":    { "op": "math", "fn": "div", "a": "@z", "b": 16 },
+"lu_alpha": { "op": "math", "fn": "mul", "a": "$landuse-alpha", "b": "@zfrac" },
+"landuse":  { "op": "fill-solid", "features": "@landuse_feat",
+              "fill": "#a6c084", "fill-alpha": "@lu_alpha" }
+```
+
+That is the zoom-scaled landuse wash from `watercolor.json`: one knob for peak
+opacity, scaled by zoom in the graph.
+
+## Reaching places `$param` cannot
+
+Scalar params substitute into scalar fields. They cannot reach into array-valued
+fields — gradient stops, stroke curves. Function arguments *do* substitute
+structurally, so the pattern is to wrap the array-heavy node in a
+[function](/ezu/style/functions/) and pass the pieces in as scalar arguments.
+
+## Two rules
+
+- **A padding-determining field needs a declared `max`.** Blur sigma and friends
+  fix padding at build time, so `{ "type": "number", "default": 0 }` is a build
+  error there. Keep the bound as tight as the style needs — padding is budgeted
+  from it on every tile.
+- **`v` is reserved** as a tile-server query key. Do not name a param `v`.

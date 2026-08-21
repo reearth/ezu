@@ -1,0 +1,128 @@
+---
+title: Hillshade and hypsometric tint
+description: A DEM into a shaded relief map, coloured by elevation.
+sidebar:
+  order: 3
+---
+
+Terrain is the one part of ezu that needs no vector data at all. A DEM source
+becomes a `ScalarField`, and two ops read it: `color-ramp` for elevation colour,
+`hillshade` for shading.
+
+```json
+{
+  "name": "hillshade",
+  "tile-size": 512,
+  "pad": 16,
+  "sources": {
+    "terrain": {
+      "type": "dem",
+      "url": "https://terrain.reearth.land/mapterhorn-egm08/terrarium/ellipsoid/{z}/{x}/{y}.webp",
+      "encoding": "terrarium",
+      "tile-size": 512,
+      "max-zoom": 14,
+      "neighbor-fetch": true
+    }
+  },
+  "nodes": {
+    "dem": { "op": "dem", "source": "terrain" },
+    "elevation": {
+      "op": "color-ramp", "field": "@dem",
+      "stops": [
+        { "value": -200, "color": "#9bc8e5" },
+        { "value": 0,    "color": "#cce6c8" },
+        { "value": 500,  "color": "#e0d8a6" },
+        { "value": 1500, "color": "#b89271" },
+        { "value": 2500, "color": "#8b6b4a" },
+        { "value": 3500, "color": "#f4f1ea" }
+      ]
+    },
+    "shade": { "op": "hillshade", "field": "@dem",
+               "azimuth-deg": 315, "altitude-deg": 45,
+               "exaggeration": 1.5, "mode": "relief" },
+    "out": { "op": "blend", "base": "@elevation", "over": "@shade" }
+  },
+  "output": "@out"
+}
+```
+
+That is the complete
+[`hillshade.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/hillshade.json).
+Every asset is remote, so it renders from a URL with no checkout:
+
+```sh
+ezu tile --style https://raw.githubusercontent.com/reearth/ezu/main/crates/ezu/examples/styles/hillshade.json \
+  --tile 11/1813/807 --out fuji.png
+```
+
+<figure class="page-fig">
+  <img src="/ezu/figures/gallery-hillshade.webp" alt="Shaded relief of Mount Fuji with hypsometric colouring" width="768" height="768" loading="lazy" decoding="async" />
+  <figcaption>Mount Fuji at z11: a hypsometric ramp under shaded relief, from DEM tiles alone.</figcaption>
+</figure>
+
+The elevation is Re:Earth Terrain's Mapterhorn-merged global DEM blended with
+EGM2008 geoid undulations — credit Re:Earth Terrain, Mapterhorn and EGM2008 (NGA)
+if you render with it. The TileJSON carries that string, so
+`Document::attributions()` picks it up without you writing it down.
+
+## Get `encoding` right first
+
+`terrarium` and `mapbox-rgb` pack elevation into RGB differently. Point the wrong
+decoder at a pyramid and you get noise that looks like a rendering bug rather than
+a configuration one. If your terrain looks like television static, this is why.
+
+## Why `neighbor-fetch` matters
+
+A gradient at the tile's edge needs elevations from the next tile over. Without
+the neighbourhood, hillshade *steps* at every border — a grid of visible seams.
+The host stitches the 3×3 neighbourhood into one per-tile field before evaluation.
+
+Ask which neighbours are actually needed rather than fetching nine tiles blindly:
+`requestedNeighborOffsets('terrain')` in wasm,
+`requested_neighbor_offsets` natively.
+
+`geo_scale` is populated on a DEM field, which is what lets `hillshade` and
+`slope` produce real-world angles rather than unitless ones.
+
+## Tuning the shading
+
+- **`azimuth-deg` 315** — light from the north-west. This is a cartographic
+  convention, not physics: humans read north-west light as raised and south-east
+  light as sunken. Change it and half your readers will see valleys as ridges.
+- **`altitude-deg`** — lower is more dramatic and loses detail on flat ground.
+- **`exaggeration`** — 1.5 is a mild lie that makes gentle terrain legible. Raise
+  it at low zooms where real relief is sub-pixel; drop it towards 1.0 at high
+  zooms where it starts looking inflated.
+- **`mode`** — `relief` is the shaded-relief look. Combined with the ramp
+  underneath it gives the classic atlas appearance.
+
+Wire `exaggeration` to a `$param` and you can tune it against the map instead of
+by guesswork.
+
+## Ramp stops
+
+Stops are absolute metres, so the same ramp means different things in the Alps and
+in the Netherlands. Two habits help:
+
+- Put a stop at 0 and one just below it, so the coastline is a hard colour change
+  rather than an interpolated smear.
+- Spend your stops where the data is. A ramp with five stops between 0 and 500 m
+  and one at 3500 m reads far better over a coastal region than an evenly spaced
+  one.
+
+## Beyond the classic look
+
+`slope` yields angle rather than shading, which makes a steepness map:
+
+```json
+"steep":  { "op": "slope", "field": "@dem" },
+"warn":   { "op": "color-ramp", "field": "@steep",
+            "stops": [ { "value": 0, "color": "#00000000" },
+                       { "value": 30, "color": "#e0000060" },
+                       { "value": 45, "color": "#e00000c0" } ] }
+```
+
+Blend that over a basemap and you have an avalanche-slope overlay. And since a
+`ScalarField` is just a field, the painterly ops apply: `dither` a hypsometric
+ramp to a small palette for a printed-atlas feel, or run the composite through
+`blur` and a paper texture.

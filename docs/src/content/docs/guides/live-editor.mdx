@@ -1,0 +1,68 @@
+---
+title: The live editor
+description: ezu serve — edit a style, watch the map redraw, schema-validated as you type.
+sidebar:
+  order: 5
+---
+
+```sh
+ezu serve                                                # the default example style
+ezu serve crates/ezu/examples/styles/pencil-sketch.json  # a local file
+ezu serve https://example.com/style.json                 # or fetch one
+# → http://127.0.0.1:8080
+```
+
+The editor is a MapLibre GL page with the style JSON beside the map. Hit `⌘↵` /
+`Ctrl+↵` to apply, or turn on **Live preview** to apply on every keystroke that
+parses, schema-validates, and builds clean.
+
+## What the server exposes
+
+| Route | Serves |
+| --- | --- |
+| `/` | the editor |
+| `/tiles/{z}/{x}/{y}.png` · `.webp` | rendered tiles — a usable tile source for any client |
+| `/mvt/{z}/{x}/{y}` | the raw MVT bytes behind the current tile |
+| `/schemas/ezu-style.json` | the JSON Schema, assembled from the registered ops |
+| `/style/params` | the current style's parameter schema |
+| `/style/attribution` | merged attribution across the document and its sources |
+
+The tile route takes [param overrides](/ezu/concepts/params-and-functions/) as
+query string values, which is how the params panel re-renders without touching
+the style text:
+
+```sh
+curl 'http://127.0.0.1:8080/tiles/13/7276/3225.png?paper=%23ffe0f0&softness=2'
+```
+
+## Editing features worth knowing
+
+- **Params panel** — controls generated from the style's `params` block: sliders
+  for bounded numbers, colour pickers, toggles. `reset` returns to the declared
+  defaults.
+- **External-edit reload** — launched with a local path, the server watches the
+  file and pushes Server-Sent Events on change. Edit in your own editor and the
+  browser follows; with unsaved edits in the buffer you get a Reload banner
+  instead of a silent swap.
+- **Open / URL / Save** — load from a local file or an http(s) URL. On Chromium
+  the File System Access API lets Save write back in place.
+- **Source MVT inspector** — overlay the underlying vector tile, toggle layers,
+  click a feature to read its properties. Indispensable when writing a
+  `filter-expr` and wondering what the data actually says.
+- **Tile grid** — a `z/x/y` boundary overlay, which is how you check that dabs and
+  labels really are continuous across edges.
+
+Validation in the editor is the same validation `ezu check` runs, and the schema
+it validates against is derived from the registry — so
+[custom ops](/ezu/extending/custom-ops/) get completion and error squiggles with
+no extra work.
+
+## Serving to something other than the editor
+
+`ezu serve` is a real tile server, so during development you can point an
+existing MapLibre or Leaflet app at `http://127.0.0.1:8080/tiles/{z}/{x}/{y}.png`
+and see your style in place. For anything beyond development, see
+[serve tiles](/ezu/guides/serving-tiles/).
+
+The `ezu-wasm` demo page ships here too, including the COOP/COEP headers the
+threads build needs — see [use in the browser](/ezu/guides/browser-wasm/).

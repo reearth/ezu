@@ -1,0 +1,123 @@
+---
+title: Benchmarks
+description: Measured numbers, the methodology behind them, and how to reproduce them.
+sidebar:
+  order: 1
+---
+
+All figures below are from an **Apple M1** (4 performance + 4 efficiency cores).
+Treat them as a shape, not a spec: they move with hardware, style complexity, and
+network.
+
+## Graph evaluation, single-threaded
+
+A Protomaps basemap MapLibre style, converted with `ezu translate`, rendered at
+512 px — **pure graph evaluation**, with MVT fetch and decode excluded:
+
+```sh
+cargo run --release -p ezu-compare -- \
+  --style crates/ezu-compare/samples/protomaps-basemap.json \
+  --tiles 12/3637/1613,13/7275/3225,14/14550/6452,15/29101/12904 \
+  --bench --repeat 5
+# eval: z12 ~22 ms, z13 ~30 ms, z14 ~19 ms, z15 ~13 ms
+```
+
+Roughly **13–30 ms per tile**. Note that it is not monotonic in zoom: z13 is the
+most expensive here because that is where this style draws the most — feature
+count, not zoom level, is what costs.
+
+## End to end, parallel
+
+A 251-tile z13–z14 pyramid via `ezu tiles`, parallel evaluator across all 8 cores:
+
+**~9 s wall, ~37 ms/tile amortized** — *including* HTTP tile fetch, MVT decode, and
+PNG encode. At this render cost those three dominate the per-tile wall clock, which
+is worth internalising: for vector-ish styles you are often optimising I/O, not
+rendering.
+
+## Parallel evaluator, painterly style
+
+The parallel evaluator buckets nodes by longest-path depth and fans each bucket
+across Rayon. On a six-node-wide watercolour graph, four Tokyo tiles go from
+**6.3 s to 1.3 s**.
+
+The win scales with graph *width*, not node count. A deep, narrow graph gets almost
+nothing from it.
+
+## A real theme, with labels
+
+The style above is a converted basemap with no text. A fuller one —
+[`protomaps-light`](https://papers.reearth.land/styles/protomaps-light/style.json),
+68 layers, 11 of them `symbol`, its own glyph endpoint — expands to a 149-node
+graph, and evaluates in **42–105 ms per tile** across z12–z15 on the same
+machine:
+
+```sh
+cargo run --release -p ezu-compare -- \
+  --style https://papers.reearth.land/styles/protomaps-light/style.json \
+  --tiles 14/14550/6452,12/3637/1613,15/29101/12904 --bench --repeat 3
+# eval: z14 ~105 ms, z12 ~105 ms, z15 ~42 ms
+```
+
+Where that time goes is worth knowing, because it is not where people expect:
+
+| op | share of eval |
+| --- | --- |
+| `stroke` (123 nodes) | 69.5 % |
+| `stack` | 12.4 % |
+| `fill-solid` | 9.8 % |
+| `text-labels` + `text-draw` + `label-placement` | 5.2 % |
+
+Text is cheap here; **road casings are the bill**. A style with dozens of `line`
+layers pays for them, whatever its labels are doing.
+
+:::caution[Cold renders are dominated by fetching, not rendering]
+The *first* render of a style is far slower than these numbers — seconds, not
+milliseconds. Lazily fetched assets land inside evaluation: the glyph ranges the
+text nodes need, the eight neighbour tiles each symbol layer gathers for
+cross-tile collision, the sprite sheet. None of that is rendering cost, and none
+of it repeats.
+
+So measure what you actually care about. `--repeat` reports the fastest run,
+which is the steady state a warm tile server sees. If cold-start latency is your
+concern, prebind the assets — a wasm host that binds glyphs and neighbours up
+front renders this same style well under a second per tile.
+:::
+
+## What the numbers do not say
+
+- **Painterly styles cost more than translated basemaps.** `fill-dabs` and `line`
+  place real dabs along real geometry; a dab-heavy style at z15 over dense polygons
+  is the most expensive thing you can ask for. Do not plan capacity for a
+  watercolour style from a basemap benchmark.
+- **The cache is warm within a style, cold between styles.** A pyramid run reuses
+  work across tiles; a benchmark that renders one tile per process does not, and
+  will look worse than production.
+- **`--repeat` measures a warm cache** by design. Cold-start latency — what a tile
+  server serving an uncached tile actually sees — is the first iteration, not the
+  average.
+
+## Reproducing
+
+```sh
+# Evaluation only, with repeats
+cargo run --release -p ezu-compare -- --style STYLE --tiles Z/X/Y[,…] --bench --repeat 5
+
+# End to end over a pyramid
+time ezu tiles --style STYLE --bbox W,S,E,N --min-zoom 13 --max-zoom 14 --out /tmp/pyr
+
+# Per-node breakdown: op, cache hit/miss, output shape, duration
+ezu --verbose tile --style STYLE --tile Z/X/Y --out /tmp/t.png
+```
+
+`--verbose` is the one to reach for first when a style is slower than you expect.
+A node missing the cache on every tile — when you thought it was shared — almost
+always means an asset hash that changes when it should not.
+
+## WebAssembly
+
+The `ezu-wasm` README carries browser benchmarks for the scalar, SIMD, and threads
+builds. Expect wasm to be slower than native, SIMD to help the image-processing
+ops most, and the threads build to behave like the native parallel evaluator when
+the page is cross-origin isolated. See
+[use in the browser](/ezu/guides/browser-wasm/).

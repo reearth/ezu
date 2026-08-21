@@ -1,0 +1,39 @@
+{
+  "name": "figure",
+  "tile-size": 512,
+  "pad": 32,
+  "sources": {
+    "basemap": {
+      "type": "mvt",
+      "url": "https://papers.reearth.land/protomaps/tilejson.json"
+    }
+  },
+  "nodes": {
+    "bg": {
+      "op": "solid",
+      "color": "#fbf6e6"
+    },
+    "water_f": {
+      "op": "features",
+      "layer": "water"
+    },
+    "water": {
+      "op": "fill-dabs",
+      "features": "@water_f",
+      "color": "#5876a0",
+      "opacity": 0.22,
+      "radius-px": 7,
+      "spacing-px": 3,
+      "hardness": 0.5,
+      "position-jitter": 0.9,
+      "size-jitter": 0.4,
+      "opacity-jitter": 0.3
+    },
+    "out": {
+      "op": "blend",
+      "base": "@bg",
+      "over": "@water"
+    }
+  },
+  "output": "@out"
+}

@@ -1,0 +1,56 @@
+---
+title: Changelog
+description: Where releases are recorded, and what versioning means here.
+sidebar:
+  order: 3
+---
+
+Release notes live with the releases:
+
+- **[GitHub releases](https://github.com/reearth/ezu/releases)** — one entry per
+  version, generated from the merged pull requests.
+- **[crates.io](https://crates.io/crates/ezu)** — published versions of every
+  crate.
+- **[npm](https://www.npmjs.com/package/@reearth/ezu)** — the WebAssembly package,
+  versioned in lockstep with the crates.
+
+## What the version numbers mean
+
+Every published crate in the workspace shares one version and is released as a
+set, so `ezu 0.6.1` expects `ezu-graph 0.6.1`. Pin the umbrella crate and let it
+pin the rest.
+
+ezu is **pre-1.0**, so a minor bump may contain a breaking change — to the Rust
+API, to the style spec, or to the wasm interface. In practice:
+
+- **patch** (`0.6.0` → `0.6.1`) — fixes, no interface change intended.
+- **minor** (`0.6.x` → `0.7.0`) — new capabilities, and any breaking change.
+
+`maplibre-expr` lives in
+[its own repository](https://github.com/reearth/maplibre-expr-rs) and versions
+independently.
+
+## Style spec changes
+
+The style language is versioned with the workspace. A change to the document shape
+— a renamed field, a new required field, a changed default — is called out in the
+release notes for the version that introduces it.
+
+Two things make an upgrade cheap to check:
+
+```sh
+ezu check style.json --no-fetch     # every style you own, against the new binary
+ezu schema --out ezu-style.schema.json   # regenerate the schema your editor uses
+```
+
+The schema is assembled from the op registry, so regenerating it after an upgrade
+is how you see, concretely, what changed in the ops you use.
+
+## The `version` field in a document
+
+```json
+{ "name": "watercolor", "version": "1", "…": "…" }
+```
+
+That field is **yours**. Nothing in ezu reads it. It is there so a style can carry
+its own version alongside its name — useful as part of a tile cache key.

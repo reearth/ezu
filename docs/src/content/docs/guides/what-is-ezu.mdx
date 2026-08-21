@@ -1,0 +1,72 @@
+---
+title: What is ezu?
+description: Where ezu sits between a GPU map engine and a raster tile server, and when to reach for it.
+sidebar:
+  order: 1
+---
+
+`ezu` (絵図 — "picture map") renders vector tiles to raster tiles on the CPU. It
+is a Rust library, a CLI, and a WebAssembly module. There is no GPU in the
+pipeline and no headless browser.
+
+Two things make it unusual.
+
+**A style is a typed node graph, not a layer list.** Instead of an ordered list
+of layers with paint properties, an ezu style is a DAG of ~80 ops — sources,
+rasterization, blending, warp, morphology, dither, terrain, text — wired by
+reference. That is what makes painterly output tractable: a watercolour wash is a
+scatter-dab fill blurred, blended and warped, which is a graph, not a layer
+property.
+
+**It speaks MapLibre where it counts.** `ezu translate` lowers a MapLibre GL
+style into an ezu recipe, and any node field that varies per feature accepts a
+raw MapLibre expression, evaluated by
+[`maplibre-expr`](https://github.com/reearth/maplibre-expr-rs) at 100 %
+conformance against MapLibre's official spec fixtures. You can start from an
+existing basemap style and stay compatible.
+
+## Compared to
+
+**MapLibre GL JS / native.** MapLibre draws on the GPU, per frame, for an
+interactive viewport. ezu draws on the CPU, per tile, and hands you a PNG. Use
+MapLibre for a map a user pans; use ezu to *produce* tiles — for a server, a
+batch job, a print export, or a stylized basemap you serve like any other raster
+pyramid. ezu's label collision is deterministic in world space rather than
+viewport-driven, which is what makes tiles cacheable but also means there are no
+per-frame fades or viewport-centre priority.
+
+**A conventional raster tile server (Mapnik, MapServer, …).** Same output shape,
+different styling model. ezu's node graph and brush engine target painterly
+rendering, and its MapLibre frontend means the style you already have is an
+input.
+
+**Static map images.** ezu renders single tiles, bbox mosaics, and whole XYZ
+pyramids, so a one-off image and a pyramid are the same tool with different
+flags.
+
+## When it is a good fit
+
+- You want a map that looks hand-painted, not styled.
+- You need raster tiles from a MapLibre style without keeping a headless browser
+  alive.
+- You want rendering inside a process with no GPU — a Worker, a serverless
+  function, a wasm sandbox, a batch pipeline.
+- You care that adjacent tiles agree: brush texture, dab placement, and label
+  collision are all deterministic across tile boundaries.
+
+## When it is not
+
+- You need an interactive, continuously-zooming client map. Render tiles with ezu
+  and let MapLibre or any raster client display them.
+- You need pixel-identical MapLibre output. ezu gets close — a 68-layer Protomaps
+  theme scores SSIM 0.80–0.87 against maplibre-gl-js, labels and icons in place
+  ([see the tiles](/ezu/maplibre/compatibility/)) — but it is a different
+  renderer; see [gaps and differences](/ezu/maplibre/gaps-and-differences/).
+- You need true 3-D (`fill-extrusion` height, terrain meshes). Footprints render
+  flat.
+
+## Where to go next
+
+- [Install](/ezu/guides/install/), then [render your first tile](/ezu/guides/first-tile/).
+- [The node graph](/ezu/concepts/node-graph/) for the model behind the style language.
+- [From a MapLibre style](/ezu/guides/from-maplibre/) if you already have a style.

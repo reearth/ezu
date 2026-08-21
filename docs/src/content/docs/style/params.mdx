@@ -1,0 +1,105 @@
+---
+title: params
+description: Declaring typed knobs that callers override at render time.
+sidebar:
+  order: 3
+---
+
+```json
+"params": {
+  "paper":    { "type": "color",  "default": "#fbf6e6" },
+  "softness": { "type": "number", "default": 0, "min": 0, "max": 4,
+                "description": "Blur over the finished tile, in px." },
+  "labels":   { "type": "bool",   "default": true }
+}
+```
+
+Reference a param with `$name` anywhere a scalar field lives:
+
+```json
+"bg":  { "op": "solid", "color": "$paper" },
+"out": { "op": "blur", "input": "@composite", "sigma": "$softness" }
+```
+
+## Declaration fields
+
+| Field | Applies to | Meaning |
+| --- | --- | --- |
+| `type` | all | `color`, `number`, or `bool` — required |
+| `default` | all | used when the caller supplies nothing — required |
+| `min` / `max` | `number` | validated on every override; `max` also serves as the static bound for padding-determining fields |
+| `description` | all | surfaced in the generated schema and the editor's params panel |
+
+Colours are `#rrggbb` or `#rrggbbaa`. Bools are `true` / `false`.
+
+## Overriding at render time
+
+```sh
+# CLI — repeatable, validated against the declarations
+ezu tile --style watercolor.json --tile 13/7276/3225 \
+  --param 'paper=#ffe0f0' --param softness=2 --out tile.png
+
+# Tile server — query-string overrides on the tile endpoint
+curl 'http://127.0.0.1:8080/tiles/13/7276/3225.png?paper=%23ffe0f0&softness=2'
+```
+
+```rust
+let mut params = ezu::graph::ParamValues::new();
+params.set("softness".into(), parse_param_value(&doc.params, "softness", "2")?);
+```
+
+Every path validates: a number outside `min`/`max`, a malformed colour, or a
+non-boolean fails before rendering. An unset param falls back to its `default`.
+
+:::caution[`v` is reserved]
+The tile server uses `v` as a query key, so a param named `v` cannot be overridden
+that way. Pick another name.
+:::
+
+## One graph, every combination
+
+Params resolve at **render time**, so nothing rebuilds when a value changes, and
+the cache keys on the values each node actually reads — flipping one param
+re-evaluates only its subtree. That is what makes the editor's params panel
+responsive on a style that takes hundreds of milliseconds cold.
+
+## The generated schema
+
+`Document::params_schema()` derives a JSON Schema of the declarations — types,
+defaults, ranges, descriptions:
+
+```sh
+curl http://127.0.0.1:8080/style/params
+```
+
+Drive your own sliders and colour pickers off that rather than parsing the style.
+The live editor's panel is generated from exactly this.
+
+## Padding-determining fields need `max`
+
+Canvas padding is fixed at build time, so a field that decides it — blur sigma and
+friends — must carry a static upper bound. A literal qualifies; a `$param`
+qualifies **only if it declares `max`**; a `@node` port never does.
+
+```json
+"softness": { "type": "number", "default": 0, "min": 0, "max": 4 }   // ✅ usable as a blur sigma
+"softness": { "type": "number", "default": 0 }                       // ❌ build error
+```
+
+The bound is what the graph budgets padding for, so keep it as tight as the style
+actually needs — an unnecessarily large `max` costs render time on every tile.
+
+## Composing computed values
+
+Params are inputs, not expressions. To combine them, wire scalars through the
+graph — a `$param` argument keeps its runtime-override behaviour all the way
+through:
+
+```json
+"z":        { "op": "zoom" },
+"zfrac":    { "op": "math", "fn": "div", "a": "@z", "b": 16 },
+"lu_alpha": { "op": "math", "fn": "mul", "a": "$landuse-alpha", "b": "@zfrac" }
+```
+
+[`watercolor.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/watercolor.json)
+is a complete parametric style.

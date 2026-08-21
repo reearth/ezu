@@ -1,0 +1,12 @@
+{
+  "name": "solid-demo",
+  "tile-size": 512,
+  "pad": 8,
+  "nodes": {
+    "out": {
+      "op": "solid",
+      "color": "#c2410c"
+    }
+  },
+  "output": "@out"
+}

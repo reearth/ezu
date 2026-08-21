@@ -716,7 +716,6 @@ dependencies = [
  "ezu-paint",
  "ezu-style",
  "ezu-translate",
- "futures",
  "hokusai",
  "pmtiles",
  "reqwest",

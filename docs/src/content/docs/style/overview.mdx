@@ -1,0 +1,90 @@
+---
+title: Overview
+description: The shape of an Ezu Style document.
+sidebar:
+  order: 1
+---
+
+An Ezu Style document is a JSON object. Two fields are required — `nodes` and
+`output` — plus a `name`. Everything else is optional.
+
+```json
+{
+  "name": "watercolor",
+  "version": "1",
+  "tile-size": 512,
+  "pad": 24,
+  "attribution": "© OpenStreetMap contributors",
+  "params":    { },
+  "functions": { },
+  "sources":   { },
+  "nodes":     { },
+  "output": "@out"
+}
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `name` | string | required — identifies the style in logs and saved files |
+| `nodes` | map of id → node | required — the graph. Order is irrelevant |
+| `output` | `@node` | required — must resolve to a `Raster` |
+| `version` | string | the style's own version, yours to use |
+| `tile-size` | integer | rendered tile edge in px (512 matches MapLibre) |
+| `pad` | integer | margin around the tile for filters and overflowing geometry |
+| `attribution` | string | document-level attribution, merged with each source's |
+| `params` | map | [typed knobs](/ezu/style/params/) resolved at render time |
+| `functions` | map | [reusable subgraphs](/ezu/style/functions/) expanded at build time |
+| `sources` | map | [every external resource](/ezu/style/sources/) the style pulls in |
+
+## The two reference prefixes
+
+There are exactly two, and the prefix tells you when it resolves:
+
+- **`@name`** — a node reference, resolved at build time. On a scalar field it is a
+  `Scalar` port, so computed values (`math`, `zoom`, `expr`) plug in.
+- **`$name`** — a `params` reference, resolved at render time against
+  caller-supplied values, falling back to the declared default.
+
+A field name ending in `-expr` takes a raw
+[MapLibre expression](/ezu/style/expression-fields/) instead.
+
+## A complete minimal style
+
+```json
+{
+  "name": "flat",
+  "tile-size": 512,
+  "pad": 8,
+  "sources": {
+    "basemap": { "type": "mvt", "url": "https://papers.reearth.land/protomaps/tilejson.json" }
+  },
+  "nodes": {
+    "bg":      { "op": "solid", "color": "#fbf6e6" },
+    "water_f": { "op": "features", "layer": "water" },
+    "water":   { "op": "fill-solid", "features": "@water_f", "fill": "#5876a0" },
+    "out":     { "op": "blend", "base": "@bg", "over": "@water" }
+  },
+  "output": "@out"
+}
+```
+
+## Versioning
+
+The spec is pre-1.0 and lives in the `ezu-style` crate, versioned with the
+workspace (currently **0.6.x**). Breaking changes to the document shape are
+called out in the [changelog](/ezu/reference/changelog/). The `version` field
+inside a document is for *your* versioning — nothing in ezu interprets it.
+
+The authoritative machine-readable definition is the
+[JSON Schema](/ezu/style/json-schema/), assembled from the same op registry the
+renderer uses, so it cannot drift from the implementation.
+
+## Validation
+
+```sh
+ezu check style.json              # parse + graph + assets
+ezu check style.json --no-fetch    # offline: parse + graph only
+```
+
+This runs the same static checks the renderer runs — reference resolution, port
+types, cycles, padding limits. See [validate in CI](/ezu/guides/validate-in-ci/).

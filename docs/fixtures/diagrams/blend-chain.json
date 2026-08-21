@@ -1,0 +1,61 @@
+{
+  "name": "blend-chain-diagram",
+  "tile-size": 512,
+  "pad": 8,
+  "sources": {
+    "basemap": {
+      "type": "mvt",
+      "url": "https://papers.reearth.land/protomaps/tilejson.json"
+    }
+  },
+  "nodes": {
+    "bg": {
+      "op": "solid",
+      "color": "#faf6ec"
+    },
+    "earth_f": {
+      "op": "features",
+      "layer": "earth"
+    },
+    "earth": {
+      "op": "fill-solid",
+      "features": "@earth_f",
+      "fill": "#ece1c6"
+    },
+    "water_f": {
+      "op": "features",
+      "layer": "water"
+    },
+    "water": {
+      "op": "fill-solid",
+      "features": "@water_f",
+      "fill": "#8fb4d9"
+    },
+    "roads_f": {
+      "op": "features",
+      "layer": "roads"
+    },
+    "roads": {
+      "op": "stroke",
+      "features": "@roads_f",
+      "color": "#b09a80",
+      "width-px": 1.2
+    },
+    "c1": {
+      "op": "blend",
+      "base": "@bg",
+      "over": "@earth"
+    },
+    "c2": {
+      "op": "blend",
+      "base": "@c1",
+      "over": "@water"
+    },
+    "out": {
+      "op": "blend",
+      "base": "@c2",
+      "over": "@roads"
+    }
+  },
+  "output": "@out"
+}

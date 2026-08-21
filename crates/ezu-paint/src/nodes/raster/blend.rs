@@ -297,11 +297,13 @@ fn normal_over(base: &RasterBuf, over: &RasterBuf, op: f32) -> RasterBuf {
     } else {
         (op * 255.0).round() as u32
     };
-    for (o, (d, s)) in out
-        .pixels
-        .chunks_exact_mut(4)
-        .zip(base.pixels.chunks_exact(4).zip(over.pixels.chunks_exact(4)))
-    {
+    for (o, (d, s)) in out.pixels.as_chunks_mut::<4>().0.iter_mut().zip(
+        base.pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(over.pixels.as_chunks::<4>().0),
+    ) {
         let sa = if sf == 255 {
             s[3] as u32
         } else {
@@ -600,7 +602,7 @@ mod tests {
     fn random_premul(w: u32, h: u32, seed: u64) -> RasterBuf {
         let mut rng = Lcg(seed);
         let mut buf = RasterBuf::new(w, h);
-        for px in buf.pixels.chunks_exact_mut(4) {
+        for px in buf.pixels.as_chunks_mut::<4>().0 {
             let a = rng.byte();
             px[0] = rng.byte().min(a);
             px[1] = rng.byte().min(a);

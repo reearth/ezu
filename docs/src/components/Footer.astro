@@ -1,0 +1,42 @@
+---
+// Every rendered image on this site is made from someone else's data, and most
+// of those licences require credit. Starlight's footer is kept as-is and a
+// credits line added under it, so the attribution travels with every page
+// rather than living only on the gallery.
+import Default from '@astrojs/starlight/components/Footer.astro';
+---
+
+<Default><slot /></Default>
+
+<p class="data-credits">
+  Map renders on this site are made from
+  <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> data via
+  <a href="https://protomaps.com/">Protomaps</a> (© OpenStreetMap contributors),
+  elevation from <a href="https://terrain.reearth.land/">Re:Earth Terrain</a>,
+  <a href="https://mapterhorn.com/">Mapterhorn</a> and
+  <a href="https://earth-info.nga.mil/">EGM2008 (NGA)</a>, and aerial imagery
+  from <a href="https://maps.gsi.go.jp/development/ichiran.html">GSI Japan</a>
+  (© 国土地理院). The painterly styles use CC0 brushes by
+  <a href="https://www.davidrevoy.com/">David Revoy</a>.
+</p>
+
+<style>
+  .data-credits {
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--sl-color-hairline);
+    font-size: var(--sl-text-xs);
+    line-height: 1.6;
+    color: var(--sl-color-gray-3);
+  }
+
+  .data-credits a {
+    color: inherit;
+    text-decoration: underline;
+    text-decoration-color: var(--sl-color-gray-5);
+  }
+
+  .data-credits a:hover {
+    color: var(--sl-color-white);
+  }
+</style>

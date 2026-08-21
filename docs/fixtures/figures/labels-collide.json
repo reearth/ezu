@@ -1,0 +1,94 @@
+{
+  "name": "figure",
+  "tile-size": 512,
+  "pad": 32,
+  "sources": {
+    "basemap": {
+      "type": "mvt",
+      "url": "https://papers.reearth.land/protomaps/tilejson.json"
+    },
+    "sans": {
+      "type": "font",
+      "url": "system:Helvetica"
+    }
+  },
+  "nodes": {
+    "bg": {
+      "op": "solid",
+      "color": "#faf6ec"
+    },
+    "base_earth_f": {
+      "op": "features",
+      "layer": "earth"
+    },
+    "base_earth": {
+      "op": "fill-solid",
+      "features": "@base_earth_f",
+      "fill": "#ece1c6"
+    },
+    "base_water_f": {
+      "op": "features",
+      "layer": "water"
+    },
+    "base_water": {
+      "op": "fill-solid",
+      "features": "@base_water_f",
+      "fill": "#8fb4d9"
+    },
+    "base_roads_f": {
+      "op": "features",
+      "layer": "roads",
+      "min-zoom-field": "min_zoom"
+    },
+    "base_roads": {
+      "op": "stroke",
+      "features": "@base_roads_f",
+      "color": "#b09a80",
+      "width-px": 1.2
+    },
+    "base": {
+      "op": "stack",
+      "layers": [
+        "@bg",
+        "@base_earth",
+        "@base_water",
+        "@base_roads"
+      ]
+    },
+    "places_f": {
+      "op": "features",
+      "layer": "places"
+    },
+    "labels": {
+      "op": "text",
+      "features": "@places_f",
+      "font": [
+        "sans"
+      ],
+      "text": [
+        "coalesce",
+        [
+          "get",
+          "name:en"
+        ],
+        [
+          "get",
+          "name"
+        ]
+      ],
+      "size": 13,
+      "color": "#3b2f24",
+      "halo-color": "#fbf6e6dd",
+      "halo-width": 1.6,
+      "collide": true,
+      "source": "basemap",
+      "layer": "places"
+    },
+    "out": {
+      "op": "blend",
+      "base": "@base",
+      "over": "@labels"
+    }
+  },
+  "output": "@out"
+}

@@ -1,0 +1,118 @@
+---
+title: Gallery
+description: Renders produced by the example styles, each paired with the style that made it.
+---
+
+Every image here comes from an example style in the repository, rendered with
+`ezu tile` or `ezu bbox`. The style JSON is the whole recipe — copy it, change a
+colour, render again.
+
+## pencil-sketch
+
+Ten wave-then-line stroke layers, factored into one user-defined function, plus a
+`water-hatch` function for the sea. This is the front-page render.
+
+<figure class="page-fig">
+  <img src="/ezu/figures/gallery-pencil-sketch.webp" alt="A pencil-sketch render of central Tokyo" width="768" height="768" loading="lazy" decoding="async" />
+  <figcaption>Central Tokyo at z13, three tiles across.</figcaption>
+</figure>
+
+```sh
+ezu bbox --style crates/ezu/examples/styles/pencil-sketch.json \
+  --bbox 139.72,35.66,139.80,35.72 --zoom 13 --out pencil.png
+```
+
+Style: [`pencil-sketch.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/pencil-sketch.json)
+· Concepts: [params and functions](/ezu/concepts/params-and-functions/)
+
+## watercolor
+
+Scatter-dab fills through the `hokusai` brush engine, anchored in world
+coordinates so the wash continues across tile edges. Parametric: `paper` and
+`softness` are declared knobs.
+
+<figure class="page-fig">
+  <img src="/ezu/figures/gallery-watercolor.webp" alt="A watercolour render of central Tokyo" width="768" height="768" loading="lazy" decoding="async" />
+  <figcaption>The same ground in `watercolor.json`, at its declared defaults.</figcaption>
+</figure>
+
+```sh
+ezu bbox --style crates/ezu/examples/styles/watercolor.json \
+  --bbox 139.72,35.66,139.80,35.72 --zoom 13 --out water.png
+
+# …or with the knobs turned
+ezu tile --style crates/ezu/examples/styles/watercolor.json \
+  --tile 13/7276/3225 --param 'paper=#ffe0f0' --param softness=2 --out water.png
+```
+
+Style: [`watercolor.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/watercolor.json)
+
+## hillshade
+
+Raster-DEM tiles → `hillshade` + hypsometric tint. All-remote assets, so it
+renders straight from a URL with no checkout.
+
+<figure class="page-fig">
+  <img src="/ezu/figures/gallery-hillshade.webp" alt="Shaded relief of Mount Fuji" width="768" height="768" loading="lazy" decoding="async" />
+  <figcaption>Mount Fuji at z11 — hypsometric tint under shaded relief, from DEM tiles alone.</figcaption>
+</figure>
+
+```sh
+ezu tile --style https://raw.githubusercontent.com/reearth/ezu/main/crates/ezu/examples/styles/hillshade.json \
+  --tile 11/1813/807 --out fuji.png
+```
+
+Style: [`hillshade.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/hillshade.json)
+· Concepts: [sources and assets](/ezu/concepts/sources-and-assets/)
+
+## photo-pop
+
+Not a vector style at all: GSI aerial photography pulled in as a `raster` source,
+saturation pushed up with `hsl`, then `posterize` to twelve steps per channel.
+Four nodes.
+
+<figure class="page-fig">
+  <img src="/ezu/figures/gallery-photo-pop.webp" alt="A high-contrast posterized render of central Tokyo" width="768" height="768" loading="lazy" decoding="async" />
+  <figcaption>Colour and palette ops rather than brushes — the same data, pushed hard.</figcaption>
+</figure>
+
+```sh
+ezu bbox --style crates/ezu/examples/styles/photo-pop.json \
+  --bbox 139.72,35.66,139.80,35.72 --zoom 13 --out pop.png
+```
+
+Style: [`photo-pop.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/photo-pop.json)
+
+## A translated MapLibre basemap
+
+Not painterly at all: a Protomaps basemap MapLibre style, converted with
+`ezu translate` and rendered by ezu, labels included. This is the render
+`ezu-compare` pixel-diffs against maplibre-gl-js.
+
+```sh
+ezu translate https://api.protomaps.com/styles/v5/light/en.json --out recipe.json
+ezu tile --style recipe.json --tile 14/14550/6452 --out basemap.png
+```
+
+Guide: [from a MapLibre style](/ezu/guides/from-maplibre/)
+
+:::note[Brushes and licensing]
+The painterly example styles reference CC0 brushes by David Revoy through a
+relative `file:` path, so render them from a checkout of the repository. Nothing
+is bundled into the library — a style names every brush it uses.
+:::
+
+## Credits
+
+The renders on this page are made from other people's data, and the licences ask
+for credit:
+
+- **watercolor, pencil-sketch, photo-pop (vector), the Protomaps basemap** — [OpenStreetMap](https://www.openstreetmap.org/copyright) via [Protomaps](https://protomaps.com/), © OpenStreetMap contributors.
+- **hillshade** — elevation from [Re:Earth Terrain](https://terrain.reearth.land/) (Mapterhorn-merged global DEM blended with EGM2008 geoid undulations): Re:Earth Terrain, [Mapterhorn](https://mapterhorn.com/), [EGM2008 (NGA)](https://earth-info.nga.mil/).
+- **photo-pop** — aerial imagery from [GSI Japan](https://maps.gsi.go.jp/development/ichiran.html), © 国土地理院.
+- **Brushes** — CC0, by [David Revoy](https://www.davidrevoy.com/).
+
+ezu tracks this for you at render time: a source inherits attribution from its
+TileJSON or PMTiles metadata, `Document::attributions()` returns the merged list,
+and `ezu serve` exposes it at `GET /style/attribution`. Whatever your tiles end
+up in, render it — see [serve tiles](/ezu/guides/serving-tiles/#attribution).

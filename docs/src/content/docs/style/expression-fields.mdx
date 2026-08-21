@@ -1,0 +1,96 @@
+---
+title: Expression fields
+description: The -expr convention — which fields take a MapLibre expression, and how it is evaluated.
+sidebar:
+  order: 6
+---
+
+A field whose name ends in `-expr` takes a raw
+[MapLibre expression](https://maplibre.org/maplibre-style-spec/expressions/) —
+the same JSON array form MapLibre uses, not a rewrite of it.
+
+```json
+"landuse": {
+  "op": "fill-solid",
+  "features": "@landuse_f",
+  "fill-expr": ["match", ["get", "kind"], "park", "#a6c084", "forest", "#8fae74", "#e8e4d8"]
+}
+```
+
+Evaluation is by [`maplibre-expr`](https://github.com/reearth/maplibre-expr-rs) at
+100 % conformance against MapLibre's official spec fixtures. See
+[expression conformance](/ezu/maplibre/expression-conformance/).
+
+## The pairing convention
+
+Where a paint value can be data-driven, the op offers both forms, and the
+`-expr` field wins when both are present:
+
+| Literal field | Expression field |
+| --- | --- |
+| `fill` | `fill-expr` |
+| `color` | `color-expr` |
+| `width-px` | `width-expr` |
+| `radius-px` | `radius-expr` |
+| `opacity` | `opacity-expr` |
+
+The per-op tables in the [node catalog](/ezu/style/nodes/source/) are generated
+from the registry, so they are the authoritative list of which fields an op
+actually accepts.
+
+`filter-expr` on a `features` node is the same mechanism used as a predicate:
+
+```json
+"water_f": { "op": "features", "layer": "water",
+             "filter-expr": ["all", ["==", ["get", "kind"], "water"], ["has", "name"]] }
+```
+
+Legacy-form filters — bare field names, `!in`, `!has`, `none` — are accepted and
+converted with MapLibre's own pre-compile conversion, strict-type semantics
+included.
+
+## Evaluation context
+
+| Where | Runs | Sees |
+| --- | --- | --- |
+| a paint op's `*-expr` | once per feature | that feature's properties, and the tile's zoom |
+| `filter-expr` | once per feature | the same |
+| the `expr` op | once per tile | the tile's zoom (no feature) |
+
+So a `["zoom"]`-only curve is cheaper as an `expr` node — evaluated once, emitted
+as a `Scalar`, cached like any other node:
+
+```json
+"w": { "op": "expr", "expr": ["interpolate", ["linear"], ["zoom"], 10, 0.5, 16, 4] },
+"roads": { "op": "stroke", "features": "@roads_f", "width-px": "@w" }
+```
+
+Zoom is the tile's integer zoom. There is no fractional zoom, because there is no
+camera — a tile is rendered at its own zoom level. A MapLibre curve therefore
+evaluates at integer steps rather than continuously; this is the main visible
+consequence of tile-based rendering on zoom functions.
+
+## Expression, param, or scalar chain?
+
+All three produce a number, and they differ in *when* the value is fixed:
+
+```json
+"sigma": ["interpolate", …]   // ❌ not a thing — expressions go on `-expr` fields
+"sigma": 3                    // fixed in the document
+"sigma": "$softness"          // overridable per render by the caller
+"sigma": "@w"                 // computed by the graph (expr / math / zoom)
+```
+
+Choose `$param` when a caller should be able to change it (CLI flag, query
+string, slider). Choose an expression or a scalar chain when the value is a
+property of the style. See
+[params and functions](/ezu/concepts/params-and-functions/).
+
+## Notes
+
+- An expression is part of the node's cache key, so using one costs nothing in
+  cacheability.
+- `heatmap`-style colour functions over density are baked into a 256-entry ramp
+  per tile (`ramp-expr` on `color-ramp`).
+- What can be type-checked statically is reported at build time; the rest is
+  reported per feature at render time.

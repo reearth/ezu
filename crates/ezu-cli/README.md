@@ -23,6 +23,7 @@ for one-off swaps.
 | `ezu check` | Validate a style — parse + build graph + resolve assets. Exits non-zero on error, so it drops into a pre-commit hook or CI step. `--no-fetch` stays offline (parse + graph only) |
 | `ezu translate` | Lower a MapLibre GL style into an ezu recipe via [`ezu-translate`](../ezu-translate). `--font "NAME=SOURCE"` maps a fontstack entry to a real font; skipped or approximated layers are reported on stderr |
 | `ezu graph` | Emit a Mermaid `graph LR` diagram of the style's node dependencies |
+| `ezu schema` | Print the Ezu Style JSON Schema, assembled from the registered ops (`--out FILE` to write it). Feed it to an editor's JSON language server, an `ajv` CI check, or a docs generator — [custom ops](../ezu-graph#custom-ops) are included |
 | `ezu serve` | Live editor + tile server (below) |
 
 Global flags: `--verbose` / `-v` turns on per-node debug logs from the

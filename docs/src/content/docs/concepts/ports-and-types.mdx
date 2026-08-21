@@ -1,0 +1,81 @@
+---
+title: Ports and types
+description: The seven port kinds every edge carries, and what static typing buys you.
+sidebar:
+  order: 2
+---
+
+Every edge in the graph carries exactly one of seven kinds. Types are checked
+when the graph is built, not when it renders.
+
+| Kind | Carries |
+| --- | --- |
+| `Features` | Vector features — geometry plus properties, already filtered. Format-agnostic: MVT, GeoJSON, or synthesized in-node. |
+| `Raster` | RGBA8 buffer, sRGB premultiplied, **padded canvas-sized**. The document's `output` must be this kind. |
+| `Sprite` | RGBA8 buffer at the **asset's native size**, not canvas-sized. The carrier for sprite and texture sources. |
+| `Brush` | A `hokusai` brush handle plus overrides. |
+| `Scalar` | A constant colour, number, or bool. |
+| `Labels` | Label placement candidates, or the decisions a shared placement stage reached over them. |
+| `ScalarField` | Per-pixel single-channel `f32` grid, padded canvas-sized — elevation, distance fields, scalar noise, slope angle. |
+
+## Raster vs Sprite
+
+Both are RGBA8; the difference is what the dimensions mean. A `Raster` is the
+padded canvas, so pixel (0,0) has a defined position in the tile. A `Sprite` is
+an asset at its own size — a 32×32 icon is 32×32.
+
+That distinction matters because of what each is for. `Sprite` flows from `image`
+and `icon` into placement ops (`place`, `tiling`, `stamp`), which sample it at its
+native size and produce a `Raster`. It cannot be the document `output`.
+
+The polymorphic filter ops — `blur`, `hsl`, `brightness-contrast`, `invert`,
+`color-to-alpha`, `displace`, `warp`, `blend` — accept either and pass the input
+kind through, so you can adjust an icon and a whole tile with the same node.
+
+## ScalarField
+
+The general carrier for floating-point per-pixel data. `dem` produces one with
+`geo_scale` populated, meaning the values are metres and gradient ops
+(`hillshade`, `slope`) yield real-world angles. A field without `geo_scale` is
+unitless — scalar noise or a distance field used for stylization. `color-ramp`
+maps any field back to a `Raster`.
+
+## Labels and shared placement
+
+Text is the one part of the pipeline that cannot be node-local: two labels in
+different layers still have to avoid each other. So label layers do not decide
+their own placement. Each lowers to a candidates node and a draw node around a
+single `label-placement` node, which resolves everything against one collision
+index — including candidates gathered from the eight neighbouring tiles.
+
+The consequence is that a POI can knock out a road name, the way MapLibre does,
+and that a label near a tile edge resolves identically from either side. See
+[tiles and determinism](/ezu/concepts/tiles-and-determinism/).
+
+## Scalars: literals, params, and ports
+
+A numeric field is usually an `In<T>`, meaning it accepts three things:
+
+```json
+"sigma": 3            // a literal
+"sigma": "$softness"  // a `params` reference, resolved at render time
+"sigma": "@computed"  // a Scalar port from another node
+```
+
+That is how zoom-dependent styling works without a special syntax: `zoom` emits
+the tile's zoom, `math` does arithmetic, `expr` evaluates a whole MapLibre
+expression once per tile — all of them producing `Scalar`.
+
+One constraint. Fields that decide canvas padding at build time — blur sigma and
+friends — need a **static upper bound**: a literal, or a `$param` whose
+declaration has `max`. Wiring those from a `@node` port is a build error, because
+padding must be known before anything is evaluated. See
+[padding and neighbours](/ezu/concepts/padding-and-neighbours/).
+
+## Reading type errors
+
+`build_graph` reports the node id, the port, and both kinds. The usual cause is
+forgetting the intermediate op: `fill-solid` consumes `Features`, not a source
+name, so `features` has to exist as its own node. That verbosity is deliberate —
+the `features` node is where filters and zoom gates live, and it is shared by
+every consumer of that layer.

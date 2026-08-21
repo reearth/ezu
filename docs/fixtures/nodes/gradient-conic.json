@@ -1,0 +1,25 @@
+{
+  "name": "gradient-conic-demo",
+  "tile-size": 512,
+  "pad": 8,
+  "nodes": {
+    "out": {
+      "op": "gradient-conic",
+      "stops": [
+        [
+          0,
+          "#faf6ec"
+        ],
+        [
+          0.5,
+          "#c2410c"
+        ],
+        [
+          1,
+          "#faf6ec"
+        ]
+      ]
+    }
+  },
+  "output": "@out"
+}

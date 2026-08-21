@@ -1,0 +1,88 @@
+---
+title: ezu
+description: Painterly cartography — render vector tiles as paintings — on a pure-Rust, GPU-free CPU renderer with first-class MapLibre compatibility.
+template: splash
+hero:
+  tagline: Render vector tiles as paintings. Pure Rust, no GPU, no headless browser — and it speaks MapLibre.
+  image:
+    alt: An ezu pencil-sketch render of central Japan
+    file: ../../assets/hero.webp
+  actions:
+    - text: Render your first tile
+      link: /ezu/guides/first-tile/
+      icon: right-arrow
+    - text: Gallery
+      link: /ezu/gallery/
+      variant: minimal
+    - text: GitHub
+      link: https://github.com/reearth/ezu
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, Code } from '@astrojs/starlight/components';
+
+`ezu` (絵図) turns vector tiles (MVT / PMTiles) into raster tiles on the CPU.
+It does this two ways, and does both at once.
+
+<CardGrid stagger>
+  <Card title="Painterly" icon="pencil">
+    A declarative node-graph style language drives the
+    [`hokusai`](https://github.com/reearth/hokusai) brush engine and ~80
+    image-processing ops — watercolour, ink wash, ukiyo-e — while the geographic
+    data underneath stays intact.
+    [The node graph →](/ezu/concepts/node-graph/)
+  </Card>
+  <Card title="MapLibre-compatible" icon="external">
+    `ezu translate` lowers a MapLibre GL style into an ezu recipe, and nodes carry
+    raw MapLibre expressions for data-driven styling.
+    [Layer mapping →](/ezu/maplibre/compatibility/)
+  </Card>
+  <Card title="CPU, everywhere" icon="laptop">
+    No GPU and no browser: a CLI, a Rust library, and a WebAssembly build that
+    renders in a tab or a Worker.
+    [Install →](/ezu/guides/install/)
+  </Card>
+  <Card title="Seamless by construction" icon="approve-check">
+    Brush dabs are anchored in world coordinates and label collision is shared
+    across tiles, so tile borders don't show.
+    [Tiles and determinism →](/ezu/concepts/tiles-and-determinism/)
+  </Card>
+</CardGrid>
+
+## Four styles, one engine
+
+<div class="style-strip">
+  <a href="/ezu/gallery/#watercolor"><img src="/ezu/figures/gallery-watercolor.webp" alt="A watercolour render of central Tokyo" width="768" height="768" loading="lazy" decoding="async" /><span>watercolor</span></a>
+  <a href="/ezu/gallery/#pencil-sketch"><img src="/ezu/figures/gallery-pencil-sketch.webp" alt="A pencil-sketch render of central Tokyo" width="768" height="768" loading="lazy" decoding="async" /><span>pencil-sketch</span></a>
+  <a href="/ezu/gallery/#hillshade"><img src="/ezu/figures/gallery-hillshade.webp" alt="Shaded relief of Mount Fuji" width="768" height="768" loading="lazy" decoding="async" /><span>hillshade</span></a>
+  <a href="/ezu/gallery/#photo-pop"><img src="/ezu/figures/gallery-photo-pop.webp" alt="A posterized render of central Tokyo" width="768" height="768" loading="lazy" decoding="async" /><span>photo-pop</span></a>
+</div>
+
+Every one is a style document and nothing else — same binary, same data, same
+tile. [The gallery](/ezu/gallery/) has the recipes.
+
+## Install
+
+<Code
+  code={`# CLI
+cargo install ezu-cli
+
+# Rust library
+cargo add ezu
+
+# Browser / Node / Workers
+npm install @reearth/ezu`}
+  lang="sh"
+/>
+
+## Render something
+
+<Code
+  code={`ezu tile --style https://raw.githubusercontent.com/reearth/ezu/main/crates/ezu/examples/styles/hillshade.json \\
+  --tile 11/1813/807 --out fuji.png`}
+  lang="sh"
+/>
+
+That style pulls its DEM tiles over HTTP, so it needs nothing but the CLI.
+[Render your first tile](/ezu/guides/first-tile/) walks through the rest.
