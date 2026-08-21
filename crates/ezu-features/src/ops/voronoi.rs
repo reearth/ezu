@@ -15,6 +15,7 @@ use voronoice::{BoundingBox, Point as VPoint, Voronoi, VoronoiBuilder};
 
 use crate::Polygon;
 
+use super::contains::point_in_polygon;
 use super::convert::{polygon_to_f, polygons_from_shapes, pt_to_i};
 
 /// Axis-aligned bounding rectangle used to bound Voronoi diagrams.
@@ -308,40 +309,6 @@ fn densify_ring(ring: &[(i32, i32)], target_px: f64) -> Vec<(i32, i32)> {
         }
     }
     out
-}
-
-/// Ray-casting point-in-polygon. Treats holes correctly: a point in a
-/// hole counts as outside.
-fn point_in_polygon(p: &Polygon, x: f64, y: f64) -> bool {
-    if !ring_contains(&p.exterior, x, y) {
-        return false;
-    }
-    for hole in &p.holes {
-        if ring_contains(hole, x, y) {
-            return false;
-        }
-    }
-    true
-}
-
-fn ring_contains(ring: &[(i32, i32)], x: f64, y: f64) -> bool {
-    if ring.len() < 3 {
-        return false;
-    }
-    let mut inside = false;
-    let n = ring.len();
-    let mut j = n - 1;
-    for i in 0..n {
-        let (xi, yi) = (ring[i].0 as f64, ring[i].1 as f64);
-        let (xj, yj) = (ring[j].0 as f64, ring[j].1 as f64);
-        let intersect =
-            ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi + f64::EPSILON) + xi);
-        if intersect {
-            inside = !inside;
-        }
-        j = i;
-    }
-    inside
 }
 
 /// Build polylines from a list of Voronoi edges. Walks from
