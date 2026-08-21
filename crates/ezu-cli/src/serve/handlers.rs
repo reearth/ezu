@@ -35,6 +35,7 @@ pub fn router() -> Router<AppState> {
         .route("/style", get(get_style).put(put_style))
         .route("/style/params", get(get_params_schema))
         .route("/style/attribution", get(get_attribution))
+        .route("/config", get(get_config))
         .route("/style/validate", axum::routing::post(post_validate))
         .route("/style/fetch", get(get_style_fetch))
         .route("/style/events", get(get_style_events))
@@ -46,6 +47,31 @@ pub fn router() -> Router<AppState> {
 
 async fn index() -> Html<&'static str> {
     Html(include_str!("editor.html"))
+}
+
+/// Zoom the editor should stop requesting tiles at when the source
+/// declares its own depth. A source that stays quiet about it (a bare
+/// `{z}/{x}/{y}` template) gets [`ABSOLUTE_MAXZOOM`] instead — the
+/// renderer is happy to draw whatever the fetcher hands it, so an
+/// unknown depth is no reason to fence the map in.
+const ABSOLUTE_MAXZOOM: u8 = 22;
+
+/// Server-side knobs the editor needs to configure its map. Kept as one
+/// endpoint so the front end never has to guess at CLI defaults.
+async fn get_config(State(s): State<AppState>) -> Json<serde_json::Value> {
+    let data_maxzoom = s.source.as_ref().and_then(|src| src.data_maxzoom());
+    // Past the source's own depth the tile handler reprojects ancestor
+    // tiles, `overzoom_levels` of them, so that is exactly how much
+    // deeper than the data the editor can still ask for.
+    let raster_maxzoom = match data_maxzoom {
+        Some(z) => z.saturating_add(s.overzoom_levels).min(ABSOLUTE_MAXZOOM),
+        None => ABSOLUTE_MAXZOOM,
+    };
+    Json(serde_json::json!({
+        "overzoomLevels": s.overzoom_levels,
+        "dataMaxzoom": data_maxzoom,
+        "rasterMaxzoom": raster_maxzoom,
+    }))
 }
 
 async fn get_style(State(s): State<AppState>) -> Response {

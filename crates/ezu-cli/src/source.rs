@@ -35,6 +35,10 @@ pub enum SourceError {
 pub struct TileSource {
     kind: TileSourceKind,
     attribution: Option<String>,
+    /// Deepest zoom the source itself claims to hold (TileJSON
+    /// `maxzoom`, PMTiles header `max_zoom`). `None` for a bare
+    /// `{z}/{x}/{y}` template, which carries no such metadata.
+    data_maxzoom: Option<u8>,
 }
 
 enum TileSourceKind {
@@ -48,19 +52,29 @@ impl TileSource {
     pub async fn open(spec: &SourceSpec) -> Result<Self, SourceError> {
         match spec {
             SourceSpec::PmTiles(arg) => {
-                let (kind, metadata) = if is_url(arg) {
+                let (kind, metadata, data_maxzoom) = if is_url(arg) {
                     let client = Client::new();
                     let reader = AsyncPmTilesReader::new_with_url(client, arg)
                         .await
                         .map_err(|e| SourceError::PmTilesOpen(e.to_string()))?;
                     let meta = reader.get_metadata().await.ok();
-                    (TileSourceKind::PmTilesHttp(Arc::new(reader)), meta)
+                    let maxzoom = reader.get_header().max_zoom;
+                    (
+                        TileSourceKind::PmTilesHttp(Arc::new(reader)),
+                        meta,
+                        Some(maxzoom),
+                    )
                 } else {
                     let reader = AsyncPmTilesReader::new_with_path(arg)
                         .await
                         .map_err(|e| SourceError::PmTilesOpen(e.to_string()))?;
                     let meta = reader.get_metadata().await.ok();
-                    (TileSourceKind::PmTilesLocal(Arc::new(reader)), meta)
+                    let maxzoom = reader.get_header().max_zoom;
+                    (
+                        TileSourceKind::PmTilesLocal(Arc::new(reader)),
+                        meta,
+                        Some(maxzoom),
+                    )
                 };
                 let attribution = metadata.and_then(|m| {
                     serde_json::from_str::<serde_json::Value>(&m)
@@ -69,15 +83,19 @@ impl TileSource {
                         .as_str()
                         .map(str::to_string)
                 });
-                Ok(Self { kind, attribution })
+                Ok(Self {
+                    kind,
+                    attribution,
+                    data_maxzoom,
+                })
             }
             SourceSpec::Mvt(arg) => {
-                let (pattern, attribution) = if looks_like_tilejson(arg) {
-                    let (resolved, attribution) = load_tilejson_pattern(arg).await?;
+                let (pattern, attribution, data_maxzoom) = if looks_like_tilejson(arg) {
+                    let (resolved, attribution, maxzoom) = load_tilejson_pattern(arg).await?;
                     tracing::info!("tilejson {arg} → {resolved}");
-                    (resolved, attribution)
+                    (resolved, attribution, maxzoom)
                 } else {
-                    (arg.clone(), None)
+                    (arg.clone(), None, None)
                 };
                 if !pattern.contains("{z}") || !pattern.contains("{x}") || !pattern.contains("{y}")
                 {
@@ -91,9 +109,20 @@ impl TileSource {
                 } else {
                     TileSourceKind::MvtFile { pattern }
                 };
-                Ok(Self { kind, attribution })
+                Ok(Self {
+                    kind,
+                    attribution,
+                    data_maxzoom,
+                })
             }
         }
+    }
+
+    /// Deepest zoom the source claims to hold, when it says so. Hosts
+    /// use it as the base for how far past the data they can still
+    /// render by reprojecting ancestor tiles.
+    pub fn data_maxzoom(&self) -> Option<u8> {
+        self.data_maxzoom
     }
 
     /// Upstream attribution captured at open time (TileJSON
@@ -231,10 +260,12 @@ fn looks_like_tilejson(arg: &str) -> bool {
 }
 
 /// Fetch a TileJSON document (URL or path) and return the first entry
-/// of its `tiles` array plus its `attribution`, if any. The spec
-/// allows multiple endpoints for load balancing; we pick the first
-/// deterministically.
-async fn load_tilejson_pattern(src: &str) -> Result<(String, Option<String>), SourceError> {
+/// of its `tiles` array plus its `attribution` and `maxzoom`, if any.
+/// The spec allows multiple endpoints for load balancing; we pick the
+/// first deterministically.
+async fn load_tilejson_pattern(
+    src: &str,
+) -> Result<(String, Option<String>, Option<u8>), SourceError> {
     let text = if is_url(src) {
         let resp = reqwest::get(src)
             .await
@@ -279,5 +310,9 @@ async fn load_tilejson_pattern(src: &str) -> Result<(String, Option<String>), So
         .get("attribution")
         .and_then(|a| a.as_str())
         .map(str::to_string);
-    Ok((first.to_string(), attribution))
+    let maxzoom = v
+        .get("maxzoom")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|z| u8::try_from(z).ok());
+    Ok((first.to_string(), attribution, maxzoom))
 }

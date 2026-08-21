@@ -119,7 +119,6 @@
       <button id="grid-toggle" class="off" title="Show XYZ tile boundaries + z/x/y labels">grid: off</button>
       <button id="inspect-toggle" class="off" title="Overlay source MVT features for inspection">inspect: off</button>
       <button id="raster-toggle" title="Toggle the ezu rendered raster output">render: on</button>
-      <button id="params-toggle" class="off" title="Adjust the style's declared params (rendered per tile request)">params: off</button>
     </div>
     <div class="params-panel" id="params-panel">
       <header>
@@ -173,6 +172,10 @@
   const layerState = new Map(); // name -> { color, geoms:Set, count, visible }
   let inspectOn = false;
   let rasterVisible = true;
+  // How deep the tile endpoint can still serve: the source's own depth
+  // plus the server's overzoom levels. /config reports it; until that
+  // answers, don't fence the map in.
+  let rasterMaxzoom = 22;
 
   function setStatus(text, cls = '', title = '') {
     $status.textContent = text;
@@ -193,7 +196,7 @@
     center: [139.767, 35.681], // Tokyo Station
     zoom: 11,
     minZoom: 0,
-    maxZoom: 18,
+    maxZoom: 23,
     attributionControl: { compact: true },
   });
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
@@ -216,7 +219,7 @@
       tiles: [rasterTilesUrl()],
       tileSize,
       minzoom: 0,
-      maxzoom: 15,
+      maxzoom: rasterMaxzoom,
       attribution: attributionHtml,
     });
     map.addLayer({
@@ -890,11 +893,9 @@
   // from the document's `params` block): sliders for bounded numbers,
   // color pickers for colors, checkboxes for bools. Only values that
   // differ from the declared default ride on the tile URL.
-  const $paramsToggle = document.getElementById('params-toggle');
   const $paramsPanel = document.getElementById('params-panel');
   const $paramsList = document.getElementById('params-list');
   const $paramsReset = document.getElementById('params-reset');
-  let paramsOn = false;
   let paramDecls = {}; // name -> schema property
 
   let paramTimer = 0;
@@ -962,13 +963,9 @@
   function renderParams() {
     const names = Object.keys(paramDecls);
     $paramsList.textContent = '';
-    if (!names.length) {
-      const empty = document.createElement('div');
-      empty.className = 'params-empty';
-      empty.textContent = 'No params declared in the current style.';
-      $paramsList.appendChild(empty);
-      return;
-    }
+    // No declarations, no panel — there is nothing to adjust.
+    $paramsPanel.classList.toggle('open', names.length > 0);
+    if (!names.length) return;
     for (const name of names) {
       const decl = paramDecls[name];
       const row = document.createElement('div');
@@ -1045,15 +1042,6 @@
     }
   }
 
-  function setParams(on) {
-    paramsOn = on;
-    $paramsToggle.textContent = `params: ${on ? 'on' : 'off'}`;
-    $paramsToggle.classList.toggle('off', !on);
-    $paramsPanel.classList.toggle('open', on);
-    if (on) loadParams();
-  }
-
-  $paramsToggle.addEventListener('click', () => setParams(!paramsOn));
   $paramsReset.addEventListener('click', () => {
     if (!paramOverrides.size) return;
     paramOverrides.clear();
@@ -1212,8 +1200,28 @@
   function escapeAttr(s) { return escapeHtml(s); }
 
   // --- Boot -----------------------------------------------------------
+  // Ask the server how deep it can serve before the raster source is
+  // created — MapLibre reads `maxzoom` at addSource time, so learning
+  // this later would mean rebuilding the source.
+  async function loadConfig() {
+    try {
+      const r = await fetch('/config');
+      if (!r.ok) return;
+      const cfg = await r.json();
+      if (Number.isFinite(cfg.rasterMaxzoom)) {
+        rasterMaxzoom = cfg.rasterMaxzoom;
+        // A 512px raster tile spans one display zoom more than its own
+        // z, so the map can go one further than the deepest tile.
+        map.setMaxZoom(Math.min(24, rasterMaxzoom + 1));
+      }
+    } catch (e) {
+      console.warn('config load failed:', e);
+    }
+  }
+
   map.on('load', async () => {
     updateZoom();
+    await loadConfig();
     await loadSchema();
     await loadAttribution();
     await loadStyle();
