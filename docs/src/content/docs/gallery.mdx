@@ -67,8 +67,9 @@ Style: [`hillshade.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/ex
 
 ## photo-pop
 
-Raster imagery run through the colour and palette ops — posterize, quantize,
-dither — rather than through the brush engine.
+Not a vector style at all: GSI aerial photography pulled in as a `raster` source,
+saturation pushed up with `hsl`, then `posterize` to twelve steps per channel.
+Four nodes.
 
 <figure class="page-fig">
   <img src="/ezu/figures/gallery-photo-pop.webp" alt="A high-contrast posterized render of central Tokyo" width="768" height="768" loading="lazy" decoding="async" />
@@ -101,4 +102,17 @@ relative `file:` path, so render them from a checkout of the repository. Nothing
 is bundled into the library — a style names every brush it uses.
 :::
 
-Basemap data in these renders is © OpenStreetMap contributors, © Protomaps.
+## Credits
+
+The renders on this page are made from other people's data, and the licences ask
+for credit:
+
+- **watercolor, pencil-sketch, photo-pop (vector), the Protomaps basemap** — [OpenStreetMap](https://www.openstreetmap.org/copyright) via [Protomaps](https://protomaps.com/), © OpenStreetMap contributors.
+- **hillshade** — elevation from [Re:Earth Terrain](https://terrain.reearth.land/) (Mapterhorn-merged global DEM blended with EGM2008 geoid undulations): Re:Earth Terrain, [Mapterhorn](https://mapterhorn.com/), [EGM2008 (NGA)](https://earth-info.nga.mil/).
+- **photo-pop** — aerial imagery from [GSI Japan](https://maps.gsi.go.jp/development/ichiran.html), © 国土地理院.
+- **Brushes** — CC0, by [David Revoy](https://www.davidrevoy.com/).
+
+ezu tracks this for you at render time: a source inherits attribution from its
+TileJSON or PMTiles metadata, `Document::attributions()` returns the merged list,
+and `ezu serve` exposes it at `GET /style/attribution`. Whatever your tiles end
+up in, render it — see [serve tiles](/ezu/guides/serving-tiles/#attribution).

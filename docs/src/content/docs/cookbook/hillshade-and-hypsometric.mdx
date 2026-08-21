@@ -60,6 +60,11 @@ ezu tile --style https://raw.githubusercontent.com/reearth/ezu/main/crates/ezu/e
   <figcaption>Mount Fuji at z11: a hypsometric ramp under shaded relief, from DEM tiles alone.</figcaption>
 </figure>
 
+The elevation is Re:Earth Terrain's Mapterhorn-merged global DEM blended with
+EGM2008 geoid undulations — credit Re:Earth Terrain, Mapterhorn and EGM2008 (NGA)
+if you render with it. The TileJSON carries that string, so
+`Document::attributions()` picks it up without you writing it down.
+
 ## Get `encoding` right first
 
 `terrarium` and `mapbox-rgb` pack elevation into RGB differently. Point the wrong

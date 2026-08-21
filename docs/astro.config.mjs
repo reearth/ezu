@@ -16,6 +16,10 @@ export default defineConfig({
         'Painterly cartography on a pure-Rust, GPU-free CPU renderer with first-class MapLibre compatibility.',
       favicon: '/favicon.svg',
       customCss: ['./src/styles/custom.css'],
+      components: {
+        // Adds the data credits under the default footer — see the component.
+        Footer: './src/components/Footer.astro',
+      },
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/reearth/ezu' }],
       editLink: {
         baseUrl: 'https://github.com/reearth/ezu/edit/main/docs/',
