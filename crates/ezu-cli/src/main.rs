@@ -61,6 +61,15 @@ enum Cmd {
     Translate(TranslateCmd),
     /// Start the live editor + tile server at `http://127.0.0.1:8080`.
     Serve(serve::ServeCmd),
+    /// Print the Ezu Style JSON Schema, gathered from the registered ops.
+    Schema(SchemaCmd),
+}
+
+#[derive(Args, Debug)]
+struct SchemaCmd {
+    /// Write to this path instead of stdout.
+    #[arg(long)]
+    out: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -287,6 +296,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Cmd::Graph(args) => run_graph(args).await,
         Cmd::Translate(args) => run_translate(args).await,
         Cmd::Serve(args) => serve::run(args).await,
+        Cmd::Schema(args) => run_schema(args),
     }
 }
 
@@ -424,6 +434,20 @@ fn parse_cli_params(
         values.set(name.to_string(), v);
     }
     Ok(values)
+}
+
+/// Dump the document JSON Schema assembled from every registered op —
+/// the same document served at `/schemas/ezu-style.json` by `ezu serve`.
+/// Feed it to editor tooling, an `ajv` CI check, or a docs generator.
+fn run_schema(args: SchemaCmd) -> Result<(), Box<dyn std::error::Error>> {
+    let schema = default_registry().document_schema();
+    let mut text = serde_json::to_string_pretty(&schema)?;
+    text.push('\n');
+    match args.out {
+        Some(path) => std::fs::write(&path, text)?,
+        None => print!("{text}"),
+    }
+    Ok(())
 }
 
 async fn run_check(args: CheckCmd) -> Result<(), Box<dyn std::error::Error>> {
