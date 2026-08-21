@@ -1,0 +1,90 @@
+---
+title: Validate in CI
+description: Catch broken styles with ezu check before they reach a renderer.
+sidebar:
+  order: 7
+---
+
+A style can fail in ways that have nothing to do with pixels: a dangling `@ref`,
+a port type mismatch, a cycle, a blur whose padding exceeds the maximum, a brush
+URL that 404s. `ezu check` runs exactly the validation the renderer runs, without
+rendering, and exits non-zero on any of it.
+
+```sh
+ezu check style.json              # parse + build graph + resolve every asset
+ezu check style.json --no-fetch   # parse + build graph only — offline, fast
+```
+
+On success it prints a one-line summary — style name, version, node count, source
+count. On failure it names the offending node.
+
+## In GitHub Actions
+
+```yaml title=".github/workflows/styles.yml"
+name: styles
+on: [push, pull_request]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install ezu-cli
+      - name: Validate every style
+        run: |
+          for style in styles/*.json; do
+            echo "== $style"
+            ezu check "$style"
+          done
+```
+
+Use `--no-fetch` if your CI runners have no network, or if remote assets are
+flaky enough to make the job unreliable — you keep the structural checks and give
+up only "does this URL resolve".
+
+## As a pre-commit hook
+
+```yaml title=".pre-commit-config.yaml"
+- repo: local
+  hooks:
+    - id: ezu-check
+      name: ezu check
+      entry: ezu check --no-fetch
+      language: system
+      files: ^styles/.*\.json$
+```
+
+## Editor-time validation
+
+Validation you get before committing is better still. Point your editor's JSON
+language server at the schema:
+
+```sh
+ezu schema --out ezu-style.schema.json
+```
+
+```json title=".vscode/settings.json"
+{
+  "json.schemas": [
+    { "fileMatch": ["styles/*.json"], "url": "./ezu-style.schema.json" }
+  ]
+}
+```
+
+The schema is assembled from the op registry, so it covers
+[custom ops](/ezu/extending/custom-ops/) you registered too. A hosted copy of the
+built-in schema lives at
+[`ezu-style.schema.json`](/ezu/ezu-style.schema.json).
+
+## Translating in CI
+
+`ezu translate` writes to stdout, so a converted style can be validated in one
+line — useful as a canary when an upstream MapLibre style changes:
+
+```sh
+ezu translate https://example.com/style.json | ezu check /dev/stdin --no-fetch
+```
+
+Layers the frontend skipped or approximated are reported on stderr. Fail the job
+on unexpected warnings if you want to be told when upstream drifts.

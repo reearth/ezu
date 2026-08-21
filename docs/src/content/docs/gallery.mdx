@@ -1,0 +1,80 @@
+---
+title: Gallery
+description: Renders produced by the example styles, each paired with the style that made it.
+---
+
+Every image here comes from an example style in the repository, rendered with
+`ezu tile` or `ezu bbox`. The style JSON is the whole recipe — copy it, change a
+colour, render again.
+
+## pencil-sketch
+
+Ten wave-then-line stroke layers, factored into one user-defined function, plus a
+`water-hatch` function for the sea. This is the front-page render.
+
+```sh
+ezu tile --style crates/ezu/examples/styles/pencil-sketch.json \
+  --tile 13/7276/3225 --out pencil.png
+```
+
+Style: [`pencil-sketch.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/pencil-sketch.json)
+· Concepts: [params and functions](/ezu/concepts/params-and-functions/)
+
+## watercolor
+
+Scatter-dab fills through the `hokusai` brush engine, anchored in world
+coordinates so the wash continues across tile edges. Parametric: `paper` and
+`softness` are declared knobs.
+
+```sh
+ezu tile --style crates/ezu/examples/styles/watercolor.json \
+  --tile 13/7276/3225 --param 'paper=#ffe0f0' --param softness=2 --out water.png
+```
+
+Style: [`watercolor.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/watercolor.json)
+
+## hillshade
+
+Raster-DEM tiles → `hillshade` + hypsometric tint. All-remote assets, so it
+renders straight from a URL with no checkout.
+
+```sh
+ezu tile --style https://raw.githubusercontent.com/reearth/ezu/main/crates/ezu/examples/styles/hillshade.json \
+  --tile 11/1813/807 --out fuji.png
+```
+
+Style: [`hillshade.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/hillshade.json)
+· Concepts: [sources and assets](/ezu/concepts/sources-and-assets/)
+
+## photo-pop
+
+Raster imagery run through the colour and palette ops — posterize, quantize,
+dither — rather than through the brush engine.
+
+```sh
+ezu tile --style crates/ezu/examples/styles/photo-pop.json \
+  --tile 13/7276/3225 --out pop.png
+```
+
+Style: [`photo-pop.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/photo-pop.json)
+
+## A translated MapLibre basemap
+
+Not painterly at all: a Protomaps basemap MapLibre style, converted with
+`ezu translate` and rendered by ezu, labels included. This is the render
+`ezu-compare` pixel-diffs against maplibre-gl-js.
+
+```sh
+ezu translate https://api.protomaps.com/styles/v5/light/en.json --out recipe.json
+ezu tile --style recipe.json --tile 14/14550/6452 --out basemap.png
+```
+
+Guide: [from a MapLibre style](/ezu/guides/from-maplibre/)
+
+:::note[Brushes and licensing]
+The painterly example styles reference CC0 brushes by David Revoy through a
+relative `file:` path, so render them from a checkout of the repository. Nothing
+is bundled into the library — a style names every brush it uses.
+:::
+
+Basemap data in these renders is © OpenStreetMap contributors, © Protomaps.

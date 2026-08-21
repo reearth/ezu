@@ -1,0 +1,83 @@
+---
+title: Tiles and determinism
+description: Why brush strokes and labels don't break at tile borders.
+sidebar:
+  order: 3
+---
+
+Rendering a map as tiles means rendering it in independent pieces. Anything that
+depends on *where the piece starts* shows up as a seam. Painterly rendering is
+full of such things — dab placement, brush texture, noise, label collision — so
+ezu treats seamlessness as a property of the design rather than a post-process.
+
+## Anchor in world coordinates, not tile coordinates
+
+A naive scatter fill picks dab positions relative to the tile origin. Adjacent
+tiles then use different grids and the seam is obvious.
+
+ezu's world-anchored ops — `fill-dabs`, `line`, `noise` and friends — derive their
+positions and random draws from **world coordinates**. Two tiles covering the same
+ground compute the same dabs, so a wash that crosses a border continues instead
+of restarting.
+
+This has a pleasant side effect on caching: a world-anchored node's output is not
+a function of the tile id, so it drops the tile id from its cache key and adjacent
+tiles share cached results. (If such a node samples a tile-scoped asset, that
+binding's hash reintroduces the distinction automatically — nothing is lost.)
+
+## Seeding
+
+`render` takes an `rng_seed`. It is folded into the world-coordinate derivation,
+so a given seed produces the same painting every time, and changing the seed
+gives a different-but-equally-valid painting of the same map. Deterministic
+output is what makes tiles cacheable and snapshot tests possible.
+
+## Filters need neighbours, not tiles
+
+A blur near the edge needs pixels from beyond the edge. Rendering the tile alone
+darkens or lightens the border. ezu renders onto a **padded canvas**: `pad` pixels
+of margin all round, filled with real geometry, and cropped away at the end.
+
+The padding each source must supply is computed from the graph, not guessed —
+see [padding and neighbours](/ezu/concepts/padding-and-neighbours/).
+
+## Labels collide across borders
+
+Label placement cannot be decided tile-locally either: a label anchored just
+outside the tile still overlaps into it. So the placement stage gathers
+candidates from the eight neighbouring tiles, dedupes them, orders them by
+`symbol-sort-key` with ties broken by tile feature order (as MapLibre does), and
+places greedily against one shared collision index.
+
+Because the ordering is total and the input set is the same from either side of a
+border, both tiles reach the same decision. A label is drawn, or dropped, by
+agreement.
+
+This is a deliberate divergence from MapLibre, which places labels per frame,
+prioritising tiles nearest the viewport centre and fading labels in and out. ezu
+has no viewport, so:
+
+- there is no viewport-centre priority,
+- there is no per-frame fade,
+- `text-overlap: cooperative` has no equivalent and is treated as `never`.
+
+What you get instead is a tile that is a pure function of its inputs. See
+[gaps and differences](/ezu/maplibre/gaps-and-differences/).
+
+## The determinism contract
+
+A rendered tile is a function of:
+
+`(style document, param values, tile id, source data, rng seed)`
+
+Nothing else — no clock, no viewport, no process-local state, no iteration order
+that varies between runs. That is what makes the output cacheable at every layer,
+comparable between versions, and safe to render in parallel.
+
+## Checking it yourself
+
+Turn on the tile-grid overlay in `ezu serve` and look along the boundaries. Dabs
+should cross them mid-stroke, labels should never appear twice, and hillshade
+should not step. If something does break at an edge, the usual causes are too
+little `pad` for a filter chain, or a custom op that reads tile-local coordinates
+where it should read world coordinates.

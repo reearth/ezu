@@ -1,0 +1,86 @@
+---
+title: Install
+description: The CLI, the Rust crates, and the npm package.
+sidebar:
+  order: 2
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+ezu needs a Rust toolchain to build from source (MSRV 1.89) and nothing at all to
+run — no system graphics libraries, no GPU driver, no browser.
+
+<Tabs>
+  <TabItem label="CLI">
+
+```sh
+cargo install ezu-cli
+```
+
+That puts an `ezu` binary on your `PATH`. Check it:
+
+```sh
+ezu --help
+```
+
+Every command is listed in the [CLI reference](/ezu/reference/cli/).
+
+  </TabItem>
+  <TabItem label="Rust">
+
+```sh
+cargo add ezu
+```
+
+The umbrella crate re-exports the workspace behind feature flags:
+
+```toml
+[dependencies]
+ezu = { version = "0.6", features = ["parallel"] }
+```
+
+`parallel` pulls in Rayon and enables `Evaluator::render_parallel`. Leave it off
+for wasm. See [use from Rust](/ezu/guides/rust-library/) and the per-crate map in
+[crates](/ezu/reference/crates/).
+
+  </TabItem>
+  <TabItem label="npm">
+
+```sh
+npm install @reearth/ezu
+```
+
+The package ships browser, Node, and `workerd` builds, in scalar and SIMD
+variants, and exposes them through conditional exports — your bundler picks the
+right one. See [use in the browser](/ezu/guides/browser-wasm/).
+
+  </TabItem>
+</Tabs>
+
+## Example styles and brushes
+
+Nothing is bundled into the library: a style names every brush, font, and image
+it uses through its [`sources` block](/ezu/style/sources/). The painterly example
+styles reference CC0 brushes by relative `file:` path, so render those from a
+checkout:
+
+```sh
+git clone https://github.com/reearth/ezu && cd ezu
+ls crates/ezu/examples/styles/
+# hillshade.json  pencil-sketch.json  photo-pop.json  watercolor.json  brushes/
+```
+
+Styles whose assets are all remote or inline — `hillshade.json`, or anything
+`ezu translate` emits — render straight from a URL with no checkout.
+
+## Editor support
+
+Point your editor's JSON language server at the style schema and you get
+completion and as-you-type validation for all 82 ops:
+
+- [`ezu-style.schema.json`](/ezu/ezu-style.schema.json) — generated from the same
+  registry the renderer uses.
+- `ezu schema --out ezu-style.schema.json` regenerates it locally, including any
+  [custom ops](/ezu/extending/custom-ops/) you registered.
+- `ezu serve` serves it at `/schemas/ezu-style.json` and the built-in editor
+  consumes it directly.

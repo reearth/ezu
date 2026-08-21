@@ -1,0 +1,72 @@
+---
+title: Bounding boxes and pyramids
+description: Render a mosaic over a lon/lat box, or a whole XYZ pyramid, in parallel.
+sidebar:
+  order: 4
+---
+
+`ezu tile` renders one tile. Two other commands render many, and they share every
+flag with `tile` — `--style`, `--assets-dir`, `--param`, source overrides.
+
+## One image over a bounding box
+
+`ezu bbox` renders every tile covering a lon/lat box at one zoom and stitches
+them into a single image:
+
+```sh
+ezu bbox --style watercolor.json \
+  --bbox 139.74,35.65,139.78,35.69 \
+  --zoom 13 --out tokyo.png
+```
+
+The box is `min-lng,min-lat,max-lng,max-lat`. The result is tile-aligned: it
+covers *at least* the box, snapped outward to tile edges. This is the command for
+a figure in a slide deck or a print export.
+
+## A whole pyramid
+
+`ezu tiles` bulk-renders `<out>/<z>/<x>/<y>.png` across a zoom range:
+
+```sh
+ezu tiles --style watercolor.json \
+  --bbox 139.74,35.65,139.78,35.69 \
+  --min-zoom 10 --max-zoom 14 \
+  --out pyramid
+```
+
+`--concurrency` sets how many tiles render at once (default: your core count).
+Because the intermediate cache is shared across tiles within one style, and
+world-anchored nodes drop the tile id from their cache key, a pyramid run reuses
+far more work than the same tiles rendered one process at a time. See
+[caching and parallelism](/ezu/concepts/caching-and-parallelism/).
+
+The output tree is a plain XYZ directory — serve it with any static file server
+and point MapLibre, Leaflet, or OpenLayers at
+`https://example.com/pyramid/{z}/{x}/{y}.png`.
+
+## Parameters per run
+
+Style [params](/ezu/concepts/params-and-functions/) let one style produce
+variants without editing JSON:
+
+```sh
+for paper in '#fbf6e6' '#ffe0f0' '#e8f2ff'; do
+  ezu bbox --style watercolor.json --bbox 139.74,35.65,139.78,35.69 \
+    --zoom 13 --param "paper=$paper" --out "tokyo-$paper.png"
+done
+```
+
+Values are validated against the declarations — a number outside its `min`/`max`
+or a malformed colour fails before rendering starts.
+
+## Practical notes
+
+- **WebP** — `--out tile.webp` (or `--format webp`) writes lossless WebP, usually
+  20–40 % smaller than PNG on painterly content, through a pure-Rust encoder.
+- **Overzoom** — when a requested tile is missing from the source, ezu walks up
+  to `--overzoom-levels` parent zooms (default 4) and reprojects the ancestor's
+  geometry into the requested frame. `--overzoom-levels 0` disables it.
+- **Attribution** — `Document::attributions()` (and the tile server's
+  `/style/attribution`) return the merged attribution for everything a style
+  pulled in, including TileJSON and PMTiles metadata. Render it wherever the
+  tiles end up.

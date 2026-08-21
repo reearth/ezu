@@ -1,0 +1,89 @@
+---
+title: Contributing
+description: Repository layout, how tests are structured, and what CI checks.
+sidebar:
+  order: 4
+---
+
+```sh
+git clone https://github.com/reearth/ezu && cd ezu
+cargo build --workspace
+cargo test -p ezu-graph          # scope to what you touched
+```
+
+MSRV is **1.89**. The workspace is dual-licensed MIT or Apache-2.0.
+
+## Layout
+
+```
+crates/
+  ezu/            umbrella crate + examples/styles/
+  ezu-core/       tile + world coordinates, seeding
+  ezu-features/   MVT / GeoJSON parsing
+  ezu-style/      the style spec parser
+  ezu-graph/      typed DAG, cache, pad propagation, evaluator
+  ezu-paint/      the ops (src/nodes/<category>/one-file-per-op) + host glue
+  ezu-translate/  MapLibre → ezu recipe
+  ezu-cli/        the `ezu` binary, incl. `serve` (editor + tile server)
+  ezu-wasm/       WebAssembly bindings + npm package
+  ezu-compare/    internal: render vs maplibre-gl-js, pixel-compare
+docs/             this site (Astro + Starlight)
+tools/mlgl-ref/   Playwright harness producing maplibre-gl-js reference renders
+```
+
+Adding an op means adding a file under `crates/ezu-paint/src/nodes/<category>/` and
+ending it with `ezu_graph::submit_node!(YourFactory);`. There is no central list to
+edit — the registry collects submissions through inventory, and the docs site's
+node catalog is generated from the registry, so a new op documents itself.
+
+## Tests
+
+- **Unit tests** live beside the code.
+- **Snapshot tests** compare rendered output. Because rendering is deterministic —
+  a tile is a pure function of style, params, tile id, source data, and seed — a
+  pixel difference is a real difference, not flake. If a change is *supposed* to
+  alter output, say so in the pull request and update the snapshots deliberately.
+- **SSIM comparison** against maplibre-gl-js reference renders (`ezu-compare` plus
+  `tools/mlgl-ref`) tracks translated-style fidelity as a number rather than an
+  impression.
+- **Expression conformance** lives in
+  [`maplibre-expr-rs`](https://github.com/reearth/maplibre-expr-rs), which vendors
+  MapLibre's official spec fixtures and runs each as its own test.
+
+`cargo test --workspace` is heavy. Scope with `-p` while iterating and let CI run
+the whole thing.
+
+## Documentation
+
+This site is an Astro + Starlight project in `docs/`:
+
+```sh
+cd docs
+npm install
+npm run dev       # http://localhost:4321/ezu
+npm run build
+```
+
+Two parts are **generated and committed** — do not hand-edit them:
+
+- `src/content/docs/style/nodes/*.mdx` — the node catalog, from every op's
+  `NodeFactory::schema()`
+- `src/content/docs/reference/cli.mdx` — the CLI reference, from clap
+
+```sh
+npm run gen       # regenerate both (needs a Rust toolchain)
+```
+
+CI regenerates and fails on a diff, the same way snapshot tests do. If you add or
+change an op's fields or description, run `npm run gen` and commit the result.
+
+## Pull requests
+
+- Keep the change and its tests together.
+- Note any intended output change explicitly, since snapshots will move.
+- Run `cargo fmt` and `cargo clippy` on the crates you touched.
+- Write the description for someone who was not in the discussion.
+
+Bugs and design questions are both welcome as
+[issues](https://github.com/reearth/ezu/issues) — for anything large, an issue
+first saves everyone a rewrite.

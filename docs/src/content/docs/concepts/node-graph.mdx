@@ -1,0 +1,83 @@
+---
+title: The node graph
+description: Why an ezu style is a typed DAG instead of an ordered layer list.
+sidebar:
+  order: 1
+---
+
+A MapLibre style is an ordered list of layers. Each layer names a source, a
+filter, and paint properties, and the renderer draws them bottom to top. It is a
+good model for "flat shapes in a defined order", which is what most maps are.
+
+An ezu style is a **directed acyclic graph of ops**. A node has an op name, some
+fields, and references to other nodes. There is no ordering in the document: the
+`nodes` object is a map, and evaluation order comes from the references.
+
+```json
+{
+  "nodes": {
+    "bg":      { "op": "solid", "color": "#fbf6e6" },
+    "water_f": { "op": "features", "layer": "water" },
+    "water":   { "op": "fill-dabs", "features": "@water_f", "color": "#5876a0" },
+    "soft":    { "op": "blur", "input": "@water", "sigma": 3 },
+    "out":     { "op": "blend", "base": "@bg", "over": "@soft" }
+  },
+  "output": "@out"
+}
+```
+
+Read it backwards from `output` and you get the dependency chain: `out` needs
+`bg` and `soft`, `soft` needs `water`, `water` needs `water_f`.
+
+## Why this shape
+
+**Painterly rendering is a pipeline, not a property.** A watercolour wash is
+"rasterize these polygons as scatter dabs, blur the result, warp it slightly,
+multiply it over paper texture". In a layer model each of those steps has to
+become a paint property with a fixed position in a fixed pipeline. In a graph
+they are four nodes, and their order is yours to choose.
+
+**Reuse falls out of it.** A node's output can feed several consumers. Rasterize
+coastlines once, then use it as a mask, as a stroke, and as the input to a
+distance field — one evaluation, three uses, because the cache is keyed by
+content.
+
+**The layer model is expressible in it.** `ezu translate` lowers MapLibre's
+ordered list into a `blend` chain — painter's algorithm written as a graph. So the
+graph model is a superset, not an alternative.
+
+## What the graph buys you at build time
+
+`build_graph` runs before any pixel is drawn and rejects the document if:
+
+- an `@ref` names a node, input, or source that does not exist,
+- two connected ports disagree on type (see
+  [ports and types](/ezu/concepts/ports-and-types/)),
+- the references contain a cycle,
+- the computed canvas padding exceeds the maximum (catches an accidental
+  `blur σ=200` before it allocates anything),
+- a field that decides padding at build time has no static upper bound.
+
+Errors carry the offending node id. `ezu check` is exactly this pass, run on its
+own.
+
+## Composition beyond wiring
+
+Two features keep large graphs from becoming copy-paste:
+
+- **[Functions](/ezu/style/functions/)** — declare a reusable subgraph with typed
+  input ports and call it with `op: "func"`. It expands inline at build time like
+  a hygienic macro. `pencil-sketch.json`'s ten stroke layers are one function
+  called ten times.
+- **[Params](/ezu/style/params/)** — typed knobs resolved at render time, so one
+  built graph serves every combination of values.
+
+## Seeing the graph
+
+```sh
+ezu graph style.json          # Mermaid `graph LR` on stdout
+ezu --verbose tile ...        # per-node op, cache hit/miss, output shape, duration
+```
+
+The Mermaid output pastes straight into anything that renders Mermaid, which is
+the fastest way to understand a translated recipe you did not write.

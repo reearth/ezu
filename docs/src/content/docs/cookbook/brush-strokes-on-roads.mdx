@@ -1,0 +1,108 @@
+---
+title: Brush strokes on roads
+description: Driving the hokusai brush engine along a line, with pressure curves and wobble.
+sidebar:
+  order: 2
+---
+
+A road drawn with `stroke` is a crisp constant-width band — correct, and obviously
+machine-made. A road drawn with `line` is a brush dragged along the geometry,
+with pressure and speed varying over the stroke.
+
+```json
+"glazing":       { "type": "brush", "src": "file:brushes/watercolor_glazing.myb" },
+
+"glazing_brush": { "op": "brush-file", "src": "@glazing" },
+"roads_trunk_f": { "op": "features", "layer": "roads",
+                   "min-zoom-field": "min_zoom",
+                   "filter-expr": ["in", ["get", "kind_detail"],
+                                   ["literal", ["trunk", "primary", "motorway"]]] },
+"roads_trunk": {
+  "op": "line", "features": "@roads_trunk_f", "brush": "@glazing_brush",
+  "color": "$road", "radius-px": 1.6, "opacity": 0.6,
+  "pressure-base": 0.7, "pressure-jitter": 0.2, "dtime": 0.05,
+  "radius-stroke-curve":  [[0.0, -1.4], [0.12, 0.0], [0.88, 0.0], [1.0, -1.8]],
+  "opacity-stroke-curve": [[0.0, -0.25], [0.1, 0.0], [0.9, 0.0], [1.0, -0.35]],
+  "dtime-stroke-curve":   [[0.0, 2.5],  [0.15, 1.0], [0.85, 1.0], [1.0, 3.0]]
+}
+```
+
+From
+[`watercolor.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/watercolor.json).
+
+## Brushes come from you
+
+Nothing is bundled. Declare any MyPaint `.myb` brush as a source and load it with
+`brush-file`. The example styles ship CC0 brushes by David Revoy next to their
+style JSON; `file:` paths resolve against `--assets-dir`, so render those from a
+checkout. For a portable style, use an `http(s)://` or `data:` source instead —
+see [sources](/ezu/style/sources/).
+
+`brush-solid` synthesizes a brush when you want the stroke machinery without an
+asset.
+
+## Stroke curves are the whole trick
+
+A `*-stroke-curve` is a list of `[t, delta]` control points where `t` runs 0→1
+along the stroke. The shape above says: start thin, hold, taper at the end.
+
+That is what makes a stroke look like it was *begun* and *ended* rather than
+extruded. Three curves are worth setting:
+
+- **`radius-stroke-curve`** — negative deltas at both ends give tapered entry and
+  exit. Asymmetric values (−1.4 in, −1.8 out) read as a hand lifting.
+- **`opacity-stroke-curve`** — fading the ends slightly keeps intersections from
+  building into dark knots where many roads meet.
+- **`dtime-stroke-curve`** — speed. Fast at the ends, slow through the middle,
+  which changes how much paint the brush lays down.
+
+Stroke curves are arrays, so a plain `$param` cannot reach into them — but a
+**function** argument substitutes structurally and can. That is how one stroke
+recipe serves many layers; see [functions](/ezu/style/functions/).
+
+## Wobble: `wave` before `line`
+
+Pressure variation alone still follows the survey line exactly. Perturb the
+geometry first:
+
+```json
+"wob":  { "op": "wave", "features": "@roads_f", "amplitude-px": 0.8 },
+"draw": { "op": "line", "features": "@wob", "brush": "@pencil",
+          "color": "$ink", "radius-px": 1.2 }
+```
+
+Sub-pixel amplitude is enough — 0.8 px reads as a hand not quite following a
+ruler, while 3 px reads as bad data. `wave` is a `Features → Features` transform,
+so it composes with any downstream paint op.
+
+## Factor it into a function
+
+Ten road classes differing only in layer, colour, and width should be one
+declaration called ten times. This is exactly what
+[`pencil-sketch.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/pencil-sketch.json)
+does with its `sketchy-line` function:
+
+```json
+"functions": {
+  "sketchy-line": {
+    "inputs": { "features": { "kind": "features" }, "brush": { "kind": "brush" },
+                "color": { "kind": "scalar" }, "radius": { "kind": "scalar", "default": 1.0 } },
+    "output": "@draw", "output-kind": "raster",
+    "nodes": {
+      "wob":  { "op": "wave", "features": "@features", "amplitude-px": 0.8 },
+      "draw": { "op": "line", "features": "@wob", "brush": "@brush",
+                "color": "@color", "radius-px": "@radius" }
+    }
+  }
+}
+```
+
+Calls with identical arguments share cache entries, so inlining costs nothing.
+
+## Cost
+
+Brush strokes are the most expensive thing in a painterly style — every dab along
+every line is real work. Two levers: gate minor classes behind `min-zoom` on the
+`features` node so they only appear where they matter, and use `stroke` rather
+than `line` for hairline classes where the brush texture would not be visible
+anyway.

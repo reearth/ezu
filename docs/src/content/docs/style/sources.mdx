@@ -1,0 +1,98 @@
+---
+title: sources
+description: Every external resource a style pulls in, declared in one block.
+sidebar:
+  order: 2
+---
+
+`sources` is the single home for everything external: document-scoped files
+(brushes, images, fonts) sit next to tile-scoped pyramids (MVT, PMTiles, DEM,
+raster imagery). Each entry's `type` selects the variant; document-scoped
+variants carry a `src` URI, tile-scoped variants a `url` template.
+
+```json
+"sources": {
+  "glazing": { "type": "brush", "src": "file:brushes/watercolor_glazing.myb" },
+  "basemap": { "type": "mvt",   "url": "https://example.com/tiles/{z}/{x}/{y}.pbf" },
+  "terrain": { "type": "dem",   "encoding": "terrarium", "tile-size": 512,
+               "max-zoom": 14, "on-missing": "upsample",
+               "url": "https://terrain.reearth.land/…/{z}/{x}/{y}.webp" }
+}
+```
+
+Nothing is bundled into the library — see
+[sources and assets](/ezu/concepts/sources-and-assets/) for why, and for how the
+host binds the bytes.
+
+## `src` schemes (document-scoped)
+
+| Scheme | Resolves to |
+| --- | --- |
+| `file:PATH` | local file, relative to `--assets-dir` (or absolute). The extension may be omitted — it is inferred from the source `type` |
+| `http(s)://…` | fetched by the host before the first render, then cached in the in-memory bank |
+| `data:[<mediatype>][;base64],…` | decoded in-process, no I/O — works in every host including wasm. `image/*` loads as an image; anything else is tried as a brush |
+| `builtin:NAME` | whatever the host registered under `NAME` at runtime |
+| `system:FAMILY` | `font` only — a face resolved from installed fonts. Machine-dependent, unavailable on wasm |
+
+## Document-scoped types
+
+**`brush`** — a MyPaint `.myb` brush. Any `.myb` works; the example styles ship
+CC0 brushes by David Revoy next to their style JSON.
+
+**`image`** — a PNG/WebP image, for `place`, `tiling`, and texture work.
+
+**`sprite`** — a sprite sheet: an atlas `image` plus an `index` mapping icon names
+to atlas sub-rects. The `index` is a URL/path to a sprite `.json` or an inline map
+of the same shape. An `icon` node crops a named rect into a `Sprite` for `stamp`
+(symbol icons) or `tiling` (`fill-pattern`). Nine-slice `stretchX`/`stretchY`/
+`content` metadata is honoured by `icon-text-fit`.
+
+**`font`** — outline font bytes (TTF/OTF/TTC) for the `text` node's font stack,
+named with a `url`.
+
+**`glyphs`** — a MapLibre glyph-PBF endpoint (`{fontstack}`/`{range}` template)
+serving pre-rendered SDF ranges, fetched lazily. The no-font-files alternative to
+`font`, and what `ezu translate` falls back to.
+
+## Tile-scoped types
+
+**`mvt`** — an XYZ MVT URL template, or a TileJSON document. The host fetches one
+tile per render, decodes every layer, and binds each under `tile.<layer-name>` —
+the names a `features` node references. The source key is just a label. **Declare
+only one MVT-flavoured source per style**; later entries are ignored.
+
+**`pmtiles`** — a PMTiles archive (local path or `http(s)://`). Layers bind exactly
+as `mvt`.
+
+**`dem`** — a raster-DEM pyramid. `encoding` is `terrarium` or `mapbox-rgb` and
+must match the data, since the RGB channels mean different things. The host
+stitches the 3×3 neighbourhood into a per-tile `ScalarField` with `geo_scale`
+populated, so `hillshade` and `slope` produce real-world angles, and binds it
+under `tile.<source-name>` for the `dem` node.
+
+**`raster`** — an RGBA imagery pyramid (satellite, pre-rendered basemaps; PNG /
+WebP / JPEG). `url` may be an XYZ template, a TileJSON document, or a `.pmtiles`
+archive. Stitched over the padded canvas and bound under the source name for the
+`raster` node.
+
+**`geojson`** — inline (`data`) or remote (`url`) GeoJSON in WGS84 lon/lat. The
+host projects it into each tile's frame and binds it as one layer named
+`<source>.<source>`.
+
+## Pyramid options
+
+For `raster` and `dem`:
+
+| Field | Meaning |
+| --- | --- |
+| `tile-size` | source tile edge in px |
+| `max-zoom` | deepest zoom the source has. Deeper requests always upsample from this ancestor |
+| `on-missing` | in-range 404 policy: `empty` (default — transparent / zero elevation), `upsample` (walk up parents and upsample the covered sub-region), or `error` (fail the render, so a server can answer 404) |
+
+## Attribution
+
+Any source may declare an `attribution` string. Sources that do not inherit
+upstream metadata — TileJSON's `attribution` field, or PMTiles archive metadata —
+when the host opens them. The document's own top-level `attribution` is merged in.
+`Document::attributions()` returns the declared list; `GET /style/attribution` and
+the wasm `renderer.attribution` return the merged result.

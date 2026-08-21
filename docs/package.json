@@ -1,0 +1,19 @@
+{
+  "name": "ezu-docs",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check": "astro check",
+    "gen": "node scripts/gen-reference.mjs",
+    "links": "node scripts/check-links.mjs"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.41.7",
+    "astro": "^7.2.4",
+    "sharp": "^0.35.3"
+  }
+}

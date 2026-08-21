@@ -1,0 +1,62 @@
+---
+title: Expression conformance
+description: What "100 % conformance" means, how it is measured, and what it does not cover.
+sidebar:
+  order: 3
+---
+
+Expressions are the part of MapLibre compatibility that is exact rather than
+approximate. They are evaluated by
+[`maplibre-expr`](https://github.com/reearth/maplibre-expr-rs) — a pure-Rust
+parser and evaluator in its own repository, published as
+[`maplibre-expr`](https://crates.io/crates/maplibre-expr) — which passes **100 %
+of MapLibre's official expression spec fixtures** (563/563).
+
+## What the fixtures cover
+
+The suite is MapLibre's own, vendored into the crate and run through
+`libtest-mimic` so each fixture is an individual test. It exercises:
+
+- every operator in the spec — arithmetic, comparison, `match`, `case`, `step`,
+  `interpolate` (linear / exponential / cubic-bezier), string and array
+  functions, `let`/`var`, `coalesce`;
+- the **type system** — `to-number`, `to-string`, `to-boolean`, `to-color`,
+  `array` with type and length assertions, and the errors that are supposed to be
+  errors;
+- `collator` and locale-aware comparison;
+- the geo functions (`within`, `distance`);
+- legacy filter conversion, using MapLibre's own pre-compile conversion so an old
+  bare-field filter means what it always meant, strict-type semantics included.
+
+Passing all of them means a `*-expr` field evaluates to the value MapLibre would
+compute for the same feature — not "close enough", the same.
+
+## What it does not tell you
+
+Conformance is about expression *evaluation*. It says nothing about what the
+renderer does with the resulting value. A `fill-expr` returns exactly MapLibre's
+colour, and then `fill-solid` rasterizes it with ezu's rasterizer, which is not
+GL-JS's. Antialiasing, stroke geometry, and label placement are separate concerns —
+see [gaps and differences](/ezu/maplibre/gaps-and-differences/).
+
+Two evaluation-context differences are worth naming:
+
+- **Zoom is integer.** A tile is rendered at its own zoom level, so `["zoom"]`
+  takes integer values. Curves evaluate at integer steps, not continuously.
+- **`expr`-op scalars see no feature.** The `expr` op evaluates once per tile with
+  zoom in the context; feature properties are only available on per-feature
+  `*-expr` fields. See [expression fields](/ezu/style/expression-fields/).
+
+## Using the engine on its own
+
+`maplibre-expr` has no dependency on ezu, so it is usable in any Rust project
+that needs to evaluate MapLibre expressions or convert legacy filters:
+
+```toml
+[dependencies]
+maplibre-expr = "0"
+```
+
+It lives at
+[`reearth/maplibre-expr-rs`](https://github.com/reearth/maplibre-expr-rs), and
+that is where expression bugs and fixture failures belong.

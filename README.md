@@ -4,12 +4,13 @@
 [![docs.rs](https://img.shields.io/docsrs/ezu)](https://docs.rs/ezu)
 [![CI](https://github.com/reearth/ezu/actions/workflows/ci.yml/badge.svg)](https://github.com/reearth/ezu/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![Docs](https://img.shields.io/badge/docs-reearth.github.io%2Fezu-blue)](https://reearth.github.io/ezu/)
 
 **Painterly cartography** — render vector tiles as paintings — on a
 **pure-Rust, GPU-free CPU renderer** with **first-class MapLibre
 compatibility**.
 
-![ezu pencil-sketch render of central Japan — © OpenStreetMap contributors, © Protomaps](docs/hero.webp)
+![ezu pencil-sketch render of central Japan — © OpenStreetMap contributors, © Protomaps](docs/src/assets/hero.webp)
 
 `ezu` (絵図) is a Rust map rendering engine that turns vector tiles (MVT /
 PMTiles) into raster tiles on the CPU — no GPU, no headless browser. It
@@ -26,6 +27,10 @@ does this two ways, and does both at once:
   [`maplibre-expr`](https://github.com/reearth/maplibre-expr-rs) (100 %
   conformance against MapLibre's official spec fixtures). A Protomaps
   basemap MapLibre style renders end to end, labels included.
+
+Full documentation — guides, the style spec, the node catalog, and the
+MapLibre compatibility tables — is at
+**<https://reearth.github.io/ezu/>**.
 
 ## Workspace
 

@@ -1,0 +1,69 @@
+---
+title: JSON Schema
+description: The machine-readable definition of the style spec, and how to point tools at it.
+sidebar:
+  order: 7
+---
+
+The authoritative definition of the style language is a JSON Schema **assembled
+from the op registry** — each op contributes its own fragment through
+`NodeFactory::schema()`, and the registry gathers them under a `oneOf` keyed by
+`op`. It therefore cannot drift from the implementation, and it covers any
+[custom ops](/ezu/extending/custom-ops/) you registered.
+
+- **Download:** [`ezu-style.schema.json`](/ezu/ezu-style.schema.json)
+- **Generate locally:** `ezu schema --out ezu-style.schema.json`
+- **Served by the dev server:** `GET /schemas/ezu-style.json` from `ezu serve` —
+  the same document the live editor validates against as you type
+
+## Point your editor at it
+
+```json title=".vscode/settings.json"
+{
+  "json.schemas": [
+    { "fileMatch": ["styles/*.json"], "url": "./ezu-style.schema.json" }
+  ]
+}
+```
+
+Any editor with a JSON language server works the same way (Neovim's `jsonls`,
+JetBrains' JSON Schema mappings). You get op-name completion, field completion
+per op, and inline errors for unknown fields and bad types — which is most of the
+feedback loop, without leaving the file.
+
+You can also reference it from the document itself if your tooling honours
+`$schema`, though ezu itself ignores the field.
+
+## Validate in a pipeline
+
+The schema is ordinary Draft 2020-12, so any validator works:
+
+```sh
+npx ajv-cli validate -s ezu-style.schema.json -d 'styles/*.json' --spec=draft2020
+```
+
+Schema validation and `ezu check` catch different things and are worth running
+together:
+
+| | Catches | Misses |
+| --- | --- | --- |
+| JSON Schema | unknown ops, unknown or misspelled fields, wrong JSON types, missing required fields | dangling `@refs`, port type mismatches, cycles, padding overflow |
+| `ezu check` | all of the above semantic checks, plus asset resolution | nothing schema-level that the graph builder tolerates |
+
+For CI, `ezu check` alone is usually enough. See
+[validate in CI](/ezu/guides/validate-in-ci/).
+
+## What is in it
+
+- Document-level fields: `name`, `version`, `tile-size`, `pad`, `attribution`,
+  `params`, `functions`, `sources`, `nodes`, `output`.
+- One `oneOf` variant per registered op, titled `op: <name>`, carrying that op's
+  `properties`, `required`, and descriptions — the same descriptions the
+  [node catalog](/ezu/style/nodes/source/) is generated from.
+- A permissive `op: "func"` variant for calls into the document's
+  [`functions`](/ezu/style/functions/) block, which stays open beyond `op` and
+  `fn` because arguments are function-specific.
+
+An op whose factory does not override `schema()` contributes a permissive variant
+— valid, just unchecked beyond `op`. If a field you expect is not being
+completed, that is usually why.

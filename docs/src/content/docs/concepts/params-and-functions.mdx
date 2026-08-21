@@ -1,0 +1,117 @@
+---
+title: Params and functions
+description: Typed knobs resolved at render time, and reusable subgraphs expanded at build time.
+sidebar:
+  order: 7
+---
+
+Two features keep styles from becoming unmaintainable, and they work at different
+times: **params** resolve at render time, **functions** expand at build time.
+
+## Params — one graph, many renders
+
+The `params` block declares typed knobs. A `$name` reference stands in for the
+value anywhere a scalar field lives.
+
+```json
+{
+  "params": {
+    "paper":    { "type": "color",  "default": "#fbf6e6" },
+    "softness": { "type": "number", "default": 0, "min": 0, "max": 4,
+                  "description": "Blur over the finished tile, in px." }
+  },
+  "nodes": {
+    "bg":  { "op": "solid", "color": "$paper" },
+    "out": { "op": "blur", "input": "@composite", "sigma": "$softness" }
+  }
+}
+```
+
+Values arrive at render time — three ways in, same semantics:
+
+```sh
+ezu tile --style s.json --tile 13/7276/3225 --param 'paper=#ffe0f0' --param softness=2
+curl 'http://127.0.0.1:8080/tiles/13/7276/3225.png?paper=%23ffe0f0&softness=2'
+```
+
+```rust
+params.set("softness".into(), parse_param_value(&doc.params, "softness", "2")?);
+```
+
+Every path validates against the declaration: numbers respect `min`/`max`, colours
+must be `#rrggbb[aa]`, bools are `true`/`false`.
+
+**One built graph serves every combination.** Nothing rebuilds when a value
+changes, and the cache keys on the values each node actually reads, so flipping
+one param re-evaluates only its subtree.
+
+`Document::params_schema()` derives a JSON Schema of the declarations —
+defaults, ranges, descriptions — which is what the live editor's params panel is
+generated from, and what you should drive your own UI off rather than parsing the
+style.
+
+Two constraints worth knowing:
+
+- Padding-determining fields (blur sigma and friends) need a declared `max`, since
+  padding is fixed at build time. See
+  [padding and neighbours](/ezu/concepts/padding-and-neighbours/).
+- `v` is reserved as a query key by the tile server, so avoid a param named `v`.
+
+## Functions — reusable subgraphs
+
+The `functions` block declares a subgraph with typed input ports and an output
+kind. `op: "func"` calls it.
+
+```json
+{
+  "functions": {
+    "sketchy-line": {
+      "inputs": {
+        "features": { "kind": "features" },
+        "brush":    { "kind": "brush" },
+        "color":    { "kind": "scalar" },
+        "radius":   { "kind": "scalar", "default": 1.0 }
+      },
+      "output": "@draw",
+      "output-kind": "raster",
+      "nodes": {
+        "wob":  { "op": "wave", "features": "@features", "amplitude-px": 0.8 },
+        "draw": { "op": "line", "features": "@wob", "brush": "@brush",
+                  "color": "@color", "radius-px": "@radius" }
+      }
+    }
+  },
+  "nodes": {
+    "roads": { "op": "func", "fn": "sketchy-line",
+               "features": "@roads_f", "brush": "@pencil", "color": "$ink" }
+  }
+}
+```
+
+Expansion is inline at build time, like a hygienic macro:
+
+- **Closed over inputs.** Inside a body, `@name` resolves to a function input,
+  another body node, or a document-scoped source — nothing else. A typo cannot
+  silently capture a caller's node.
+- **Structural substitution.** Literals stay literals; `$param` references keep
+  their runtime-override behaviour; `@node` arguments become port connections.
+  Scalar arguments substitute verbatim, so they reach places a plain `$param`
+  cannot — gradient stops, stroke-curve arrays. A `null` default or argument
+  removes the field entirely, for ops where absence is meaningful.
+- **Functions may call functions.** Cycles are a build error, reported with the
+  path (`a → b → a`).
+- **Namespaced ids.** Body nodes become `<call>/<node>` (the output node takes the
+  call id), so errors and `--verbose` logs stay readable.
+- **No duplicated work.** The cache is content-addressed, so two calls with
+  identical arguments share entries — inlining does not cost evaluations.
+
+[`pencil-sketch.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/pencil-sketch.json)
+is the live demo: ten stroke layers are one `sketchy-line` function, and the water
+hatching is a `water-hatch` function that calls it.
+
+## Which one to reach for
+
+- The value should change **per render** (a caller, a query string, a slider) →
+  **param**.
+- The *structure* repeats across layers → **function**.
+- Both: declare params for the knobs, and pass them into functions as arguments.

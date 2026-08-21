@@ -1,0 +1,101 @@
+---
+title: nodes and output
+description: The graph itself — node syntax, wiring, and the rules the output must satisfy.
+sidebar:
+  order: 5
+---
+
+```json
+"nodes": {
+  "bg":  { "op": "solid", "color": "#fbf6e6" },
+  "out": { "op": "blur", "input": "@bg", "sigma": 2 }
+},
+"output": "@out"
+```
+
+## Node syntax
+
+Each entry is `id: { "op": "<op-name>", …fields }`. The id is yours; the op name
+selects the implementation from the registry (all 82 are in the
+[node catalog](/ezu/style/nodes/source/)); everything else is that op's fields.
+
+Ids may contain letters, digits, `_` and `-`, and must not start with a digit.
+Function expansion produces ids of the form `<call>/<node>`, so avoid `/` in ids
+you write yourself.
+
+**The order of entries is meaningless.** Evaluation order comes from the
+references. Group and name nodes for a human reader.
+
+## Wiring
+
+A field whose value is `"@other"` is a connection. What kind of connection it is
+depends on the field:
+
+```json
+"features": "@water_f"     // a Features port
+"input":    "@bg"          // a Raster (or Sprite) port
+"brush":    "@pencil"       // a Brush port
+"sigma":    "@computed"     // a Scalar port
+```
+
+The op declares each port's accepted kinds, and `build_graph` checks them — see
+[ports and types](/ezu/concepts/ports-and-types/). A numeric field usually accepts
+a literal, `$param`, or `@node` interchangeably.
+
+Fan-out is free and encouraged: several consumers may reference one node, and it
+is evaluated once because the cache is content-addressed.
+
+## Common shapes
+
+**A layer.** Data always enters through a `features` node, which is where the
+filter and zoom gates live, and is shared by every consumer of that layer:
+
+```json
+"roads_f": { "op": "features", "layer": "roads",
+             "filter-expr": ["==", ["get", "kind"], "highway"],
+             "min-zoom": 8 },
+"roads":   { "op": "stroke", "features": "@roads_f", "color": "#333", "width-px": 1.5 }
+```
+
+**Stacking.** Compositing is a `blend` chain — painter's algorithm as a graph.
+`ezu translate` emits exactly this from a MapLibre layer list:
+
+```json
+"c1":  { "op": "blend", "base": "@bg",  "over": "@landuse" },
+"c2":  { "op": "blend", "base": "@c1",  "over": "@water" },
+"out": { "op": "blend", "base": "@c2",  "over": "@roads" }
+```
+
+For many layers at once, `stack` composites a list in one node.
+
+**Masking.** `blend` with `clip: true` clips the result to the base's alpha —
+Photoshop's clipping mask, and how a `fill-pattern` gets confined to its polygon.
+
+**Toggling a branch.** `switch` selects between two inputs, which is how
+`--keep-hidden` preserves a hidden MapLibre layer without drawing it.
+
+## The output
+
+```json
+"output": "@out"
+```
+
+`output` must resolve to a node whose kind is `Raster`. Notably:
+
+- A `Sprite` cannot be the output (it is not canvas-sized) — put it through a
+  placement op first.
+- `Features`, `Brush`, `Scalar`, `Labels` and `ScalarField` cannot be the output
+  either. `color-ramp` is the usual way to turn a `ScalarField` into a `Raster`.
+
+Nodes not reachable from `output` are still validated but never evaluated — handy
+for commenting a branch out, cheap to leave in place.
+
+## Inspecting a graph
+
+```sh
+ezu graph style.json     # Mermaid `graph LR` of the dependencies
+ezu --verbose tile …      # per-node op, cache hit/miss, output shape, duration
+```
+
+The Mermaid diagram is the fastest way into a translated recipe you did not
+write.

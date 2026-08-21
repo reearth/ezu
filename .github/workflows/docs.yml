@@ -1,0 +1,82 @@
+name: docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'crates/**'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'crates/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+# Allow one concurrent deployment; a newer push supersedes an in-flight one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  # The node catalog and CLI reference are generated from the op registry and
+  # from clap, then committed. Regenerate here and fail on a diff, so the site
+  # cannot drift from the implementation.
+  generated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+      - run: npm ci
+        working-directory: docs
+      - run: npm run gen
+        working-directory: docs
+      - name: Check generated docs are up to date
+        run: |
+          if ! git diff --quiet -- docs/src/content/docs docs/public; then
+            echo "::error::Generated docs are stale. Run 'npm run gen' in docs/ and commit the result."
+            git diff --stat -- docs/src/content/docs docs/public
+            exit 1
+          fi
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+      - run: npm ci
+        working-directory: docs
+      - run: npm run build
+        working-directory: docs
+      - name: Check internal links resolve
+        run: npm run links
+        working-directory: docs
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: docs/dist
+
+  deploy:
+    # Only main deploys; pull requests build and link-check without publishing.
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: [generated, build]
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

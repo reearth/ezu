@@ -1,0 +1,118 @@
+---
+title: Host integration
+description: What a host owes the renderer — asset loading, fetch policy, and cache invalidation.
+sidebar:
+  order: 3
+---
+
+ezu performs no I/O. Everything external arrives through one trait, and the host
+that implements it decides what fetching, caching, and failure mean. The CLI and
+the wasm bindings are both just hosts; yours is on equal footing.
+
+```rust
+pub enum Asset {
+    Image(Arc<RasterBuf>),
+    Brush(OpaqueValue),
+    Features(OpaqueValue),
+    ScalarField(Arc<ScalarField>),
+}
+
+pub trait AssetLoader: Send + Sync {
+    fn load(&self, name: &str) -> Result<Asset, AssetError>;
+    fn hash(&self, _name: &str) -> u128 { 0 }   // for cache invalidation
+}
+```
+
+Think of it as shader uniforms: the document declares which bindings its source
+nodes sample, the host fills them, the evaluator stitches it together.
+
+## Two scopes, one trait
+
+Names beginning with `tile.` are **tile-scoped** by convention and rebound per
+render. Bare names are **document-scoped** — brush and image banks, loaded once.
+
+The standard pattern is an overlay: a long-lived base loader for document-scoped
+assets, and a per-tile loader layered over it.
+
+```rust
+let base = ezu::paint::host::BrushBankLoader::new()
+    .with_dir(assets_dir.clone())
+    .with_images_dir(assets_dir.clone());
+ezu::paint::host::prefetch_doc_assets(&doc, &assets_dir, &mut base).await?;
+
+let mut tile_loader = ezu::paint::host::TileLoader::new(&base, tile_id);
+tile_loader.bind_mvt(ezu::features::mvt::decode(&bytes)?);
+```
+
+`bind_mvt` binds every decoded layer under `tile.<layer-name>` — the names a
+`features` node references. That is why the source key in `sources` is only a
+label for MVT-flavoured sources.
+
+Before you fetch anything, ask what the style actually needs. Neighbour tiles are
+required only by cross-tile label collision and edge-continuous DEM/raster
+shading:
+
+```rust
+let offsets = ezu::paint::host::requested_neighbor_offsets(&graph, "terrain");
+```
+
+Empty means the centre tile is enough. Nine fetches versus one, per source, per
+tile.
+
+## `hash()` is not optional in practice
+
+Return a real hash for anything that can change between renders. The evaluator
+folds each binding's hash into the consuming node's cache key, so:
+
+- a changed binding invalidates every dependent entry automatically;
+- a **constant** hash on changing data serves stale tiles;
+- a hash that changes when the data has not defeats the cache entirely — the usual
+  cause being a timestamp or a pointer address.
+
+Hash the bytes, or a content version you already trust (an ETag, a PMTiles entry
+hash, a database row version).
+
+## Fetch policy is yours
+
+The style says *what*; the host decides *how*. Places where a real host has to
+have an opinion:
+
+- **Timeouts and retries.** A hung tile fetch is a hung render.
+- **Concurrency limits.** A padded render may want a 3×3 neighbourhood for several
+  sources at once; unbounded fan-out will find your upstream's rate limit.
+- **Missing data.** `raster` and `dem` sources declare an `on-missing` policy
+  (`empty`, `upsample`, `error`) — honour it, and map `error` onto whatever your
+  transport uses for "no tile", e.g. HTTP 404.
+- **Overzoom.** Walking up parent zooms is the host's loop. Natively,
+  `--overzoom-levels` bounds it; in wasm, bind the ancestor's bytes with
+  `{ sourceZoom }` and the renderer reprojects into the requested frame.
+- **Trust.** A style names URLs. If styles are user-supplied, the host is the only
+  place an allowlist can live.
+
+## Fonts and glyphs
+
+`system:FAMILY` font sources resolve from the machine's installed fonts, so they
+are unavailable on wasm and make a render machine-dependent anywhere. A host that
+cares about reproducibility should prefer font files or a `glyphs` endpoint, and
+say so when it rejects a style.
+
+Glyph ranges are fetched lazily where the host can fetch lazily. Where it cannot —
+wasm — ask `neededGlyphRanges()` / `neededCodepoints()` after binding features and
+before rendering, and cap residency with `setGlyphBudget`.
+
+## Attribution is a host obligation
+
+Sources inherit attribution from TileJSON and PMTiles metadata when the host opens
+them, so the host is the only component that sees the full picture. Merge it with
+what the document declares and surface it — `Document::attributions()`,
+`renderer.attribution`, `GET /style/attribution` — then render it wherever the
+tiles are displayed. Most basemap licences require it.
+
+## Lifecycle
+
+Build the graph once per style; keep one `Cache` for that style's lifetime; drop
+both when the style changes. In a memory-capped environment, size the cache
+deliberately — a padded 512 px RGBA canvas is roughly 1.2 MB, and
+`Cache::with_capacity` counts entries, not bytes. The wasm bindings expose
+`memoryUsage()` and a self-evicting cache budget for exactly this reason; a native
+host should decide the equivalent policy for itself.

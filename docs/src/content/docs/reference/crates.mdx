@@ -1,0 +1,67 @@
+---
+title: Crates
+description: The workspace map, and where the API documentation lives.
+sidebar:
+  order: 2
+---
+
+API documentation lives on **docs.rs** and is not duplicated here. This page is the
+map: what each crate is for, and which one to read.
+
+| Crate | crates.io | docs.rs | Role |
+| --- | --- | --- | --- |
+| [`ezu`](https://github.com/reearth/ezu/tree/main/crates/ezu) | [crates.io](https://crates.io/crates/ezu) | [docs.rs](https://docs.rs/ezu) | Umbrella crate: re-exports plus feature flags. Start here. |
+| [`ezu-core`](https://github.com/reearth/ezu/tree/main/crates/ezu-core) | [crates.io](https://crates.io/crates/ezu-core) | [docs.rs](https://docs.rs/ezu-core) | Tile and world coordinates, deterministic seeding. |
+| [`ezu-features`](https://github.com/reearth/ezu/tree/main/crates/ezu-features) | [crates.io](https://crates.io/crates/ezu-features) | [docs.rs](https://docs.rs/ezu-features) | GIS feature parsing — MVT via `geozero`, GeoJSON. No remote fetch. |
+| [`ezu-style`](https://github.com/reearth/ezu/tree/main/crates/ezu-style) | [crates.io](https://crates.io/crates/ezu-style) | [docs.rs](https://docs.rs/ezu-style) | Style spec parser (`serde`). Pure data, no rendering. |
+| [`ezu-graph`](https://github.com/reearth/ezu/tree/main/crates/ezu-graph) | [crates.io](https://crates.io/crates/ezu-graph) | [docs.rs](https://docs.rs/ezu-graph) | Typed node-DAG evaluator: cache, pad propagation, Rayon parallelism. No rendering deps. |
+| [`ezu-paint`](https://github.com/reearth/ezu/tree/main/crates/ezu-paint) | [crates.io](https://crates.io/crates/ezu-paint) | [docs.rs](https://docs.rs/ezu-paint) | Painting primitives, the built-in ops, host glue (PNG/WebP, asset banks, fonts). |
+| [`ezu-translate`](https://github.com/reearth/ezu/tree/main/crates/ezu-translate) | [crates.io](https://crates.io/crates/ezu-translate) | [docs.rs](https://docs.rs/ezu-translate) | Lower other engines' styles into ezu recipes. MapLibre GL is the first frontend. |
+| [`ezu-cli`](https://github.com/reearth/ezu/tree/main/crates/ezu-cli) | [crates.io](https://crates.io/crates/ezu-cli) | [docs.rs](https://docs.rs/ezu-cli) | The `ezu` binary: rendering, `translate`, `check`, `graph`, `schema`, `serve`. |
+| [`ezu-wasm`](https://github.com/reearth/ezu/tree/main/crates/ezu-wasm) | — | — | WebAssembly bindings, published to npm as [`@reearth/ezu`](https://www.npmjs.com/package/@reearth/ezu). Not published to crates.io. |
+| `ezu-compare` | — | — | Internal benchmark: convert a MapLibre style, render it, pixel-compare against maplibre-gl-js. Not published. |
+
+## Sister repositories
+
+| Project | What it is |
+| --- | --- |
+| [`maplibre-expr`](https://github.com/reearth/maplibre-expr-rs) | Pure-Rust MapLibre expression parser and evaluator, 100 % conformance against the official spec fixtures. Its own repository and crate. |
+| [`hokusai`](https://github.com/reearth/hokusai) | The brush engine behind `fill-dabs`, `line`, and friends. |
+
+## The dependency shape
+
+```
+ezu-style   (parse)  ──┐
+                       ├──> ezu-graph (evaluate) ──> ezu-paint (the ops + host glue)
+ezu-core    (coords) ──┘                                   │
+ezu-features (MVT/GeoJSON) ────────────────────────────────┘
+
+ezu-translate ──> emits ezu-style JSON
+ezu-cli / ezu-wasm ──> hosts
+```
+
+Two boundaries are worth knowing:
+
+- **`ezu-graph` has no rendering dependencies.** `tiny-skia`, `hokusai`, and
+  `libblur` all live in `ezu-paint`, which registers the concrete ops. That is why
+  a custom op in your own crate is a first-class citizen — see
+  [custom ops](/ezu/extending/custom-ops/).
+- **`ezu-style` does not evaluate anything.** Parsing gives you a `Document`, which
+  is data. `build_graph` turns it into something executable.
+
+## Feature flags
+
+On the umbrella crate:
+
+| Feature | Effect |
+| --- | --- |
+| `parallel` | pulls in Rayon and enables `Evaluator::render_parallel`. Leave off for wasm. |
+
+`ezu-cli` additionally has `heap-profile`, which writes `dhat-heap.json` for
+allocation-site attribution.
+
+## Versioning
+
+All published crates are versioned together with the workspace (currently
+**0.6.x**) and released as a set, so `ezu 0.6.1` expects `ezu-graph 0.6.1`. Pin the
+umbrella crate and let it pin the rest. `maplibre-expr` versions independently.

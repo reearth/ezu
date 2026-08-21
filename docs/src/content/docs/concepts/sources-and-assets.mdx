@@ -1,0 +1,105 @@
+---
+title: Sources and assets
+description: The one block that declares every external resource, and how each URI scheme resolves.
+sidebar:
+  order: 8
+---
+
+**Nothing is bundled into ezu.** No default brushes, no fallback font, no built-in
+basemap. Every external resource a style needs is declared in its `sources` block,
+and the *host* supplies the bytes — ezu itself performs no I/O.
+
+That is a deliberate trade. It means a style is self-describing (you can read what
+it will fetch), and it means the same document works in a CLI, a server, and a
+wasm sandbox where fetching is someone else's job.
+
+```json
+"sources": {
+  "glazing": { "type": "brush", "src": "file:brushes/watercolor_glazing.myb" },
+  "basemap": { "type": "mvt",   "url": "https://example.com/tiles/{z}/{x}/{y}.pbf" },
+  "terrain": { "type": "dem",   "encoding": "terrarium", "tile-size": 512, "max-zoom": 14,
+               "url": "https://terrain.reearth.land/…/{z}/{x}/{y}.webp" }
+}
+```
+
+## Two scopes
+
+**Document-scoped** entries carry a `src` URI and are loaded once for the life of
+the style: `brush`, `image`, `sprite`, `font`, `glyphs`.
+
+**Tile-scoped** entries carry a `url` template and are fetched per tile: `mvt`,
+`pmtiles`, `dem`, `raster`, `geojson`.
+
+The distinction shows up in every host. In wasm, `clearSources()` drops the
+tile-scoped bindings and keeps the document-scoped bank. In the Rust API,
+document-scoped assets go in the base loader and tile-scoped ones in a per-tile
+overlay.
+
+## URI schemes are explicit
+
+A `src` never guesses. Pick one:
+
+| Scheme | Resolves to |
+| --- | --- |
+| `file:PATH` | a local file, relative to `--assets-dir` or absolute |
+| `http(s)://…` | fetched by the host before the first render, then cached in the bank |
+| `data:[<mediatype>][;base64],…` | decoded in-process, no I/O — works in every host including wasm |
+| `builtin:NAME` | whatever the host registered under `NAME` at runtime |
+| `system:FAMILY` | `font` only: a face resolved from the machine's installed fonts |
+
+`system:` is convenient and machine-dependent: the render depends on what is
+installed, and it does not exist on wasm. Use a font file URL when reproducibility
+matters.
+
+`data:` is the one to remember for wasm and for tests — a small brush or icon can
+live inside the document with no fetching at all.
+
+## How bound data reaches a node
+
+Think of it as shader uniforms. The document declares which bindings its source
+nodes sample; the host fills them; the evaluator stitches it together. Names
+beginning with `tile.` are tile-scoped by convention.
+
+For `mvt` and `pmtiles`, the host decodes the tile and binds **each layer** under
+`tile.<layer-name>` — which is why a `features` node names a `layer`, not a
+source, and why the source key is only a label. Declare one MVT-flavoured source
+per style; later entries are ignored.
+
+`geojson` binds as a single layer named `<source>.<source>`, projected into each
+tile's local frame.
+
+## Tile pyramid policy
+
+`raster` and `dem` sources take an `on-missing` policy for an in-range 404:
+
+- **`empty`** (default) — transparent pixels, or zero elevation
+- **`upsample`** — walk up parent zooms and upsample the covered sub-region
+- **`error`** — fail the render, so a tile server can answer 404
+
+Requests past `max-zoom` always upsample from the `max-zoom` ancestor, whatever
+the policy says. `dem` also needs an `encoding` (`terrarium` or `mapbox-rgb`) —
+get it wrong and the terrain is noise, since the RGB channels mean different
+things.
+
+Both stitch the 3×3 neighbourhood so gradients are continuous at edges. Ask
+`requestedNeighborOffsets` / `requested_neighbor_offsets` which neighbours are
+actually read rather than fetching nine tiles blindly.
+
+## Text: `font` or `glyphs`
+
+Two ways to get glyphs, and they trade differently:
+
+- **`font`** — outline font bytes (TTF/OTF/TTC), shaped with `rustybuzz`. Best
+  fidelity, and you control the exact face.
+- **`glyphs`** — a MapLibre glyph-PBF endpoint (`{fontstack}`/`{range}` template)
+  serving pre-rendered SDF ranges, fetched lazily. No font files, and the same
+  glyphs MapLibre itself draws — which is what `ezu translate` falls back to.
+
+## Attribution
+
+Every source, and the document itself, may declare an `attribution`. A source
+without one inherits upstream metadata — TileJSON's `attribution` field, or
+PMTiles archive metadata — when the host opens it. `Document::attributions()`
+returns the declared list; `GET /style/attribution` and the wasm
+`renderer.attribution` return the merged result. Render it wherever the tiles are
+displayed.

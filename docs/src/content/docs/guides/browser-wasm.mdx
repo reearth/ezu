@@ -1,0 +1,132 @@
+---
+title: Use in the browser
+description: Render tiles in a tab, a Worker, or a Cloudflare Worker with @reearth/ezu.
+sidebar:
+  order: 9
+---
+
+```sh
+npm install @reearth/ezu
+```
+
+The package ships browser, Node, and `workerd` builds — scalar and SIMD — behind
+conditional exports, so your bundler picks one. The wasm module is **stateful**:
+a `Renderer` holds the parsed style, its built graph, an in-memory asset bank,
+and a per-tile binding buffer mirroring the style's `sources` block.
+
+**The JS side owns all I/O.** ezu never fetches. You supply decoded bytes.
+
+## The shape of a render
+
+```js
+import init, { Renderer, simdEnabled } from '@reearth/ezu';
+
+await init();
+const r = new Renderer(styleJson);
+
+const z = 13, x = 7276, y = 3225;
+const mvt = new Uint8Array(await (await fetch(`/mvt/${z}/${x}/${y}`)).arrayBuffer());
+
+r.clearSources();
+r.bindSource('basemap', mvt);            // keyed by the `sources` entry name
+
+// Fastest path to the screen: skip the PNG round trip.
+const rgba = r.renderTile(z, x, y, { format: 'rgba' });
+const w = r.tileSize;
+canvas.getContext('2d').putImageData(
+  new ImageData(new Uint8ClampedArray(rgba.buffer), w, w), 0, 0);
+```
+
+`renderTile` also returns `'png'` (the default) or lossless `'webp'`. Use RGBA
+when the destination is a canvas; use PNG/WebP when the bytes are going into an
+`<img>`, a cache, or over the network.
+
+## Binding sources
+
+`bindSource(name, bytes, opts?)` dispatches on the declared `type` of that
+source:
+
+| Declared `type` | What the renderer does with the bytes | Lifetime |
+| --- | --- | --- |
+| `brush` | parse the `.myb`, register in the bank | persistent |
+| `image`, `sprite` | decode PNG/WebP | persistent |
+| `mvt`, `pmtiles` | decode MVT, bind each layer as `tile.<layer>` | cleared by `clearSources()` |
+| `dem` | decode and stitch the 3×3 neighbourhood | per tile |
+| `raster` | decode RGBA imagery and stitch | per tile |
+
+Neighbour tiles are bound with `{ coord: [dx, dy] }`, `dx, dy ∈ {-1, 0, 1}`, the
+centre being the default `[0, 0]`.
+
+Do not fetch a blind 3×3 for everything. Ask what the style actually reads:
+
+```js
+r.requestedNeighborOffsets('terrain');   // e.g. [[-1,0],[1,0],[0,-1],[0,1]] — or []
+```
+
+Only cross-tile label collision and edge-continuous DEM shading read neighbours,
+and only for the sources that need them.
+
+## Glyphs and fonts
+
+This host cannot fetch lazily, so after binding vector sources and before
+rendering, ask what text needs:
+
+```js
+r.neededGlyphRanges();   // { fonts: [0, 256, 8192] } → fetch `…/{fontstack}/0-255.pbf`, etc.
+r.neededCodepoints();    // exact codepoints, if you can build your own PBF
+```
+
+Both over-approximate. `setGlyphBudget(bytes)` caps what each fontstack keeps
+resident; without it a fontstack keeps every range ever bound for the renderer's
+life.
+
+`system:` font sources do not work here — there are no installed fonts in wasm.
+Use a font file URL or a `glyphs` endpoint.
+
+## Memory and lifetime
+
+`memoryUsage()` reports the renderer's payloads (glyphs, fonts, images, cache)
+plus module-wide `heapBytes`. `heapBytes` is a high-water mark: wasm cannot
+return pages to the host, so it never falls. In a memory-capped isolate, poll it
+and shed load — drop a renderer with `free()` — before an allocation fails.
+
+`setStyle(styleJson)` swaps the style in place and returns the new node count,
+reusing the module and the asset bank.
+
+## Parallel rendering
+
+Three builds sit side by side:
+
+- **scalar** and **SIMD** (`+simd128`) — stable Rust, run anywhere.
+  `simdEnabled()` tells you which you loaded.
+- **threads** — renders across Web Workers via `wasm-bindgen-rayon`. Nightly to
+  build; at runtime the page must be cross-origin isolated
+  (`Cross-Origin-Opener-Policy: same-origin` and
+  `Cross-Origin-Embedder-Policy: require-corp`, which means HTTPS or localhost).
+
+```js
+if (threadsEnabled()) {
+  await initThreadPool(navigator.hardwareConcurrency);
+  r.renderTile(z, x, y, { parallel: true });
+}
+```
+
+`ezu serve` hosts a self-contained demo page with exactly the headers the threads
+build needs — the quickest way to see it working before wiring up your own
+server.
+
+## Gotchas
+
+- Every `Uint8Array` return value is **copied** across the wasm-bindgen boundary.
+  A 512×512 RGBA buffer is 1 MB, comparable to a PNG decode on the JS side — so
+  prefer RGBA only when you would otherwise re-decode the PNG into an
+  `ImageBitmap`.
+- `std::time::Instant` panics on `wasm32-unknown-unknown`, so timing in the
+  rendering crates is compiled out on wasm. If you extend those crates, gate new
+  timing the same way.
+- Per-node `tracing` events can be surfaced in the console by installing a
+  `LogSink` once at startup — the same op/cache-hit/duration trace `--verbose`
+  prints natively.
+
+The full JS API, build commands, and benchmarks live in the
+[`ezu-wasm` README](https://github.com/reearth/ezu/tree/main/crates/ezu-wasm).
