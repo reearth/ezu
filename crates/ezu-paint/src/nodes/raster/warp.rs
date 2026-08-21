@@ -18,8 +18,9 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    raster_or_sprite_output, read_boundary, read_number_or, read_optional_string, sample_bilinear,
-    unwrap_raster_or_sprite, wrap_raster_like, Anchor, BoundaryMode, ACCEPTS_RASTER_OR_SPRITE,
+    default_field_seed, raster_or_sprite_output, read_boundary, read_number_or,
+    read_optional_string, sample_bilinear, unwrap_raster_or_sprite, wrap_raster_like, Anchor,
+    BoundaryMode, ACCEPTS_RASTER_OR_SPRITE,
 };
 use crate::nodes::raster::noise_field::{fbm, NoiseKind, Sampler};
 
@@ -79,9 +80,11 @@ impl Node for WarpNode {
         let amp_x = self.amp_x.get(ctx, inputs)?;
         let amp_y = self.amp_y.get(ctx, inputs)?;
 
+        // Anchoring decides the default seed: a world-anchored field has to
+        // be the same field in every tile, so it cannot use a per-tile one.
         let seed = self
             .seed
-            .unwrap_or((ctx.rng_seed as u32) ^ ((ctx.rng_seed >> 32) as u32));
+            .unwrap_or_else(|| default_field_seed(self.anchor, ctx.rng_seed));
         let nx = Sampler::build(self.kind, seed);
         let ny = Sampler::build(self.kind, seed.wrapping_add(0x9E37_79B9));
 
@@ -293,7 +296,7 @@ impl NodeFactory for WarpFactory {
                 "amp-px": schema_frag::px_number(),
                 "amp-x-px": schema_frag::px_number(),
                 "amp-y-px": schema_frag::px_number(),
-                "seed": { "type": "integer", "minimum": 0 },
+                "seed": { "type": "integer", "minimum": 0, "description": "Field seed. Omitted, `anchor: world` uses a fixed seed so every tile samples the same field, and `anchor: tile` uses the host's per-tile seed so each tile gets its own. Set it to pin either." },
                 "anchor": { "type": "string", "enum": ["tile", "world"], "default": "world" },
                 "boundary": {
                     "type": "string",

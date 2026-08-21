@@ -229,6 +229,49 @@ pub fn render_with_features_and_sprite(
     }
 }
 
+/// Render the way a host does: with `rng_seed` derived from the tile id.
+///
+/// `render_tile` passes 0 for every tile, which hides anything that goes
+/// wrong when the seed varies per tile — the failure mode
+/// `world_anchored_noise_is_continuous_across_a_tile_border` exists to
+/// catch. `ezu-cli`, `ezu serve` and `ezu-wasm` all derive the seed this
+/// way, so a seam test has to as well.
+#[allow(dead_code)]
+pub fn render_tile_host_seeded(
+    json: &str,
+    tile_size: u32,
+    pad: u32,
+    tile: TileId,
+) -> std::sync::Arc<ezu_graph::RasterBuf> {
+    let doc = Document::from_json(json).expect("parse");
+    let registry = default_registry();
+    let graph = build_graph(&doc, &registry).expect("build");
+    let cache = Cache::new();
+    let ev = Evaluator::new(&graph, &cache, &NoAssets);
+    let out = ev
+        .render(
+            tile,
+            CanvasInfo { tile_size, pad },
+            &ParamValues::new(),
+            host_tile_seed(tile),
+        )
+        .expect("render");
+    match out {
+        PortValue::Raster(r) => r,
+        other => panic!("expected raster output, got {:?}", other.kind()),
+    }
+}
+
+/// The seed the hosts compute from a tile id — mirrors `tile_seed` in
+/// `ezu-cli`, `ezu serve` and `ezu-wasm`.
+fn host_tile_seed(tile: TileId) -> u64 {
+    let mut s = 0u64;
+    for v in [tile.z as u64, tile.x as u64, tile.y as u64] {
+        s = s.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(v);
+    }
+    s
+}
+
 fn render_with_assets(
     json: &str,
     tile_size: u32,

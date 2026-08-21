@@ -12,7 +12,14 @@
 //! - `warp-amp` / `warp-freq`: optional domain warp (turbulence)
 //! - `anchor`: `world` (default, seamless across tile borders) or
 //!   `tile` (per-tile pattern)
-//! - `seed`: explicit `u32`, otherwise derived from `EvalCtx::rng_seed`
+//! - `seed`: explicit `u32`, otherwise chosen by `anchor` (below)
+//!
+//! The default `seed` follows `anchor`: a world-anchored field takes a
+//! fixed seed, because "seamless across tile borders" means every tile has
+//! to sample the *same* field — the host's per-tile `rng_seed` would align
+//! the sampling coordinates and then swap the field underneath them. A
+//! tile-anchored field takes the per-tile seed, which is the variation it
+//! exists for.
 //!
 //! Raster mode (default, `kind: "raster"`) also takes
 //! `low-color` / `high-color` / `opacity` to map the normalised noise
@@ -35,7 +42,9 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{read_number_or, read_optional_string, resolve_field, Anchor};
+use crate::nodes::common::{
+    default_field_seed, read_number_or, read_optional_string, resolve_field, Anchor,
+};
 use crate::nodes::raster::noise_field::{fbm, NoiseKind, Sampler};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,9 +105,11 @@ impl Node for NoiseNode {
         let warp_amp = self.warp_amp.get(ctx, inputs)?;
         let warp_freq = self.warp_freq.get(ctx, inputs)?;
 
+        // Anchoring decides the default seed: a world-anchored field has to
+        // be the same field in every tile, so it cannot use a per-tile one.
         let seed = self
             .seed
-            .unwrap_or((ctx.rng_seed as u32) ^ ((ctx.rng_seed >> 32) as u32));
+            .unwrap_or_else(|| default_field_seed(self.anchor, ctx.rng_seed));
         let main = Sampler::build(self.kind, seed);
         // Warp uses an offset seed so the warp field decorrelates from
         // the main field. Only built when warp is active.
@@ -328,7 +339,7 @@ impl NodeFactory for NoiseFactory {
                 "gain": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 0.5 })),
                 "warp-amp": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 0.0 })),
                 "warp-freq": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 1.0 })),
-                "seed": { "type": "integer", "minimum": 0 },
+                "seed": { "type": "integer", "minimum": 0, "description": "Field seed. Omitted, `anchor: world` uses a fixed seed so every tile samples the same field, and `anchor: tile` uses the host's per-tile seed so each tile gets its own. Set it to pin either." },
                 "low-color": schema_frag::color(),
                 "high-color": schema_frag::color(),
                 "opacity": schema_frag::unit_number(),

@@ -342,6 +342,25 @@ pub(super) enum Anchor {
     World,
 }
 
+/// Seed a procedural field should use when the style names none.
+///
+/// Anchoring decides this, because the two anchors want opposite things.
+/// A `World` field is one function over the whole map, so every tile has
+/// to sample the *same* field — a per-tile seed would line the sampling
+/// coordinates up and then swap the field underneath them, which reads as
+/// a discontinuity exactly at the border the anchor exists to hide. A
+/// `Tile` field is deliberately per-tile, so the host's per-tile
+/// `rng_seed` is the right source of variation there.
+///
+/// The constant is arbitrary; it only has to be stable across tiles and
+/// across runs.
+pub(super) fn default_field_seed(anchor: Anchor, rng_seed: u64) -> u32 {
+    match anchor {
+        Anchor::World => 0x5EED_1F1E,
+        Anchor::Tile => (rng_seed as u32) ^ ((rng_seed >> 32) as u32),
+    }
+}
+
 pub(super) fn read_anchor(
     fields: &serde_json::Map<String, Value>,
     name: &str,

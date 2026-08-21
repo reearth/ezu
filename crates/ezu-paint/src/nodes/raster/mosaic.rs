@@ -270,7 +270,7 @@ impl NodeFactory for MosaicFactory {
                 "input": schema_frag::node_ref(),
                 "block": schema_frag::in_number(serde_json::json!({
                     "type": "integer", "minimum": 1,
-                    "description": "Block edge length in canvas pixels."
+                    "description": "Block edge length in canvas pixels. Takes a literal or a `$param` with a declared `max`, but not an `@node` port: with `anchor: world` the block size sets the canvas padding, which has to be known before anything renders."
                 })),
                 "anchor": { "type": "string", "enum": ["world", "tile"], "default": "world",
                             "description": "`world` (default) makes the block grid seamless across map tiles by growing the upstream pad. `tile` restarts the grid at every map tile's top-left and requires no extra padding." },

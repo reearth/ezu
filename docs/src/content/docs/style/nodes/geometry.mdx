@@ -56,7 +56,7 @@ Minkowski sum / offset with a disk. Polygons accept negative distance for erosio
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `distance` | number \| `$param` \| `@node` | yes | — |
+| `distance` | number \| `$param` \| `@node` | yes | Offset distance in tile pixels. Positive inflates, negative erodes (polygons only). |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
 | `join` | `miter` \| `round` \| `bevel` | no | — |
 
@@ -83,9 +83,9 @@ Isolines from a ScalarField (marching squares with linear sub-cell interpolation
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `base` | number \| `$param` \| `@node` | no | — |
+| `base` | number \| `$param` \| `@node` | no | Offset the `interval` grid: levels sit at `base + k·interval`. |
 | `field` | `@node` | yes | Reference to another node (`@name`). |
-| `interval` | number \| `$param` \| `@node` | no | — |
+| `interval` | number \| `$param` \| `@node` | no | Spacing between levels, in field units. Required unless `levels` is given. |
 | `levels` | array of number | no | Explicit levels to extract; overrides `interval`/`base`. |
 | `max` | number | no | Emit no level above this value. |
 | `min` | number | no | Emit no level below this value. |
@@ -121,7 +121,7 @@ Cut polylines into dash/gap segments. Lengths are in canvas pixels (consistent w
 | `dash-px` | number (0…∞) \| `$param` \| `@node` | yes | — |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
 | `gap-px` | number (0…∞) \| `$param` \| `@node` | yes | — |
-| `phase-px` | number \| `$param` \| `@node` | no | — |
+| `phase-px` | number \| `$param` \| `@node` | no | Initial offset into the dash/gap pattern, in pixels. May be negative. |
 
 ### `densify`
 
@@ -154,10 +154,10 @@ Parallel-line hatching of input polygons.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `angle-deg` | number \| `$param` \| `@node` | no | — |
+| `angle-deg` | number \| `$param` \| `@node` | no | Hatch direction (degrees, CCW from +X). |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
-| `phase` | number \| `$param` \| `@node` | no | — |
-| `spacing` | number (0…∞) \| `$param` \| `@node` | yes | — |
+| `phase` | number \| `$param` \| `@node` | no | Per-line offset in spacing units (0..1 cycles through one period). |
+| `spacing` | number (0…∞) \| `$param` \| `@node` | yes | Perpendicular spacing between consecutive lines, in tile pixels. |
 
 ### `medial-axis`
 
@@ -198,7 +198,7 @@ Douglas-Peucker simplify polylines and polygon rings; points pass through.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `epsilon` | number (0…∞) \| `$param` \| `@node` | yes | — |
+| `epsilon` | number (0…∞) \| `$param` \| `@node` | yes | Max perpendicular distance a vertex may be from the simplified line, in tile pixels. |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
 
 ### `smooth`
@@ -300,11 +300,11 @@ Displace polylines laterally with a sine wave. Lengths in canvas pixels. Sharp c
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `amplitude-px` | number \| `$param` \| `@node` | yes | — |
+| `amplitude-px` | number \| `$param` \| `@node` | yes | Peak lateral deviation in pixels. May be negative to flip phase. |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
-| `noise-amp-px` | number \| `$param` \| `@node` | no | — |
-| `noise-scale-px` | number (0.5…∞) \| `$param` \| `@node` | no | — |
-| `phase-px` | number \| `$param` \| `@node` | no | — |
+| `noise-amp-px` | number \| `$param` \| `@node` | no | Peak 1D-value-noise jitter added on top of the sine, in pixels. 0 = pure sine (default). |
+| `noise-scale-px` | number (0.5…∞) \| `$param` \| `@node` | no | Cell length of the noise jitter along arc length, in pixels. Defaults to `wavelength-px`. |
+| `phase-px` | number \| `$param` \| `@node` | no | Offset into the wave at the polyline start, in pixels. |
 | `samples-per-wavelength` | number (2…256) | no | Subdivisions per wavelength. Higher = smoother but more vertices. Default 16. |
 | `seed` | integer (0…∞) | no | Optional explicit u32 seed for the world-anchored 2D value noise. Default: a fixed constant so adjacent tiles agree across the seam. |
 | `wavelength-px` | number (0.5…∞) \| `$param` \| `@node` | yes | — |

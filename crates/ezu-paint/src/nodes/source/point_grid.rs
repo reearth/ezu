@@ -186,7 +186,10 @@ impl NodeFactory for PointGridFactory {
             "description": "Regular lattice of points covering the tile.",
             "properties": {
                 "extent": { "type": "integer", "minimum": 1, "default": DEFAULT_EXTENT },
-                "spacing": schema_frag::px_number(),
+                "spacing": schema_frag::in_number(serde_json::json!({
+                    "type": "number", "minimum": 0.0,
+                    "description": "Grid pitch in *extent* units, not pixels — `extent` below is the coordinate space (4096 by default), so a 512 px tile fits 8 points at `spacing: 512`. Paint ops downstream take pixels, so the two do not match."
+                })),
                 "spacing-x": schema_frag::px_number(),
                 "spacing-y": schema_frag::px_number(),
                 "offset-x": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 0.0 })),

@@ -1,6 +1,6 @@
 //! Noise source and the displace/warp distortion nodes.
 
-use crate::common::{render, render_tile};
+use crate::common::{render, render_tile, render_tile_host_seeded};
 use ezu_graph::TileId;
 
 #[test]
@@ -199,4 +199,96 @@ fn warp_world_anchor_is_seamless_across_adjacent_tiles() {
             );
         }
     }
+}
+
+/// Mean absolute difference down a column pair: the seam between two
+/// adjacent tiles, and a within-tile step of the same distance as a
+/// reference for how much the field varies locally anyway.
+fn seam_and_local(json: &str, size: u32) -> (f64, f64) {
+    let z = 8;
+    // Host-derived seeds: the bug this guards against only appears when
+    // `rng_seed` differs between the two tiles, which is what every host
+    // does.
+    let left = render_tile_host_seeded(json, size, 0, TileId { z, x: 230, y: 100 });
+    let right = render_tile_host_seeded(json, size, 0, TileId { z, x: 231, y: 100 });
+    let w = size as usize;
+    let mut seam = 0f64;
+    let mut local = 0f64;
+    for y in 0..w {
+        let last = (y * w + w - 1) * 4;
+        let prev = (y * w + w - 2) * 4;
+        let first = (y * w) * 4;
+        seam += (left.pixels[last] as f64 - right.pixels[first] as f64).abs();
+        local += (left.pixels[last] as f64 - left.pixels[prev] as f64).abs();
+    }
+    (seam / w as f64, local / w as f64)
+}
+
+fn noise_doc(anchor: &str, seed: Option<u32>) -> String {
+    let seed = seed.map_or(String::new(), |s| format!(r#", "seed": {s}"#));
+    format!(
+        r##"{{
+      "name": "demo",
+      "tile-size": 64,
+      "nodes": {{
+        "out": {{ "op": "noise", "type": "perlin", "scale-px": 60, "octaves": 3,
+                  "anchor": "{anchor}", "low-color": "#000000",
+                  "high-color": "#ffffff"{seed} }}
+      }},
+      "output": "@out"
+    }}"##
+    )
+}
+
+/// A world-anchored field is one function over the whole map, so the
+/// border between two tiles must be no more of a step than the field
+/// takes anywhere else — with or without an explicit `seed`.
+///
+/// Without one this used to fail: the default seed came from the host's
+/// per-tile `rng_seed`, which lined the sampling coordinates up and then
+/// swapped the field underneath them.
+#[test]
+fn world_anchored_noise_is_continuous_across_a_tile_border() {
+    for seed in [None, Some(7)] {
+        let (seam, local) = seam_and_local(&noise_doc("world", seed), 64);
+        assert!(
+            seam < local * 3.0 + 1.0,
+            "seam should be no worse than local variation (seed {seed:?}): \
+             seam {seam:.2}, local {local:.2}"
+        );
+    }
+}
+
+/// `anchor: tile` means the opposite on purpose: the field restarts at
+/// every tile, so the border *is* a discontinuity. Asserted so the fix
+/// above cannot be "fixed" by making both anchors behave the same.
+#[test]
+fn tile_anchored_noise_restarts_at_a_tile_border() {
+    let (seam, local) = seam_and_local(&noise_doc("tile", Some(7)), 64);
+    assert!(
+        seam > local * 3.0,
+        "tile anchoring should break at the border: seam {seam:.2}, local {local:.2}"
+    );
+}
+
+/// Same argument for `warp`, which distorts an input by its own field:
+/// straight lines crossing a tile border must not kink.
+#[test]
+fn world_anchored_warp_is_continuous_across_a_tile_border() {
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 64,
+      "nodes": {
+        "grid": { "op": "gradient-linear", "angle-deg": 90, "anchor": "world",
+                  "stops": [[0.0, "#000000"], [1.0, "#ffffff"]] },
+        "out":  { "op": "warp", "input": "@grid", "type": "perlin",
+                  "scale-px": 60, "amp-px": 6, "anchor": "world" }
+      },
+      "output": "@out"
+    }"##;
+    let (seam, local) = seam_and_local(json, 64);
+    assert!(
+        seam < local * 3.0 + 1.0,
+        "warped seam should match local variation: seam {seam:.2}, local {local:.2}"
+    );
 }

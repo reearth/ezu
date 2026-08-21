@@ -397,7 +397,19 @@ impl<'a, 'c> InReader<'a, 'c> {
             .map(In::Const)
             .ok_or_else(|| FactoryError::BadField {
                 field: name.into(),
-                msg: format!("expected {} literal, `$param`, or `@node`", T::NAME),
+                // A JSON array here is almost always a MapLibre expression
+                // aimed at the wrong field: paint properties that accept one
+                // keep it on a `<name>-expr` sibling, since an expression is
+                // evaluated per feature rather than wired as a port.
+                msg: if v.is_array() {
+                    format!(
+                        "expected {} literal, `$param`, or `@node`, got a JSON array — \
+                         if that is a MapLibre expression, it belongs on `{name}-expr`",
+                        T::NAME
+                    )
+                } else {
+                    format!("expected {} literal, `$param`, or `@node`", T::NAME)
+                },
             })
     }
 

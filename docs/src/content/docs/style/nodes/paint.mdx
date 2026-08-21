@@ -129,9 +129,9 @@ Repeat a sprite along each polyline, rotated to the line's tangent (MapLibre `li
 | `features` | `@node` | yes | Reference to another node (`@name`). |
 | `image` | `@node` | yes | Reference to another node (`@name`). |
 | `opacity` | number (0…1) \| `$param` \| `@node` | no | — |
-| `scale` | number (0…∞) \| `$param` \| `@node` | no | — |
-| `spacing-px` | number (0…∞) \| `$param` \| `@node` | no | — |
-| `width-px` | number (0…∞) \| `$param` \| `@node` | no | — |
+| `scale` | number (0…∞) \| `$param` \| `@node` | no | Extra uniform scale on top of the width fit. Default 1.0. |
+| `spacing-px` | number (0…∞) \| `$param` \| `@node` | no | Advance between stamps. 0 = the scaled image width (seamless tiling). |
+| `width-px` | number (0…∞) \| `$param` \| `@node` | no | Stroke width; the image height is fit to it. 0 = native height. |
 
 ### `stamp`
 
@@ -144,12 +144,12 @@ Stamp a sprite at every input point. Lines and polygons are ignored. Jitter is w
 | `name-expr` | — | no | A MapLibre expression giving each feature's icon name (MapLibre data-driven `icon-image`), cropped per group from the `sprite` atlas. Used instead of an `image` input; any icon the bound sheet contains is croppable, so no enumeration is needed. |
 | `opacity` | number (0…1) \| `$param` \| `@node` | no | — |
 | `opacity-expr` | — | no | A MapLibre number expression giving opacity, evaluated per feature group; overrides the constant `opacity`. |
-| `rotation-deg` | number \| `$param` \| `@node` | no | — |
+| `rotation-deg` | number \| `$param` \| `@node` | no | Constant rotation around each point, in degrees clockwise. |
 | `rotation-deg-expr` | — | no | A MapLibre number expression (degrees clockwise), evaluated per feature group; overrides the constant `rotation-deg`. |
-| `rotation-jitter-deg` | number (0…∞) \| `$param` \| `@node` | no | — |
-| `scale` | number (0…∞) \| `$param` \| `@node` | no | — |
+| `rotation-jitter-deg` | number (0…∞) \| `$param` \| `@node` | no | Per-point random rotation, ±value degrees. |
+| `scale` | number (0…∞) \| `$param` \| `@node` | no | Uniform scale applied to the sprite. Default 1.0 (native size). |
 | `scale-expr` | — | no | A MapLibre number expression, evaluated per feature group; overrides the constant `scale`. A group whose expression doesn't resolve to a number falls back to `scale`. |
-| `scale-jitter` | number (0…∞) \| `$param` \| `@node` | no | — |
+| `scale-jitter` | number (0…∞) \| `$param` \| `@node` | no | Per-point random scale, ±value as a fraction of `scale` (0.2 = ±20%). |
 | `sprite` | string | no | Asset reference (`@name`) or literal path. |
 
 ### `stroke`
@@ -197,7 +197,7 @@ Text labels (MapLibre `symbol-placement`): `placement: point` (default) labels e
 | `font-stacks` | object | no | Named dynamic font stacks: canonical stack key (font names joined with `,`) → ordered `font`/`glyphs` source names. Consulted by `font-expr` and by `format` text sections carrying `text-font`. Declaration order fixes each stack's stable id (used by the layout cache and cross-tile collision). |
 | `halo-color` | color \| `$param` \| `@node` | no | sRGB hex color, `$param` reference, or `@node` scalar port. |
 | `halo-color-expr` | — | no | A MapLibre color expression for the halo, evaluated per feature group; overrides the constant `halo-color`. |
-| `halo-width` | number (0…∞) \| `$param` \| `@node` | no | — |
+| `halo-width` | number (0…∞) \| `$param` \| `@node` | no | Halo radius in px around each glyph. Default 0 (no halo). |
 | `halo-width-expr` | — | no | A MapLibre number expression (px), evaluated per feature group; overrides the constant `halo-width`. |
 | `icon-allow-overlap` | boolean | no | MapLibre `icon-allow-overlap`. A symbol carries one overlap decision, so with text present this and `allow-overlap` must both be set for the symbol to ignore collision. Default false. |
 | `icon-anchor` | `center` \| `left` \| `right` \| `top` \| `bottom` \| `top-left` \| `top-right` \| `bottom-left` \| `bottom-right` | no | Which part of the icon sits on the point (MapLibre `icon-anchor`). Default `center`. |
@@ -237,7 +237,7 @@ Text labels (MapLibre `symbol-placement`): `placement: point` (default) labels e
 | `padding-px` | number (0…∞) | no | Collision-box inflation in px on every side. Default 2. |
 | `placement` | `point` \| `line` \| `line-center` | no | MapLibre `symbol-placement`. `point` (default) labels each feature point. `line` repeats labels along each polyline every `spacing-px`; `line-center` places one at each line's arc-length midpoint. Line placement ignores wrapping (`max-width-em`) and lays out a single line along the path. |
 | `radial-offset` | number | no | MapLibre `text-radial-offset`: em distance each `anchor-variants` entry pushes the block away from the point in its direction. Default 0. |
-| `size` | number (0…∞) \| `$param` \| `@node` | no | — |
+| `size` | number (0…∞) \| `$param` \| `@node` | no | Font size in px. Default 16. |
 | `size-expr` | — | no | A MapLibre number expression (px), evaluated per feature group; overrides the constant `size`. |
 | `sort-key-expr` | — | no | A MapLibre number expression (MapLibre `symbol-sort-key`), evaluated per feature group; lower values place first under collision. Absent = 0. |
 | `source` | string | no | Upstream feature source name (matches the `features` node). Used only to name the neighbour tile bindings for cross-tile collision. Omit to collide within this tile only. |
@@ -275,7 +275,7 @@ Text labels (MapLibre `symbol-placement`): `placement: point` (default) labels e
 | `font-stacks` | object | no | Named dynamic font stacks: canonical stack key (font names joined with `,`) → ordered `font`/`glyphs` source names. Consulted by `font-expr` and by `format` text sections carrying `text-font`. Declaration order fixes each stack's stable id (used by the layout cache and cross-tile collision). |
 | `halo-color` | color \| `$param` \| `@node` | no | sRGB hex color, `$param` reference, or `@node` scalar port. |
 | `halo-color-expr` | — | no | A MapLibre color expression for the halo, evaluated per feature group; overrides the constant `halo-color`. |
-| `halo-width` | number (0…∞) \| `$param` \| `@node` | no | — |
+| `halo-width` | number (0…∞) \| `$param` \| `@node` | no | Halo radius in px around each glyph. Default 0 (no halo). |
 | `halo-width-expr` | — | no | A MapLibre number expression (px), evaluated per feature group; overrides the constant `halo-width`. |
 | `icon-allow-overlap` | boolean | no | MapLibre `icon-allow-overlap`. A symbol carries one overlap decision, so with text present this and `allow-overlap` must both be set for the symbol to ignore collision. Default false. |
 | `icon-anchor` | `center` \| `left` \| `right` \| `top` \| `bottom` \| `top-left` \| `top-right` \| `bottom-left` \| `bottom-right` | no | Which part of the icon sits on the point (MapLibre `icon-anchor`). Default `center`. |
@@ -315,7 +315,7 @@ Text labels (MapLibre `symbol-placement`): `placement: point` (default) labels e
 | `padding-px` | number (0…∞) | no | Collision-box inflation in px on every side. Default 2. |
 | `placement` | `point` \| `line` \| `line-center` | no | MapLibre `symbol-placement`. `point` (default) labels each feature point. `line` repeats labels along each polyline every `spacing-px`; `line-center` places one at each line's arc-length midpoint. Line placement ignores wrapping (`max-width-em`) and lays out a single line along the path. |
 | `radial-offset` | number | no | MapLibre `text-radial-offset`: em distance each `anchor-variants` entry pushes the block away from the point in its direction. Default 0. |
-| `size` | number (0…∞) \| `$param` \| `@node` | no | — |
+| `size` | number (0…∞) \| `$param` \| `@node` | no | Font size in px. Default 16. |
 | `size-expr` | — | no | A MapLibre number expression (px), evaluated per feature group; overrides the constant `size`. |
 | `sort-key-expr` | — | no | A MapLibre number expression (MapLibre `symbol-sort-key`), evaluated per feature group; lower values place first under collision. Absent = 0. |
 | `source` | string | no | Upstream feature source name (matches the `features` node). Used only to name the neighbour tile bindings for cross-tile collision. Omit to collide within this tile only. |

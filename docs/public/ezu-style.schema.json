@@ -2951,7 +2951,7 @@
               "block": {
                 "oneOf": [
                   {
-                    "description": "Block edge length in canvas pixels.",
+                    "description": "Block edge length in canvas pixels. Takes a literal or a `$param` with a declared `max`, but not an `@node` port: with `anchor: world` the block size sets the canvas padding, which has to be known before anything renders.",
                     "minimum": 1,
                     "type": "integer"
                   },
@@ -3087,6 +3087,7 @@
                 ]
               },
               "seed": {
+                "description": "Field seed. Omitted, `anchor: world` uses a fixed seed so every tile samples the same field, and `anchor: tile` uses the host's per-tile seed so each tile gets its own. Set it to pin either.",
                 "minimum": 0,
                 "type": "integer"
               },
@@ -3311,6 +3312,7 @@
               "spacing": {
                 "oneOf": [
                   {
+                    "description": "Grid pitch in *extent* units, not pixels — `extent` below is the coordinate space (4096 by default), so a 512 px tile fits 8 points at `spacing: 512`. Paint ops downstream take pixels, so the two do not match.",
                     "minimum": 0.0,
                     "type": "number"
                   },
@@ -5239,6 +5241,7 @@
                 ]
               },
               "seed": {
+                "description": "Field seed. Omitted, `anchor: world` uses a fixed seed so every tile samples the same field, and `anchor: tile` uses the host's per-tile seed so each tile gets its own. Set it to pin either.",
                 "minimum": 0,
                 "type": "integer"
               },

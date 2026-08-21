@@ -197,6 +197,25 @@ function figure(op) {
   ].join('\n');
 }
 
+/**
+ * A field's description. `schema_frag::in_number` wraps its literal in a
+ * `oneOf`, so an op that documents the literal — the units of a `spacing`,
+ * what a `block` cannot take — puts the text one level down. Look there
+ * before giving up, or the table says nothing about exactly the fields
+ * that needed explaining.
+ */
+function describe(frag) {
+  const own = mdx(frag?.description);
+  if (own) return own;
+  for (const branch of frag?.oneOf ?? []) {
+    const nested = mdx(branch?.description);
+    // The `$param` / `@node` branch carries boilerplate every numeric
+    // field shares; it is the literal's description that is specific.
+    if (nested && !nested.includes('`$param` reference or `@node`')) return nested;
+  }
+  return '—';
+}
+
 function opSection(op, variant) {
   const props = variant.properties ?? {};
   const required = new Set(variant.required ?? []);
@@ -204,7 +223,7 @@ function opSection(op, variant) {
     .filter(([name]) => name !== 'op')
     .map(
       ([name, frag]) =>
-        `| \`${name}\` | ${typeOf(frag)} | ${required.has(name) ? 'yes' : 'no'} | ${mdx(frag.description) || '—'} |`
+        `| \`${name}\` | ${typeOf(frag)} | ${required.has(name) ? 'yes' : 'no'} | ${describe(frag)} |`
     );
   const out = [`### \`${op}\``, ''];
   if (variant.description) out.push(mdx(variant.description), '');
