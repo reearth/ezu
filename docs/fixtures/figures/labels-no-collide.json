@@ -1,7 +1,7 @@
 {
   "name": "figure",
   "tile-size": 512,
-  "pad": 32,
+  "pad": 128,
   "sources": {
     "basemap": {
       "type": "mvt",

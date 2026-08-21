@@ -455,20 +455,26 @@ fn run_schema(args: SchemaCmd) -> Result<(), Box<dyn std::error::Error>> {
 /// Report whether the document's `pad` covers what its filters read.
 ///
 /// Rendering happens on one canvas of `tile-size + 2 * pad`, and nothing
-/// grows it: a `blur` whose kernel reaches past the margin quietly samples
-/// clamped edge pixels instead, which shows up as a seam between tiles
-/// rather than as an error. `Graph::compute_pad` knows what each node
-/// needs, so say so here — this is the one place a style is inspected
-/// without rendering it.
+/// grows it. A filter reading past the margin samples clamped edge pixels
+/// instead, which shows up as a seam between tiles rather than as an
+/// error — so the margin has to be at least as wide as the furthest any
+/// node reaches, or the tile's own edge pixels are wrong.
+///
+/// That distance is `compute_pad(0)`: the growth the chain adds, with no
+/// margin asked for at the output. Passing `doc.pad` instead would answer
+/// a different question — what sources must supply to keep the *padded
+/// canvas* clean out to its corners — and since the crop throws that
+/// margin away, comparing it against `doc.pad` counts the same pixels
+/// twice.
 fn report_pad(graph: &Graph, doc: &Document) {
-    let pads = match graph.compute_pad(doc.pad) {
+    let growth = match graph.compute_pad(0) {
         Ok(pads) => pads,
         Err(e) => {
             tracing::warn!("pad: {e}");
             return;
         }
     };
-    let Some((ix, &needed)) = pads.iter().enumerate().max_by_key(|(_, &p)| p) else {
+    let Some((ix, &needed)) = growth.iter().enumerate().max_by_key(|(_, &p)| p) else {
         return;
     };
     if needed > doc.pad {

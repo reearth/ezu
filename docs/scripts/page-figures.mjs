@@ -135,7 +135,7 @@ const FIGURES = {
         },
         out: { op: 'blend', base: '@base', over: '@labels' },
       },
-      { pad: 32, sources: { ...BASEMAP_SOURCE, sans: { type: 'font', url: 'system:Helvetica' } } }
+      { pad: 128, sources: { ...BASEMAP_SOURCE, sans: { type: 'font', url: 'system:Helvetica' } } }
     ),
   },
   'labels-no-collide': {
@@ -157,7 +157,7 @@ const FIGURES = {
         },
         out: { op: 'blend', base: '@base', over: '@labels' },
       },
-      { pad: 32, sources: { ...BASEMAP_SOURCE, sans: { type: 'font', url: 'system:Helvetica' } } }
+      { pad: 128, sources: { ...BASEMAP_SOURCE, sans: { type: 'font', url: 'system:Helvetica' } } }
     ),
   },
 
