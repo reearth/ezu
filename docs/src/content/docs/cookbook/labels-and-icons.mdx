@@ -173,3 +173,10 @@ when no `--font` mapping is given. In a wasm host you cannot fetch lazily, so as
   larger value.
 - ezu has no viewport, so there is no fade and no viewport-centre priority. See
   [gaps and differences](/ezu/maplibre/gaps-and-differences/).
+
+## A worked example
+
+[`atlas.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/atlas.json)
+is this page assembled: three label layers (city, neighbourhood, line-placed road
+names) through one `label-placement`, over a cased-road basemap, with the font
+declared as a `font` source URL. See it rendered in the [gallery](/ezu/gallery/#atlas).

@@ -126,3 +126,10 @@ Blend that over a basemap and you have an avalanche-slope overlay. And since a
 `ScalarField` is just a field, the painterly ops apply: `dither` a hypsometric
 ramp to a small palette for a printed-atlas feel, or run the composite through
 `blur` and a paper texture.
+
+## A worked example
+
+[`topo.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/topo.json)
+reads one DEM three ways at once — `contour` for vector isolines at a param-driven
+interval, `hillshade` for the relief, and `slope` for cliff shading — over a
+hypsometric ramp. See it rendered in the [gallery](/ezu/gallery/#topo).

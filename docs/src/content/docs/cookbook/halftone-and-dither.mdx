@@ -123,3 +123,11 @@ then dither that layer alone and blend it over.
 Padding is computed across the whole chain, so you never add it up by hand; but if
 edges look wrong after adding `displace` or a world-anchored `mosaic`, `pad` is the
 first thing to check.
+
+## A worked example
+
+[`risograph.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/examples/styles/risograph.json)
+puts the whole chapter together: a masked `point-grid` screen over the area fills,
+solid linework, drums knocked out of register with `transform`, and one closing
+`quantize` onto the ink palette. See it rendered in the
+[gallery](/ezu/gallery/#risograph).
