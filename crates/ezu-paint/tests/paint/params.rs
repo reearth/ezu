@@ -504,3 +504,31 @@ fn param_recolours_a_quantize_palette() {
     );
     assert_eq!(r.pixel(4, 4), [0xff, 0x00, 0x00, 0xff]);
 }
+
+/// A number table: `stroke`'s dash pattern. Each length resolves per
+/// eval, so a dash can be tuned from a slider.
+#[test]
+fn param_drives_a_dash_length() {
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 32,
+      "params": { "on": { "type": "number", "default": 12, "min": 1, "max": 16 } },
+      "nodes": {
+        "shape": { "op": "literal-geometry", "lines": [ [[0, 2048], [4096, 2048]] ] },
+        "out":   { "op": "stroke", "features": "@shape", "color": "#000000",
+                   "width-px": 2, "dasharray": ["$on", 4] }
+      },
+      "output": "@out"
+    }"##;
+    let ink = |r: &std::sync::Arc<ezu_graph::RasterBuf>| {
+        (0..32).filter(|&x| r.pixel(x, 16)[3] > 0).count()
+    };
+    let long = render(json, 32, 0);
+    let short = render_with_params(json, 32, 0, Z0, &[("on", ScalarValue::Number(2.0))]);
+    assert!(
+        ink(&short) < ink(&long),
+        "a shorter `on` length should leave less ink: {} vs {}",
+        ink(&short),
+        ink(&long)
+    );
+}

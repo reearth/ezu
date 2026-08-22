@@ -14,7 +14,7 @@ use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
     canvas_into_raster, core_tile, downcast_brush, downcast_features, empty_raster, make_canvas,
-    resolve_field, srgb_to_linear_rgba,
+    srgb_to_linear_rgba,
 };
 use crate::{paint_lines, LineStrokeStyle};
 // NOTE: `paint_lines_parallel` exists behind the `parallel` feature but
@@ -31,10 +31,10 @@ struct LineNode {
     dtime: In<f64>,
     radius_px: Option<In<f64>>,
     opacity: Option<In<f64>>,
-    radius_stroke_curve: Option<Vec<(f32, f32)>>,
-    opacity_stroke_curve: Option<Vec<(f32, f32)>>,
-    hardness_stroke_curve: Option<Vec<(f32, f32)>>,
-    dtime_stroke_curve: Option<Vec<(f32, f32)>>,
+    radius_stroke_curve: Option<CurveIn>,
+    opacity_stroke_curve: Option<CurveIn>,
+    hardness_stroke_curve: Option<CurveIn>,
+    dtime_stroke_curve: Option<CurveIn>,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
 }
@@ -87,10 +87,10 @@ impl Node for LineNode {
             pressure_base: self.pressure_base.get(ctx, inputs)? as f32,
             pressure_jitter: self.pressure_jitter.get(ctx, inputs)? as f32,
             dtime: self.dtime.get(ctx, inputs)? as f32,
-            radius_stroke_curve: self.radius_stroke_curve.clone(),
-            opacity_stroke_curve: self.opacity_stroke_curve.clone(),
-            hardness_stroke_curve: self.hardness_stroke_curve.clone(),
-            dtime_stroke_curve: self.dtime_stroke_curve.clone(),
+            radius_stroke_curve: resolve_curve(&self.radius_stroke_curve, ctx, inputs)?,
+            opacity_stroke_curve: resolve_curve(&self.opacity_stroke_curve, ctx, inputs)?,
+            hardness_stroke_curve: resolve_curve(&self.hardness_stroke_curve, ctx, inputs)?,
+            dtime_stroke_curve: resolve_curve(&self.dtime_stroke_curve, ctx, inputs)?,
         };
         let lines: Vec<_> = feats.lines().cloned().collect();
         paint_lines(
@@ -131,7 +131,27 @@ impl Node for LineNode {
     }
 }
 
-fn hash_curve(h: &mut Xxh3, tag: &[u8], curve: Option<&[(f32, f32)]>) {
+/// A brush-dynamics curve whose points may each be a `$param`, so the
+/// curve is resolved once per eval by [`resolve_curve`].
+type CurveIn = Vec<(In<f64>, In<f64>)>;
+
+/// Resolve one curve for an eval. Hokusai wants the points ordered, and
+/// a `$param` position is only known now, so sort here.
+fn resolve_curve(
+    curve: &Option<CurveIn>,
+    ctx: &EvalCtx<'_>,
+    inputs: &[Option<PortValue>],
+) -> Result<Option<Vec<(f32, f32)>>, EvalError> {
+    let Some(pts) = curve else { return Ok(None) };
+    let mut out = Vec::with_capacity(pts.len());
+    for (x, y) in pts {
+        out.push((x.get(ctx, inputs)? as f32, y.get(ctx, inputs)? as f32));
+    }
+    out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(Some(out))
+}
+
+fn hash_curve(h: &mut Xxh3, tag: &[u8], curve: Option<&[(In<f64>, In<f64>)]>) {
     h.update(tag);
     match curve {
         None => h.update(&[0]),
@@ -139,8 +159,8 @@ fn hash_curve(h: &mut Xxh3, tag: &[u8], curve: Option<&[(f32, f32)]>) {
             h.update(&[1]);
             h.update(&(pts.len() as u32).to_le_bytes());
             for (x, y) in pts {
-                h.update(&x.to_le_bytes());
-                h.update(&y.to_le_bytes());
+                x.param_hash(h);
+                y.param_hash(h);
             }
         }
     }
@@ -173,11 +193,11 @@ impl NodeFactory for LineFactory {
         } else {
             None
         };
+        let radius_stroke_curve = read_stroke_curve(fields, "radius-stroke-curve", &mut r)?;
+        let opacity_stroke_curve = read_stroke_curve(fields, "opacity-stroke-curve", &mut r)?;
+        let hardness_stroke_curve = read_stroke_curve(fields, "hardness-stroke-curve", &mut r)?;
+        let dtime_stroke_curve = read_stroke_curve(fields, "dtime-stroke-curve", &mut r)?;
         let parts = r.finish();
-        let radius_stroke_curve = read_stroke_curve(fields, "radius-stroke-curve", ctx)?;
-        let opacity_stroke_curve = read_stroke_curve(fields, "opacity-stroke-curve", ctx)?;
-        let hardness_stroke_curve = read_stroke_curve(fields, "hardness-stroke-curve", ctx)?;
-        let dtime_stroke_curve = read_stroke_curve(fields, "dtime-stroke-curve", ctx)?;
 
         let mut ports = vec![
             PortSpec {
@@ -227,7 +247,7 @@ impl NodeFactory for LineFactory {
             "type": "array",
             "items": {
                 "type": "array",
-                "items": { "type": "number" },
+                "items": schema_frag::nested_number(serde_json::json!({ "type": "number" })),
                 "minItems": 2,
                 "maxItems": 2,
             },
@@ -273,12 +293,11 @@ impl NodeFactory for LineFactory {
 fn read_stroke_curve(
     fields: &serde_json::Map<String, Value>,
     name: &str,
-    ctx: &FactoryCtx<'_>,
-) -> Result<Option<Vec<(f32, f32)>>, FactoryError> {
-    if !fields.contains_key(name) {
+    r: &mut InReader<'_, '_>,
+) -> Result<Option<CurveIn>, FactoryError> {
+    let Some(v) = fields.get(name) else {
         return Ok(None);
-    }
-    let v = resolve_field(fields, name, ctx)?;
+    };
     let arr = v.as_array().ok_or_else(|| FactoryError::BadField {
         field: name.into(),
         msg: "expected array of [t, y] pairs".into(),
@@ -290,7 +309,6 @@ fn read_stroke_curve(
         });
     }
     let mut out = Vec::with_capacity(arr.len());
-    let mut prev_t: Option<f32> = None;
     for (i, pt) in arr.iter().enumerate() {
         let pair = pt.as_array().ok_or_else(|| FactoryError::BadField {
             field: name.into(),
@@ -302,24 +320,12 @@ fn read_stroke_curve(
                 msg: format!("entry {i}: expected exactly 2 numbers"),
             });
         }
-        let t = pair[0].as_f64().ok_or_else(|| FactoryError::BadField {
-            field: name.into(),
-            msg: format!("entry {i}: t must be number"),
-        })? as f32;
-        let y = pair[1].as_f64().ok_or_else(|| FactoryError::BadField {
-            field: name.into(),
-            msg: format!("entry {i}: y must be number"),
-        })? as f32;
-        if let Some(p) = prev_t {
-            if t < p {
-                return Err(FactoryError::BadField {
-                    field: name.into(),
-                    msg: format!("entry {i}: t must be non-decreasing"),
-                });
-            }
-        }
-        prev_t = Some(t);
-        out.push((t, y));
+        // Ordering is not checked here: a `$param` position is only known
+        // at eval, where `resolve_curve` sorts.
+        out.push((
+            r.nested(&format!("{name}[{i}][0]"), &pair[0])?,
+            r.nested(&format!("{name}[{i}][1]"), &pair[1])?,
+        ));
     }
     Ok(Some(out))
 }

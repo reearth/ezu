@@ -86,7 +86,7 @@ Isolines from a ScalarField (marching squares with linear sub-cell interpolation
 | `base` | number \| `$param` \| `@node` | no | Offset the `interval` grid: levels sit at `base + k·interval`. |
 | `field` | `@node` | yes | Reference to another node (`@name`). |
 | `interval` | number \| `$param` \| `@node` | no | Spacing between levels, in field units. Required unless `levels` is given. |
-| `levels` | array of number | no | Explicit levels to extract; overrides `interval`/`base`. |
+| `levels` | array of number \| string | no | Explicit levels to extract; overrides `interval`/`base`. A level may be a `$param`; the list is sorted and de-duplicated per render. |
 | `max` | number | no | Emit no level above this value. |
 | `min` | number | no | Emit no level below this value. |
 

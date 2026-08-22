@@ -42,7 +42,7 @@ struct ContourNode {
     interval: In<f64>,
     base: In<f64>,
     /// Explicit level list; overrides `interval` / `base` when present.
-    levels: Option<Vec<f64>>,
+    levels: Option<Vec<In<f64>>>,
     /// Clamp on which levels are emitted.
     min: Option<f64>,
     max: Option<f64>,
@@ -128,7 +128,7 @@ impl Node for ContourNode {
         if let Some(levels) = &self.levels {
             h.update(b"levels");
             for l in levels {
-                h.update(&l.to_le_bytes());
+                l.param_hash(h);
             }
         }
         for (tag, bound) in [(b"min".as_slice(), self.min), (b"max".as_slice(), self.max)] {
@@ -155,7 +155,15 @@ impl ContourNode {
     ) -> Result<Vec<f64>, EvalError> {
         let keep = |l: f64| self.min.is_none_or(|m| l >= m) && self.max.is_none_or(|m| l <= m);
         if let Some(levels) = &self.levels {
-            let mut out: Vec<f64> = levels.iter().copied().filter(|&l| keep(l)).collect();
+            // A level may be a `$param`, so resolve before filtering and
+            // sorting — the order is only knowable now.
+            let mut out = Vec::with_capacity(levels.len());
+            for l in levels {
+                let l = l.get(ctx, inputs)?;
+                if keep(l) {
+                    out.push(l);
+                }
+            }
             out.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             out.dedup();
             return Ok(out);
@@ -347,7 +355,6 @@ impl NodeFactory for ContourFactory {
         let mut r = InReader::new(fields, ctx, 1);
         let interval = r.number_or("interval", 0.0)?;
         let base = r.number_or("base", 0.0)?;
-        let parts = r.finish();
 
         let levels = match fields.get("levels") {
             None => None,
@@ -356,12 +363,15 @@ impl NodeFactory for ContourFactory {
                     field: "levels".into(),
                     msg: "expected an array of numbers".into(),
                 })?;
-                let levels: Vec<f64> = arr.iter().filter_map(Value::as_f64).collect();
-                if levels.len() != arr.len() || levels.is_empty() {
+                if arr.is_empty() {
                     return Err(FactoryError::BadField {
                         field: "levels".into(),
                         msg: "expected a non-empty array of numbers".into(),
                     });
+                }
+                let mut levels = Vec::with_capacity(arr.len());
+                for (i, v) in arr.iter().enumerate() {
+                    levels.push(r.nested(&format!("levels[{i}]"), v)?);
                 }
                 Some(levels)
             }
@@ -388,6 +398,7 @@ impl NodeFactory for ContourFactory {
         };
         let min = read_opt("min")?;
         let max = read_opt("max")?;
+        let parts = r.finish();
 
         let mut ports = vec![PortSpec {
             name: "field",
@@ -423,8 +434,9 @@ impl NodeFactory for ContourFactory {
                               "description": "Spacing between levels, in field units. Required unless `levels` is given." })),
                 "base": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 0.0,
                           "description": "Offset the `interval` grid: levels sit at `base + k·interval`." })),
-                "levels": { "type": "array", "items": { "type": "number" }, "minItems": 1,
-                            "description": "Explicit levels to extract; overrides `interval`/`base`." },
+                "levels": { "type": "array", "minItems": 1,
+                            "items": schema_frag::nested_number(serde_json::json!({ "type": "number" })),
+                            "description": "Explicit levels to extract; overrides `interval`/`base`. A level may be a `$param`; the list is sorted and de-duplicated per render." },
                 "min": { "type": "number", "description": "Emit no level below this value." },
                 "max": { "type": "number", "description": "Emit no level above this value." },
             },

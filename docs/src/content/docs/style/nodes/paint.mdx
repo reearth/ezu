@@ -111,15 +111,15 @@ Brush stroke along MVT polylines.
 | `brush` | `@node` | yes | Reference to another node (`@name`). |
 | `color` | color \| `$param` \| `@node` | yes | sRGB hex color, `$param` reference, or `@node` scalar port. |
 | `dtime` | number (0…∞) \| `$param` \| `@node` | no | — |
-| `dtime-stroke-curve` | array of array of number | no | Piecewise-linear `[[t, y], ...]` multiplier on `dtime`. `y` scales the per-vertex dtime — y=3 makes the brush linger 3× longer (slower hand), y=0.3 sweeps through 3× faster. Used with dynamics-driven brushes that respond to stroke speed. |
+| `dtime-stroke-curve` | array of array of number \| string | no | Piecewise-linear `[[t, y], ...]` multiplier on `dtime`. `y` scales the per-vertex dtime — y=3 makes the brush linger 3× longer (slower hand), y=0.3 sweeps through 3× faster. Used with dynamics-driven brushes that respond to stroke speed. |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
-| `hardness-stroke-curve` | array of array of number | no | Piecewise-linear `[[t, y], ...]` driving a libmypaint `stroke` input on the brush. `t` is normalized stroke progress in [0, 1]; `y` is an offset added to the setting's base value. `radius` is log-space (y=-2.3 ≈ ×0.1, y=+0.69 ≈ ×2); `opaque` and `hardness` are linear. |
+| `hardness-stroke-curve` | array of array of number \| string | no | Piecewise-linear `[[t, y], ...]` driving a libmypaint `stroke` input on the brush. `t` is normalized stroke progress in [0, 1]; `y` is an offset added to the setting's base value. `radius` is log-space (y=-2.3 ≈ ×0.1, y=+0.69 ≈ ×2); `opaque` and `hardness` are linear. |
 | `opacity` | number (0…1) \| `$param` \| `@node` | no | — |
-| `opacity-stroke-curve` | array of array of number | no | Piecewise-linear `[[t, y], ...]` driving a libmypaint `stroke` input on the brush. `t` is normalized stroke progress in [0, 1]; `y` is an offset added to the setting's base value. `radius` is log-space (y=-2.3 ≈ ×0.1, y=+0.69 ≈ ×2); `opaque` and `hardness` are linear. |
+| `opacity-stroke-curve` | array of array of number \| string | no | Piecewise-linear `[[t, y], ...]` driving a libmypaint `stroke` input on the brush. `t` is normalized stroke progress in [0, 1]; `y` is an offset added to the setting's base value. `radius` is log-space (y=-2.3 ≈ ×0.1, y=+0.69 ≈ ×2); `opaque` and `hardness` are linear. |
 | `pressure-base` | number (0…1) \| `$param` \| `@node` | no | — |
 | `pressure-jitter` | number (0…1) \| `$param` \| `@node` | no | — |
 | `radius-px` | number (0…∞) \| `$param` \| `@node` | no | — |
-| `radius-stroke-curve` | array of array of number | no | Piecewise-linear `[[t, y], ...]` driving a libmypaint `stroke` input on the brush. `t` is normalized stroke progress in [0, 1]; `y` is an offset added to the setting's base value. `radius` is log-space (y=-2.3 ≈ ×0.1, y=+0.69 ≈ ×2); `opaque` and `hardness` are linear. |
+| `radius-stroke-curve` | array of array of number \| string | no | Piecewise-linear `[[t, y], ...]` driving a libmypaint `stroke` input on the brush. `t` is normalized stroke progress in [0, 1]; `y` is an offset added to the setting's base value. `radius` is log-space (y=-2.3 ≈ ×0.1, y=+0.69 ≈ ×2); `opaque` and `hardness` are linear. |
 
 ### `line-stamp`
 
@@ -170,7 +170,7 @@ Crisp constant-width vector stroke along feature polylines (tiny-skia), with cap
 | `cap` | `butt` \| `round` \| `square` | no | — |
 | `color` | color \| `$param` \| `@node` | yes | sRGB hex color, `$param` reference, or `@node` scalar port. |
 | `color-expr` | — | no | A MapLibre color expression (JSON array, e.g. ["match", ["get", "class"], "river", "#48b", "#888"]), evaluated per feature group at paint time. When present it overrides the constant `color`; a group whose expression doesn't resolve to a color falls back to `color`. Unlocks data-driven stroke colors. |
-| `dasharray` | array of number | no | On/off lengths in pixels; omit for solid. |
+| `dasharray` | array of number (0…∞) \| string | no | On/off lengths in pixels; omit for solid. Each length may be a `$param`. |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
 | `gap-width-expr` | — | no | A MapLibre number expression (JSON array) giving the casing gap in pixels, evaluated per feature group at paint time. When present it overrides the constant `gap-width-px`; a group whose expression doesn't resolve to a number falls back to `gap-width-px`. |
 | `gap-width-px` | number | no | MapLibre `line-gap-width`: when &gt; 0 the stroke becomes a casing — two parallel bands of `width-px` each, their inner edges this many pixels apart (outer footprint `gap + 2 * width`, centred on the line). `0` strokes the centreline. |

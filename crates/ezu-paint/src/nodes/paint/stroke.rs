@@ -26,8 +26,9 @@ struct StrokeNode {
     opacity: In<f64>,
     cap: LineCap,
     join: LineJoin,
-    /// On/off dash pattern in pixels (`None` = solid).
-    dash: Option<Vec<f32>>,
+    /// On/off dash pattern in pixels (`None` = solid). Each length may
+    /// be a `$param`, so the pattern resolves once per eval.
+    dash: Option<Vec<In<f64>>>,
     /// Optional data-driven stroke color: a MapLibre color expression
     /// evaluated per feature group. When set, it overrides the constant
     /// `color` for groups whose expression resolves to a color.
@@ -79,6 +80,15 @@ impl Node for StrokeNode {
         let const_color = tint_alpha_color(rgba8, opacity);
         let const_width = (self.width_px.get(ctx, inputs)? as f32).max(0.0);
         let const_gap = (self.gap_width_px.get(ctx, inputs)? as f32).max(0.0);
+        // Resolved once here; every group's `StrokeStyle` clones it.
+        let dash = match &self.dash {
+            None => None,
+            Some(d) => Some(
+                d.iter()
+                    .map(|v| v.get(ctx, inputs).map(|n| n as f32))
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+        };
         let mut canvas = make_canvas(ctx)?;
 
         if self.color_expr.is_some()
@@ -133,7 +143,7 @@ impl Node for StrokeNode {
                     width,
                     cap: self.cap,
                     join: self.join,
-                    dash: self.dash.clone(),
+                    dash: dash.clone(),
                     gap,
                 };
                 paint_strokes(&mut canvas, &group.lines, feats.extent, &style);
@@ -146,7 +156,7 @@ impl Node for StrokeNode {
             width: const_width,
             cap: self.cap,
             join: self.join,
-            dash: self.dash.clone(),
+            dash: dash.clone(),
             gap: const_gap,
         };
         let lines: Vec<_> = feats.lines().cloned().collect();
@@ -163,7 +173,7 @@ impl Node for StrokeNode {
         if let Some(d) = &self.dash {
             h.update(&[1]);
             for v in d {
-                h.update(&v.to_le_bytes());
+                v.param_hash(h);
             }
         } else {
             h.update(&[0]);
@@ -240,6 +250,7 @@ impl NodeFactory for StrokeFactory {
                 })
             }
         };
+        let mut r = InReader::new(fields, ctx, 1);
         let dash = match fields.get("dasharray") {
             None | Some(Value::Null) => None,
             Some(v) => {
@@ -247,11 +258,10 @@ impl NodeFactory for StrokeFactory {
                     field: "dasharray".into(),
                     msg: "expected an array of numbers (pixels)".into(),
                 })?;
-                let pat: Vec<f32> = arr
-                    .iter()
-                    .filter_map(|x| x.as_f64())
-                    .map(|x| x as f32)
-                    .collect();
+                let mut pat = Vec::with_capacity(arr.len());
+                for (i, x) in arr.iter().enumerate() {
+                    pat.push(r.nested(&format!("dasharray[{i}]"), x)?);
+                }
                 if pat.is_empty() {
                     None
                 } else {
@@ -259,8 +269,6 @@ impl NodeFactory for StrokeFactory {
                 }
             }
         };
-
-        let mut r = InReader::new(fields, ctx, 1);
         let color = r.color("color")?;
         let width_px = r.number_or("width-px", 1.0)?;
         let gap_width_px = r.number_or("gap-width-px", 0.0)?;
@@ -405,7 +413,9 @@ impl NodeFactory for StrokeFactory {
                 },
                 "cap": { "type": "string", "enum": ["butt", "round", "square"], "default": "butt" },
                 "join": { "type": "string", "enum": ["miter", "round", "bevel"], "default": "miter" },
-                "dasharray": { "type": "array", "items": { "type": "number" }, "description": "On/off lengths in pixels; omit for solid." },
+                "dasharray": { "type": "array",
+                               "items": schema_frag::nested_number(serde_json::json!({ "type": "number", "minimum": 0.0 })),
+                               "description": "On/off lengths in pixels; omit for solid. Each length may be a `$param`." },
             },
             "required": ["features", "color"],
         })

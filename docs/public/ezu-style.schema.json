@@ -904,9 +904,18 @@
                 ]
               },
               "levels": {
-                "description": "Explicit levels to extract; overrides `interval`/`base`.",
+                "description": "Explicit levels to extract; overrides `interval`/`base`. A level may be a `$param`; the list is sorted and de-duplicated per render.",
                 "items": {
-                  "type": "number"
+                  "oneOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "description": "`$param` reference.",
+                      "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                      "type": "string"
+                    }
+                  ]
                 },
                 "minItems": 1,
                 "type": "array"
@@ -2715,7 +2724,16 @@
                 "description": "Piecewise-linear `[[t, y], ...]` multiplier on `dtime`. `y` scales the per-vertex dtime — y=3 makes the brush linger 3× longer (slower hand), y=0.3 sweeps through 3× faster. Used with dynamics-driven brushes that respond to stroke speed.",
                 "items": {
                   "items": {
-                    "type": "number"
+                    "oneOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "description": "`$param` reference.",
+                        "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                        "type": "string"
+                      }
+                    ]
                   },
                   "maxItems": 2,
                   "minItems": 2,
@@ -2733,7 +2751,16 @@
                 "description": "Piecewise-linear `[[t, y], ...]` driving a libmypaint `stroke` input on the brush. `t` is normalized stroke progress in [0, 1]; `y` is an offset added to the setting's base value. `radius` is log-space (y=-2.3 ≈ ×0.1, y=+0.69 ≈ ×2); `opaque` and `hardness` are linear.",
                 "items": {
                   "items": {
-                    "type": "number"
+                    "oneOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "description": "`$param` reference.",
+                        "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                        "type": "string"
+                      }
+                    ]
                   },
                   "maxItems": 2,
                   "minItems": 2,
@@ -2764,7 +2791,16 @@
                 "description": "Piecewise-linear `[[t, y], ...]` driving a libmypaint `stroke` input on the brush. `t` is normalized stroke progress in [0, 1]; `y` is an offset added to the setting's base value. `radius` is log-space (y=-2.3 ≈ ×0.1, y=+0.69 ≈ ×2); `opaque` and `hardness` are linear.",
                 "items": {
                   "items": {
-                    "type": "number"
+                    "oneOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "description": "`$param` reference.",
+                        "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                        "type": "string"
+                      }
+                    ]
                   },
                   "maxItems": 2,
                   "minItems": 2,
@@ -2818,7 +2854,16 @@
                 "description": "Piecewise-linear `[[t, y], ...]` driving a libmypaint `stroke` input on the brush. `t` is normalized stroke progress in [0, 1]; `y` is an offset added to the setting's base value. `radius` is log-space (y=-2.3 ≈ ×0.1, y=+0.69 ≈ ×2); `opaque` and `hardness` are linear.",
                 "items": {
                   "items": {
-                    "type": "number"
+                    "oneOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "description": "`$param` reference.",
+                        "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                        "type": "string"
+                      }
+                    ]
                   },
                   "maxItems": 2,
                   "minItems": 2,
@@ -4247,9 +4292,19 @@
                 "description": "A MapLibre color expression (JSON array, e.g. [\"match\", [\"get\", \"class\"], \"river\", \"#48b\", \"#888\"]), evaluated per feature group at paint time. When present it overrides the constant `color`; a group whose expression doesn't resolve to a color falls back to `color`. Unlocks data-driven stroke colors."
               },
               "dasharray": {
-                "description": "On/off lengths in pixels; omit for solid.",
+                "description": "On/off lengths in pixels; omit for solid. Each length may be a `$param`.",
                 "items": {
-                  "type": "number"
+                  "oneOf": [
+                    {
+                      "minimum": 0.0,
+                      "type": "number"
+                    },
+                    {
+                      "description": "`$param` reference.",
+                      "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                      "type": "string"
+                    }
+                  ]
                 },
                 "type": "array"
               },
