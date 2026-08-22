@@ -1,7 +1,6 @@
 {
   "name": "stained-glass",
   "version": "1",
-  "tile-size": 512,
   "params": {
     "lead":      { "type": "color",  "default": "#1b1a22",
                    "description": "Leading (the metal between panes)." },

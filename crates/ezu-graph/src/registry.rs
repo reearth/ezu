@@ -224,7 +224,8 @@ impl NodeRegistry {
             "properties": {
                 "name": { "type": "string" },
                 "version": { "type": "string" },
-                "tile-size": { "type": "integer", "minimum": 1 },
+                "tile-size": { "type": "integer", "minimum": 1, "default": 512,
+                               "description": "Rendered tile edge in px. Every `*-px` field is measured against it, so it decides what a pixel is worth in ground units. Defaults to 512, MapLibre's vector-tile convention." },
                 "pad": { "type": "integer", "minimum": 0 },
                 "attribution": {
                     "type": "string",
@@ -330,9 +331,10 @@ impl NodeRegistry {
                                     "type": { "const": "dem" },
                                     "url": { "type": "string", "description": "XYZ template or TileJSON URL." },
                                     "encoding": { "enum": ["terrarium", "mapbox-rgb"] },
-                                    "tile-size": { "type": "integer", "minimum": 1 },
-                                    "max-zoom": { "type": "integer", "minimum": 0 },
-                                    "neighbor-fetch": { "type": "boolean" },
+                                    "tile-size": { "type": "integer", "minimum": 1, "default": 256,
+                                                   "description": "Edge of the source's own tiles in px — not the document's canvas, and defaulting to 256 rather than 512. Terrarium pyramids are usually 256, Mapbox-RGB ones often 512." },
+                                    "max-zoom": { "type": "integer", "minimum": 0, "description": "Deepest zoom the source serves. Past it, tiles are overzoomed from the covering ancestor." },
+                                    "neighbor-fetch": { "type": "boolean", "default": true },
                                     "elevation-offset": { "type": "number" },
                                     "on-missing": { "enum": ["empty", "upsample", "error"], "default": "empty", "description": "404 within zoom range: zero elevation, upsample a parent, or fail the tile." },
                                     "attribution": { "type": "string" }

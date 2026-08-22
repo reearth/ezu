@@ -26,7 +26,6 @@ else is required. Start with a solid colour:
 ```json title="mine.json"
 {
   "name": "mine",
-  "tile-size": 512,
   "nodes": {
     "bg": { "op": "solid", "color": "#fbf6e6" }
   },
@@ -46,10 +45,9 @@ ezu tile --style mine.json --tile 13/7276/3225 --out mine.png
 A cream square. Now add data. Declare an MVT source, select a layer, fill it, and
 composite the fill over the background:
 
-```json title="mine.json" ins={5-7,9-16}
+```json title="mine.json" ins={4-6,8-15}
 {
   "name": "mine",
-  "tile-size": 512,
   "pad": 8,
   "sources": {
     "basemap": { "type": "mvt", "url": "https://papers.reearth.land/protomaps/tilejson.json" }

@@ -1,7 +1,6 @@
 {
   "name": "poi-field",
   "version": "1",
-  "tile-size": 512,
   "params": {
     "radius-px": { "type": "number", "default": 26, "min": 8, "max": 80,
                    "description": "Kernel radius of the density estimate, in px." },

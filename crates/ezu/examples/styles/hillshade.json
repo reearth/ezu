@@ -1,6 +1,5 @@
 {
   "name": "hillshade",
-  "tile-size": 512,
   "pad": 16,
   "sources": {
     "terrain": {

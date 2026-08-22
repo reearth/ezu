@@ -19,6 +19,12 @@ pub struct Document {
     pub name: String,
     #[serde(default = "default_version")]
     pub version: String,
+    /// Rendered tile edge in pixels. Every `*-px` field in the document
+    /// is measured against this, so it decides what a pixel is worth in
+    /// ground units: the same `width-px` covers twice the ground at 256
+    /// as it does at 512. Defaults to 512, MapLibre's vector-tile
+    /// convention, so px numbers carry across from a MapLibre style
+    /// unchanged.
     #[serde(default = "default_tile_size")]
     pub tile_size: u32,
     #[serde(default)]

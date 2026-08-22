@@ -1,7 +1,6 @@
 {
   "name": "pencil-sketch",
   "version": "1",
-  "tile-size": 512,
   "pad": 24,
   "params": {
     "paper":         { "type": "color",  "default": "#fbf7ec",

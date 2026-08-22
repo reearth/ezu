@@ -12,7 +12,6 @@ evaluator. To execute a document, feed it to
 ```json
 {
   "name": "watercolor",
-  "tile-size": 512,
   "pad": 24,
   "sources": {
     "glazing": { "type": "brush", "src": "file:brushes/watercolor_glazing.myb" }

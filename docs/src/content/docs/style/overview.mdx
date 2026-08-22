@@ -30,13 +30,30 @@ An Ezu Style document is a JSON object. Two fields are required — `nodes` and
 | `nodes` | map of id → node | required — the graph. Order is irrelevant |
 | `output` | `@node` | required — must resolve to a `Raster` |
 | `version` | string | the style's own version, yours to use |
-| `tile-size` | integer | rendered tile edge in px (512 matches MapLibre) |
+| `tile-size` | integer | rendered tile edge in px. **Defaults to 512**, which matches MapLibre — leave it out unless you want another edge |
 | `pad` | integer | margin around the tile, in px. A **floor**: the renderer uses this or what the graph's filters need, whichever is larger. Leave it out to let the graph decide — see [padding](/ezu/concepts/padding-and-neighbours/) |
 | `attribution` | string | document-level attribution, merged with each source's |
 | `params` | map | [typed knobs](/ezu/style/params/) resolved at render time |
 | `functions` | map | [reusable subgraphs](/ezu/style/functions/) expanded at build time |
 | `legend` | object | [what the symbols mean](/ezu/style/legend/), for a host to draw beside the map |
 | `sources` | map | [every external resource](/ezu/style/sources/) the style pulls in |
+
+## Why the canvas defaults to 512
+
+`tile-size` is how many pixels a tile's fixed patch of ground is drawn into, so
+**every `*-px` field in the document is measured against it**. The same
+`width-px: 8` stroke occupies 1.56% of a 512 px tile and 3.12% of a 256 px one —
+twice the ground width for the same number.
+
+512 is MapLibre's vector-tile convention, and matching it is what makes a px
+number mean the same thing here as it does there: a style ported either way keeps
+its weights. 256 is the older raster-imagery convention; drawing a
+512-designed style into it doubles every stroke, glyph and dab relative to the
+ground, which reads as a crowded map rather than a scaled one.
+
+So it is worth setting deliberately, and worth checking on a style you are
+matching against a reference: comparing line widths in pixels across two
+different canvas sizes compares nothing.
 
 ## The two reference prefixes
 
@@ -84,7 +101,6 @@ file treated as JSON with comments — in VS Code, that means associating it wit
 ```json
 {
   "name": "flat",
-  "tile-size": 512,
   "sources": {
     "basemap": { "type": "mvt", "url": "https://papers.reearth.land/protomaps/tilejson.json" }
   },

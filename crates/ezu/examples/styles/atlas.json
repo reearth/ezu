@@ -1,7 +1,6 @@
 {
   "name": "atlas",
   "version": "1",
-  "tile-size": 512,
   "params": {
     "paper":   { "type": "color", "default": "#f6f3ec",
                  "description": "Land colour." },

@@ -1,7 +1,6 @@
 {
   "name": "photo-pop",
   "version": "1",
-  "tile-size": 512,
   "pad": 8,
   "attribution": "Style: ezu photo-pop demo",
   "params": {

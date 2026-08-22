@@ -1,7 +1,6 @@
 {
   "name": "topo",
   "version": "1",
-  "tile-size": 512,
   "params": {
     "interval-m": { "type": "number", "default": 100, "min": 20, "max": 500,
                     "description": "Contour interval, in metres." },

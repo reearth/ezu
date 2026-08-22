@@ -48,7 +48,6 @@ earth-tone background, composited bottom-to-top with `stack`.
 ```json
 {
   "name": "demo",
-  "tile-size": 512,
   "pad": 24,
   "sources": {
     "glazing":  { "type": "brush", "src": "file:brushes/watercolor_glazing.myb" },
@@ -328,7 +327,6 @@ reproducible recipe.
 ```json
 {
   "name": "labels",
-  "tile-size": 512,
   "sources": {
     "basemap": { "type": "mvt", "url": "https://papers.reearth.land/protomaps/tilejson.json" },
     "sans":    { "type": "font", "url": "system:Helvetica" }

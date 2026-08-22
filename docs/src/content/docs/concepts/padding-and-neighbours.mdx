@@ -17,7 +17,7 @@ A style declares `pad`, and rendering happens on a canvas of
 margin is cropped off at the end.
 
 ```json
-{ "name": "mine", "tile-size": 512, "pad": 24, "…": "…" }
+{ "name": "mine", "pad": 24, "…": "…" }
 ```
 
 Every `Raster` and `ScalarField` in the graph is this padded size, which is why
@@ -34,7 +34,6 @@ knowable before anything renders:
 ```json
 {
   "name": "soft",
-  "tile-size": 512,
   "nodes": {
     "f":    { "op": "features", "layer": "earth" },
     "fill": { "op": "fill-solid", "features": "@f", "fill": "#c2410c" },
