@@ -772,15 +772,26 @@
                 "type": "string"
               },
               "stops": {
+                "description": "Either half of a stop may be a `$param`, so a ramp can be recoloured or rescaled at render time. The table is sorted by `value` on every eval, so a param may reorder it.",
                 "items": {
                   "properties": {
                     "color": {
-                      "description": "`#rrggbb` or `#rrggbbaa`.",
+                      "description": "sRGB hex color or `$param` reference.",
+                      "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|\\$[A-Za-z_][A-Za-z0-9_-]*)$",
                       "type": "string"
                     },
                     "value": {
-                      "description": "Scalar value at this stop (e.g. metres of elevation for a DEM field).",
-                      "type": "number"
+                      "oneOf": [
+                        {
+                          "description": "Scalar value at this stop (e.g. metres of elevation for a DEM field).",
+                          "type": "number"
+                        },
+                        {
+                          "description": "`$param` reference.",
+                          "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                          "type": "string"
+                        }
+                      ]
                     }
                   },
                   "required": [

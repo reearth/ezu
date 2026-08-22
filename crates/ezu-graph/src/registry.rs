@@ -398,6 +398,33 @@ pub mod schema_frag {
         })
     }
 
+    /// `#rrggbb[aa]` literal or `$param` — a colour *inside* a composite
+    /// field (a ramp stop, a palette entry), where a `@node` scalar port
+    /// has no slot to attach to.
+    pub fn nested_color() -> Value {
+        json!({
+            "type": "string",
+            "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|\\$[A-Za-z_][A-Za-z0-9_-]*)$",
+            "description": "sRGB hex color or `$param` reference."
+        })
+    }
+
+    /// Wrap a numeric schema so it also accepts a `$param` string — a
+    /// number inside a composite field. Unlike [`in_number`] it admits
+    /// no `@node`, for the same reason as [`nested_color`].
+    pub fn nested_number(literal: Value) -> Value {
+        json!({
+            "oneOf": [
+                literal,
+                {
+                    "type": "string",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "description": "`$param` reference."
+                }
+            ]
+        })
+    }
+
     /// Number in `[0, 1]` — commonly opacity / fraction parameters.
     pub fn unit_number() -> Value {
         in_number(json!({ "type": "number", "minimum": 0.0, "maximum": 1.0 }))

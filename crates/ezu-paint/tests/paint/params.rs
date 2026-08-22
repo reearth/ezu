@@ -303,3 +303,105 @@ fn padding_field_clamps_a_port_above_its_ceiling() {
         "a port above its ceiling should render as the ceiling"
     );
 }
+
+// --- `$param` inside a composite field ------------------------------------
+//
+// A colour ramp's `stops` is a table, not a scalar field, so each half of
+// each entry is read through `InReader::nested`: literal or `$param`, and
+// resolved once per eval rather than baked at build time.
+
+/// Two-stop ramp over an all-zero `dem` field: every pixel clamps to the
+/// first stop, so the rendered colour *is* `$low`.
+fn ramp_doc() -> &'static str {
+    r##"{
+      "name": "demo",
+      "tile-size": 8,
+      "params": {
+        "low":  { "type": "color",  "default": "#ff0000" },
+        "high": { "type": "color",  "default": "#0000ff" },
+        "top":  { "type": "number", "default": 100, "min": 1, "max": 1000 }
+      },
+      "sources": {
+        "terrain": { "type": "dem",
+                     "url": "http://example.invalid/{z}/{x}/{y}.webp",
+                     "encoding": "terrarium" }
+      },
+      "nodes": {
+        "dem": { "op": "dem", "name": "tile.terrain" },
+        "out": { "op": "color-ramp", "field": "@dem",
+                 "stops": [ { "value": 0,      "color": "$low" },
+                            { "value": "$top", "color": "$high" } ] }
+      },
+      "output": "@out"
+    }"##
+}
+
+#[test]
+fn param_in_a_ramp_stop_uses_its_declared_default() {
+    let r = render(ramp_doc(), 8, 0);
+    assert_eq!(r.pixel(4, 4), [0xff, 0x00, 0x00, 0xff]);
+}
+
+#[test]
+fn runtime_override_recolours_a_ramp_stop() {
+    let r = render_with_params(
+        ramp_doc(),
+        8,
+        0,
+        Z0,
+        &[("low", ScalarValue::Color([0.0, 1.0, 0.0, 1.0]))],
+    );
+    assert_eq!(
+        r.pixel(4, 4),
+        [0x00, 0xff, 0x00, 0xff],
+        "overriding `low` should repaint without rebuilding the graph"
+    );
+}
+
+/// The param in a stop's `value` has to reach `param_refs`, or the
+/// evaluator keys the cache without it and serves a stale tile.
+#[test]
+fn a_stop_value_param_is_folded_into_the_cache_key() {
+    // Stops at 0 (`$low`) and `$top` (`$high`) over a zero field. Moving
+    // `top` cannot change a clamped-to-first-stop pixel, so drive the
+    // field between the stops instead: a `solid` ramped by luminance.
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 8,
+      "params": { "top": { "type": "number", "default": 1.0, "min": 0.5, "max": 8.0 } },
+      "nodes": {
+        "grey": { "op": "solid", "color": "#808080" },
+        "out":  { "op": "color-ramp", "field": "@grey",
+                  "stops": [ { "value": 0,      "color": "#000000" },
+                             { "value": "$top", "color": "#ffffff" } ] }
+      },
+      "output": "@out"
+    }"##;
+    let doc = Document::from_json(json).unwrap();
+    let graph = build_graph(&doc, &default_registry()).unwrap();
+    let cache = Cache::new();
+    let ev = Evaluator::new(&graph, &cache, &NoAssets);
+    let canvas = CanvasInfo::square(8, 0);
+
+    let render_at = |top: f64| {
+        let mut params = ParamValues::new();
+        params.set("top", ScalarValue::Number(top));
+        match ev.render(Z0, canvas, &params, 0).unwrap() {
+            PortValue::Raster(r) => r.pixel(4, 4),
+            other => panic!("expected a raster, got {:?}", other.kind()),
+        }
+    };
+    // Luminance 0.5 against a 0→1 ramp is mid-grey; against a 0→8 ramp it
+    // sits near the dark end. Same cache, so an unkeyed param shows up as
+    // the first answer repeated.
+    let near = render_at(1.0);
+    let far = render_at(8.0);
+    assert_ne!(
+        near, far,
+        "a `$param` in a stop value must be part of the cache key"
+    );
+    assert!(
+        far[0] < near[0],
+        "stretching the ramp should darken mid-grey: {near:?} -> {far:?}"
+    );
+}

@@ -97,6 +97,23 @@ A `@node` port carries no bound, so the style states one beside it with a
 The bound is what the graph budgets padding for, so keep it as tight as the style
 actually needs — an unnecessarily large `max` costs render time on every tile.
 
+## Inside a table
+
+Some fields are not scalars but tables — a colour ramp's stops, a palette, a
+dash pattern. A `$param` works in each entry too:
+
+```json
+"tint": { "op": "color-ramp", "field": "@dem",
+          "stops": [ { "value": 0,          "color": "$lowland" },
+                     { "value": "$treeline", "color": "$upland"  } ] }
+```
+
+Two differences from a scalar field. A table entry takes a literal or a
+`$param` but **not** a `@node`: a port needs a fixed name and its own slot on
+the node, and a table of unknown length has neither. And a ramp is sorted by
+`value` on every render rather than at build time, since a param can reorder
+it — so stops need not be declared in order.
+
 ## Composing computed values
 
 Params are inputs, not expressions. To combine them, wire scalars through the

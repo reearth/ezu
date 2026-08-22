@@ -37,9 +37,16 @@ struct Stop {
     rgba: [u8; 4],
 }
 
+/// One declared stop. Either half may be a `$param`, so a stop table is
+/// resolved — and re-sorted — once per eval rather than at build time.
+struct StopIn {
+    value: In<f64>,
+    color: In<[f32; 4]>,
+}
+
 struct ColorRampNode {
     /// Empty iff `ramp_expr` is set (the factory requires one of the two).
-    stops: Vec<Stop>,
+    stops: Vec<StopIn>,
     space: InterpSpace,
     /// Optional raw MapLibre color expression over `heatmap-density`;
     /// overrides `stops` (see the module docs for the LUT semantics).
@@ -74,12 +81,16 @@ impl Node for ColorRampNode {
         let opacity = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
         // With `ramp-expr`, bake the expression into a 256-entry LUT once
         // per eval (zoom is in the context, so zoom×density curves work);
-        // otherwise sample the stop table directly.
+        // otherwise resolve the stop table — once here, never per pixel.
         let lut = self.ramp_expr.as_ref().map(|e| build_lut(e, ctx.tile.z));
+        let stops = match &lut {
+            Some(_) => Vec::new(),
+            None => resolve_stops(&self.stops, ctx, inputs)?,
+        };
         let sample = |v: f32| -> [u8; 4] {
             match &lut {
                 Some(lut) => sample_lut(lut, v),
-                None => sample_stops(&self.stops, v, self.space),
+                None => sample_stops(&stops, v, self.space),
             }
         };
         // ScalarField: map each value through the ramp (hypsometric tint).
@@ -131,8 +142,8 @@ impl Node for ColorRampNode {
         h.update(b"color-ramp");
         h.update(&[self.space.hash_tag()]);
         for s in &self.stops {
-            h.update(&s.value.to_le_bytes());
-            h.update(&s.rgba);
+            s.value.param_hash(h);
+            s.color.param_hash(h);
         }
         if let Some(s) = &self.ramp_expr_src {
             h.update(b"rampexpr");
@@ -179,6 +190,29 @@ fn sample_lut(lut: &[[f32; 4]], v: f32) -> [u8; 4] {
         a[2] + (b[2] - a[2]) * f,
         a[3] + (b[3] - a[3]) * f,
     ])
+}
+
+/// Resolve every stop for one eval and sort by value. Sorting happens
+/// here rather than at build time because a `$param` stop value is only
+/// known now, and `sample_stops` needs the table ordered.
+fn resolve_stops(
+    stops: &[StopIn],
+    ctx: &EvalCtx<'_>,
+    inputs: &[Option<PortValue>],
+) -> Result<Vec<Stop>, EvalError> {
+    let mut out = Vec::with_capacity(stops.len());
+    for s in stops {
+        out.push(Stop {
+            value: s.value.get(ctx, inputs)? as f32,
+            rgba: to_u8(s.color.get(ctx, inputs)?),
+        });
+    }
+    out.sort_by(|a, b| {
+        a.value
+            .partial_cmp(&b.value)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Ok(out)
 }
 
 fn sample_stops(stops: &[Stop], v: f32, space: InterpSpace) -> [u8; 4] {
@@ -249,13 +283,15 @@ impl NodeFactory for ColorRampFactory {
             }
             None => (None, None),
         };
+        let space = read_space(fields)?;
+        // One reader for the whole node, so a `$param` inside `stops`
+        // lands in the same `param_refs` the evaluator keys the cache on.
+        let mut r = InReader::new(fields, ctx, 1);
         let stops = match fields.get("stops") {
-            Some(raw) => parse_stops(raw)?,
+            Some(raw) => parse_stops(raw, &mut r)?,
             None if ramp_expr.is_some() => Vec::new(),
             None => return Err(FactoryError::MissingField("stops".into())),
         };
-        let space = read_space(fields)?;
-        let mut r = InReader::new(fields, ctx, 1);
         let opacity = r.number_or("opacity", 1.0)?;
         let parts = r.finish();
 
@@ -297,11 +333,13 @@ impl NodeFactory for ColorRampFactory {
                     "items": {
                         "type": "object",
                         "properties": {
-                            "value": { "type": "number", "description": "Scalar value at this stop (e.g. metres of elevation for a DEM field)." },
-                            "color": { "type": "string", "description": "`#rrggbb` or `#rrggbbaa`." },
+                            "value": schema_frag::nested_number(serde_json::json!({ "type": "number",
+                                       "description": "Scalar value at this stop (e.g. metres of elevation for a DEM field)." })),
+                            "color": schema_frag::nested_color(),
                         },
                         "required": ["value", "color"],
                     },
+                    "description": "Either half of a stop may be a `$param`, so a ramp can be recoloured or rescaled at render time. The table is sorted by `value` on every eval, so a param may reorder it.",
                 },
                 "space": { "type": "string", "enum": ["rgb", "hsl", "hsv", "hcl", "lab"], "default": "rgb", "description": "Colour space the stops interpolate in. `rgb` (default) is a straight sRGB lerp; `hsl`/`hsv`/`hcl` interpolate hue on the shortest path; `hcl`/`lab` are perceptual (ported from the MapLibre style spec)." },
                 "opacity": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0, "maximum": 1.0,
@@ -312,7 +350,10 @@ impl NodeFactory for ColorRampFactory {
     }
 }
 
-fn parse_stops(raw: &Value) -> Result<Vec<Stop>, FactoryError> {
+/// Read `stops` as `[{value, color}]`, either half of each entry a
+/// literal or a `$param`. Ordering is not checked here — a `$param`
+/// value is unknown until eval, so `resolve_stops` sorts instead.
+fn parse_stops(raw: &Value, r: &mut InReader<'_, '_>) -> Result<Vec<StopIn>, FactoryError> {
     let arr = raw.as_array().ok_or_else(|| FactoryError::BadField {
         field: "stops".into(),
         msg: "expected an array of {value, color} objects".into(),
@@ -323,57 +364,26 @@ fn parse_stops(raw: &Value) -> Result<Vec<Stop>, FactoryError> {
             msg: "at least two stops required".into(),
         });
     }
-    let mut stops: Vec<Stop> = Vec::with_capacity(arr.len());
+    let mut stops = Vec::with_capacity(arr.len());
     for (i, v) in arr.iter().enumerate() {
         let obj = v.as_object().ok_or_else(|| FactoryError::BadField {
             field: format!("stops[{i}]"),
             msg: "expected object".into(),
         })?;
-        let value =
-            obj.get("value")
-                .and_then(Value::as_f64)
-                .ok_or_else(|| FactoryError::BadField {
-                    field: format!("stops[{i}].value"),
-                    msg: "expected number".into(),
-                })? as f32;
-        let color_s =
-            obj.get("color")
-                .and_then(Value::as_str)
-                .ok_or_else(|| FactoryError::BadField {
-                    field: format!("stops[{i}].color"),
-                    msg: "expected #rrggbb[aa] string".into(),
-                })?;
-        let rgba = parse_hex_rgba(color_s).ok_or_else(|| FactoryError::BadField {
-            field: format!("stops[{i}].color"),
-            msg: format!("bad color: {color_s}"),
+        let value = obj.get("value").ok_or_else(|| FactoryError::BadField {
+            field: format!("stops[{i}].value"),
+            msg: "missing".into(),
         })?;
-        stops.push(Stop { value, rgba });
+        let color = obj.get("color").ok_or_else(|| FactoryError::BadField {
+            field: format!("stops[{i}].color"),
+            msg: "missing".into(),
+        })?;
+        stops.push(StopIn {
+            value: r.nested(&format!("stops[{i}].value"), value)?,
+            color: r.nested(&format!("stops[{i}].color"), color)?,
+        });
     }
-    stops.sort_by(|a, b| {
-        a.value
-            .partial_cmp(&b.value)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
     Ok(stops)
-}
-
-fn parse_hex_rgba(s: &str) -> Option<[u8; 4]> {
-    let s = s.strip_prefix('#')?;
-    match s.len() {
-        6 => Some([
-            u8::from_str_radix(&s[0..2], 16).ok()?,
-            u8::from_str_radix(&s[2..4], 16).ok()?,
-            u8::from_str_radix(&s[4..6], 16).ok()?,
-            255,
-        ]),
-        8 => Some([
-            u8::from_str_radix(&s[0..2], 16).ok()?,
-            u8::from_str_radix(&s[2..4], 16).ok()?,
-            u8::from_str_radix(&s[4..6], 16).ok()?,
-            u8::from_str_radix(&s[6..8], 16).ok()?,
-        ]),
-        _ => None,
-    }
 }
 
 ezu_graph::submit_node!(ColorRampFactory);

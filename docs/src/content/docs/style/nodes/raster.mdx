@@ -120,7 +120,7 @@ Map a `ScalarField` (or a `Raster`, by its luminance — a gradient map) to colo
 | `opacity` | number (0…1) \| `$param` \| `@node` | no | Uniform output-alpha multiplier (layer opacity). Default 1.0. Feed an `expr` node via `@node` for a zoom curve. |
 | `ramp-expr` | — | no | A MapLibre color expression over `heatmap-density` (e.g. a `heatmap-color` value). When present it overrides `stops`: the expression is baked into a 256-entry LUT per eval (zoom in context), inputs clamp to [0, 1], and lookups interpolate linearly between entries — mirroring MapLibre's 256-px ramp texture. `stops` is only required when this is absent. |
 | `space` | `rgb` \| `hsl` \| `hsv` \| `hcl` \| `lab` | no | Colour space the stops interpolate in. `rgb` (default) is a straight sRGB lerp; `hsl`/`hsv`/`hcl` interpolate hue on the shortest path; `hcl`/`lab` are perceptual (ported from the MapLibre style spec). |
-| `stops` | array of object | no | — |
+| `stops` | array of object | no | Either half of a stop may be a `$param`, so a ramp can be recoloured or rescaled at render time. The table is sorted by `value` on every eval, so a param may reorder it. |
 
 ### `color-to-alpha`
 

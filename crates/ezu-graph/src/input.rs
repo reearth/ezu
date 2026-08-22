@@ -335,6 +335,72 @@ impl<'a, 'c> InReader<'a, 'c> {
         self.read(name, Some(default))
     }
 
+    /// Read a scalar that lives *inside* a composite field — one stop of
+    /// a colour ramp, one entry of a palette, one number of a dash
+    /// pattern. `label` names the position for error messages
+    /// (`"stops[2].color"`).
+    ///
+    /// Accepts a literal or a `$param`, but not a `@node`: a port needs
+    /// a `&'static str` name and its own slot in `Node::inputs()`, and a
+    /// table of unknown length can offer neither. Resolve the whole
+    /// table once per eval, never per pixel.
+    pub fn nested<T: ScalarType>(&mut self, label: &str, v: &Value) -> Result<In<T>, FactoryError> {
+        if let Some(s) = v.as_str() {
+            match spec::FieldRef::classify(s) {
+                spec::FieldRef::Node(_) => {
+                    return Err(FactoryError::BadField {
+                        field: label.to_string(),
+                        msg: format!(
+                            "expected {} literal or `$param`, got a `@node` ref — a scalar \
+                             port cannot be wired into one entry of a table",
+                            T::NAME
+                        ),
+                    })
+                }
+                spec::FieldRef::Param(p) => return self.param_in(label, p),
+                spec::FieldRef::Literal(_) => {} // fall through
+            }
+        }
+        T::from_json(v)
+            .map(In::Const)
+            .ok_or_else(|| FactoryError::BadField {
+                field: label.to_string(),
+                msg: format!("expected {} literal or `$param`", T::NAME),
+            })
+    }
+
+    /// Build a `$param`-backed `In` and record the reference, checking
+    /// the declaration's type and default. Shared by whole-field and
+    /// nested reads; `label` is only for error messages.
+    fn param_in<T: ScalarType>(&mut self, label: &str, p: &str) -> Result<In<T>, FactoryError> {
+        let decl = self
+            .ctx
+            .params
+            .get(p)
+            .ok_or_else(|| FactoryError::UnknownParam(p.to_string()))?;
+        if !T::matches_kind(decl.kind) {
+            return Err(FactoryError::BadField {
+                field: label.to_string(),
+                msg: format!(
+                    "param `${p}` is declared `{:?}`, but this field needs a {}",
+                    decl.kind,
+                    T::NAME
+                ),
+            });
+        }
+        let fallback = T::from_json(&decl.default).ok_or_else(|| FactoryError::BadField {
+            field: label.to_string(),
+            msg: format!("param `${p}` default is not a valid {}", T::NAME),
+        })?;
+        self.parts.param_refs.push(p.to_string());
+        Ok(In::Param {
+            name: p.to_string(),
+            fallback,
+            min: decl.min,
+            max: decl.max,
+        })
+    }
+
     fn read<T: ScalarType>(
         &mut self,
         name: &'static str,
@@ -361,35 +427,7 @@ impl<'a, 'c> InReader<'a, 'c> {
                     });
                     return Ok(In::Port { ix, name });
                 }
-                spec::FieldRef::Param(p) => {
-                    let decl = self
-                        .ctx
-                        .params
-                        .get(p)
-                        .ok_or_else(|| FactoryError::UnknownParam(p.to_string()))?;
-                    if !T::matches_kind(decl.kind) {
-                        return Err(FactoryError::BadField {
-                            field: name.into(),
-                            msg: format!(
-                                "param `${p}` is declared `{:?}`, but this field needs a {}",
-                                decl.kind,
-                                T::NAME
-                            ),
-                        });
-                    }
-                    let fallback =
-                        T::from_json(&decl.default).ok_or_else(|| FactoryError::BadField {
-                            field: name.into(),
-                            msg: format!("param `${p}` default is not a valid {}", T::NAME),
-                        })?;
-                    self.parts.param_refs.push(p.to_string());
-                    return Ok(In::Param {
-                        name: p.to_string(),
-                        fallback,
-                        min: decl.min,
-                        max: decl.max,
-                    });
-                }
+                spec::FieldRef::Param(p) => return self.param_in(name, p),
                 spec::FieldRef::Literal(_) => {} // fall through
             }
         }
