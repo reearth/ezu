@@ -39,7 +39,12 @@ curl 'http://127.0.0.1:8080/tiles/13/7276/3225.png?paper=%23ffe0f0&softness=2'
 
 - **Params panel** — controls generated from the style's `params` block: sliders
   for bounded numbers, colour pickers, toggles. `reset` returns to the declared
-  defaults.
+  defaults. Each colour has a hex field beside its swatch, so a value can be
+  pasted in from anywhere it was picked and copied back out — clicking the field
+  selects it. CSS shorthand is understood on the way in (`#fff`, `#fffa`, and
+  either without the `#`) and expanded to the `#rrggbb` / `#rrggbbaa` the spec
+  speaks. The field is also where alpha lives, since the native picker cannot
+  show it.
 - **External-edit reload** — launched with a local path, the server watches the
   file and pushes Server-Sent Events on change. Edit in your own editor and the
   browser follows; with unsaved edits in the buffer you get a Reload banner

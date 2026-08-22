@@ -77,6 +77,9 @@
   .param-row input[type=range] { width: 100%; accent-color: #5a4636; margin: 0; }
   .param-row input[type=number] { width: 80px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; padding: 2px 4px; border: 1px solid #d8d2bf; border-radius: 3px; background: #fff; color: #382a1f; }
   .param-row input[type=color] { width: 36px; height: 22px; padding: 0; border: 1px solid #d8d2bf; border-radius: 3px; background: #fff; cursor: pointer; }
+  .param-row .colorbox { display: flex; align-items: center; gap: 6px; }
+  .param-row .phex { flex: 1; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; padding: 2px 4px; border: 1px solid #d8d2bf; border-radius: 3px; background: #fff; color: #382a1f; }
+  .param-row .phex.bad { border-color: #a03434; color: #a03434; }
   .param-row input[type=checkbox] { margin: 0; accent-color: #5a4636; }
   .params-empty { padding: 12px; font-size: 11px; color: #8a7a6a; text-align: center; }
 
@@ -945,10 +948,25 @@
     return Number.isInteger(n) ? String(n) : n.toFixed(Math.abs(n) < 1 ? 3 : 2).replace(/0+$/, '').replace(/\.$/, '');
   }
 
-  // Normalize colors for default-comparison: lowercase, drop an opaque
-  // alpha byte (the <input type=color> picker only speaks #rrggbb).
+  // Accept what a person actually has on the clipboard — CSS shorthand
+  // (`#fff`, `#fffa`), the long forms, and any of them with the `#`
+  // lost on the way — and return the `#rrggbb` / `#rrggbbaa` the style
+  // spec speaks. `null` when it is not a hex color at all.
+  function parseHexColor(s) {
+    const t = String(s == null ? '' : s).trim().replace(/^#/, '');
+    if (!/^[0-9a-fA-F]+$/.test(t)) return null;
+    const x = t.toLowerCase();
+    if (x.length === 3 || x.length === 4) {
+      return '#' + Array.from(x, (c) => c + c).join('');
+    }
+    return x.length === 6 || x.length === 8 ? '#' + x : null;
+  }
+
+  // Normalize colors for default-comparison: expand shorthand, lowercase,
+  // drop an opaque alpha byte (the <input type=color> picker only speaks
+  // #rrggbb, so a value it produced never carries one).
   function normColor(s) {
-    let c = String(s || '').toLowerCase();
+    let c = parseHexColor(s) || String(s || '').toLowerCase();
     if (c.length === 9 && c.endsWith('ff')) c = c.slice(0, 7);
     return c;
   }
@@ -1051,15 +1069,63 @@
         row.appendChild(input);
       } else if (decl.format === 'color') {
         row.appendChild(head);
+        // A swatch to pick with, and a hex field to paste into and copy
+        // out of. The field is the authority on alpha: the native picker
+        // cannot show it, so an `#rrggbbaa` value keeps its last byte
+        // through a trip round the swatch.
+        let cur = parseHexColor(paramOverrides.has(name)
+          ? paramOverrides.get(name)
+          : decl.default) || '#000000';
+        const box = document.createElement('div');
+        box.className = 'colorbox';
         const input = document.createElement('input');
         input.type = 'color';
-        input.value = (paramOverrides.has(name)
-          ? paramOverrides.get(name)
-          : normColor(decl.default) || '#000000').slice(0, 7);
+        input.value = cur.slice(0, 7);
+        const hex = document.createElement('input');
+        hex.type = 'text';
+        hex.className = 'phex';
+        hex.value = cur;
+        hex.spellcheck = false;
+        hex.autocapitalize = 'off';
+        hex.setAttribute('autocomplete', 'off');
+        hex.title = 'Hex color — #fff, #ffff, #ffffff or #ffffffff';
+
+        const commit = (next) => {
+          cur = next;
+          setOverride(cur, normColor(cur) === normColor(decl.default));
+        };
         input.addEventListener('input', () => {
-          setOverride(input.value, normColor(input.value) === normColor(decl.default));
+          const alpha = cur.length === 9 ? cur.slice(7) : '';
+          hex.classList.remove('bad');
+          hex.value = input.value + alpha;
+          commit(hex.value);
         });
-        row.appendChild(input);
+        hex.addEventListener('input', () => {
+          const parsed = parseHexColor(hex.value);
+          // Nothing is pushed while the text is not a color yet —
+          // half-typed input should not repaint the map.
+          hex.classList.toggle('bad', parsed === null);
+          if (parsed === null) return;
+          input.value = parsed.slice(0, 7);
+          commit(parsed);
+        });
+        // Canonicalize only once the edit is over, so `fff` becomes
+        // `#ffffff` under the cursor rather than mid-keystroke.
+        hex.addEventListener('change', () => {
+          hex.classList.remove('bad');
+          hex.value = cur;
+        });
+        hex.addEventListener('blur', () => {
+          hex.classList.remove('bad');
+          hex.value = cur;
+        });
+        // Click the field and the value is already selected, so copying
+        // it out is one keystroke.
+        hex.addEventListener('focus', () => hex.select());
+
+        box.appendChild(input);
+        box.appendChild(hex);
+        row.appendChild(box);
       } else if (decl.type === 'boolean') {
         const input = document.createElement('input');
         input.type = 'checkbox';
