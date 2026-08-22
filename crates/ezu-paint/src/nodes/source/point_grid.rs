@@ -9,7 +9,8 @@
 //!   lattice points, producing seamless dot patterns across tile seams.
 //!
 //! Spacing and offsets are in tile-local pixel units (the same `extent`
-//! used downstream).
+//! used downstream). The lattice covers the padded canvas, so points
+//! just outside the tile exist and whatever draws them spills in.
 
 use ezu_graph::{
     schema_frag, BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, In, InReader,
@@ -76,11 +77,20 @@ impl Node for PointGridNode {
                 offset_y - (ctx.tile.y as f64) * e,
             ),
         };
-        // Find the first grid index that lands inside [0, extent].
-        let i0 = ((-ox) / spacing_x).ceil() as i64;
-        let i1 = ((e - ox) / spacing_x).floor() as i64;
-        let j0 = ((-oy) / spacing_y).ceil() as i64;
-        let j1 = ((e - oy) / spacing_y).floor() as i64;
+        // Everything downstream draws on the padded canvas, and ops with an
+        // extent around each point (a sprite in `stamp`, a radius in
+        // `circles`) need the points just outside the tile to draw their
+        // spill into it — without them every tile border shows a seam. So
+        // cover the padded area, not the visible tile. The pad is in canvas
+        // pixels and the lattice is in extent units; round the converted
+        // margin outwards so no point in the margin is dropped.
+        let margin_x = (ctx.canvas.pad as f64 * e / ctx.canvas.tile_w.max(1) as f64).ceil();
+        let margin_y = (ctx.canvas.pad as f64 * e / ctx.canvas.tile_h.max(1) as f64).ceil();
+        // Find the first grid index that lands inside the padded area.
+        let i0 = ((-margin_x - ox) / spacing_x).ceil() as i64;
+        let i1 = ((e + margin_x - ox) / spacing_x).floor() as i64;
+        let j0 = ((-margin_y - oy) / spacing_y).ceil() as i64;
+        let j1 = ((e + margin_y - oy) / spacing_y).floor() as i64;
 
         let mut points = Vec::new();
         let mut j = j0;

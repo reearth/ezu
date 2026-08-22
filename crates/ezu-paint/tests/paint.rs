@@ -62,6 +62,8 @@ mod noise_warp;
 mod params;
 #[path = "paint/pixel_filters.rs"]
 mod pixel_filters;
+#[path = "paint/point_grid_padding.rs"]
+mod point_grid_padding;
 #[path = "paint/raster_layout.rs"]
 mod raster_layout;
 #[path = "paint/raster_source.rs"]
