@@ -29,6 +29,11 @@ class Renderer {
   setStyle(styleJson: string): number;            // → new node count
   readonly tileSize: number;
 
+  // JSON Schema for the current style's `params` — types, defaults,
+  // ranges, descriptions. Follows `setStyle`. Generate a params panel
+  // from this rather than parsing the style.
+  readonly paramsSchema: object;
+
   // Bind raw tile bytes under a `sources.<name>` entry. The renderer
   // dispatches on the source's declared `type`:
   //   - brush  → parse `.myb` JSON, register in the persistent bank

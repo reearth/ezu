@@ -72,6 +72,10 @@ defaults, ranges, descriptions:
 curl http://127.0.0.1:8080/style/params
 ```
 
+The same document is available wherever the style is loaded: the tile server
+serves it at `/style/params`, and in the browser it is the `paramsSchema` getter
+on the wasm [`Renderer`](/ezu/guides/browser-wasm/#building-the-panel-from-the-schema).
+
 Drive your own sliders and colour pickers off that rather than parsing the style.
 The live editor's panel is generated from exactly this.
 

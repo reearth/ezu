@@ -61,6 +61,24 @@ One built graph serves every combination, and the cache keys on the values each
 node actually reads, so moving one slider re-evaluates only its subtree. That is
 what makes a params panel in a browser feel immediate.
 
+### Building the panel from the schema
+
+`r.paramsSchema` returns the JSON Schema of the declarations — the same document
+the tile server serves at `/style/params`:
+
+```js
+for (const [name, p] of Object.entries(r.paramsSchema.properties)) {
+  // p.type: 'number' | 'string' (format 'color') | 'boolean'
+  // p.default, p.minimum, p.maximum, p.description
+  panel.append(control(name, p));
+}
+```
+
+Drive your controls off that rather than reading the style's `params` block
+yourself. It follows `setStyle`, so the panel and the graph being rendered cannot
+drift apart — and a style that declares a param you have no control for shows up
+as a missing widget instead of a knob that silently does nothing.
+
 ## Binding sources
 
 `bindSource(name, bytes, opts?)` dispatches on the declared `type` of that

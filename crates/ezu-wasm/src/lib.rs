@@ -277,6 +277,17 @@ impl Renderer {
         self.doc.tile_size
     }
 
+    /// JSON Schema for the current style's `params` — types, defaults,
+    /// ranges, descriptions. The same document the CLI's tile server
+    /// serves at `/style/params`. Generate sliders and colour pickers
+    /// from this rather than parsing the style; it follows `setStyle`,
+    /// so a params panel driven off it cannot drift from the graph
+    /// being rendered.
+    #[wasm_bindgen(getter, js_name = paramsSchema)]
+    pub fn params_schema(&self) -> Result<JsValue, JsValue> {
+        js_sys::JSON::parse(&self.doc.params_schema().to_string())
+    }
+
     /// Bind raw tile bytes under a `sources.<name>` entry from the style.
     /// The renderer dispatches on the source's declared `type`:
     ///
