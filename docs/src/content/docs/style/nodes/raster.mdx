@@ -266,7 +266,7 @@ Conic (sweep) gradient around `center`. Gradient parameter is the clockwise angl
 | `kind` | `raster` \| `sprite` | no | — |
 | `space` | `rgb` \| `hsl` \| `hsv` \| `hcl` \| `lab` | no | Colour space the stops interpolate in; hue-based spaces take the shortest path. |
 | `start-angle` | number \| `$param` \| `@node` | no | — |
-| `stops` | array of array of — | yes | — |
+| `stops` | array of array of — | yes | `[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order. |
 | `width-px` | integer (1…∞) | no | — |
 
 ### `gradient-diamond`
@@ -288,7 +288,7 @@ Diamond gradient from `center`. Gradient parameter is Manhattan (|dx| + |dy|) di
 | `kind` | `raster` \| `sprite` | no | — |
 | `radius` | number (0…∞) \| `$param` \| `@node` | no | — |
 | `space` | `rgb` \| `hsl` \| `hsv` \| `hcl` \| `lab` | no | Colour space the stops interpolate in; hue-based spaces take the shortest path. |
-| `stops` | array of array of — | yes | — |
+| `stops` | array of array of — | yes | `[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order. |
 | `width-px` | integer (1…∞) | no | — |
 
 ### `gradient-linear`
@@ -310,7 +310,7 @@ Linear gradient from `start` to `end` (fractional coords). `kind: raster` (defau
 | `kind` | `raster` \| `sprite` | no | — |
 | `space` | `rgb` \| `hsl` \| `hsv` \| `hcl` \| `lab` | no | Colour space the stops interpolate in; hue-based spaces take the shortest path. |
 | `start` | array of number | no | — |
-| `stops` | array of array of — | yes | — |
+| `stops` | array of array of — | yes | `[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order. |
 | `width-px` | integer (1…∞) | no | — |
 
 ### `gradient-radial`
@@ -333,7 +333,7 @@ Radial gradient from `center` outward. Gradient parameter is Euclidean distance 
 | `kind` | `raster` \| `sprite` | no | — |
 | `radius` | number (0…∞) \| `$param` \| `@node` | no | — |
 | `space` | `rgb` \| `hsl` \| `hsv` \| `hcl` \| `lab` | no | Colour space the stops interpolate in; hue-based spaces take the shortest path. |
-| `stops` | array of array of — | yes | — |
+| `stops` | array of array of — | yes | `[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order. |
 | `width-px` | integer (1…∞) | no | — |
 
 ### `hillshade`

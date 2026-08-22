@@ -405,3 +405,74 @@ fn a_stop_value_param_is_folded_into_the_cache_key() {
         "stretching the ramp should darken mid-grey: {near:?} -> {far:?}"
     );
 }
+
+/// The gradient ops share one stop reader, so a param works in the
+/// `[t, color]` pair form too — including the position half.
+#[test]
+fn params_drive_a_gradient_stop_position_and_colour() {
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 16,
+      "params": {
+        "edge": { "type": "color",  "default": "#000000" },
+        "mid":  { "type": "number", "default": 0.5, "min": 0, "max": 1 }
+      },
+      "nodes": {
+        "out": { "op": "gradient-linear", "start": [0, 0], "end": [1, 0],
+                 "stops": [ [0, "$edge"], ["$mid", "#ff0000"], [1, "#ffffff"] ] }
+      },
+      "output": "@out"
+    }"##;
+    // Default: stop 0 is black, so the left edge has no green in it.
+    // (Pixels sample at their centre, so x=0 is already a little way
+    // towards the red stop — hence "nearly", not "exactly", the stop.)
+    let base = render(json, 16, 0);
+    assert_eq!(base.pixel(0, 8)[1], 0, "got {:?}", base.pixel(0, 8));
+
+    // Recolour the first stop: now the left edge is nearly all green.
+    let recoloured = render_with_params(
+        json,
+        16,
+        0,
+        Z0,
+        &[("edge", ScalarValue::Color([0.0, 1.0, 0.0, 1.0]))],
+    );
+    assert!(
+        recoloured.pixel(0, 8)[1] > 0xe0,
+        "got {:?}",
+        recoloured.pixel(0, 8)
+    );
+
+    // Move the red stop left: x=4/16 = 0.25 is past a mid of 0.2, so it
+    // has started fading towards white rather than still climbing to red.
+    let moved = render_with_params(json, 16, 0, Z0, &[("mid", ScalarValue::Number(0.2))]);
+    assert!(
+        moved.pixel(4, 8)[2] > base.pixel(4, 8)[2],
+        "moving the red stop left should whiten x=0.25: {:?} -> {:?}",
+        base.pixel(4, 8),
+        moved.pixel(4, 8)
+    );
+}
+
+/// Stops out of order used to be a build error. A `$param` position can
+/// reorder them at render time, so ordering is a runtime concern now and
+/// a declared-out-of-order table renders the same as a sorted one.
+#[test]
+fn gradient_stops_need_not_be_declared_in_order() {
+    let doc = |stops: &str| {
+        format!(
+            r##"{{
+      "name": "demo",
+      "tile-size": 16,
+      "nodes": {{
+        "out": {{ "op": "gradient-linear", "start": [0, 0], "end": [1, 0],
+                 "stops": {stops} }}
+      }},
+      "output": "@out"
+    }}"##
+        )
+    };
+    let sorted = render(&doc(r##"[ [0, "#000000"], [1, "#ffffff"] ]"##), 16, 0);
+    let jumbled = render(&doc(r##"[ [1, "#ffffff"], [0, "#000000"] ]"##), 16, 0);
+    assert_eq!(sorted.pixels, jumbled.pixels);
+}

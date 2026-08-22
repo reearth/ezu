@@ -408,14 +408,19 @@ pub(super) fn read_xy(
     Ok([x, y])
 }
 
-/// Parse a gradient `stops` field: `[[t, "#hex"], ...]` with t in [0,1]
-/// (non-decreasing) and color as an `#rrggbb[aa]` string. Requires at
-/// least two stops.
+/// A gradient stop table read from `[[t, "#hex"], ...]`, either half of
+/// each pair a literal or a `$param`. Resolve with [`resolve_stops`].
+pub(super) type StopsIn = Vec<(ezu_graph::In<f64>, ezu_graph::In<[f32; 4]>)>;
+
+/// Parse a gradient `stops` field: `[[t, "#hex"], ...]` with t normally
+/// in [0, 1] and colour an `#rrggbb[aa]` string. Requires at least two
+/// stops. Either half may be a `$param`, so ordering is not checked
+/// here — [`resolve_stops`] sorts once the values are known.
 pub(super) fn read_stops(
     fields: &serde_json::Map<String, Value>,
     name: &str,
-    _ctx: &FactoryCtx<'_>,
-) -> Result<Vec<(f32, [f32; 4])>, FactoryError> {
+    r: &mut ezu_graph::InReader<'_, '_>,
+) -> Result<StopsIn, FactoryError> {
     let v = fields
         .get(name)
         .ok_or_else(|| FactoryError::MissingField(name.to_string()))?;
@@ -430,7 +435,6 @@ pub(super) fn read_stops(
         });
     }
     let mut out = Vec::with_capacity(arr.len());
-    let mut prev_t: Option<f32> = None;
     for (i, pt) in arr.iter().enumerate() {
         let pair = pt.as_array().ok_or_else(|| FactoryError::BadField {
             field: name.into(),
@@ -442,30 +446,35 @@ pub(super) fn read_stops(
                 msg: format!("entry {i}: expected exactly 2 entries"),
             });
         }
-        let t = pair[0].as_f64().ok_or_else(|| FactoryError::BadField {
-            field: name.into(),
-            msg: format!("entry {i}: t must be number"),
-        })? as f32;
-        let s = pair[1].as_str().ok_or_else(|| FactoryError::BadField {
-            field: name.into(),
-            msg: format!("entry {i}: color must be hex string"),
-        })?;
-        let color = parse_hex_color(s).ok_or_else(|| FactoryError::BadField {
-            field: name.into(),
-            msg: format!("entry {i}: bad color `{s}`"),
-        })?;
-        if let Some(p) = prev_t {
-            if t < p {
-                return Err(FactoryError::BadField {
-                    field: name.into(),
-                    msg: format!("entry {i}: t must be non-decreasing"),
-                });
-            }
-        }
-        prev_t = Some(t);
-        out.push((t, color));
+        out.push((
+            r.nested(&format!("{name}[{i}][0]"), &pair[0])?,
+            r.nested(&format!("{name}[{i}][1]"), &pair[1])?,
+        ));
     }
     Ok(out)
+}
+
+/// Resolve a stop table for one eval and sort it by `t`, which
+/// [`sample_stops`] requires. Call once per eval, never per pixel.
+pub(super) fn resolve_stops(
+    stops: &StopsIn,
+    ctx: &EvalCtx<'_>,
+    inputs: &[Option<PortValue>],
+) -> Result<Vec<(f32, [f32; 4])>, EvalError> {
+    let mut out = Vec::with_capacity(stops.len());
+    for (t, c) in stops {
+        out.push((t.get(ctx, inputs)? as f32, c.get(ctx, inputs)?));
+    }
+    out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(out)
+}
+
+/// Feed a stop table's static identity into `Node::param_hash`.
+pub(super) fn hash_stops(stops: &StopsIn, h: &mut xxhash_rust::xxh3::Xxh3) {
+    for (t, c) in stops {
+        t.param_hash(h);
+        c.param_hash(h);
+    }
 }
 
 /// Read an optional colour-interpolation `space` field (`"rgb"` default,
@@ -535,9 +544,7 @@ pub(super) fn read_optional_string(
 }
 
 // ---------------------------------------------------------------------------
-// Color parsing / conversions
-
-use ezu_style::parse_hex_color;
+// Color conversions
 
 /// Straight (non-premultiplied) `[0, 1]` components → `[0, 255]`.
 pub(super) fn color_f32_to_u8(c: [f32; 4]) -> [u8; 4] {

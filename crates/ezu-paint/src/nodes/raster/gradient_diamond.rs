@@ -9,14 +9,17 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::color_interp::InterpSpace;
-use crate::nodes::common::{read_anchor, read_space, read_stops, read_xy, sample_stops, Anchor};
+use crate::nodes::common::{
+    hash_stops, read_anchor, read_space, read_stops, read_xy, resolve_stops, sample_stops, Anchor,
+    StopsIn,
+};
 use crate::nodes::raster::generator_kind::{parse_generator_kind, GeneratorKind};
 use crate::nodes::raster::gradient_common::render_gradient;
 
 struct GradientDiamondNode {
     center: [f32; 2],
     radius: In<f64>,
-    stops: Vec<(f32, [f32; 4])>,
+    stops: StopsIn,
     space: InterpSpace,
     anchor: Anchor,
     out_kind: GeneratorKind,
@@ -51,7 +54,9 @@ impl Node for GradientDiamondNode {
     ) -> Result<PortValue, EvalError> {
         let r = (self.radius.get(ctx, inputs)? as f32).max(1e-6);
         let center = self.center;
-        let stops = &self.stops;
+        // Resolved here, so a `$param` stop costs one lookup per eval
+        // rather than one per pixel.
+        let stops = &resolve_stops(&self.stops, ctx, inputs)?;
         let space = self.space;
         let sample = |ux: f32, uy: f32| -> [f32; 4] {
             let t = ((ux - center[0]).abs() + (uy - center[1]).abs()) / r;
@@ -66,12 +71,7 @@ impl Node for GradientDiamondNode {
         self.radius.param_hash(h);
         h.update(&[self.anchor as u8]);
         h.update(&[self.space.hash_tag()]);
-        for (t, c) in &self.stops {
-            h.update(&t.to_le_bytes());
-            for v in c {
-                h.update(&v.to_le_bytes());
-            }
-        }
+        hash_stops(&self.stops, h);
         let (tag, dims) = self.out_kind.hash_tag();
         h.update(&tag);
         if let Some((w, hh)) = dims {
@@ -95,10 +95,10 @@ impl NodeFactory for GradientDiamondFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let center = read_xy(fields, "center", ctx, [0.5, 0.5])?;
-        let stops = read_stops(fields, "stops", ctx)?;
         let space = read_space(fields)?;
         let anchor = read_anchor(fields, "anchor", ctx)?;
         let mut r = InReader::new(fields, ctx, 0);
+        let stops = read_stops(fields, "stops", &mut r)?;
         let radius = r.number_or("radius", 0.5)?;
         let parts = r.finish();
         let out_kind = parse_generator_kind(fields, ctx)?;
@@ -122,7 +122,10 @@ impl NodeFactory for GradientDiamondFactory {
             "properties": {
                 "center": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "default": [0.5, 0.5] },
                 "radius": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0, "default": 0.5 })),
-                "stops": { "type": "array", "items": { "type": "array", "minItems": 2, "maxItems": 2 }, "minItems": 2 },
+                "stops": { "type": "array", "minItems": 2,
+                           "items": { "type": "array", "minItems": 2, "maxItems": 2,
+                                      "items": [schema_frag::nested_number(serde_json::json!({ "type": "number" })), schema_frag::nested_color()] },
+                           "description": "`[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order." },
                 "anchor": { "type": "string", "enum": ["tile", "world"], "default": "tile" },
                 "space": { "type": "string", "enum": ["rgb", "hsl", "hsv", "hcl", "lab"], "default": "rgb", "description": "Colour space the stops interpolate in; hue-based spaces take the shortest path." },
                 "kind": { "type": "string", "enum": ["raster", "sprite"], "default": "raster" },

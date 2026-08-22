@@ -1855,7 +1855,27 @@
                 ]
               },
               "stops": {
+                "description": "`[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order.",
                 "items": {
+                  "items": [
+                    {
+                      "oneOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "description": "`$param` reference.",
+                          "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    {
+                      "description": "sRGB hex color or `$param` reference.",
+                      "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|\\$[A-Za-z_][A-Za-z0-9_-]*)$",
+                      "type": "string"
+                    }
+                  ],
                   "maxItems": 2,
                   "minItems": 2,
                   "type": "array"
@@ -1941,7 +1961,27 @@
                 "type": "string"
               },
               "stops": {
+                "description": "`[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order.",
                 "items": {
+                  "items": [
+                    {
+                      "oneOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "description": "`$param` reference.",
+                          "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    {
+                      "description": "sRGB hex color or `$param` reference.",
+                      "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|\\$[A-Za-z_][A-Za-z0-9_-]*)$",
+                      "type": "string"
+                    }
+                  ],
                   "maxItems": 2,
                   "minItems": 2,
                   "type": "array"
@@ -2025,7 +2065,27 @@
                 "type": "array"
               },
               "stops": {
+                "description": "`[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order.",
                 "items": {
+                  "items": [
+                    {
+                      "oneOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "description": "`$param` reference.",
+                          "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    {
+                      "description": "sRGB hex color or `$param` reference.",
+                      "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|\\$[A-Za-z_][A-Za-z0-9_-]*)$",
+                      "type": "string"
+                    }
+                  ],
                   "maxItems": 2,
                   "minItems": 2,
                   "type": "array"
@@ -2125,7 +2185,27 @@
                 "type": "string"
               },
               "stops": {
+                "description": "`[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order.",
                 "items": {
+                  "items": [
+                    {
+                      "oneOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "description": "`$param` reference.",
+                          "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    {
+                      "description": "sRGB hex color or `$param` reference.",
+                      "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|\\$[A-Za-z_][A-Za-z0-9_-]*)$",
+                      "type": "string"
+                    }
+                  ],
                   "maxItems": 2,
                   "minItems": 2,
                   "type": "array"

@@ -4,24 +4,28 @@
 //! (world-anchored), or of the sprite (`kind: sprite`).
 
 use ezu_graph::{
-    BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, Node, NodeFactory,
-    PortKind, PortSpec, PortValue,
+    schema_frag, BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, InReader,
+    Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::color_interp::InterpSpace;
-use crate::nodes::common::{read_anchor, read_space, read_stops, read_xy, sample_stops, Anchor};
+use crate::nodes::common::{
+    hash_stops, read_anchor, read_space, read_stops, read_xy, resolve_stops, sample_stops, Anchor,
+    StopsIn,
+};
 use crate::nodes::raster::generator_kind::{parse_generator_kind, GeneratorKind};
 use crate::nodes::raster::gradient_common::render_gradient;
 
 struct GradientLinearNode {
     start: [f32; 2],
     end: [f32; 2],
-    stops: Vec<(f32, [f32; 4])>,
+    stops: StopsIn,
     space: InterpSpace,
     anchor: Anchor,
     out_kind: GeneratorKind,
+    param_refs: Vec<String>,
 }
 
 impl Node for GradientLinearNode {
@@ -46,12 +50,18 @@ impl Node for GradientLinearNode {
             (_, Anchor::World) => CoordSpace::World,
         }
     }
-    fn eval(&self, ctx: &EvalCtx<'_>, _: &[Option<PortValue>]) -> Result<PortValue, EvalError> {
+    fn eval(
+        &self,
+        ctx: &EvalCtx<'_>,
+        inputs: &[Option<PortValue>],
+    ) -> Result<PortValue, EvalError> {
         let dx = self.end[0] - self.start[0];
         let dy = self.end[1] - self.start[1];
         let len2 = dx * dx + dy * dy;
         let start = self.start;
-        let stops = &self.stops;
+        // Resolved here, so a `$param` stop costs one lookup per eval
+        // rather than one per pixel.
+        let stops = &resolve_stops(&self.stops, ctx, inputs)?;
         let space = self.space;
         let sample = |ux: f32, uy: f32| -> [f32; 4] {
             if len2 < 1e-12 {
@@ -70,18 +80,16 @@ impl Node for GradientLinearNode {
         h.update(&self.end[1].to_le_bytes());
         h.update(&[self.anchor as u8]);
         h.update(&[self.space.hash_tag()]);
-        for (t, c) in &self.stops {
-            h.update(&t.to_le_bytes());
-            for v in c {
-                h.update(&v.to_le_bytes());
-            }
-        }
+        hash_stops(&self.stops, h);
         let (tag, dims) = self.out_kind.hash_tag();
         h.update(&tag);
         if let Some((w, hh)) = dims {
             h.update(&w.to_le_bytes());
             h.update(&hh.to_le_bytes());
         }
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -97,7 +105,8 @@ impl NodeFactory for GradientLinearFactory {
     ) -> Result<BuiltNode, FactoryError> {
         let start = read_xy(fields, "start", ctx, [0.0, 0.0])?;
         let end = read_xy(fields, "end", ctx, [1.0, 0.0])?;
-        let stops = read_stops(fields, "stops", ctx)?;
+        let mut r = InReader::new(fields, ctx, 0);
+        let stops = read_stops(fields, "stops", &mut r)?;
         let space = read_space(fields)?;
         let anchor = read_anchor(fields, "anchor", ctx)?;
         let out_kind = parse_generator_kind(fields, ctx)?;
@@ -109,6 +118,7 @@ impl NodeFactory for GradientLinearFactory {
                 space,
                 anchor,
                 out_kind,
+                param_refs: r.finish().param_refs,
             }),
             connections: vec![],
         })
@@ -119,7 +129,10 @@ impl NodeFactory for GradientLinearFactory {
             "properties": {
                 "start": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "default": [0.0, 0.0] },
                 "end":   { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "default": [1.0, 0.0] },
-                "stops": { "type": "array", "items": { "type": "array", "minItems": 2, "maxItems": 2 }, "minItems": 2 },
+                "stops": { "type": "array", "minItems": 2,
+                           "items": { "type": "array", "minItems": 2, "maxItems": 2,
+                                      "items": [schema_frag::nested_number(serde_json::json!({ "type": "number" })), schema_frag::nested_color()] },
+                           "description": "`[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order." },
                 "anchor": { "type": "string", "enum": ["tile", "world"], "default": "tile" },
                 "space": { "type": "string", "enum": ["rgb", "hsl", "hsv", "hcl", "lab"], "default": "rgb", "description": "Colour space the stops interpolate in; hue-based spaces take the shortest path." },
                 "kind": { "type": "string", "enum": ["raster", "sprite"], "default": "raster" },
