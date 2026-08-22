@@ -205,6 +205,19 @@
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
   map.addControl(new maplibregl.ScaleControl({}), 'bottom-left');
 
+  // Retargeting the raster source aborts whatever tiles were in flight,
+  // which is the point — a params slider does it on every step. MapLibre
+  // reports each abort as a map `error` event, and with no listener
+  // registered it prints them, so dragging a slider buries the console
+  // in noise. Swallow those; anything else still gets through.
+  function isAbort(e) {
+    return e && (e.name === 'AbortError' || e.message === 'AbortError' || e.code === 20);
+  }
+  map.on('error', (e) => {
+    if (isAbort(e && e.error)) return;
+    console.error('map error:', (e && e.error) || e);
+  });
+
   function rasterTilesUrl() {
     // Param overrides ride along as query params; the tile endpoint
     // validates them against the style's declarations.
