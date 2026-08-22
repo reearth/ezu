@@ -2,7 +2,7 @@
 //! `dither`. Distance is measured in perceptual CIELAB (ΔE, the default) or
 //! plain RGB.
 
-use ezu_graph::{FactoryCtx, FactoryError};
+use ezu_graph::{EvalCtx, EvalError, FactoryCtx, FactoryError, In, InReader, PortValue};
 use serde_json::{Map, Value};
 use xxhash_rust::xxh3::Xxh3;
 
@@ -15,9 +15,17 @@ pub(super) enum Metric {
     Lab,
 }
 
-/// A parsed colour palette with each entry projected into the distance
-/// metric's space for fast nearest-colour lookup.
+/// A declared colour palette. Each entry is a literal or a `$param`, so
+/// the table — and its projection into the metric space — is resolved
+/// once per eval by [`Palette::resolve`].
 pub(super) struct Palette {
+    colors: Vec<In<[f32; 4]>>,
+    metric: Metric,
+}
+
+/// A palette resolved for one eval, with each entry projected into the
+/// distance metric's space for fast nearest-colour lookup.
+pub(super) struct ResolvedPalette {
     /// Straight (non-premultiplied) RGB of each entry, 0..1.
     colors: Vec<[f32; 3]>,
     /// Entries in the metric space (RGB or LAB).
@@ -26,11 +34,13 @@ pub(super) struct Palette {
 }
 
 impl Palette {
-    /// Read `palette` (array of `#rrggbb[aa]`) and the `space` distance
-    /// metric (`lab` default, or `rgb`) from a node's fields.
+    /// Read `palette` (array of `#rrggbb[aa]` or `$param`) and the
+    /// `space` distance metric (`lab` default, or `rgb`) from a node's
+    /// fields.
     pub(super) fn from_fields(
         fields: &Map<String, Value>,
         ctx: &FactoryCtx<'_>,
+        r: &mut InReader<'_, '_>,
     ) -> Result<Self, FactoryError> {
         let raw = fields
             .get("palette")
@@ -47,14 +57,7 @@ impl Palette {
         }
         let mut colors = Vec::with_capacity(arr.len());
         for (i, v) in arr.iter().enumerate() {
-            let s = v.as_str().ok_or_else(|| FactoryError::BadField {
-                field: format!("palette[{i}]"),
-                msg: "expected `#rrggbb[aa]` string".into(),
-            })?;
-            colors.push(parse_hex_rgb(s).ok_or_else(|| FactoryError::BadField {
-                field: format!("palette[{i}]"),
-                msg: format!("bad colour: {s}"),
-            })?);
+            colors.push(r.nested(&format!("palette[{i}]"), v)?);
         }
         let metric = match read_string_or(fields, "space", ctx, "lab")?.as_str() {
             "lab" => Metric::Lab,
@@ -66,14 +69,41 @@ impl Palette {
                 })
             }
         };
-        let coords = colors.iter().map(|&c| project(c, metric)).collect();
-        Ok(Self {
+        Ok(Self { colors, metric })
+    }
+
+    /// Resolve every entry for one eval and project it into the metric
+    /// space. Call once per eval, never per pixel.
+    pub(super) fn resolve(
+        &self,
+        ctx: &EvalCtx<'_>,
+        inputs: &[Option<PortValue>],
+    ) -> Result<ResolvedPalette, EvalError> {
+        let mut colors = Vec::with_capacity(self.colors.len());
+        for c in &self.colors {
+            let rgba = c.get(ctx, inputs)?;
+            colors.push([rgba[0], rgba[1], rgba[2]]);
+        }
+        let coords = colors.iter().map(|&c| project(c, self.metric)).collect();
+        Ok(ResolvedPalette {
             colors,
             coords,
-            metric,
+            metric: self.metric,
         })
     }
 
+    pub(super) fn hash(&self, h: &mut Xxh3) {
+        h.update(&[match self.metric {
+            Metric::Rgb => 0,
+            Metric::Lab => 1,
+        }]);
+        for c in &self.colors {
+            c.param_hash(h);
+        }
+    }
+}
+
+impl ResolvedPalette {
     /// Nearest palette colour to a straight RGB pixel (0..1).
     pub(super) fn nearest(&self, rgb: [f32; 3]) -> [f32; 3] {
         let p = project(rgb, self.metric);
@@ -88,18 +118,6 @@ impl Palette {
         }
         self.colors[best]
     }
-
-    pub(super) fn hash(&self, h: &mut Xxh3) {
-        h.update(&[match self.metric {
-            Metric::Rgb => 0,
-            Metric::Lab => 1,
-        }]);
-        for c in &self.colors {
-            for v in c {
-                h.update(&v.to_le_bytes());
-            }
-        }
-    }
 }
 
 fn project(rgb: [f32; 3], metric: Metric) -> [f32; 3] {
@@ -110,17 +128,4 @@ fn project(rgb: [f32; 3], metric: Metric) -> [f32; 3] {
             [lab[0], lab[1], lab[2]]
         }
     }
-}
-
-fn parse_hex_rgb(s: &str) -> Option<[f32; 3]> {
-    let s = s.strip_prefix('#')?;
-    let hex = match s.len() {
-        3 => s.chars().flat_map(|c| [c, c]).collect::<String>(),
-        6 | 8 => s[..6].to_string(),
-        _ => return None,
-    };
-    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-    Some([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0])
 }

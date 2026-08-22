@@ -8,13 +8,13 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    FactoryError, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::read_string_or;
-use crate::nodes::raster::palette::Palette;
+use crate::nodes::raster::palette::{Palette, ResolvedPalette};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Method {
@@ -35,6 +35,7 @@ struct DitherNode {
     palette: Palette,
     method: Method,
     amount: f32,
+    param_refs: Vec<String>,
 }
 
 impl Node for DitherNode {
@@ -54,7 +55,7 @@ impl Node for DitherNode {
     }
     fn eval(
         &self,
-        _ctx: &EvalCtx<'_>,
+        ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
         let src = inputs[0]
@@ -63,10 +64,12 @@ impl Node for DitherNode {
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
         let w = src.width as usize;
         let h = src.height as usize;
+        // Resolved and re-projected once, outside the pixel loops.
+        let palette = self.palette.resolve(ctx, inputs)?;
         let mut out = RasterBuf::new(src.width, src.height);
         match self.method {
-            Method::Ordered => self.ordered(src, w, h, &mut out),
-            Method::FloydSteinberg => self.floyd_steinberg(src, w, h, &mut out),
+            Method::Ordered => self.ordered(src, &palette, w, h, &mut out),
+            Method::FloydSteinberg => self.floyd_steinberg(src, &palette, w, h, &mut out),
         }
         Ok(PortValue::Raster(Arc::new(out)))
     }
@@ -79,10 +82,20 @@ impl Node for DitherNode {
         h.update(&self.amount.to_le_bytes());
         self.palette.hash(h);
     }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
+    }
 }
 
 impl DitherNode {
-    fn ordered(&self, src: &RasterBuf, w: usize, h: usize, out: &mut RasterBuf) {
+    fn ordered(
+        &self,
+        src: &RasterBuf,
+        palette: &ResolvedPalette,
+        w: usize,
+        h: usize,
+        out: &mut RasterBuf,
+    ) {
         for y in 0..h {
             for x in 0..w {
                 let i = (y * w + x) * 4;
@@ -97,13 +110,20 @@ impl DitherNode {
                     ((src.pixels[i + 1] as f32 / 255.0 / a) + d).clamp(0.0, 1.0),
                     ((src.pixels[i + 2] as f32 / 255.0 / a) + d).clamp(0.0, 1.0),
                 ];
-                write_premul(out, i, self.palette.nearest(rgb), a);
+                write_premul(out, i, palette.nearest(rgb), a);
                 out.pixels[i + 3] = src.pixels[i + 3];
             }
         }
     }
 
-    fn floyd_steinberg(&self, src: &RasterBuf, w: usize, h: usize, out: &mut RasterBuf) {
+    fn floyd_steinberg(
+        &self,
+        src: &RasterBuf,
+        palette: &ResolvedPalette,
+        w: usize,
+        h: usize,
+        out: &mut RasterBuf,
+    ) {
         // Working buffer of straight RGB; error is diffused into it.
         let mut buf = vec![[0f32; 3]; w * h];
         for (p, px) in buf.iter_mut().zip(src.pixels.as_chunks::<4>().0) {
@@ -131,7 +151,7 @@ impl DitherNode {
                     buf[idx][1].clamp(0.0, 1.0),
                     buf[idx][2].clamp(0.0, 1.0),
                 ];
-                let q = self.palette.nearest(old);
+                let q = palette.nearest(old);
                 let err = [old[0] - q[0], old[1] - q[1], old[2] - q[2]];
                 write_premul(out, i, q, a);
                 out.pixels[i + 3] = src.pixels[i + 3];
@@ -175,7 +195,8 @@ impl NodeFactory for DitherFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let input = take_input_ref(fields, "input")?;
-        let palette = Palette::from_fields(fields, ctx)?;
+        let mut r = InReader::new(fields, ctx, 1);
+        let palette = Palette::from_fields(fields, ctx, &mut r)?;
         let method = match read_string_or(fields, "method", ctx, "floyd-steinberg")?.as_str() {
             "floyd-steinberg" | "fs" => Method::FloydSteinberg,
             "ordered" | "bayer" => Method::Ordered,
@@ -196,6 +217,7 @@ impl NodeFactory for DitherFactory {
                 palette,
                 method,
                 amount,
+                param_refs: r.finish().param_refs,
             }),
             connections: vec![Connection {
                 port: "input".into(),
@@ -211,7 +233,8 @@ impl NodeFactory for DitherFactory {
                 "palette": {
                     "type": "array",
                     "minItems": 1,
-                    "items": { "type": "string", "description": "`#rrggbb` or `#rrggbbaa` (alpha ignored for matching)." },
+                    "items": schema_frag::nested_color(),
+                    "description": "Each entry is `#rrggbb` / `#rrggbbaa` (alpha ignored for matching) or a `$param`, so a palette can be recoloured at render time.",
                 },
                 "method": { "type": "string", "enum": ["floyd-steinberg", "ordered"], "default": "floyd-steinberg" },
                 "amount": { "type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.5, "description": "Ordered-dither strength (ignored for floyd-steinberg)." },

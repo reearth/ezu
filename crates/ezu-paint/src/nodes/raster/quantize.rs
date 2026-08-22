@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    FactoryError, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -21,6 +21,7 @@ use crate::nodes::raster::palette::Palette;
 
 struct QuantizeNode {
     palette: Palette,
+    param_refs: Vec<String>,
 }
 
 impl Node for QuantizeNode {
@@ -40,13 +41,15 @@ impl Node for QuantizeNode {
     }
     fn eval(
         &self,
-        _ctx: &EvalCtx<'_>,
+        ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
         let input = inputs[0]
             .as_ref()
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
         let (src, kind) = unwrap_raster_or_sprite(input, "input")?;
+        // Resolved and re-projected once, outside the pixel loop.
+        let palette = self.palette.resolve(ctx, inputs)?;
         let mut out = RasterBuf::new(src.width, src.height);
         for i in (0..src.pixels.len()).step_by(4) {
             let a = src.pixels[i + 3] as f32 / 255.0;
@@ -58,7 +61,7 @@ impl Node for QuantizeNode {
                 (src.pixels[i + 1] as f32 / 255.0 / a).min(1.0),
                 (src.pixels[i + 2] as f32 / 255.0 / a).min(1.0),
             ];
-            let q = self.palette.nearest(rgb);
+            let q = palette.nearest(rgb);
             // Re-premultiply with the source alpha (preserve coverage).
             out.pixels[i] = (q[0] * a * 255.0).round() as u8;
             out.pixels[i + 1] = (q[1] * a * 255.0).round() as u8;
@@ -70,6 +73,9 @@ impl Node for QuantizeNode {
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"quantize");
         self.palette.hash(h);
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -84,9 +90,13 @@ impl NodeFactory for QuantizeFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let input = take_input_ref(fields, "input")?;
-        let palette = Palette::from_fields(fields, ctx)?;
+        let mut r = InReader::new(fields, ctx, 1);
+        let palette = Palette::from_fields(fields, ctx, &mut r)?;
         Ok(BuiltNode {
-            node: Box::new(QuantizeNode { palette }),
+            node: Box::new(QuantizeNode {
+                palette,
+                param_refs: r.finish().param_refs,
+            }),
             connections: vec![Connection {
                 port: "input".into(),
                 src: input,
@@ -101,7 +111,8 @@ impl NodeFactory for QuantizeFactory {
                 "palette": {
                     "type": "array",
                     "minItems": 1,
-                    "items": { "type": "string", "description": "`#rrggbb` or `#rrggbbaa` (alpha ignored for matching)." },
+                    "items": schema_frag::nested_color(),
+                    "description": "Each entry is `#rrggbb` / `#rrggbbaa` (alpha ignored for matching) or a `$param`, so a palette can be recoloured at render time.",
                 },
                 "space": { "type": "string", "enum": ["lab", "rgb"], "default": "lab", "description": "Colour space the nearest-colour distance is measured in." },
             },

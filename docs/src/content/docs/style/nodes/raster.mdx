@@ -211,7 +211,7 @@ Reduce to a fixed `palette` with dithering so gradients survive a small palette.
 | `amount` | number (0…1) | no | Ordered-dither strength (ignored for floyd-steinberg). |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
 | `method` | `floyd-steinberg` \| `ordered` | no | — |
-| `palette` | array of string | yes | — |
+| `palette` | array of string | yes | Each entry is `#rrggbb` / `#rrggbbaa` (alpha ignored for matching) or a `$param`, so a palette can be recoloured at render time. |
 | `space` | `lab` \| `rgb` | no | — |
 
 ### `edge-detect`
@@ -533,7 +533,7 @@ Snap each pixel to the nearest colour in `palette`, measuring distance in `space
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
-| `palette` | array of string | yes | — |
+| `palette` | array of string | yes | Each entry is `#rrggbb` / `#rrggbbaa` (alpha ignored for matching) or a `$param`, so a palette can be recoloured at render time. |
 | `space` | `lab` \| `rgb` | no | Colour space the nearest-colour distance is measured in. |
 
 ### `saturate`

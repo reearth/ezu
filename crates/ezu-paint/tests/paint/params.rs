@@ -476,3 +476,31 @@ fn gradient_stops_need_not_be_declared_in_order() {
     let jumbled = render(&doc(r##"[ [1, "#ffffff"], [0, "#000000"] ]"##), 16, 0);
     assert_eq!(sorted.pixels, jumbled.pixels);
 }
+
+/// `quantize` / `dither` share one palette reader, and the palette is
+/// projected into the distance metric's space — so a param has to
+/// re-project too, not just re-colour the output.
+#[test]
+fn param_recolours_a_quantize_palette() {
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 8,
+      "params": { "ink": { "type": "color", "default": "#0000ff" } },
+      "nodes": {
+        "grey": { "op": "solid", "color": "#808080" },
+        "out":  { "op": "quantize", "input": "@grey", "palette": ["$ink"] }
+      },
+      "output": "@out"
+    }"##;
+    // A one-entry palette snaps everything to that entry.
+    assert_eq!(render(json, 8, 0).pixel(4, 4), [0x00, 0x00, 0xff, 0xff]);
+
+    let r = render_with_params(
+        json,
+        8,
+        0,
+        Z0,
+        &[("ink", ScalarValue::Color([1.0, 0.0, 0.0, 1.0]))],
+    );
+    assert_eq!(r.pixel(4, 4), [0xff, 0x00, 0x00, 0xff]);
+}
