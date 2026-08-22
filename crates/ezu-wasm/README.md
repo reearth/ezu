@@ -34,6 +34,18 @@ class Renderer {
   // from this rather than parsing the style.
   readonly paramsSchema: object;
 
+  // The style's declared `legend`, or undefined. Pass a zoom to keep
+  // only the entries that apply there. Entries name the node that draws
+  // each symbol, so render that node for the swatch.
+  legend(zoom?: number): object | undefined;
+
+  // The tile to fetch from `name` in order to draw z/x/y. Past a
+  // source's declared `max-zoom` this is the covering ancestor — bind
+  // it with `{ sourceZoom: <returned z> }`. Keeps the ceiling in the
+  // style instead of a second copy in the host.
+  sourceTile(name: string, z: number, x: number, y: number):
+    { z: number; x: number; y: number };
+
   // Bind raw tile bytes under a `sources.<name>` entry. The renderer
   // dispatches on the source's declared `type`:
   //   - brush  → parse `.myb` JSON, register in the persistent bank
@@ -87,7 +99,8 @@ class Renderer {
   // [dx, dy] pairs (never [0, 0]). Only cross-tile label collision and
   // edge-continuous DEM shading read neighbours, and only for the
   // sources that need them — fetch these instead of the whole 3×3.
-  // Empty means the centre tile is enough.
+  // Empty means the centre tile is enough, which is also what a dem /
+  // raster source declaring `neighbor-fetch: false` always reports.
   requestedNeighborOffsets(name: string): [number, number][];
 
   // Codepoints the bound features can require, keyed by `glyphs`
@@ -338,6 +351,15 @@ Don't `bindSource` an MVT source for that tile — `renderTile` returns
 the style's paper background. `features` source nodes see no
 `tile.<layer>` binding and emit an empty layer, so downstream paint
 nodes short-circuit.
+
+`dem` and `raster` behave the same by default: nothing bound means a
+zero-elevation field or no imagery, and the tile renders flat. When that
+is worth failing over instead, the style says so per source with
+`on-missing: error`, and `renderTile` throws `UnknownSource` for a tile
+with nothing bound rather than handing back a blank. `on-missing:
+upsample` describes the parent walk, which in a wasm host *is* the
+`sourceZoom` binding above — ezu never fetches, so it cannot walk on its
+own.
 
 ### Concurrency and instance lifetime
 

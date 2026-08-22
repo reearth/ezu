@@ -82,7 +82,7 @@ use ezu_paint::host::{
     upsample_subregion_raster, BrushBankLoader, DemTile, PngCompression, RasterTile, TileLoader,
 };
 use ezu_paint::nodes::default_registry;
-use ezu_style::{Document, SourceDecl};
+use ezu_style::{Document, OnMissing, SourceDecl};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
@@ -557,6 +557,65 @@ impl Renderer {
             .collect()
     }
 
+    /// The style's declared `legend`, or `undefined` when it declares
+    /// none. Pass a zoom to keep only the entries that apply there.
+    ///
+    /// Entries name the node that draws the symbol rather than restating
+    /// a colour, so a host lays out the labels and asks the map itself
+    /// for the swatches. The CLI's `ezu legend` renders those swatches;
+    /// in a browser, render the named node.
+    #[wasm_bindgen(js_name = legend)]
+    pub fn legend(&self, zoom: Option<u8>) -> Result<JsValue, JsValue> {
+        let Some(legend) = &self.doc.legend else {
+            return Ok(JsValue::UNDEFINED);
+        };
+        let filtered = zoom.map(|z| ezu_style::LegendDecl {
+            title: legend.title.clone(),
+            note: legend.note.clone(),
+            entries: legend.entries_at(z).cloned().collect(),
+        });
+        let json = serde_json::to_string(filtered.as_ref().unwrap_or(legend))
+            .map_err(|e| named_err(ERR_STYLE, e))?;
+        js_sys::JSON::parse(&json)
+    }
+
+    /// The tile a host should actually fetch from `name` in order to draw
+    /// `z/x/y`, as `{ z, x, y }`.
+    ///
+    /// For a source that declares `max-zoom`, a request past the ceiling
+    /// answers with the covering ancestor — bind those bytes with
+    /// `{ sourceZoom: <returned z> }` and the renderer resamples or
+    /// reprojects them into the requested tile. Below the ceiling, and for
+    /// a source that declares no ceiling, the answer is the tile itself.
+    ///
+    /// This exists so the ceiling lives in one place. A host that hard-codes
+    /// the maxzoom of each source keeps a second copy of something the style
+    /// already states, and the two drift.
+    ///
+    /// Throws `UnknownSource` if `name` is not declared in the style.
+    #[wasm_bindgen(js_name = sourceTile)]
+    pub fn source_tile(&self, name: &str, z: u8, x: u32, y: u32) -> Result<JsValue, JsValue> {
+        let decl = self
+            .doc
+            .sources
+            .get(name)
+            .ok_or_else(|| named_err(ERR_SOURCE, format!("no source `{name}` in style")))?;
+        let max_zoom = match decl {
+            SourceDecl::Dem(s) => s.max_zoom,
+            SourceDecl::Raster(s) => s.max_zoom,
+            _ => None,
+        };
+        let (tz, tx, ty) = match max_zoom {
+            Some(mz) if z > mz => (mz, x >> (z - mz), y >> (z - mz)),
+            _ => (z, x, y),
+        };
+        let out = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(&out, &"z".into(), &JsValue::from(tz));
+        let _ = js_sys::Reflect::set(&out, &"x".into(), &JsValue::from(tx));
+        let _ = js_sys::Reflect::set(&out, &"y".into(), &JsValue::from(ty));
+        Ok(out.into())
+    }
+
     /// Neighbour tile offsets the active style actually asks for from
     /// `source`, as an array of `[dx, dy]` pairs (never including the
     /// centre `[0, 0]`).
@@ -569,14 +628,26 @@ impl Renderer {
     /// fetches exactly what the recipe needs. An empty array means the
     /// centre tile is enough.
     ///
+    /// A `dem` or `raster` source that declares `neighbor-fetch: false`
+    /// reports no offsets whatever the graph asks for: the style has said
+    /// not to stitch a neighbourhood for it, and this list is what a host
+    /// fetches from.
+    ///
     /// Throws `UnknownSource` if `name` is not declared in the style.
     #[wasm_bindgen(js_name = requestedNeighborOffsets)]
     pub fn requested_neighbor_offsets(&self, name: &str) -> Result<js_sys::Array, JsValue> {
-        if !self.doc.sources.contains_key(name) {
-            return Err(named_err(
-                ERR_SOURCE,
-                format!("no source `{name}` in style"),
-            ));
+        let decl = self
+            .doc
+            .sources
+            .get(name)
+            .ok_or_else(|| named_err(ERR_SOURCE, format!("no source `{name}` in style")))?;
+        let neighbor_fetch = match decl {
+            SourceDecl::Dem(s) => s.neighbor_fetch,
+            SourceDecl::Raster(s) => s.neighbor_fetch,
+            _ => true,
+        };
+        if !neighbor_fetch {
+            return Ok(js_sys::Array::new());
         }
         let requested = self.graph.asset_inputs();
         let out = js_sys::Array::new();
@@ -813,7 +884,7 @@ impl Renderer {
         y: u32,
         opts: Option<js_sys::Object>,
     ) -> Result<Vec<u8>, JsValue> {
-        let parsed = parse_render_options(opts.as_ref());
+        let parsed = parse_render_options(opts.as_ref())?;
         let out = self.render_with_bindings(z, x, y, parsed);
         // Trim here rather than at bind time: this tile is done with its
         // glyphs, so dropping the coldest ranges now cannot cost it any.
@@ -893,6 +964,40 @@ impl Renderer {
         let tile_id = TileId { z, x, y };
         let canvas = CanvasInfo::square(tile_size, pad);
         let mut tile_loader = TileLoader::new(&self.assets, tile_id);
+        let requested = self.graph.asset_inputs();
+
+        // `on-missing: error` is the style saying a tile it cannot draw
+        // should fail rather than come out blank. Natively the fetcher
+        // raises it; here the host does the fetching, so the equivalent
+        // is "nothing was bound for a source the graph reads". A missing
+        // *neighbour* still degrades — the stitch edge-clamps, same as
+        // the native host.
+        for (name, decl) in &self.doc.sources {
+            let on_missing = match decl {
+                SourceDecl::Dem(s) => s.on_missing,
+                SourceDecl::Raster(s) => s.on_missing,
+                _ => continue,
+            };
+            if on_missing != OnMissing::Error || !requested.contains(name.as_str()) {
+                continue;
+            }
+            let has_centre = match self.bindings.get(name) {
+                Some(SourceBinding::Dem(m)) | Some(SourceBinding::Raster(m)) => {
+                    m.contains_key(&(0, 0))
+                }
+                _ => false,
+            };
+            if !has_centre {
+                return Err(named_err(
+                    ERR_SOURCE,
+                    format!(
+                        "source `{name}` declares `on-missing: error` and has nothing bound \
+                         for {z}/{x}/{y}; bind the tile with coord [0, 0] (or its ancestor \
+                         with sourceZoom), or answer the request as missing"
+                    ),
+                ));
+            }
+        }
 
         for (name, binding) in &self.bindings {
             match binding {
@@ -1019,7 +1124,6 @@ impl Renderer {
         // straight into this tile. Skip any that were bound remotely above.
         // When the graph asks for neighbour features (cross-tile collision),
         // project into those neighbour tiles too and bind under `@dx,dy`.
-        let requested = self.graph.asset_inputs();
         for (name, decl) in &self.doc.sources {
             if let SourceDecl::GeoJson(g) = decl {
                 if self.bindings.contains_key(name) {
@@ -1137,20 +1241,29 @@ impl Default for RenderOptions {
 
 /// Parse the `renderTile` options object. Unknown keys are silently
 /// ignored so future fields stay backwards-compatible.
-fn parse_render_options(obj: Option<&js_sys::Object>) -> RenderOptions {
+fn parse_render_options(obj: Option<&js_sys::Object>) -> Result<RenderOptions, JsValue> {
     let mut out = RenderOptions::default();
     let Some(obj) = obj else {
-        return out;
+        return Ok(out);
     };
     // format: "png" | "webp" | "rgba"
     if let Some(s) = js_sys::Reflect::get(obj, &"format".into())
         .ok()
         .and_then(|v| v.as_string())
     {
+        // An unrecognised name is a typo, not a request for the default:
+        // silently answering PNG to `format: "jpeg"` hands back bytes the
+        // caller will not be expecting.
         out.format = match s.as_str() {
+            "png" => OutputFormat::Png,
             "webp" => OutputFormat::Webp,
             "rgba" => OutputFormat::Rgba,
-            _ => OutputFormat::Png,
+            other => {
+                return Err(named_err(
+                    ERR_STYLE,
+                    format!("format must be \"png\", \"webp\" or \"rgba\", got \"{other}\""),
+                ))
+            }
         };
     }
     if let Some(n) = js_sys::Reflect::get(obj, &"tileSize".into())
@@ -1207,12 +1320,20 @@ fn parse_render_options(obj: Option<&js_sys::Object>) -> RenderOptions {
         {
             out.png_compression = match s.as_str() {
                 "fast" => PngCompression::Fast,
+                "default" => PngCompression::Default,
                 "best" => PngCompression::Best,
-                _ => PngCompression::Default,
+                other => {
+                    return Err(named_err(
+                        ERR_STYLE,
+                        format!(
+                            "png.compression must be \"fast\", \"default\" or \"best\",                              got \"{other}\""
+                        ),
+                    ))
+                }
             };
         }
     }
-    out
+    Ok(out)
 }
 
 /// Project WGS84 GeoJSON `data` into `tile`'s local frame (extent 4096) and
@@ -1284,6 +1405,14 @@ fn parse_coord_opt(obj: Option<&js_sys::Object>) -> Result<(i32, i32), JsValue> 
         arr.get(1)
             .as_f64()
             .ok_or_else(|| named_err(ERR_SOURCE, "coord[1] (dy) must be a number"))? as i32;
+    // Only the 3×3 neighbourhood is ever stitched or collided against, so
+    // anything further out would be accepted, stored, and never read.
+    if !(-1..=1).contains(&dx) || !(-1..=1).contains(&dy) {
+        return Err(named_err(
+            ERR_SOURCE,
+            format!("coord [{dx}, {dy}] is outside the 3×3 neighbourhood (dx, dy ∈ -1..=1)"),
+        ));
+    }
     Ok((dx, dy))
 }
 
@@ -1640,6 +1769,35 @@ mod tests {
         let here = CoreTileId::new(12, 10, 20);
         let err = resolve_overzoom(here, 0, 0, Some(14)).unwrap_err();
         assert!(err.contains("deeper than the requested zoom"), "got {err}");
+    }
+
+    #[test]
+    fn a_source_tile_answer_clamps_to_the_declared_ceiling() {
+        // `sourceTile` is where the ceiling lives, so the arithmetic is
+        // worth pinning: shift right by the overshoot, and leave shallow
+        // tiles alone.
+        let ceiling = |mz: Option<u8>, z: u8, x: u32, y: u32| -> (u8, u32, u32) {
+            match mz {
+                Some(mz) if z > mz => (mz, x >> (z - mz), y >> (z - mz)),
+                _ => (z, x, y),
+            }
+        };
+        assert_eq!(
+            ceiling(Some(14), 22, 3_728_270, 1_649_855),
+            (14, 14563, 6444)
+        );
+        assert_eq!(ceiling(Some(14), 14, 14563, 6444), (14, 14563, 6444));
+        assert_eq!(ceiling(Some(14), 10, 909, 402), (10, 909, 402));
+        assert_eq!(
+            ceiling(None, 22, 3_728_270, 1_649_855),
+            (22, 3_728_270, 1_649_855)
+        );
+        // The clamped answer is the ancestor the render path resolves to,
+        // so a host can feed one straight into the other.
+        let (tz, tx, ty) = ceiling(Some(14), 16, 58252, 25776);
+        let oz =
+            resolve_overzoom(CoreTileId::new(16, 58252, 25776), 0, 0, Some(tz)).expect("in range");
+        assert_eq!(oz.from.map(|(a, _)| (a.z, a.x, a.y)), Some((tz, tx, ty)));
     }
 
     #[test]
