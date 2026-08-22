@@ -110,6 +110,33 @@ in the Netherlands. Two habits help:
   and one at 3500 m reads far better over a coastal region than an evenly spaced
   one.
 
+### Probe the field before you ramp it
+
+The same rule applies to every `ScalarField`, and it bites hardest on the
+synthetic ones, whose range is rarely what it looks like. `density` output is
+unclamped and scales with `intensity`. `noise` values land in `[-1, 1]`, but
+`worley` piles up *at* `+1` — over half a tile can be exactly 1.0.
+
+A stop placed outside where a field actually spends its time is simply never
+reached, and the failure is silent: the ramp appears to do nothing, and turning
+up `opacity` does nothing either, because the pixels are already resolving to
+one end colour.
+
+So look at the distribution first. Point `output` at a black-to-white ramp over
+the field, render one tile, and read the histogram back:
+
+```json
+"probe": { "op": "color-ramp", "field": "@field",
+           "stops": [ { "value": 0, "color": "#000000" },
+                      { "value": 1, "color": "#ffffff" } ] }
+```
+
+Pure black means "at or below the low stop", pure white "at or above the high
+stop" — so widen the two values until neither is a large share of the tile, and
+put the real stops where the greys are. Rendering the intermediate node like
+this is also the fastest way to tell a field that is empty apart from a ramp
+that is misplaced.
+
 ## Beyond the classic look
 
 `slope` yields angle rather than shading, which makes a steepness map:

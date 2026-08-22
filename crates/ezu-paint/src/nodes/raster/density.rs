@@ -274,7 +274,7 @@ impl NodeFactory for DensityFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Kernel-density estimate of the input's point features as a ScalarField (the MapLibre heatmap kernel: support = `radius` px, falloff `exp(-0.5·3²·(d/radius)²)/√(2π)`). Buffer points outside the tile still contribute, so tile borders match. Output is raw accumulated density, unclamped — map it with `color-ramp` or extract isolines with `contour`. Grows upstream pad by `radius`.",
+            "description": "Kernel-density estimate of the input's point features as a ScalarField (the MapLibre heatmap kernel: support = `radius` px, falloff `exp(-0.5·3²·(d/radius)²)/√(2π)`). **Points only** — lines and polygons contribute nothing, so a line or polygon layer comes out an all-zero field with no error; put `centroid` in front of it. Buffer points outside the tile still contribute, so tile borders match. Output is raw accumulated density, unclamped and scaling with `intensity`, so probe its range before placing ramp stops. Map it with `color-ramp` or extract isolines with `contour`. Grows upstream pad by `radius`.",
             "properties": {
                 "features": schema_frag::node_ref(),
                 "radius": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0, "default": 30,

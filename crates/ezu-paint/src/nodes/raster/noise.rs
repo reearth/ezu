@@ -314,7 +314,7 @@ impl NodeFactory for NoiseFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Procedural noise source. With `kind: raster` (default) the noise is mapped to RGBA via `low-color`/`high-color`/`opacity`. With `kind: scalar` it emits a `ScalarField` of raw fBm values (~[-1, 1] for value/perlin/simplex) — compose with `map-range` before feeding `hillshade`/`color-ramp`. `anchor=world` (default) keeps the field seamless across tile borders.",
+            "description": "Procedural noise source. With `kind: raster` (default) the noise is mapped to RGBA via `low-color`/`high-color`/`opacity`. With `kind: scalar` it emits a `ScalarField` of raw fBm values — compose with `map-range` before feeding `hillshade`/`color-ramp`. Every `type` lands in [-1, 1], but they are not distributed alike: `white`/`value`/`perlin`/`simplex` sit around 0, while `worley` is `1 − 2·distance` and so piles up *at* +1 over the cell interiors — more than half a tile can be exactly 1.0. Evenly spaced ramp stops over a field like that leave most of the ramp unreachable and the render unchanged, so probe the distribution before choosing stops. `anchor=world` (default) keeps the field seamless across tile borders.",
             "properties": {
                 "type": {
                     "type": "string",

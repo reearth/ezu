@@ -14,7 +14,7 @@ Image-processing ops over `Raster` (and, where noted, `Sprite`): generators, com
 
 ### `blend`
 
-Composite `over` onto `base` with a W3C blend mode. `clip: true` clips result to base alpha (Photoshop-style clipping mask). `composite: "destination-out"` makes `over` erase `base` (brush-eraser effect when `over` is a brush-shaped raster). Optional `mask` raster's alpha modulates source coverage.
+Composite `over` onto `base` with a W3C blend mode. `clip: true` clips result to base alpha (Photoshop-style clipping mask, i.e. source-atop): the result *takes* the base's alpha, so clipping onto a 0.12-alpha wash caps the whole overlay at 0.12 — when you mean "restrict this to an area", give an opaque shape as `mask` instead. `composite: "destination-out"` makes `over` erase `base` (brush-eraser effect when `over` is a brush-shaped raster). Optional `mask` raster's alpha modulates source coverage.
 
 <figure class="op-demo op-demo--pair">
   <div class="op-demo__images">
@@ -143,7 +143,7 @@ Make pixels close to `color` transparent. Distance ≤ `threshold` → alpha 0, 
 
 ### `density`
 
-Kernel-density estimate of the input's point features as a ScalarField (the MapLibre heatmap kernel: support = `radius` px, falloff `exp(-0.5·3²·(d/radius)²)/√(2π)`). Buffer points outside the tile still contribute, so tile borders match. Output is raw accumulated density, unclamped — map it with `color-ramp` or extract isolines with `contour`. Grows upstream pad by `radius`.
+Kernel-density estimate of the input's point features as a ScalarField (the MapLibre heatmap kernel: support = `radius` px, falloff `exp(-0.5·3²·(d/radius)²)/√(2π)`). **Points only** — lines and polygons contribute nothing, so a line or polygon layer comes out an all-zero field with no error; put `centroid` in front of it. Buffer points outside the tile still contribute, so tile borders match. Output is raw accumulated density, unclamped and scaling with `intensity`, so probe its range before placing ramp stops. Map it with `color-ramp` or extract isolines with `contour`. Grows upstream pad by `radius`.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -156,7 +156,7 @@ Kernel-density estimate of the input's point features as a ScalarField (the MapL
 
 ### `dilate`
 
-Per-channel morphological max over a square kernel. Grows bright / opaque regions; pair with `erode` to clean up speckle noise (open / close). Separable box implementation; grows upstream pad by `radius-px`.
+Per-channel morphological max over a square kernel. Grows bright / opaque regions; pair with `erode` to clean up speckle noise (open / close). Being a max, it also flattens detail finer than the kernel — a few px of `radius-px` is enough to erase grain, so add grain *after* morphology, never before. Separable box implementation; grows upstream pad by `radius-px`.
 
 <figure class="op-demo">
   <div class="op-demo__images">
@@ -232,7 +232,7 @@ Sobel gradient magnitude per channel, scaled by `strength` and clamped to [0, 25
 
 ### `erode`
 
-Per-channel morphological min over a square kernel. Shrinks bright / opaque regions; classic mask cleanup after `color-to-alpha`. Separable box implementation; grows upstream pad by `radius-px`.
+Per-channel morphological min over a square kernel. Shrinks bright / opaque regions; classic mask cleanup after `color-to-alpha`. Removes anything thinner than the kernel outright, so `erode` then `dilate` (an opening) keeps only features wider than `radius-px` — a way to select by size when the source carries no size attribute. Detail finer than the radius does not survive either op: add grain *after* morphology, never before. Separable box implementation; grows upstream pad by `radius-px`.
 
 <figure class="op-demo">
   <div class="op-demo__images">
@@ -462,7 +462,7 @@ Quantize a raster into uniform square blocks. `mode` selects how each block is s
 
 ### `noise`
 
-Procedural noise source. With `kind: raster` (default) the noise is mapped to RGBA via `low-color`/`high-color`/`opacity`. With `kind: scalar` it emits a `ScalarField` of raw fBm values (~[-1, 1] for value/perlin/simplex) — compose with `map-range` before feeding `hillshade`/`color-ramp`. `anchor=world` (default) keeps the field seamless across tile borders.
+Procedural noise source. With `kind: raster` (default) the noise is mapped to RGBA via `low-color`/`high-color`/`opacity`. With `kind: scalar` it emits a `ScalarField` of raw fBm values — compose with `map-range` before feeding `hillshade`/`color-ramp`. Every `type` lands in [-1, 1], but they are not distributed alike: `white`/`value`/`perlin`/`simplex` sit around 0, while `worley` is `1 − 2·distance` and so piles up *at* +1 over the cell interiors — more than half a tile can be exactly 1.0. Evenly spaced ramp stops over a field like that leave most of the ramp unreachable and the render unchanged, so probe the distribution before choosing stops. `anchor=world` (default) keeps the field seamless across tile borders.
 
 <figure class="op-demo">
   <div class="op-demo__images">

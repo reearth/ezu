@@ -161,7 +161,7 @@ impl NodeFactory for ErodeFactory {
         build_morph(fields, ctx, Op::Erode)
     }
     fn schema(&self) -> Value {
-        morph_schema("Per-channel morphological min over a square kernel. Shrinks bright / opaque regions; classic mask cleanup after `color-to-alpha`. Separable box implementation; grows upstream pad by `radius-px`.")
+        morph_schema("Per-channel morphological min over a square kernel. Shrinks bright / opaque regions; classic mask cleanup after `color-to-alpha`. Removes anything thinner than the kernel outright, so `erode` then `dilate` (an opening) keeps only features wider than `radius-px` — a way to select by size when the source carries no size attribute. Detail finer than the radius does not survive either op: add grain *after* morphology, never before. Separable box implementation; grows upstream pad by `radius-px`.")
     }
 }
 
@@ -178,7 +178,7 @@ impl NodeFactory for DilateFactory {
         build_morph(fields, ctx, Op::Dilate)
     }
     fn schema(&self) -> Value {
-        morph_schema("Per-channel morphological max over a square kernel. Grows bright / opaque regions; pair with `erode` to clean up speckle noise (open / close). Separable box implementation; grows upstream pad by `radius-px`.")
+        morph_schema("Per-channel morphological max over a square kernel. Grows bright / opaque regions; pair with `erode` to clean up speckle noise (open / close). Being a max, it also flattens detail finer than the kernel — a few px of `radius-px` is enough to erase grain, so add grain *after* morphology, never before. Separable box implementation; grows upstream pad by `radius-px`.")
     }
 }
 

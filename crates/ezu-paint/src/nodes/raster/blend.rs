@@ -413,7 +413,7 @@ impl NodeFactory for BlendFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Composite `over` onto `base` with a W3C blend mode. `clip: true` clips result to base alpha (Photoshop-style clipping mask). `composite: \"destination-out\"` makes `over` erase `base` (brush-eraser effect when `over` is a brush-shaped raster). Optional `mask` raster's alpha modulates source coverage.",
+            "description": "Composite `over` onto `base` with a W3C blend mode. `clip: true` clips result to base alpha (Photoshop-style clipping mask, i.e. source-atop): the result *takes* the base's alpha, so clipping onto a 0.12-alpha wash caps the whole overlay at 0.12 — when you mean \"restrict this to an area\", give an opaque shape as `mask` instead. `composite: \"destination-out\"` makes `over` erase `base` (brush-eraser effect when `over` is a brush-shaped raster). Optional `mask` raster's alpha modulates source coverage.",
             "properties": {
                 "base": schema_frag::node_ref(),
                 "over": schema_frag::node_ref(),

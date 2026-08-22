@@ -38,6 +38,29 @@ The per-op tables in the [node catalog](/ezu/style/nodes/source/) are generated
 from the registry, so they are the authoritative list of which fields an op
 actually accepts.
 
+### An `-expr` does not stand in for the literal
+
+The expression wins at paint time, but it does not satisfy the field. A required
+literal stays required:
+
+```json
+// ✅ `width-px` defaults to 1, so the expression alone is enough
+"roads": { "op": "stroke", "features": "@r", "color": "#000000",
+           "width-expr": ["interpolate", ["linear"], ["zoom"], 0, 1, 10, 4] }
+
+// ❌ missing required field `amplitude-px`
+"wob": { "op": "wave", "features": "@r", "wavelength-px": 20,
+         "amplitude-px-expr": ["literal", 3] }
+```
+
+The difference is not arbitrary. An expression is evaluated per feature while
+the tile is being painted, and some fields must be known *before* that: a field
+that decides canvas padding is one, since padding is fixed when the graph is
+built. Supply the literal as well — it is the value used when the expression is
+absent or fails for a feature, and for a padding-determining field it is also
+what the canvas is sized by. See
+[padding and neighbours](/ezu/concepts/padding-and-neighbours/).
+
 `filter-expr` on a `features` node is the same mechanism used as a predicate:
 
 ```json
@@ -48,6 +71,18 @@ actually accepts.
 Legacy-form filters — bare field names, `!in`, `!has`, `none` — are accepted and
 converted with MapLibre's own pre-compile conversion, strict-type semantics
 included.
+
+:::caution[A filter over an absent property matches nothing, quietly]
+`["get", "kind"]` on a layer that carries no `kind` evaluates to `null`, every
+comparison against it is false, and the node yields an empty feature set. That
+is legal — a layer can legitimately have no matching features on a given tile —
+so nothing is reported, and the layer simply does not appear. A filter rule
+copied from one layer to another is the usual way this happens.
+
+Check the property exists on *that* layer before filtering on it — the
+[live editor](/ezu/guides/live-editor/)'s source MVT inspector lists the
+properties a feature actually carries.
+:::
 
 ## Evaluation context
 
