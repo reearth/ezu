@@ -64,6 +64,8 @@ mod params;
 mod pixel_filters;
 #[path = "paint/point_grid_padding.rs"]
 mod point_grid_padding;
+#[path = "paint/stamp_position_jitter.rs"]
+mod stamp_position_jitter;
 #[path = "paint/raster_layout.rs"]
 mod raster_layout;
 #[path = "paint/raster_source.rs"]

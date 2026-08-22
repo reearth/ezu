@@ -30,6 +30,9 @@ use crate::nodes::common::{
 };
 
 const STAMP_SALT: u32 = 0x5354_4d50; // 'STMP'
+/// Position jitter draws from its own salt, so moving a point around is
+/// uncorrelated with how the same point is scaled and rotated.
+const STAMP_POS_SALT: u32 = 0x5350_4f53; // 'SPOS'
 
 /// Parse an optional raw MapLibre expression field, type-checked against
 /// `expect`. Returns `(parsed, raw_json_text)` for a stable cache hash.
@@ -89,6 +92,12 @@ struct StampNode {
     rotation_deg: In<f64>,
     rotation_jitter_deg: In<f64>,
     scale_jitter: In<f64>,
+    /// Maximum per-point offset in canvas pixels, drawn independently per
+    /// axis. A plain `In<f64>` rather than a `PaddingIn`: this node already
+    /// leaves the sprite's own half-extent — usually far larger than a jitter
+    /// of a few pixels — to the document's `pad`, so bounding the jitter alone
+    /// would buy nothing and would cost `@node` ports their freedom.
+    position_jitter_px: In<f64>,
     opacity: In<f64>,
     /// Optional data-driven scale / rotation / opacity: MapLibre number
     /// expressions evaluated per feature group. When set, each overrides its
@@ -145,6 +154,7 @@ impl Node for StampNode {
         let const_rotation_deg = self.rotation_deg.get(ctx, inputs)? as f32;
         let rotation_jitter_deg = self.rotation_jitter_deg.get(ctx, inputs)? as f32;
         let scale_jitter = self.scale_jitter.get(ctx, inputs)? as f32;
+        let position_jitter_px = self.position_jitter_px.get(ctx, inputs)? as f32;
         let const_opacity = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
 
         let mut canvas = make_canvas(ctx)?;
@@ -192,7 +202,16 @@ impl Node for StampNode {
                 if s <= 0.0 {
                     continue;
                 }
-                let t = Transform::from_translate(px, py)
+                // Offset the point itself, keyed by its *unjittered* world
+                // position so a stamp straddling a tile edge lands in the same
+                // place in both tiles.
+                let (mut dx, mut dy) = (0.0_f32, 0.0_f32);
+                if position_jitter_px != 0.0 {
+                    let mut seed = world_seed(WorldPos::new(wx, wy), STAMP_POS_SALT);
+                    dx = (next_unit(&mut seed) - 0.5) * 2.0 * position_jitter_px;
+                    dy = (next_unit(&mut seed) - 0.5) * 2.0 * position_jitter_px;
+                }
+                let t = Transform::from_translate(px + dx, py + dy)
                     .pre_rotate(rotation_deg + rot_off)
                     .pre_scale(s, s)
                     .pre_translate(-iw * 0.5, -ih * 0.5);
@@ -297,6 +316,7 @@ impl Node for StampNode {
         self.rotation_deg.param_hash(h);
         self.rotation_jitter_deg.param_hash(h);
         self.scale_jitter.param_hash(h);
+        self.position_jitter_px.param_hash(h);
         self.opacity.param_hash(h);
         for (tag, src) in [
             (b"scaleexpr".as_slice(), &self.scale_expr_src),
@@ -398,6 +418,7 @@ impl NodeFactory for StampFactory {
         let rotation_deg = r.number_or("rotation-deg", 0.0)?;
         let rotation_jitter_deg = r.number_or("rotation-jitter-deg", 0.0)?;
         let scale_jitter = r.number_or("scale-jitter", 0.0)?;
+        let position_jitter_px = r.number_or("position-jitter-px", 0.0)?;
         let opacity = r.number_or("opacity", 1.0)?;
         let parts = r.finish();
 
@@ -437,6 +458,7 @@ impl NodeFactory for StampFactory {
                 rotation_deg,
                 rotation_jitter_deg,
                 scale_jitter,
+                position_jitter_px,
                 opacity,
                 scale_expr,
                 rotation_deg_expr,
@@ -455,7 +477,7 @@ impl NodeFactory for StampFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Stamp a sprite at every input point. Lines and polygons are ignored. Jitter is world-deterministic — a given point gets the same jitter no matter which tile renders it. Provide either an `image` input (one sprite for every point) or, for a data-driven `icon-image`, a `sprite` atlas ref plus a `name-expr` that names each feature's icon.",
+            "description": "Stamp a sprite at every input point. Lines and polygons are ignored. Rotation, scale and position jitter are world-deterministic — a given point gets the same jitter no matter which tile renders it, and the three do not correlate. Provide either an `image` input (one sprite for every point) or, for a data-driven `icon-image`, a `sprite` atlas ref plus a `name-expr` that names each feature's icon.",
             "properties": {
                 "features": schema_frag::node_ref(),
                 "image": schema_frag::node_ref(),
@@ -477,6 +499,8 @@ impl NodeFactory for StampFactory {
                                          "description": "Per-point random rotation, ±value degrees." })),
                 "scale-jitter": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0,
                                   "description": "Per-point random scale, ±value as a fraction of `scale` (0.2 = ±20%)." })),
+                "position-jitter-px": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0,
+                                        "description": "Per-point random offset, ±value canvas pixels, drawn independently on x and y. Breaks up the regular lattice a `point-grid` leaves. Default 0 (no offset)." })),
                 "opacity": schema_frag::unit_number(),
                 "opacity-expr": {
                     "description": "A MapLibre number expression giving opacity, evaluated per feature group; overrides the constant `opacity`.",

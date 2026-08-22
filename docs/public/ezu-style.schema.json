@@ -3934,7 +3934,7 @@
             "type": "object"
           },
           {
-            "description": "Stamp a sprite at every input point. Lines and polygons are ignored. Jitter is world-deterministic — a given point gets the same jitter no matter which tile renders it. Provide either an `image` input (one sprite for every point) or, for a data-driven `icon-image`, a `sprite` atlas ref plus a `name-expr` that names each feature's icon.",
+            "description": "Stamp a sprite at every input point. Lines and polygons are ignored. Rotation, scale and position jitter are world-deterministic — a given point gets the same jitter no matter which tile renders it, and the three do not correlate. Provide either an `image` input (one sprite for every point) or, for a data-driven `icon-image`, a `sprite` atlas ref plus a `name-expr` that names each feature's icon.",
             "properties": {
               "features": {
                 "description": "Reference to another node (`@name`).",
@@ -3969,6 +3969,20 @@
               },
               "opacity-expr": {
                 "description": "A MapLibre number expression giving opacity, evaluated per feature group; overrides the constant `opacity`."
+              },
+              "position-jitter-px": {
+                "oneOf": [
+                  {
+                    "description": "Per-point random offset, ±value canvas pixels, drawn independently on x and y. Breaks up the regular lattice a `point-grid` leaves. Default 0 (no offset).",
+                    "minimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "rotation-deg": {
                 "oneOf": [

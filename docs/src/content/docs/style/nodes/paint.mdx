@@ -136,7 +136,7 @@ Repeat a sprite along each polyline, rotated to the line's tangent (MapLibre `li
 
 ### `stamp`
 
-Stamp a sprite at every input point. Lines and polygons are ignored. Jitter is world-deterministic — a given point gets the same jitter no matter which tile renders it. Provide either an `image` input (one sprite for every point) or, for a data-driven `icon-image`, a `sprite` atlas ref plus a `name-expr` that names each feature's icon.
+Stamp a sprite at every input point. Lines and polygons are ignored. Rotation, scale and position jitter are world-deterministic — a given point gets the same jitter no matter which tile renders it, and the three do not correlate. Provide either an `image` input (one sprite for every point) or, for a data-driven `icon-image`, a `sprite` atlas ref plus a `name-expr` that names each feature's icon.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -145,6 +145,7 @@ Stamp a sprite at every input point. Lines and polygons are ignored. Jitter is w
 | `name-expr` | — | no | A MapLibre expression giving each feature's icon name (MapLibre data-driven `icon-image`), cropped per group from the `sprite` atlas. Used instead of an `image` input; any icon the bound sheet contains is croppable, so no enumeration is needed. |
 | `opacity` | number (0…1) \| `$param` \| `@node` | no | — |
 | `opacity-expr` | — | no | A MapLibre number expression giving opacity, evaluated per feature group; overrides the constant `opacity`. |
+| `position-jitter-px` | number (0…∞) \| `$param` \| `@node` | no | Per-point random offset, ±value canvas pixels, drawn independently on x and y. Breaks up the regular lattice a `point-grid` leaves. Default 0 (no offset). |
 | `rotation-deg` | number \| `$param` \| `@node` | no | Constant rotation around each point, in degrees clockwise. |
 | `rotation-deg-expr` | — | no | A MapLibre number expression (degrees clockwise), evaluated per feature group; overrides the constant `rotation-deg`. |
 | `rotation-jitter-deg` | number (0…∞) \| `$param` \| `@node` | no | Per-point random rotation, ±value degrees. |
