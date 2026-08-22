@@ -64,8 +64,8 @@ mod params;
 mod pixel_filters;
 #[path = "paint/point_grid_padding.rs"]
 mod point_grid_padding;
-#[path = "paint/stamp_position_jitter.rs"]
-mod stamp_position_jitter;
+#[path = "paint/point_scatter_randomness.rs"]
+mod point_scatter_randomness;
 #[path = "paint/raster_layout.rs"]
 mod raster_layout;
 #[path = "paint/raster_source.rs"]
@@ -76,6 +76,8 @@ mod rect_canvas;
 mod scalar_ops;
 #[path = "paint/schema.rs"]
 mod schema;
+#[path = "paint/stamp_position_jitter.rs"]
+mod stamp_position_jitter;
 #[path = "paint/stroke_gap_width.rs"]
 mod stroke_gap_width;
 #[path = "paint/text_collision.rs"]

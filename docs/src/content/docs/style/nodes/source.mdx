@@ -9,7 +9,7 @@ sidebar:
 
 Ops with no upstream input: features bound by the host, synthesized geometry, images, DEM and raster tiles.
 
-9 ops: `dem`, `features`, `graticule`, `icon`, `image`, `literal-geometry`, `point-grid`, `raster`, `tile-bounds`.
+10 ops: `dem`, `features`, `graticule`, `icon`, `image`, `literal-geometry`, `point-grid`, `point-scatter`, `raster`, `tile-bounds`.
 
 Ops with no demo image below produce no visible result on their own — they feed other nodes rather than paint.
 
@@ -104,6 +104,19 @@ Regular lattice of points covering the tile.
 | `offset-x` | number \| `$param` \| `@node` | no | — |
 | `offset-y` | number \| `$param` \| `@node` | no | — |
 | `spacing` | number (0…∞) \| `$param` \| `@node` | yes | Grid pitch in *extent* units, not pixels — `extent` below is the coordinate space (4096 by default), so a 512 px tile fits 8 points at `spacing: 512`. Paint ops downstream take pixels, so the two do not match. |
+| `spacing-x` | number (0…∞) \| `$param` \| `@node` | no | — |
+| `spacing-y` | number (0…∞) \| `$param` \| `@node` | no | — |
+
+### `point-scatter`
+
+Random points at a given mean spacing, covering the tile. Where `point-grid` puts exactly one point in the middle of every cell, this one draws a *count* per cell — 0 to 3, averaging 1 — and places each point at a random spot inside it, so the set has the clumps and gaps of a real random scatter and no residual pitch. Reach for `point-grid` when the regularity is the point (a halftone screen, a tiling of panes to fracture) and for `point-scatter` when it is the enemy (stipple, foliage, grain, scattered symbols). Jittering a `point-grid` is not a substitute: one point per cell means an even density, and the lattice frequency stays plainly visible.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `anchor` | `tile` \| `world` | no | `world` indexes the cells off global (0, 0), so adjacent tiles agree on the points they share and the scatter is seamless — the usual choice. `tile` indexes off the tile's own corner, giving every tile the same point set and a visible seam. |
+| `extent` | integer (1…∞) | no | — |
+| `seed` | integer (0…∞) | no | Optional explicit u32 seed. Change it to get a different scatter at the same spacing, or to keep two `point-scatter` nodes from landing on each other. Default: a fixed constant, so the pattern is stable across tiles and runs. |
+| `spacing` | number (0…∞) \| `$param` \| `@node` | yes | Mean spacing in *extent* units, not pixels — one point per `spacing` × `spacing` cell on average. `extent` below is the coordinate space (4096 by default), so a 512 px tile averages 8 points across at `spacing: 512`. Paint ops downstream take pixels, so the two do not match. |
 | `spacing-x` | number (0…∞) \| `$param` \| `@node` | no | — |
 | `spacing-y` | number (0…∞) \| `$param` \| `@node` | no | — |
 

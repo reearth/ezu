@@ -193,6 +193,7 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 | `literal-geometry` | `() → Features` | Inline points / lines / polygons from style fields |
 | `tile-bounds` | `() → Features` | Polygon covering the current tile |
 | `point-grid` | `() → Features` | Regular grid of points across the tile |
+| `point-scatter` | `() → Features` | Random points at a given mean spacing across the tile — a variable count per cell, so no lattice frequency survives |
 
 **Feature paint** (`nodes::paint`)
 

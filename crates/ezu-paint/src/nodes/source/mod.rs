@@ -9,5 +9,6 @@ mod icon;
 mod image;
 mod literal_geometry;
 mod point_grid;
+mod point_scatter;
 mod raster;
 mod tile_bounds;
