@@ -46,9 +46,10 @@ class Renderer {
   //              the centre is `[0, 0]`, the default).
   //   - raster → RGBA imagery tiles (PNG/WebP/JPEG); decode + 3×3
   //              stitch at render time, same `coord` convention as dem
-  // `sourceZoom` (mvt / pmtiles) says the bytes are natively encoded at
-  // a shallower zoom than the tile being rendered, and the renderer
-  // reprojects them into its frame — see "Overzoom" below.
+  // `sourceZoom` says the bytes are natively encoded at a shallower zoom
+  // than the tile being rendered. Vector geometry is reprojected into the
+  // tile's frame; dem / raster resample the ancestor's sub-rectangle. Any
+  // tile-scoped kind accepts it — see "Overzoom" below.
   bindSource(name: string, bytes: Uint8Array,
              opts?: { coord?: [number, number]; sourceZoom?: number }): void;
 
@@ -265,11 +266,11 @@ assumption once a budget is set.
 
 ### Overzoom: rendering deeper than the source goes
 
-A vector source usually stops at some `maxzoom` — Protomaps basemaps end
-at z15 — while a tile endpoint is expected to serve deeper. Pass
-`sourceZoom` and the renderer puts the ancestor's geometry into the
-requested tile's frame before drawing, so z16 and beyond render at full
-detail instead of a client scaling a raster up:
+A source usually stops at some `maxzoom` — Protomaps basemaps end at z15,
+a terrain pyramid often at z12–14 — while a tile endpoint is expected to
+serve deeper. Pass `sourceZoom` and the renderer puts the ancestor into
+the requested tile's frame before drawing, so z16 and beyond render at
+full detail instead of a client scaling a raster up:
 
 ```js
 const MAXZOOM = 15;
@@ -303,6 +304,33 @@ Geometry that straddles the tile edge is passed through rather than
 clipped, matching MVT's buffer convention, and features whose bounding
 box misses the tile entirely are dropped — so an overzoomed tile costs
 less to draw the deeper it goes, not more.
+
+**DEM and imagery overzoom the same way.** They are grids rather than
+geometry, so the ancestor's covering sub-rectangle is resampled
+bilinearly instead of reprojected — the same thing the native host does
+for a source past its `max-zoom`. The mechanics for the caller are
+identical, including the per-neighbour ancestor:
+
+```js
+const TERRAIN_MAXZOOM = 12;
+const demAncestor = (z, x, y) =>
+  z <= TERRAIN_MAXZOOM
+    ? [z, x, y]
+    : [TERRAIN_MAXZOOM, x >> (z - TERRAIN_MAXZOOM), y >> (z - TERRAIN_MAXZOOM)];
+
+r.bindSource("terrain", await fetchDem(...demAncestor(z, x, y)),
+             { sourceZoom: TERRAIN_MAXZOOM });
+for (const [dx, dy] of r.requestedNeighborOffsets("terrain")) {
+  const nb = await fetchDem(...demAncestor(z, x + dx, y + dy));
+  if (nb) r.bindSource("terrain", nb,
+                       { coord: [dx, dy], sourceZoom: TERRAIN_MAXZOOM });
+}
+```
+
+Without it a terrain source simply has no tile to bind past its ceiling,
+and the `dem` node emits a zero-elevation field — a hillshade that goes
+flat with no error. A style whose vector basemap serves z22 over terrain
+that stops at z14 needs this on every tile deeper than 14.
 
 ### Missing tiles
 

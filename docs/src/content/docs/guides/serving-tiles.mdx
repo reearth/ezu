@@ -75,8 +75,10 @@ Requests past a source's declared `max-zoom` always upsample from the `max-zoom`
 ancestor, regardless of policy.
 
 In a wasm host you do the walking: bind the ancestor's bytes and tell the
-renderer which zoom they came from with `bindSource(name, bytes, { sourceZoom })`,
-and it reprojects into the tile being rendered.
+renderer which zoom they came from with `bindSource(name, bytes, { sourceZoom })`.
+Vector geometry is reprojected into the tile being rendered; a `dem` or `raster`
+payload has its covering sub-rectangle resampled. Every tile-scoped source kind
+takes it, and each neighbour resolves against its own ancestor.
 
 ## Attribution
 

@@ -85,7 +85,8 @@ have an opinion:
   transport uses for "no tile", e.g. HTTP 404.
 - **Overzoom.** Walking up parent zooms is the host's loop. Natively,
   `--overzoom-levels` bounds it; in wasm, bind the ancestor's bytes with
-  `{ sourceZoom }` and the renderer reprojects into the requested frame.
+  `{ sourceZoom }` — vector geometry is reprojected into the requested frame,
+  `dem` and `raster` have their covering sub-rectangle resampled.
 - **Trust.** A style names URLs. If styles are user-supplied, the host is the only
   place an allowlist can live.
 

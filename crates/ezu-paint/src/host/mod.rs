@@ -3,7 +3,9 @@
 //! PNG output.
 
 pub mod dem_decode;
-pub use dem_decode::{decode_dem_tile, stitch_padded_field, DemDecodeError, DemTile};
+pub use dem_decode::{
+    decode_dem_tile, stitch_padded_field, upsample_subregion, DemDecodeError, DemTile,
+};
 pub mod raster_decode;
 pub use raster_decode::{
     decode_raster_tile, stitch_padded_raster, upsample_subregion_raster, RasterTile,

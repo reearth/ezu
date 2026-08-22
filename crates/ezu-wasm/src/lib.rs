@@ -78,8 +78,8 @@ use ezu_graph::{
 };
 use ezu_paint::host::{
     build_sprite_icons, crop_to_png, crop_to_rgba8, crop_to_webp, decode_dem_tile,
-    decode_raster_tile, stitch_padded_field, stitch_padded_raster, BrushBankLoader, DemTile,
-    PngCompression, RasterTile, TileLoader,
+    decode_raster_tile, stitch_padded_field, stitch_padded_raster, upsample_subregion,
+    upsample_subregion_raster, BrushBankLoader, DemTile, PngCompression, RasterTile, TileLoader,
 };
 use ezu_paint::nodes::default_registry;
 use ezu_style::{Document, SourceDecl};
@@ -202,25 +202,27 @@ enum SourceBinding {
     /// `coord: [0, 0]` (default); neighbours (bound with `coord`) feed
     /// cross-tile label collision and are bound under `@dx,dy` names at
     /// render time. Re-decoded at render because `DecodedTile` isn't Clone.
-    Mvt(HashMap<(i32, i32), MvtBytes>),
-    Dem(HashMap<(i32, i32), Vec<u8>>),
+    Mvt(HashMap<(i32, i32), BoundBytes>),
+    Dem(HashMap<(i32, i32), BoundBytes>),
     /// RGBA imagery tiles per `(dx, dy)` neighbour offset, decoded +
     /// stitched at render time like DEM.
-    Raster(HashMap<(i32, i32), Vec<u8>>),
+    Raster(HashMap<(i32, i32), BoundBytes>),
     /// Raw GeoJSON bytes (WGS84 lon/lat) per `(dx, dy)` neighbour offset,
     /// projected into each tile frame at render time. Only needed for
     /// *remote* geojson; inline `data` is read straight from the document.
     GeoJson(HashMap<(i32, i32), Vec<u8>>),
 }
 
-/// One bound MVT payload and, when the host is overzooming, the zoom the
-/// bytes are natively encoded at.
-struct MvtBytes {
+/// One bound tile payload and, when the host is overzooming, the zoom the
+/// bytes are natively encoded at. Shared by every tile-scoped source kind
+/// — vector geometry is reprojected, DEM and imagery are resampled, but
+/// the host states the same thing in the same way for all of them.
+struct BoundBytes {
     bytes: Vec<u8>,
     /// `Some(z)` when these bytes belong to an ancestor of the tile being
-    /// rendered — a vector source that stops at `maxzoom` while the host
-    /// serves deeper tiles. `None` means the bytes are already in the
-    /// requested tile's frame, which is the ordinary case.
+    /// rendered — a source that stops at `maxzoom` while the host serves
+    /// deeper tiles. `None` means the bytes are already in the requested
+    /// tile's frame, which is the ordinary case.
     source_zoom: Option<u8>,
 }
 
@@ -369,7 +371,7 @@ impl Renderer {
                     .entry(name.to_string())
                     .or_insert_with(|| SourceBinding::Mvt(HashMap::new()));
                 if let SourceBinding::Mvt(map) = entry {
-                    map.insert(coord, MvtBytes { bytes, source_zoom });
+                    map.insert(coord, BoundBytes { bytes, source_zoom });
                 } else {
                     return Err(named_err(
                         ERR_SOURCE,
@@ -379,12 +381,13 @@ impl Renderer {
             }
             SourceDecl::Dem(_) => {
                 let coord = parse_coord_opt(opts.as_ref())?;
+                let source_zoom = parse_source_zoom_opt(opts.as_ref())?;
                 let entry = self
                     .bindings
                     .entry(name.to_string())
                     .or_insert_with(|| SourceBinding::Dem(HashMap::new()));
                 if let SourceBinding::Dem(map) = entry {
-                    map.insert(coord, bytes);
+                    map.insert(coord, BoundBytes { bytes, source_zoom });
                 } else {
                     return Err(named_err(
                         ERR_SOURCE,
@@ -394,12 +397,13 @@ impl Renderer {
             }
             SourceDecl::Raster(_) => {
                 let coord = parse_coord_opt(opts.as_ref())?;
+                let source_zoom = parse_source_zoom_opt(opts.as_ref())?;
                 let entry = self
                     .bindings
                     .entry(name.to_string())
                     .or_insert_with(|| SourceBinding::Raster(HashMap::new()));
                 if let SourceBinding::Raster(map) = entry {
-                    map.insert(coord, bytes);
+                    map.insert(coord, BoundBytes { bytes, source_zoom });
                 } else {
                     return Err(named_err(
                         ERR_SOURCE,
@@ -904,34 +908,14 @@ impl Renderer {
                         // their geometry into this tile's frame first.
                         // Each neighbour resolves against its own
                         // ancestor, which may or may not be the centre's.
-                        if let Some(source_zoom) = payload.source_zoom {
-                            let here = CoreTileId::new(tile_id.z, tile_id.x, tile_id.y);
-                            let target = neighbor_tile(here, dx, dy).ok_or_else(|| {
-                                named_err(
-                                    ERR_SOURCE,
-                                    format!(
-                                        "coord [{dx}, {dy}] is off the map at zoom {}, so it has \
-                                         no ancestor to overzoom from",
-                                        tile_id.z
-                                    ),
-                                )
-                            })?;
-                            if let Some(ancestor) = target.ancestor_at(source_zoom) {
-                                decoded = ezu_features::mvt::clip_to_descendant(
-                                    &decoded, ancestor, target,
-                                )
-                                .map_err(|e| named_err(ERR_MVT, e))?;
-                            } else if source_zoom > target.z {
-                                return Err(named_err(
-                                    ERR_SOURCE,
-                                    format!(
-                                        "sourceZoom {source_zoom} is deeper than the requested \
-                                         zoom {}; overzoom only reprojects downwards",
-                                        target.z
-                                    ),
-                                ));
-                            }
-                            // `sourceZoom == z` needs no transform.
+                        let here = CoreTileId::new(tile_id.z, tile_id.x, tile_id.y);
+                        let oz = resolve_overzoom(here, dx, dy, payload.source_zoom)
+                            .map_err(|e| named_err(ERR_SOURCE, e))?;
+                        if let Some((ancestor, _)) = oz.from {
+                            decoded = ezu_features::mvt::clip_to_descendant(
+                                &decoded, ancestor, oz.target,
+                            )
+                            .map_err(|e| named_err(ERR_MVT, e))?;
                         }
                         tile_loader.bind_mvt_neighbor(name, dx, dy, decoded);
                     }
@@ -950,15 +934,26 @@ impl Renderer {
                         Some(SourceDecl::Dem(spec)) => spec.elevation_offset,
                         _ => 0.0,
                     };
+                    let here = CoreTileId::new(z, x, y);
                     let mut decoded: HashMap<(i32, i32), DemTile> =
                         HashMap::with_capacity(byte_map.len());
-                    for (&(dx, dy), bytes) in byte_map {
-                        // Resolve absolute tile coords so decode errors
-                        // identify the source tile, not just the offset.
-                        let abs_x = (x as i32 + dx) as u32;
-                        let abs_y = (y as i32 + dy) as u32;
-                        let t = decode_dem_tile(bytes, encoding, z, abs_x, abs_y)
+                    for (&(dx, dy), payload) in byte_map {
+                        let oz = resolve_overzoom(here, dx, dy, payload.source_zoom)
+                            .map_err(|e| named_err(ERR_SOURCE, e))?;
+                        // Decode errors name the tile the host actually
+                        // fetched, which under overzoom is the ancestor.
+                        let src = oz.from.map_or(oz.target, |(a, _)| a);
+                        let t = decode_dem_tile(&payload.bytes, encoding, src.z, src.x, src.y)
                             .map_err(|e| named_err(ERR_DEM, e))?;
+                        // Overzoom: resample the ancestor's sub-rectangle
+                        // covering this tile, matching what the native
+                        // host does for a source past its `max-zoom`.
+                        let t = match oz.from {
+                            Some((a, shift)) => {
+                                upsample_subregion(&t, shift, oz.target.x, oz.target.y, a.x, a.y)
+                            }
+                            None => t,
+                        };
                         decoded.insert((dx, dy), t);
                     }
                     let borrowed: HashMap<(i32, i32), &DemTile> =
@@ -976,13 +971,26 @@ impl Renderer {
                     tile_loader.bind_scalar_field(name.clone(), field);
                 }
                 SourceBinding::Raster(byte_map) => {
+                    let here = CoreTileId::new(z, x, y);
                     let mut decoded: HashMap<(i32, i32), RasterTile> =
                         HashMap::with_capacity(byte_map.len());
-                    for (&(dx, dy), bytes) in byte_map {
-                        let abs_x = (x as i32 + dx) as u32;
-                        let abs_y = (y as i32 + dy) as u32;
-                        let t = decode_raster_tile(bytes, z, abs_x, abs_y)
+                    for (&(dx, dy), payload) in byte_map {
+                        let oz = resolve_overzoom(here, dx, dy, payload.source_zoom)
+                            .map_err(|e| named_err(ERR_SOURCE, e))?;
+                        let src = oz.from.map_or(oz.target, |(a, _)| a);
+                        let t = decode_raster_tile(&payload.bytes, src.z, src.x, src.y)
                             .map_err(|e| named_err(ERR_RASTER, e))?;
+                        let t = match oz.from {
+                            Some((a, shift)) => upsample_subregion_raster(
+                                &t,
+                                shift,
+                                oz.target.x,
+                                oz.target.y,
+                                a.x,
+                                a.y,
+                            ),
+                            None => t,
+                        };
                         decoded.insert((dx, dy), t);
                     }
                     let borrowed: HashMap<(i32, i32), &RasterTile> =
@@ -1279,6 +1287,53 @@ fn parse_coord_opt(obj: Option<&js_sys::Object>) -> Result<(i32, i32), JsValue> 
     Ok((dx, dy))
 }
 
+/// Where one bound payload came from: the tile it belongs to, and — when
+/// the host is overzooming — the ancestor it was actually fetched at.
+#[derive(Debug, PartialEq, Eq)]
+struct Overzoom {
+    /// The tile these bytes are for: the render's tile, or the neighbour
+    /// at `(dx, dy)`.
+    target: CoreTileId,
+    /// `Some((ancestor, shift))` when the bytes are an ancestor's and the
+    /// payload must be resampled into `target`. `None` when they are
+    /// already in the target's frame.
+    from: Option<(CoreTileId, u8)>,
+}
+
+/// Resolve a bound payload's provenance, shared by every tile-scoped
+/// source kind so a host states overzoom the same way for all of them.
+///
+/// `source_zoom` equal to the target's zoom needs no transform, and one
+/// deeper than the target is refused — there is no detail to invent.
+fn resolve_overzoom(
+    here: CoreTileId,
+    dx: i32,
+    dy: i32,
+    source_zoom: Option<u8>,
+) -> Result<Overzoom, String> {
+    let target = neighbor_tile(here, dx, dy).ok_or_else(|| {
+        format!(
+            "coord [{dx}, {dy}] is off the map at zoom {}, so it has no ancestor to \
+             overzoom from",
+            here.z
+        )
+    })?;
+    let Some(sz) = source_zoom else {
+        return Ok(Overzoom { target, from: None });
+    };
+    if sz > target.z {
+        return Err(format!(
+            "sourceZoom {sz} is deeper than the requested zoom {}; overzoom only \
+             reprojects downwards",
+            target.z
+        ));
+    }
+    // `ancestor_at` is `None` at equal zoom, which is exactly the "these
+    // bytes already fit this tile" case.
+    let from = target.ancestor_at(sz).map(|a| (a, target.z - sz));
+    Ok(Overzoom { target, from })
+}
+
 /// Read `sourceZoom` off a `bindSource` options object: the zoom the
 /// bound bytes are natively encoded at, when it is shallower than the
 /// tile being rendered.
@@ -1547,6 +1602,44 @@ mod tests {
         // Equal zoom has no ancestor, which is how the render path spots
         // "these bytes already fit this tile".
         assert_eq!(centre.ancestor_at(16), None);
+    }
+
+    #[test]
+    fn overzoom_resolves_each_offset_against_its_own_ancestor() {
+        let here = CoreTileId::new(16, 100, 200);
+        // Centre and its eastern neighbour share a z15 parent; two tiles
+        // east falls into the next one. Every source kind resolves this
+        // the same way, which is what keeps the DEM stitch aligned with
+        // the vector tile drawn over it.
+        let centre = resolve_overzoom(here, 0, 0, Some(15)).expect("in range");
+        assert_eq!(centre.target, here);
+        assert_eq!(centre.from, Some((CoreTileId::new(15, 50, 100), 1)));
+        let east = resolve_overzoom(here, 1, 0, Some(15)).expect("in range");
+        assert_eq!(
+            east.from.map(|(a, _)| a),
+            Some(CoreTileId::new(15, 50, 100))
+        );
+        let further = resolve_overzoom(here, 2, 0, Some(15)).expect("in range");
+        assert_eq!(
+            further.from.map(|(a, _)| a),
+            Some(CoreTileId::new(15, 51, 100))
+        );
+    }
+
+    #[test]
+    fn overzoom_is_a_no_op_at_the_rendered_zoom() {
+        // A host that passes the source's maxzoom unconditionally must
+        // not pay for a resample on tiles at or above it.
+        let here = CoreTileId::new(15, 50, 100);
+        assert_eq!(resolve_overzoom(here, 0, 0, Some(15)).unwrap().from, None);
+        assert_eq!(resolve_overzoom(here, 0, 0, None).unwrap().from, None);
+    }
+
+    #[test]
+    fn overzoom_refuses_a_deeper_source_zoom() {
+        let here = CoreTileId::new(12, 10, 20);
+        let err = resolve_overzoom(here, 0, 0, Some(14)).unwrap_err();
+        assert!(err.contains("deeper than the requested zoom"), "got {err}");
     }
 
     #[test]
