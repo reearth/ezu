@@ -23,6 +23,49 @@ ezu check style.json --no-fetch   # parse + build graph only — offline, fast
 On success it prints a one-line summary — style name, version, node count, source
 count. On failure it names the offending node.
 
+## A machine-readable report
+
+`--json` writes the same findings to stdout as a JSON object, with the log stream
+moved to stderr so a pipe sees JSON alone:
+
+```sh
+ezu check style.json --json | jq .pad
+```
+
+```json
+{
+  "name": "watercolor",
+  "version": "1",
+  "nodes": 18,
+  "sources": 2,
+  "pad": { "declared": 24, "needed": 12 },
+  "params": { "$schema": "...", "properties": { "softness": { "type": "number", "minimum": 0, "maximum": 4, "default": 0 } } },
+  "assets_resolved": true
+}
+```
+
+`params` is the [generated params schema](/ezu/style/params/#the-generated-schema)
+— byte-for-byte what the tile server serves at `/style/params` and what the wasm
+renderer returns from `paramsSchema`.
+
+That last field is the one worth a CI job of its own if a host generates its own
+params panel rather than reading the schema at runtime. Nothing in a style fails
+when it grows a param the panel has no control for: the style renders, the check
+passes, and the knob is simply absent from the UI. Diffing the schema is what
+turns that silence into a red build.
+
+```yaml title=".github/workflows/params.yml"
+      - name: Params schema is in step with the UI
+        run: |
+          ezu check styles/basemap.json --no-fetch --json \
+            | jq -S .params > /tmp/actual.json
+          diff -u ui/params.schema.json /tmp/actual.json
+```
+
+Commit the schema next to the panel that consumes it and the diff fails the run
+that introduced the drift, naming the param. `jq -S` sorts keys so the comparison
+does not depend on emission order.
+
 ## In GitHub Actions
 
 ```yaml title=".github/workflows/styles.yml"

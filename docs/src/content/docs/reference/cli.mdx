@@ -152,6 +152,7 @@ Options:
       --assets-dir <ASSETS_DIR>  Base directory for resolving relative asset `src` paths. Defaults to the style file's parent directory (or the current directory when `--style` is a URL)
   -v, --verbose                  Emit per-node debug logs from the graph evaluator (op name, cache hit/miss, output shape, eval duration). Overrides `RUST_LOG` for this run
       --no-fetch                 Skip fetching URL assets and reading local asset files — only run parse + `build_graph`. Faster and works offline; misses errors like an unreachable brush URL or a missing image file
+      --json                     Write the report to stdout as JSON instead of log lines: name, version, counts, padding, attribution, and the style's params schema. Logs move to stderr so the stream stays parseable
   -h, --help                     Print help
 ```
 

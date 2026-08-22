@@ -146,6 +146,11 @@ struct CheckCmd {
     /// errors like an unreachable brush URL or a missing image file.
     #[arg(long)]
     no_fetch: bool,
+    /// Write the report to stdout as JSON instead of log lines: name,
+    /// version, counts, padding, attribution, and the style's params
+    /// schema. Logs move to stderr so the stream stays parseable.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args, Debug)]
@@ -363,7 +368,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))
     };
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    // `check --json` owns stdout for its report, so its log lines go to
+    // stderr — a pipe into `jq` has to see JSON and nothing else.
+    let fmt = tracing_subscriber::fmt().with_env_filter(filter);
+    match &cli.cmd {
+        Cmd::Check(a) if a.json => fmt.with_writer(std::io::stderr).init(),
+        _ => fmt.init(),
+    }
     match cli.cmd {
         Cmd::Tile(args) => run_tile(args).await,
         Cmd::Bbox(args) => run_bbox(args).await,
@@ -562,15 +573,66 @@ fn report_pad(graph: &Graph, doc: &Document) {
     }
 }
 
+/// Machine-readable `ezu check` report — `--json`.
+///
+/// `params` is the same JSON Schema the tile server serves at
+/// `/style/params` and the wasm renderer returns from `paramsSchema`.
+/// A host that generates its own params panel can diff this in CI and
+/// be told when a style grows a knob the UI has no control for, instead
+/// of finding out from a widget that quietly went missing.
+#[derive(serde::Serialize)]
+struct CheckReport<'a> {
+    name: &'a str,
+    version: &'a str,
+    nodes: usize,
+    sources: usize,
+    pad: PadReport,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    attribution: Vec<&'a str>,
+    params: serde_json::Value,
+    /// True when asset `src` entries were resolved too — the inverse of
+    /// `--no-fetch`, stated so a consumer knows how much this pass
+    /// actually covered.
+    assets_resolved: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+struct PadReport {
+    declared: u32,
+    /// What the graph needs. Absent when it could not be computed — the
+    /// reason is then in `warnings`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    needed: Option<u32>,
+}
+
 async fn run_check(args: CheckCmd) -> Result<(), Box<dyn std::error::Error>> {
     let text = fetch_text(&args.style).await?;
     let doc = Document::from_json(&text)?;
     let registry = default_registry();
     let graph = build_graph(&doc, &registry)?;
-    report_pad(&graph, &doc);
+    let mut warnings = Vec::new();
+    let needed = match graph.required_pad() {
+        Ok(needed) => Some(needed),
+        Err(e) => {
+            warnings.push(format!("pad: {e}"));
+            None
+        }
+    };
     let attributions = doc.attributions();
-    if !attributions.is_empty() {
-        tracing::info!("attribution: {}", attributions.join(" | "));
+    if !args.json {
+        match needed {
+            Some(needed) if needed > doc.pad => tracing::info!(
+                "pad: {} declared, {needed} needed — rendering with {needed}",
+                doc.pad,
+            ),
+            Some(needed) => tracing::info!("pad: {} declared, {needed} needed", doc.pad),
+            None => tracing::warn!("{}", warnings[0]),
+        }
+        if !attributions.is_empty() {
+            tracing::info!("attribution: {}", attributions.join(" | "));
+        }
     }
 
     let doc_scoped_count = count_doc_scoped_sources(&doc);
@@ -589,6 +651,25 @@ async fn run_check(args: CheckCmd) -> Result<(), Box<dyn std::error::Error>> {
             .with_dir(base_dir.clone())
             .with_images_dir(base_dir.clone());
         ezu::paint::host::prefetch_doc_assets(&doc, &base_dir, &mut loader).await?;
+    }
+
+    if args.json {
+        let report = CheckReport {
+            name: &doc.name,
+            version: &doc.version,
+            nodes: graph.len(),
+            sources: doc.sources.len(),
+            pad: PadReport {
+                declared: doc.pad,
+                needed,
+            },
+            attribution: attributions,
+            params: doc.params_schema(),
+            assets_resolved: !args.no_fetch,
+            warnings,
+        };
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
     }
 
     tracing::info!(
