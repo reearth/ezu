@@ -707,7 +707,7 @@ dependencies = [
 
 [[package]]
 name = "ezu"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "bytes",
  "ezu-core",
@@ -725,7 +725,7 @@ dependencies = [
 
 [[package]]
 name = "ezu-cli"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "axum",
  "bytes",
@@ -749,7 +749,7 @@ dependencies = [
 
 [[package]]
 name = "ezu-compare"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "ezu",
  "ezu-translate",
@@ -764,7 +764,7 @@ dependencies = [
 
 [[package]]
 name = "ezu-core"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "lru",
  "rustybuzz",
@@ -777,7 +777,7 @@ dependencies = [
 
 [[package]]
 name = "ezu-features"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "delaunator",
  "ezu-core",
@@ -792,7 +792,7 @@ dependencies = [
 
 [[package]]
 name = "ezu-graph"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "ezu-style",
  "indexmap",
@@ -807,7 +807,7 @@ dependencies = [
 
 [[package]]
 name = "ezu-paint"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "base64",
  "criterion",
@@ -835,7 +835,7 @@ dependencies = [
 
 [[package]]
 name = "ezu-style"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "ezu-core",
  "indexmap",
@@ -847,7 +847,7 @@ dependencies = [
 
 [[package]]
 name = "ezu-translate"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "ezu-core",
  "ezu-graph",
@@ -861,7 +861,7 @@ dependencies = [
 
 [[package]]
 name = "ezu-wasm"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "console_error_panic_hook",
  "ezu-core",

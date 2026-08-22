@@ -14,7 +14,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 rust-version = "1.89"
 license = "MIT OR Apache-2.0"
@@ -24,13 +24,13 @@ authors = ["Eukarya Inc."]
 
 [workspace.dependencies]
 # Internal
-ezu-core = { version = "0.7.0", path = "crates/ezu-core" }
-ezu-graph = { version = "0.7.0", path = "crates/ezu-graph" }
-ezu-features = { version = "0.7.0", path = "crates/ezu-features" }
-ezu-translate = { version = "0.7.0", path = "crates/ezu-translate" }
-ezu-paint = { version = "0.7.0", path = "crates/ezu-paint" }
-ezu-style = { version = "0.7.0", path = "crates/ezu-style" }
-ezu = { version = "0.7.0", path = "crates/ezu" }
+ezu-core = { version = "0.8.0", path = "crates/ezu-core" }
+ezu-graph = { version = "0.8.0", path = "crates/ezu-graph" }
+ezu-features = { version = "0.8.0", path = "crates/ezu-features" }
+ezu-translate = { version = "0.8.0", path = "crates/ezu-translate" }
+ezu-paint = { version = "0.8.0", path = "crates/ezu-paint" }
+ezu-style = { version = "0.8.0", path = "crates/ezu-style" }
+ezu = { version = "0.8.0", path = "crates/ezu" }
 
 # Brush engine
 hokusai = { version = "0.3", default-features = false }
