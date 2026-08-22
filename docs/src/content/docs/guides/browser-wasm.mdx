@@ -102,7 +102,29 @@ r.requestedNeighborOffsets('terrain');   // e.g. [[-1,0],[1,0],[0,-1],[0,1]] —
 ```
 
 Only cross-tile label collision and edge-continuous DEM shading read neighbours,
-and only for the sources that need them.
+and only for the sources that need them. A `dem` or `raster` source declaring
+`neighbor-fetch: false` always reports none.
+
+### Past a source's maxzoom
+
+Sources end at different depths — a vector basemap at z15, a terrain pyramid at
+z12–14 — while the map keeps zooming. Ask which tile to fetch rather than
+hard-coding each ceiling, then say which zoom the bytes came from:
+
+```js
+const t = r.sourceTile('terrain', z, x, y);   // { z: 14, x: …, y: … } past the ceiling
+r.bindSource('terrain', await fetchDem(t.z, t.x, t.y), { sourceZoom: t.z });
+```
+
+Vector geometry is reprojected into the tile's frame; `dem` and `raster` have the
+ancestor's covering sub-rectangle resampled. Each neighbour resolves against its
+own ancestor, so pass the neighbour's coordinate to `sourceTile` too — a 3×3
+window straddles two parents whenever the centre sits on a parent boundary.
+
+Skip this and the source simply has nothing bound past its ceiling: the `dem`
+node emits a zero-elevation field and the hillshade goes flat with no error. A
+style that would rather fail than draw that says `on-missing: error` on the
+source, and `renderTile` throws instead.
 
 ## Glyphs and fonts
 
