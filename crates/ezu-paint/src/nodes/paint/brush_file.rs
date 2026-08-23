@@ -2,10 +2,11 @@
 //! [`AssetLoader`](ezu_graph::AssetLoader).
 
 use ezu_graph::{
-    schema_frag, Asset, BuiltNode, EvalCtx, EvalError, FactoryCtx, FactoryError, Node, NodeFactory,
-    PortKind, PortSpec, PortValue,
+    schema_frag, Asset, BuiltNode, EvalCtx, EvalError, FactoryCtx, FactoryError, InkReach, Node,
+    NodeFactory, PortKind, PortSpec, PortValue,
 };
 use ezu_style as spec;
+use hokusai::Brush;
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
@@ -16,6 +17,19 @@ struct BrushFileNode {
 impl Node for BrushFileNode {
     fn op_name(&self) -> &'static str {
         "brush-file"
+    }
+
+    fn ink_reach(&self, assets: &dyn ezu_graph::AssetLoader) -> Option<InkReach> {
+        let Ok(Asset::Brush(b)) = assets.load(&self.src) else {
+            // The load failing here is not this walk's business to
+            // report — `eval` will. Say nothing is bounded.
+            return None;
+        };
+        let b = b.downcast::<Brush>().ok()?;
+        Some(InkReach {
+            reach_px: crate::strokes::max_dab_reach_px(&b) as f64,
+            radius_px: crate::strokes::brush_radius_px(&b) as f64,
+        })
     }
     fn inputs(&self) -> &[PortSpec] {
         &[]

@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, Node, NodeFactory, PaddingIn, PortKind, PortSpec, PortValue,
+    FactoryError, In, InReader, InfluenceCtx, Node, NodeFactory, PaddingIn, PortKind, PortSpec,
+    PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -40,6 +41,19 @@ struct FillSolidNode {
 impl Node for FillSolidNode {
     fn op_name(&self) -> &'static str {
         "fill-solid"
+    }
+
+    /// A polygon marks the canvas from its own outline outwards: half
+    /// the edge stroke, and up to the miter limit of it at a sharp
+    /// corner. The blur is already counted by `required_pad`.
+    fn influence_pad(&self, ctx: &InfluenceCtx<'_>) -> u32 {
+        let Some(w) = self.edge_width.static_bound() else {
+            return InfluenceCtx::UNBOUNDED;
+        };
+        let base = self.required_pad(ctx.downstream);
+        // tiny-skia's default miter limit is 4, so a join reaches
+        // `4 · width/2` from the centreline.
+        base.saturating_add((2.0 * w.abs()).ceil() as u32)
     }
     fn inputs(&self) -> &[PortSpec] {
         &self.ports

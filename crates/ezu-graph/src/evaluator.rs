@@ -50,10 +50,14 @@ impl<'a> Evaluator<'a> {
             assets: self.assets,
             params,
             rng_seed,
+            // Replaced per node in `eval_one`; the graph-wide value is
+            // the most permissive one.
+            influence_pad: u32::MAX,
         };
         if crate::mem::enabled() {
             crate::mem::reset();
         }
+        let influence = self.graph.influence_pads(self.assets);
         let n = self.graph.len();
         let mut hashes: Vec<Hash128> = vec![0; n];
         let mut values: Vec<Option<PortValue>> = vec![None; n];
@@ -75,7 +79,7 @@ impl<'a> Evaluator<'a> {
                             .expect("upstream evaluated earlier in topo order"),
                     )
                 };
-                self.eval_one(ix, &ctx, &upstream)?
+                self.eval_one(ix, &ctx, &influence, &upstream)?
             };
             hashes[ix] = hash;
             values[ix] = Some(value);
@@ -130,7 +134,11 @@ impl<'a> Evaluator<'a> {
                 assets: self.assets,
                 params,
                 rng_seed,
+                // Replaced per node in `eval_one`; the graph-wide value
+                // is the most permissive one.
+                influence_pad: u32::MAX,
             };
+            let influence = self.graph.influence_pads(self.assets);
             if crate::mem::enabled() {
                 crate::mem::reset();
             }
@@ -145,6 +153,7 @@ impl<'a> Evaluator<'a> {
                     .map(|ix| AtomicUsize::new(self.graph.downstream_unique(ix).len()))
                     .collect(),
                 first_err: Mutex::new(None),
+                influence,
                 ctx,
             };
 
@@ -214,7 +223,7 @@ impl<'a> Evaluator<'a> {
             (h, v)
         };
 
-        match self.eval_one(ix, &state.ctx, &upstream) {
+        match self.eval_one(ix, &state.ctx, &state.influence, &upstream) {
             Ok((v, h)) => {
                 let _ = state.hashes[ix].set(h);
                 *state.slots[ix].lock().unwrap_or_else(|p| p.into_inner()) = Some(v);
@@ -261,13 +270,21 @@ impl<'a> Evaluator<'a> {
         &self,
         ix: NodeIx,
         ctx: &EvalCtx<'_>,
+        influence: &[u32],
         upstream: &dyn Fn(NodeIx) -> (Hash128, PortValue),
     ) -> Result<(PortValue, Hash128), RenderError> {
         let node = self.graph.node(ix);
+        // What this node may drop depends on the ops *downstream* of it,
+        // whose parameters are not otherwise part of its key.
+        let ctx = &EvalCtx {
+            influence_pad: influence[ix],
+            ..*ctx
+        };
 
         // Hash this node's own params, plus any asset bindings it samples.
         let mut h = Xxh3::new();
         node.param_hash(&mut h);
+        h.update(&ctx.influence_pad.to_le_bytes());
         for name in node.asset_inputs() {
             h.update(name.as_bytes());
             h.update(&ctx.assets.hash(&name).to_le_bytes());
@@ -364,6 +381,8 @@ struct ParState<'a> {
     consumers: Vec<std::sync::atomic::AtomicUsize>,
     first_err: std::sync::Mutex<Option<RenderError>>,
     ctx: EvalCtx<'a>,
+    /// Per-node reach, from [`Graph::influence_pads`].
+    influence: Vec<u32>,
 }
 
 /// Replace a fully transparent raster with the shared blank of the same

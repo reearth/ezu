@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    FactoryError, In, InReader, InfluenceCtx, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use hokusai::color::RgbaF32;
 use serde_json::Value;
@@ -37,6 +37,14 @@ struct FillDabsNode {
 impl Node for FillDabsNode {
     fn op_name(&self) -> &'static str {
         "fill-dabs"
+    }
+
+    /// Nothing upstream of this op may be dropped.
+    ///
+    /// A dab is painted around a centre that is only tested against
+    /// the polygon, and `radius-px` has no declared ceiling.
+    fn influence_pad(&self, _ctx: &InfluenceCtx<'_>) -> u32 {
+        InfluenceCtx::UNBOUNDED
     }
     fn inputs(&self) -> &[PortSpec] {
         &self.ports

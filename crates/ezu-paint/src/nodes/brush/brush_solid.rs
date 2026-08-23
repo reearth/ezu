@@ -8,8 +8,8 @@
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, BuiltNode, EvalCtx, EvalError, FactoryCtx, FactoryError, In, InReader, Node,
-    NodeFactory, PortKind, PortSpec, PortValue,
+    schema_frag, BuiltNode, EvalCtx, EvalError, FactoryCtx, FactoryError, In, InReader, InkReach,
+    Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use hokusai::{Brush, BrushSetting};
 use serde_json::Value;
@@ -30,6 +30,18 @@ struct BrushSolidNode {
 impl Node for BrushSolidNode {
     fn op_name(&self) -> &'static str {
         "brush-solid"
+    }
+
+    fn ink_reach(&self, _assets: &dyn ezu_graph::AssetLoader) -> Option<InkReach> {
+        // A solid brush is a plain round dab, so its reach follows from
+        // its width alone — as long as that width has a ceiling.
+        let radius_px = (self.width_px.static_bound()? * 0.5).max(0.2) as f32;
+        let mut b = Brush::new();
+        b.get_mut(BrushSetting::Radius).base_value = radius_px.ln();
+        Some(InkReach {
+            reach_px: crate::strokes::max_dab_reach_px(&b) as f64,
+            radius_px: radius_px as f64,
+        })
     }
     fn inputs(&self) -> &[PortSpec] {
         &self.ports

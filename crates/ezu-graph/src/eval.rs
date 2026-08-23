@@ -142,6 +142,7 @@ impl ParamValues {
 }
 
 /// Read-only environment a node sees during `eval`.
+#[derive(Clone, Copy)]
 pub struct EvalCtx<'a> {
     pub tile: TileId,
     pub canvas: CanvasInfo,
@@ -150,6 +151,29 @@ pub struct EvalCtx<'a> {
     /// Deterministic root seed for this render. World-anchored nodes
     /// hash this with world coordinates to produce per-feature seeds.
     pub rng_seed: u64,
+    /// How far outside the canvas *this* node's geometry can still reach
+    /// the rendered tile — see [`crate::Node::influence_pad`]. A source
+    /// may drop geometry that lies further out than this; `u32::MAX`
+    /// means the reach is unbounded and nothing may be dropped.
+    pub influence_pad: u32,
+}
+
+impl EvalCtx<'_> {
+    /// The canvas rectangle, grown by this node's influence, outside
+    /// which geometry cannot affect the rendered tile. In padded-canvas
+    /// pixels; `None` when the reach is unbounded.
+    pub fn cull_rect(&self) -> Option<(f64, f64, f64, f64)> {
+        if self.influence_pad == u32::MAX {
+            return None;
+        }
+        let m = self.influence_pad as f64;
+        Some((
+            -m,
+            -m,
+            self.canvas.padded_w() as f64 + m,
+            self.canvas.padded_h() as f64 + m,
+        ))
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

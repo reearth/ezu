@@ -14,7 +14,7 @@
 use ezu_features::ops::transform::transform;
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    FactoryError, In, InReader, InfluenceCtx, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -36,6 +36,14 @@ struct TransformNode {
 impl Node for TransformNode {
     fn op_name(&self) -> &'static str {
         "transform"
+    }
+
+    /// Nothing upstream of this op may be dropped.
+    ///
+    /// `translate-*` moves geometry by a distance with no declared
+    /// ceiling, so nothing upstream can be ruled out.
+    fn influence_pad(&self, _ctx: &InfluenceCtx<'_>) -> u32 {
+        InfluenceCtx::UNBOUNDED
     }
     fn inputs(&self) -> &[PortSpec] {
         &self.ports

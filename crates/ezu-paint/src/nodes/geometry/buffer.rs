@@ -10,7 +10,7 @@ use ezu_features::ops::buffer::{
 };
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    FactoryError, In, InReader, InfluenceCtx, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -27,6 +27,14 @@ struct BufferNode {
 impl Node for BufferNode {
     fn op_name(&self) -> &'static str {
         "buffer"
+    }
+
+    /// Nothing upstream of this op may be dropped.
+    ///
+    /// `distance` has no declared ceiling, and a miter join reaches
+    /// far past it at a sharp corner.
+    fn influence_pad(&self, _ctx: &InfluenceCtx<'_>) -> u32 {
+        InfluenceCtx::UNBOUNDED
     }
     fn inputs(&self) -> &[PortSpec] {
         &self.ports

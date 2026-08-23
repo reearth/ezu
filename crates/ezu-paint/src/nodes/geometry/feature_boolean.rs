@@ -8,7 +8,7 @@
 use ezu_features::ops::boolean::{polygon_boolean, BoolOp};
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    FactoryError, InfluenceCtx, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -22,6 +22,14 @@ struct FeatureBooleanNode {
 impl Node for FeatureBooleanNode {
     fn op_name(&self) -> &'static str {
         "feature-boolean"
+    }
+
+    /// Nothing upstream of this op may be dropped.
+    ///
+    /// A union carries the other input's geometry through, so this
+    /// input's own bounds do not bound the output.
+    fn influence_pad(&self, _ctx: &InfluenceCtx<'_>) -> u32 {
+        InfluenceCtx::UNBOUNDED
     }
     fn inputs(&self) -> &[PortSpec] {
         static SPECS: &[PortSpec] = &[

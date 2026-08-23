@@ -16,6 +16,8 @@ pub(super) struct Mock {
     inputs: Vec<PortSpec>,
     output: PortKind,
     pad_grow: u32,
+    influence_grow: Option<u32>,
+    ink: Option<crate::InkReach>,
     space: CoordSpace,
     fill: [u8; 4],
 }
@@ -27,12 +29,28 @@ impl Mock {
             inputs,
             output,
             pad_grow: 0,
+            influence_grow: Some(0),
+            ink: None,
             space: CoordSpace::Inherit,
             fill: [0, 0, 0, 255],
         }
     }
     pub(super) fn with_pad_grow(mut self, g: u32) -> Self {
         self.pad_grow = g;
+        self
+    }
+    /// Reach this op adds to what upstream geometry can still affect.
+    /// `None` says it cannot be bounded.
+    pub(super) fn with_influence_grow(mut self, g: Option<u32>) -> Self {
+        self.influence_grow = g;
+        self
+    }
+    /// Make this node answer as a brush of the given reach.
+    pub(super) fn with_brush_reach(mut self, reach_px: f64, radius_px: f64) -> Self {
+        self.ink = Some(crate::InkReach {
+            reach_px,
+            radius_px,
+        });
         self
     }
     /// Produce a fully transparent raster instead of the opaque default.
@@ -60,6 +78,18 @@ impl Node for Mock {
     }
     fn required_pad(&self, downstream: u32) -> u32 {
         downstream + self.pad_grow
+    }
+    fn influence_pad(&self, ctx: &crate::InfluenceCtx<'_>) -> u32 {
+        match self.influence_grow {
+            None => crate::InfluenceCtx::UNBOUNDED,
+            Some(g) => {
+                let brush = ctx.brush.map(|b| b.reach_px).unwrap_or(0.0);
+                ctx.plus(g as f64 + brush)
+            }
+        }
+    }
+    fn ink_reach(&self, _assets: &dyn crate::eval::AssetLoader) -> Option<crate::InkReach> {
+        self.ink
     }
     fn eval(
         &self,

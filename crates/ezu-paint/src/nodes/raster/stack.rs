@@ -350,6 +350,7 @@ mod tests {
             assets: &assets,
             params: &params,
             rng_seed: 0,
+            influence_pad: u32::MAX,
         };
         let out = node.eval(&ctx, &inputs).unwrap();
         assert!(matches!(out, PortValue::Sprite(_)), "kind must mirror base");

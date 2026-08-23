@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    FactoryError, In, InReader, InfluenceCtx, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use hokusai::Brush;
 use serde_json::Value;
@@ -42,6 +42,36 @@ struct LineNode {
 impl Node for LineNode {
     fn op_name(&self) -> &'static str {
         "line"
+    }
+
+    /// A stroke lays ink a dab's reach away from its path, so geometry
+    /// that far outside the canvas still marks it. The reach belongs to
+    /// the brush, which arrives on a port — the graph resolves it and
+    /// passes it in. `radius-px` replaces the brush's own radius, and a
+    /// radius curve lifts it further, so either without a static
+    /// ceiling leaves the reach unbounded.
+    fn influence_pad(&self, ctx: &InfluenceCtx<'_>) -> u32 {
+        let Some(ink) = ctx.brush else {
+            return InfluenceCtx::UNBOUNDED;
+        };
+        // `radius-px` replaces the brush's own radius; the rest of the
+        // dab scales with it.
+        let mut reach = match &self.radius_px {
+            None => ink.reach_px,
+            Some(r) => match r.static_bound() {
+                Some(b) => ink.at_radius(b),
+                None => return InfluenceCtx::UNBOUNDED,
+            },
+        };
+        if let Some(curve) = &self.radius_stroke_curve {
+            // A curve's `y` is added to the radius in log space, so its
+            // highest knot scales the dab by `e^y`.
+            let Some(lift) = curve_max_y(curve) else {
+                return InfluenceCtx::UNBOUNDED;
+            };
+            reach *= lift.max(0.0).exp();
+        }
+        ctx.plus(reach)
     }
     fn inputs(&self) -> &[PortSpec] {
         &self.ports
@@ -134,6 +164,14 @@ impl Node for LineNode {
 /// A brush-dynamics curve whose points may each be a `$param`, so the
 /// curve is resolved once per eval by [`resolve_curve`].
 type CurveIn = Vec<(In<f64>, In<f64>)>;
+
+/// The highest `y` a curve can take, or `None` when a knot has no
+/// static ceiling and the curve's effect cannot be bounded.
+fn curve_max_y(curve: &CurveIn) -> Option<f64> {
+    curve
+        .iter()
+        .try_fold(f64::MIN, |acc, (_, y)| Some(acc.max(y.static_bound()?)))
+}
 
 /// Resolve one curve for an eval. Hokusai wants the points ordered, and
 /// a `$param` position is only known now, so sort here.

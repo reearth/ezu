@@ -181,6 +181,14 @@ pub fn paint_lines_parallel(
 // ---------------------------------------------------------------------------
 // Off-canvas culling.
 
+/// The radius, in canvas pixels, that [`max_dab_reach_px`] measured
+/// against — the brush's own radius before any per-op override.
+pub(crate) fn brush_radius_px(brush: &Brush) -> f32 {
+    setting_ceiling(brush.get(BrushSetting::Radius))
+        .exp()
+        .clamp(0.2, 1000.0)
+}
+
 /// `hokusai`'s gaussian is a sum of four uniforms, so a draw lands in
 /// `±2·sqrt(3)` exactly rather than merely with high probability. That
 /// makes every jitter below a hard bound instead of a distribution.
@@ -190,7 +198,7 @@ const GAUSS_MAX: f32 = 3.464_102;
 /// offset added to `base_value`, so summing each mapping's highest knot
 /// bounds the total. A mapping extrapolates past its last knot, but only
 /// for inputs outside their declared range, which brush inputs are not.
-fn setting_ceiling(sv: &hokusai::SettingValue) -> f32 {
+pub(crate) fn setting_ceiling(sv: &hokusai::SettingValue) -> f32 {
     sv.base_value
         + sv.inputs
             .iter()
@@ -201,7 +209,11 @@ fn setting_ceiling(sv: &hokusai::SettingValue) -> f32 {
 /// Upper bound, in canvas pixels, on how far from a stroke vertex the
 /// brush can put ink: the widest dab it can draw plus the furthest the
 /// dab's centre can be jittered away from the vertex.
-fn max_dab_reach_px(brush: &Brush) -> f32 {
+///
+/// Also what a brush node reports through
+/// [`ezu_graph::Node::ink_reach`], so the graph can tell a source how
+/// far outside the canvas geometry is still worth carrying.
+pub(crate) fn max_dab_reach_px(brush: &Brush) -> f32 {
     let radius_log = setting_ceiling(brush.get(BrushSetting::Radius));
     let radius_jitter = setting_ceiling(brush.get(BrushSetting::RadiusByRandom)).max(0.0);
     // `radius_by_random` perturbs the radius in log space, and the dab is

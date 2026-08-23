@@ -19,7 +19,9 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{features_value, read_optional_string, read_optional_zoom};
+use crate::nodes::common::{
+    features_value, features_value_culled, read_optional_string, read_optional_zoom,
+};
 use crate::render::{collect_groups, SharedLayer};
 
 struct FeaturesNode {
@@ -78,7 +80,7 @@ impl Node for FeaturesNode {
         })?;
         let fe = self.filter_expr.as_ref();
         let groups = collect_groups(&shared, fe, &self.min_zoom_field, z);
-        Ok(features_value(shared.layer.extent, groups))
+        Ok(features_value_culled(ctx, shared.layer.extent, groups))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"features");

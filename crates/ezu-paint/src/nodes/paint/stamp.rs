@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, Asset, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError,
-    FactoryCtx, FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
-    RasterBuf,
+    FactoryCtx, FactoryError, In, InReader, InfluenceCtx, Node, NodeFactory, PortKind, PortSpec,
+    PortValue, RasterBuf,
 };
 use ezu_style as spec;
 use serde_json::Value;
@@ -124,6 +124,14 @@ struct StampNode {
 impl Node for StampNode {
     fn op_name(&self) -> &'static str {
         "stamp"
+    }
+
+    /// Nothing upstream of this op may be dropped.
+    ///
+    /// The sprite's own size is only known once the image is loaded,
+    /// and `position-jitter-px` has no declared ceiling.
+    fn influence_pad(&self, _ctx: &InfluenceCtx<'_>) -> u32 {
+        InfluenceCtx::UNBOUNDED
     }
     fn inputs(&self) -> &[PortSpec] {
         &self.ports

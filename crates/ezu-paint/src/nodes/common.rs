@@ -633,6 +633,90 @@ pub(super) fn features_value(extent: u32, groups: Vec<FeatureGroup>) -> PortValu
     PortValue::Features(Arc::new(payload) as Arc<dyn Any + Send + Sync>)
 }
 
+/// Like [`features_value`], but first drops the geometry that cannot
+/// affect the rendered tile.
+///
+/// A source tile is not clipped to the tile that asks for it. Its own
+/// buffer already reaches past the edge, and under overzoom it is an
+/// ancestor's geometry scaled up by the zoom difference — eight levels
+/// deep, a road that measured ten pixels in its own tile arrives two and
+/// a half thousand pixels long, and nearly every feature of the ancestor
+/// lands somewhere off this tile entirely. Carried further down the
+/// graph, each one is resampled at a pixel-scale step and then stroked
+/// dab by dab, so the cost of a tile grows with its ancestor's extent
+/// rather than its own.
+///
+/// The graph knows how far out geometry can still matter — every op
+/// between here and the canvas declares its reach — so ask, and keep
+/// what is within it. Anything further cannot mark the tile whatever
+/// happens downstream.
+pub(super) fn features_value_culled(
+    ctx: &EvalCtx<'_>,
+    extent: u32,
+    groups: Vec<FeatureGroup>,
+) -> PortValue {
+    let Some(rect) = ctx.cull_rect() else {
+        return features_value(extent, groups);
+    };
+    if extent == 0 {
+        return features_value(extent, groups);
+    }
+    // MVT tile-local units to padded-canvas pixels, as the paint ops
+    // resolve them.
+    let sx = ctx.canvas.tile_w as f64 / extent as f64;
+    let sy = ctx.canvas.tile_h as f64 / extent as f64;
+    let pad = ctx.canvas.pad as f64;
+    let keep = |pts: &[(i32, i32)]| -> bool { ring_touches(pts, sx, sy, pad, rect) };
+
+    let groups = groups
+        .into_iter()
+        .filter_map(|g| {
+            let polygons: Vec<_> = g
+                .polygons
+                .into_iter()
+                // A hole only ever removes fill from its own exterior,
+                // so the exterior alone decides.
+                .filter(|p| keep(&p.exterior))
+                .collect();
+            let lines: Vec<_> = g.lines.into_iter().filter(|l| keep(l)).collect();
+            let points: Vec<_> = g.points.into_iter().filter(|&p| keep(&[p])).collect();
+            if polygons.is_empty() && lines.is_empty() && points.is_empty() {
+                return None;
+            }
+            Some(FeatureGroup {
+                properties: g.properties,
+                polygons,
+                lines,
+                points,
+            })
+        })
+        .collect();
+    features_value(extent, groups)
+}
+
+/// Whether a ring's bounding box, in padded-canvas pixels, meets `rect`.
+fn ring_touches(
+    pts: &[(i32, i32)],
+    sx: f64,
+    sy: f64,
+    pad: f64,
+    rect: (f64, f64, f64, f64),
+) -> bool {
+    let (rx0, ry0, rx1, ry1) = rect;
+    let (mut x0, mut x1) = (f64::MAX, f64::MIN);
+    let (mut y0, mut y1) = (f64::MAX, f64::MIN);
+    for &(x, y) in pts {
+        let px = x as f64 * sx + pad;
+        let py = y as f64 * sy + pad;
+        x0 = x0.min(px);
+        x1 = x1.max(px);
+        y0 = y0.min(py);
+        y1 = y1.max(py);
+    }
+    // An empty ring has no bounding box and nothing to draw.
+    x0 <= x1 && x1 >= rx0 && x0 <= rx1 && y1 >= ry0 && y0 <= ry1
+}
+
 /// Accepts list for ports that take either a canvas `Raster` or a
 /// native-sized `Sprite`. Filter ops that don't care about the
 /// canvas-alignment of their input (e.g. `blur`, `hsl`) use this.
@@ -698,4 +782,88 @@ pub(super) fn downcast_brush(v: &PortValue) -> Result<Arc<BrushPayload>, EvalErr
     o.clone()
         .downcast::<BrushPayload>()
         .map_err(|_| EvalError::Other("brush payload type mismatch".into()))
+}
+
+#[cfg(test)]
+mod cull_tests {
+    use super::*;
+    use ezu_graph::{CanvasInfo, NoAssets, ParamValues, TileId};
+
+    const EXTENT: u32 = 4096;
+
+    /// One line, at a tile-local position given in MVT units.
+    fn line_at(x: i32, y: i32) -> FeatureGroup {
+        FeatureGroup::synthetic(vec![], vec![vec![(x, y), (x + 10, y + 10)]], vec![])
+    }
+
+    /// Cull `groups` at a given reach and report how many groups, and
+    /// how much geometry, survived.
+    fn cull(influence_pad: u32, groups: Vec<FeatureGroup>) -> Vec<FeatureGroup> {
+        let params = ParamValues::new();
+        let assets = NoAssets;
+        let ctx = EvalCtx {
+            tile: TileId {
+                z: 13,
+                x: 7276,
+                y: 3225,
+            },
+            canvas: CanvasInfo::square(256, 12),
+            assets: &assets,
+            params: &params,
+            rng_seed: 0,
+            influence_pad,
+        };
+        let PortValue::Features(p) = features_value_culled(&ctx, EXTENT, groups) else {
+            panic!("not a features port")
+        };
+        let f = p
+            .downcast_ref::<FilteredFeatures>()
+            .expect("features payload");
+        f.groups
+            .iter()
+            .map(|g| FeatureGroup::synthetic(g.polygons.clone(), g.lines.clone(), g.points.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn geometry_beyond_the_reach_is_dropped() {
+        // 4096 MVT units span 256 px, so 40000 units is far outside.
+        let kept = cull(8, vec![line_at(2000, 2000), line_at(40_000, 40_000)]);
+        assert_eq!(kept.len(), 1);
+    }
+
+    /// Geometry outside the canvas still marks it when something
+    /// downstream reaches that far, so the reach decides rather than
+    /// the canvas edge.
+    #[test]
+    fn geometry_within_the_reach_is_kept() {
+        // 1 px is 16 MVT units here and the canvas carries 12 px of
+        // pad, so -400 units sits 13 px above the padded canvas.
+        assert_eq!(cull(0, vec![line_at(1000, -400)]).len(), 0);
+        assert_eq!(cull(64, vec![line_at(1000, -400)]).len(), 1);
+    }
+
+    /// When nothing downstream can bound its reach, everything stays.
+    #[test]
+    fn an_unbounded_reach_keeps_everything() {
+        let kept = cull(
+            u32::MAX,
+            vec![line_at(2000, 2000), line_at(400_000, 400_000)],
+        );
+        assert_eq!(kept.len(), 2);
+    }
+
+    /// A group is only dropped once *none* of its geometry survives.
+    #[test]
+    fn a_group_survives_on_any_one_of_its_shapes() {
+        let mixed = FeatureGroup::synthetic(
+            vec![],
+            vec![vec![(40_000, 40_000), (40_010, 40_010)]],
+            vec![(2000, 2000)],
+        );
+        let kept = cull(8, vec![mixed]);
+        assert_eq!(kept.len(), 1);
+        assert!(kept[0].lines.is_empty(), "the far line went");
+        assert_eq!(kept[0].points.len(), 1, "the near point stayed");
+    }
 }

@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    FactoryError, In, InReader, InfluenceCtx, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use tiny_skia::{FillRule, Paint, PathBuilder, Stroke, Transform};
@@ -107,6 +107,14 @@ struct CirclesNode {
 impl Node for CirclesNode {
     fn op_name(&self) -> &'static str {
         "circles"
+    }
+
+    /// Nothing upstream of this op may be dropped.
+    ///
+    /// `radius` has no declared ceiling, and an expression-driven one
+    /// has no static value at all.
+    fn influence_pad(&self, _ctx: &InfluenceCtx<'_>) -> u32 {
+        InfluenceCtx::UNBOUNDED
     }
     fn inputs(&self) -> &[PortSpec] {
         &self.ports

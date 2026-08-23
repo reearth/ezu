@@ -35,7 +35,7 @@ pub use evaluator::{Evaluator, RenderError};
 pub use graph::{BuildError, Edge, Graph, GraphBuilder, NodeId, NodeIx, MAX_PAD};
 pub use input::{parse_param_value, In, InParts, InReader, PaddingIn, ScalarType, ACCEPTS_SCALAR};
 pub use neighbor::{neighbor_binding, neighbor_bindings, parse_neighbor_binding};
-pub use node::Node;
+pub use node::{InfluenceCtx, InkReach, Node};
 pub use port::{CoordSpace, PortKind, PortSpec};
 pub use registry::{
     schema_frag, take_input_ref, take_optional_input_ref, BuiltNode, Connection, FactoryCtx,

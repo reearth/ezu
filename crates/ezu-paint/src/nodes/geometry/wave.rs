@@ -19,7 +19,7 @@ use std::f64::consts::PI;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    FactoryError, In, InReader, InfluenceCtx, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -43,6 +43,19 @@ struct WaveNode {
 impl Node for WaveNode {
     fn op_name(&self) -> &'static str {
         "wave"
+    }
+
+    /// A wave moves a vertex by at most the sine amplitude plus the
+    /// noise amplitude, so geometry that far outside the canvas can
+    /// still be displaced onto it.
+    fn influence_pad(&self, ctx: &InfluenceCtx<'_>) -> u32 {
+        let (Some(amp), Some(noise)) = (
+            self.amplitude_px.static_bound(),
+            self.noise_amp_px.static_bound(),
+        ) else {
+            return InfluenceCtx::UNBOUNDED;
+        };
+        ctx.plus(amp.abs() + noise.abs())
     }
     fn inputs(&self) -> &[PortSpec] {
         &self.ports

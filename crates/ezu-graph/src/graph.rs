@@ -533,6 +533,35 @@ impl Graph {
         Ok(self.compute_pad(0)?.into_iter().max().unwrap_or(0))
     }
 
+    /// Per node, how far outside the canvas that node's geometry can
+    /// still reach the rendered tile — see [`Node::influence_pad`].
+    ///
+    /// A source consults its own entry to decide which features are
+    /// worth carrying. Unlike [`Graph::compute_pad`] this never fails:
+    /// a distance too large to be useful saturates at [`u32::MAX`],
+    /// which reads as "keep everything" and so errs towards drawing.
+    pub fn influence_pads(&self, assets: &dyn crate::eval::AssetLoader) -> Vec<u32> {
+        let mut influence = vec![0u32; self.len()];
+        for &ix in self.topo.iter().rev() {
+            // A stroking op learns its dab width from a brush on one of
+            // its ports, which it cannot read before eval — so the graph
+            // asks the brush directly and hands the answer down.
+            let brush = self
+                .upstream(ix)
+                .find_map(|src| self.node(src).ink_reach(assets));
+            let ctx = crate::node::InfluenceCtx {
+                downstream: influence[ix],
+                brush,
+                assets,
+            };
+            let up = self.node(ix).influence_pad(&ctx);
+            for src in self.upstream(ix) {
+                influence[src] = influence[src].max(up);
+            }
+        }
+        influence
+    }
+
     /// Compute the canvas padding each node must supply, given the
     /// margin requested at the output.
     ///

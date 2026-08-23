@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    FactoryError, In, InReader, InfluenceCtx, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use tiny_skia::{LineCap, LineJoin};
@@ -55,6 +55,25 @@ struct StrokeNode {
 impl Node for StrokeNode {
     fn op_name(&self) -> &'static str {
         "stroke"
+    }
+
+    /// A stroke marks the canvas half a width either side of the path,
+    /// a casing gap pushing that out further, and up to the miter limit
+    /// of it at a sharp corner. An expression-driven width has no
+    /// static value at all, so it cannot be bounded.
+    fn influence_pad(&self, ctx: &InfluenceCtx<'_>) -> u32 {
+        if self.width_expr.is_some() || self.gap_width_expr.is_some() {
+            return InfluenceCtx::UNBOUNDED;
+        }
+        let (Some(w), Some(gap)) = (
+            self.width_px.static_bound(),
+            self.gap_width_px.static_bound(),
+        ) else {
+            return InfluenceCtx::UNBOUNDED;
+        };
+        // The casing footprint, times tiny-skia's default miter limit
+        // of 4 over the naive half-width.
+        ctx.plus(2.0 * (gap.abs() + 2.0 * w.abs()))
     }
     fn inputs(&self) -> &[PortSpec] {
         &self.ports

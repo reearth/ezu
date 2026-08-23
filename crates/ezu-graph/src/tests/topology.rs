@@ -2,7 +2,7 @@
 //! builder. No JSON parsing, no evaluation.
 
 use super::common::{passthrough, src, Mock};
-use crate::{BuildError, GraphBuilder, PortKind, PortSpec};
+use crate::{BuildError, GraphBuilder, InfluenceCtx, InkReach, NoAssets, PortKind, PortSpec};
 
 #[test]
 fn linear_chain_topo() {
@@ -255,4 +255,212 @@ fn nodes_the_output_ignores_are_still_ordered() {
     let pos = |id: &str| order.iter().position(|n| *n == id).unwrap();
     assert!(pos("a") < pos("out"));
     assert!(pos("a") < pos("side"));
+}
+
+// ---------------------------------------------------------------------------
+// Influence — how far outside the canvas geometry can still matter.
+
+/// The reach accumulates along the chain from the output back to the
+/// source, so a source learns what every op between it and the canvas
+/// can do with its geometry.
+#[test]
+fn influence_accumulates_back_to_the_source() {
+    let mut b = GraphBuilder::new();
+    b.add_node("feat", src(PortKind::Features))
+        .add_node(
+            "wave",
+            Mock::new(
+                "wave",
+                vec![PortSpec::new("input", &[PortKind::Features])],
+                PortKind::Features,
+            )
+            .with_influence_grow(Some(4))
+            .boxed(),
+        )
+        .add_node(
+            "draw",
+            Mock::new(
+                "draw",
+                vec![PortSpec::new("input", &[PortKind::Features])],
+                PortKind::Raster,
+            )
+            .with_influence_grow(Some(10))
+            .boxed(),
+        )
+        .add_node(
+            "blur",
+            Mock::new(
+                "blur",
+                vec![PortSpec::new("input", &[PortKind::Raster])],
+                PortKind::Raster,
+            )
+            .with_influence_grow(Some(6))
+            .boxed(),
+        )
+        .connect("feat", "wave", "input")
+        .connect("wave", "draw", "input")
+        .connect("draw", "blur", "input")
+        .set_output("blur");
+    let g = b.build().unwrap();
+    let pads = g.influence_pads(&NoAssets);
+    let at = |id: &str| {
+        pads[g
+            .topo_order()
+            .iter()
+            .copied()
+            .find(|&i| g.node_id(i) == id)
+            .unwrap()]
+    };
+    assert_eq!(at("blur"), 0, "the output claims nothing beyond itself");
+    assert_eq!(at("draw"), 6);
+    assert_eq!(at("wave"), 16);
+    assert_eq!(at("feat"), 20);
+}
+
+/// One op that cannot bound its reach makes everything above it
+/// unbounded too — the safe answer, since dropping geometry it might
+/// have used would lose ink.
+#[test]
+fn an_unbounded_op_makes_everything_above_it_unbounded() {
+    let mut b = GraphBuilder::new();
+    b.add_node("feat", src(PortKind::Features))
+        .add_node(
+            "shift",
+            Mock::new(
+                "shift",
+                vec![PortSpec::new("input", &[PortKind::Features])],
+                PortKind::Features,
+            )
+            .with_influence_grow(None)
+            .boxed(),
+        )
+        .add_node(
+            "draw",
+            Mock::new(
+                "draw",
+                vec![PortSpec::new("input", &[PortKind::Features])],
+                PortKind::Raster,
+            )
+            .with_influence_grow(Some(10))
+            .boxed(),
+        )
+        .connect("feat", "shift", "input")
+        .connect("shift", "draw", "input")
+        .set_output("draw");
+    let g = b.build().unwrap();
+    let pads = g.influence_pads(&NoAssets);
+    let at = |id: &str| {
+        pads[g
+            .topo_order()
+            .iter()
+            .copied()
+            .find(|&i| g.node_id(i) == id)
+            .unwrap()]
+    };
+    // `shift` still sees what `draw` claims; it is what lies *above*
+    // `shift` that cannot be bounded.
+    assert_eq!(at("shift"), 10);
+    assert_eq!(at("feat"), InfluenceCtx::UNBOUNDED);
+}
+
+/// A source feeding two branches has to satisfy the hungrier one.
+#[test]
+fn a_shared_source_takes_the_widest_of_its_consumers() {
+    let mut b = GraphBuilder::new();
+    let branch = |grow: u32| {
+        Mock::new(
+            "draw",
+            vec![PortSpec::new("input", &[PortKind::Features])],
+            PortKind::Raster,
+        )
+        .with_influence_grow(Some(grow))
+        .boxed()
+    };
+    b.add_node("feat", src(PortKind::Features))
+        .add_node("narrow", branch(3))
+        .add_node("wide", branch(30))
+        .add_node(
+            "merge",
+            Mock::new(
+                "merge",
+                vec![
+                    PortSpec::new("left", &[PortKind::Raster]),
+                    PortSpec::new("right", &[PortKind::Raster]),
+                ],
+                PortKind::Raster,
+            )
+            .boxed(),
+        )
+        .connect("feat", "narrow", "input")
+        .connect("feat", "wide", "input")
+        .connect("narrow", "merge", "left")
+        .connect("wide", "merge", "right")
+        .set_output("merge");
+    let g = b.build().unwrap();
+    let pads = g.influence_pads(&NoAssets);
+    let at = |id: &str| {
+        pads[g
+            .topo_order()
+            .iter()
+            .copied()
+            .find(|&i| g.node_id(i) == id)
+            .unwrap()]
+    };
+    assert_eq!(at("feat"), 30);
+}
+
+/// A stroking op is handed its brush's reach by the graph, because the
+/// brush arrives on a port it cannot read before eval.
+#[test]
+fn a_brush_hands_its_reach_to_the_op_that_strokes_with_it() {
+    let draw = |name: &'static str| {
+        Mock::new(
+            name,
+            vec![
+                PortSpec::new("input", &[PortKind::Features]),
+                PortSpec::new("brush", &[PortKind::Brush]),
+            ],
+            PortKind::Raster,
+        )
+        .with_influence_grow(Some(0))
+        .boxed()
+    };
+    let mut b = GraphBuilder::new();
+    b.add_node("feat", src(PortKind::Features))
+        .add_node(
+            "brush",
+            Mock::new("brush", vec![], PortKind::Brush)
+                .with_brush_reach(37.0, 4.0)
+                .boxed(),
+        )
+        .add_node("draw", draw("draw"))
+        .connect("feat", "draw", "input")
+        .connect("brush", "draw", "brush")
+        .set_output("draw");
+    let g = b.build().unwrap();
+    let pads = g.influence_pads(&NoAssets);
+    let at = |id: &str| {
+        pads[g
+            .topo_order()
+            .iter()
+            .copied()
+            .find(|&i| g.node_id(i) == id)
+            .unwrap()]
+    };
+    assert_eq!(at("feat"), 37);
+}
+
+/// Overriding a brush's radius scales everything else about the dab
+/// with it, so the reach follows.
+#[test]
+fn a_brushs_reach_scales_with_the_radius_it_is_used_at() {
+    let ink = InkReach {
+        reach_px: 40.0,
+        radius_px: 4.0,
+    };
+    assert_eq!(ink.at_radius(4.0), 40.0);
+    assert_eq!(ink.at_radius(8.0), 80.0);
+    // A narrower radius never claims *less* than the brush already
+    // reaches — the jitters do not shrink with it.
+    assert_eq!(ink.at_radius(1.0), 40.0);
 }
