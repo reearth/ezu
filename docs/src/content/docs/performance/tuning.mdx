@@ -76,7 +76,9 @@ PNG also takes a compression preset — use the fast preset for live previews.
 - **SIMD build** helps the image-processing ops most.
 - **Threads build** gives you the parallel evaluator across Web Workers, if the
   page is cross-origin isolated.
-- **Do not fetch a blind 3×3.** `requestedNeighborOffsets(name)` is usually empty.
+- **Do not fetch a blind 3×3.** `requestedNeighborOffsets(name)` is usually empty
+  for a vector source — but bind every offset it *does* report, DEM and raster
+  included, or the pad comes out clamped and the tile seams.
 - **Cap glyph residency** with `setGlyphBudget`, and watch `memoryUsage()`.
 
 ## 7. Fetching, not rendering

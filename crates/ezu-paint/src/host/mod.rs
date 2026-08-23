@@ -982,6 +982,60 @@ pub fn requested_neighbor_offsets(
     offs
 }
 
+/// The eight neighbours of a 3×3 window, in the same sorted order
+/// [`requested_neighbor_offsets`] returns its answers in.
+const WINDOW_3X3: [(i32, i32); 8] = [
+    (-1, -1),
+    (-1, 0),
+    (-1, 1),
+    (0, -1),
+    (0, 1),
+    (1, -1),
+    (1, 0),
+    (1, 1),
+];
+
+/// The neighbour offsets `(dx, dy)` a host should fetch for `source`,
+/// given what the graph reads (`requested`, from
+/// [`ezu_graph::Graph::asset_inputs`]) and how the source is declared.
+///
+/// This is the question a host actually has, and it is answered
+/// differently per source kind:
+///
+/// - **Feature sources** (`mvt`, `pmtiles`, `geojson`) bind per layer,
+///   and a node that wants a neighbour names it: `<source>.<layer>@dx,dy`.
+///   The graph is the authority, so the answer comes from `requested` —
+///   see [`requested_neighbor_offsets`]. Usually empty; cross-tile label
+///   collision is what fills it.
+/// - **`dem` and `raster`** bind under the bare `<source>` name. They
+///   have no layer, so no node can spell an `@dx,dy` variant of them and
+///   `requested` can never answer for them. Their window is declared
+///   instead, by `neighbor-fetch`: on (the default) means the full 3×3,
+///   so gradient and filter ops see real samples across the tile border
+///   rather than the stitch's edge-clamped guess. A source the graph
+///   never reads is still not worth a fetch, hence the `requested` check.
+///
+/// Passing `requested_neighbor_offsets` a DEM name returns an empty list
+/// for a source that needs eight tiles, which is why a host should reach
+/// for this instead.
+pub fn source_neighbor_offsets(
+    decl: &ezu_style::SourceDecl,
+    requested: &std::collections::BTreeSet<String>,
+    source: &str,
+) -> Vec<(i32, i32)> {
+    let stitched_window = match decl {
+        ezu_style::SourceDecl::Dem(s) => s.neighbor_fetch,
+        ezu_style::SourceDecl::Raster(s) => s.neighbor_fetch,
+        // Not a stitched source: the graph names what it wants.
+        _ => return requested_neighbor_offsets(requested, source),
+    };
+    if stitched_window && requested.contains(source) {
+        WINDOW_3X3.to_vec()
+    } else {
+        Vec::new()
+    }
+}
+
 /// Decode a PNG (or other format supported by the `image` crate) into a
 /// premultiplied-alpha RGBA8 [`RasterBuf`]. Returns a stringified error
 /// on any decode failure.
@@ -1552,6 +1606,97 @@ mod tests {
         assert_eq!(
             requested_neighbor_offsets(&requested, "absent"),
             Vec::<(i32, i32)>::new()
+        );
+    }
+
+    fn source_decl(json: serde_json::Value) -> ezu_style::SourceDecl {
+        serde_json::from_value(json).expect("source declaration")
+    }
+
+    fn dem_decl(neighbor_fetch: bool) -> ezu_style::SourceDecl {
+        source_decl(serde_json::json!({
+            "type": "dem",
+            "url": "https://h/{z}/{x}/{y}.webp",
+            "encoding": "terrarium",
+            "neighbor-fetch": neighbor_fetch,
+        }))
+    }
+
+    /// A DEM binds under its bare source name, so no `@dx,dy` variant of
+    /// it can ever appear in the graph's requested set. The window comes
+    /// from the declaration instead — the whole 3×3, so the pad holds
+    /// real elevation rather than the stitch's edge-clamped copy.
+    #[test]
+    fn a_dem_the_graph_reads_asks_for_the_whole_window() {
+        let requested: BTreeSet<String> = ["terrain".to_string()].into_iter().collect();
+        assert_eq!(
+            source_neighbor_offsets(&dem_decl(true), &requested, "terrain"),
+            vec![
+                (-1, -1),
+                (-1, 0),
+                (-1, 1),
+                (0, -1),
+                (0, 1),
+                (1, -1),
+                (1, 0),
+                (1, 1)
+            ]
+        );
+        // The layer-based answer cannot see a DEM at all — the reason
+        // `source_neighbor_offsets` exists.
+        assert_eq!(
+            requested_neighbor_offsets(&requested, "terrain"),
+            Vec::<(i32, i32)>::new()
+        );
+    }
+
+    #[test]
+    fn a_dem_declaring_no_neighbor_fetch_asks_for_nothing() {
+        let requested: BTreeSet<String> = ["terrain".to_string()].into_iter().collect();
+        assert_eq!(
+            source_neighbor_offsets(&dem_decl(false), &requested, "terrain"),
+            Vec::<(i32, i32)>::new()
+        );
+    }
+
+    /// Declared but unread: the pad of a field nothing samples is not
+    /// worth eight tiles.
+    #[test]
+    fn a_dem_no_node_reads_asks_for_nothing() {
+        let requested: BTreeSet<String> = ["roads.road".to_string()].into_iter().collect();
+        assert_eq!(
+            source_neighbor_offsets(&dem_decl(true), &requested, "terrain"),
+            Vec::<(i32, i32)>::new()
+        );
+    }
+
+    #[test]
+    fn a_raster_takes_the_same_window_as_a_dem() {
+        let decl = source_decl(serde_json::json!({
+            "type": "raster",
+            "url": "https://h/{z}/{x}/{y}.png",
+        }));
+        let requested: BTreeSet<String> = ["imagery".to_string()].into_iter().collect();
+        assert_eq!(
+            source_neighbor_offsets(&decl, &requested, "imagery").len(),
+            8
+        );
+    }
+
+    /// Feature sources keep answering from the graph: a window they did
+    /// not ask for is eight tiles nothing reads.
+    #[test]
+    fn a_feature_source_still_answers_from_the_graph() {
+        let decl = source_decl(serde_json::json!({
+            "type": "mvt",
+            "url": "https://h/{z}/{x}/{y}.mvt",
+        }));
+        let requested: BTreeSet<String> = ["roads.road".to_string(), "roads.label@1,0".to_string()]
+            .into_iter()
+            .collect();
+        assert_eq!(
+            source_neighbor_offsets(&decl, &requested, "roads"),
+            vec![(1, 0)]
         );
     }
 

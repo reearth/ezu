@@ -592,9 +592,17 @@ impl Renderer {
     /// the maxzoom of each source keeps a second copy of something the style
     /// already states, and the two drift.
     ///
+    /// `x` and `y` may be off the tile grid, which is what a host walking
+    /// a neighbourhood hands in: `x` wraps around the antimeridian, so
+    /// the western neighbour of `z/0/y` is the real tile at the far side
+    /// of the world. `y` does not wrap — there is no tile above the north
+    /// pole — and an out-of-range row comes back unchanged, so the fetch
+    /// for it misses and the stitch clamps that edge, which is what the
+    /// pole should look like.
+    ///
     /// Throws `UnknownSource` if `name` is not declared in the style.
     #[wasm_bindgen(js_name = sourceTile)]
-    pub fn source_tile(&self, name: &str, z: u8, x: u32, y: u32) -> Result<JsValue, JsValue> {
+    pub fn source_tile(&self, name: &str, z: u8, x: i32, y: i32) -> Result<JsValue, JsValue> {
         let decl = self
             .doc
             .sources
@@ -605,14 +613,17 @@ impl Renderer {
             SourceDecl::Raster(s) => s.max_zoom,
             _ => None,
         };
+        let world = 1i64 << z.min(30);
+        let x = (x as i64).rem_euclid(world);
+        let y = y as i64;
         let (tz, tx, ty) = match max_zoom {
             Some(mz) if z > mz => (mz, x >> (z - mz), y >> (z - mz)),
             _ => (z, x, y),
         };
         let out = js_sys::Object::new();
         let _ = js_sys::Reflect::set(&out, &"z".into(), &JsValue::from(tz));
-        let _ = js_sys::Reflect::set(&out, &"x".into(), &JsValue::from(tx));
-        let _ = js_sys::Reflect::set(&out, &"y".into(), &JsValue::from(ty));
+        let _ = js_sys::Reflect::set(&out, &"x".into(), &JsValue::from_f64(tx as f64));
+        let _ = js_sys::Reflect::set(&out, &"y".into(), &JsValue::from_f64(ty as f64));
         Ok(out.into())
     }
 
@@ -620,18 +631,25 @@ impl Renderer {
     /// `source`, as an array of `[dx, dy]` pairs (never including the
     /// centre `[0, 0]`).
     ///
-    /// Cross-tile label collision and edge-continuous DEM shading are the
-    /// only things that read neighbours, and only for the sources they
-    /// name. A host that fetches the full 3×3 window unconditionally
-    /// therefore pays for up to eight tiles it will not look at; passing
-    /// each offset from this list to `bindSource(name, bytes, { coord })`
-    /// fetches exactly what the recipe needs. An empty array means the
-    /// centre tile is enough.
+    /// Cross-tile label collision and edge-continuous DEM/raster shading
+    /// are the only things that read neighbours, and only for the sources
+    /// they name. Pass each offset from this list to
+    /// `bindSource(name, bytes, { coord })` and the render gets exactly
+    /// what the recipe needs — neither a blind 3×3 per source nor, more
+    /// costly, a window short of what a stitched source wanted. An empty
+    /// array means the centre tile is enough.
     ///
-    /// A `dem` or `raster` source that declares `neighbor-fetch: false`
-    /// reports no offsets whatever the graph asks for: the style has said
-    /// not to stitch a neighbourhood for it, and this list is what a host
-    /// fetches from.
+    /// What comes back depends on the source's kind. A vector source
+    /// answers from the graph: a node that wants a neighbour names it,
+    /// and cross-tile label collision is usually the only thing that
+    /// does, so the list is often empty. A `dem` or `raster` source
+    /// answers from its own `neighbor-fetch`, which defaults to on and
+    /// means the whole 3×3 — those bind as one stitched canvas, and a
+    /// neighbour left unbound is not a missing collision candidate but a
+    /// pad filled by clamping the tile's own edge, which shows up as a
+    /// seam in whatever samples it. `neighbor-fetch: false` reports
+    /// nothing whatever the graph asks for; so does a source no node in
+    /// the graph reads.
     ///
     /// Throws `UnknownSource` if `name` is not declared in the style.
     #[wasm_bindgen(js_name = requestedNeighborOffsets)]
@@ -641,17 +659,9 @@ impl Renderer {
             .sources
             .get(name)
             .ok_or_else(|| named_err(ERR_SOURCE, format!("no source `{name}` in style")))?;
-        let neighbor_fetch = match decl {
-            SourceDecl::Dem(s) => s.neighbor_fetch,
-            SourceDecl::Raster(s) => s.neighbor_fetch,
-            _ => true,
-        };
-        if !neighbor_fetch {
-            return Ok(js_sys::Array::new());
-        }
         let requested = self.graph.asset_inputs();
         let out = js_sys::Array::new();
-        for (dx, dy) in ezu_paint::host::requested_neighbor_offsets(&requested, name) {
+        for (dx, dy) in ezu_paint::host::source_neighbor_offsets(decl, &requested, name) {
             let pair = js_sys::Array::new();
             pair.push(&JsValue::from(dx));
             pair.push(&JsValue::from(dy));
@@ -996,6 +1006,42 @@ impl Renderer {
                          with sourceZoom), or answer the request as missing"
                     ),
                 ));
+            }
+        }
+
+        // A `dem` or `raster` stitches its 3×3 into one canvas-sized
+        // buffer, and a neighbour the host did not bind is not a gap —
+        // it is pad filled by clamping the centre tile's own edge, which
+        // every filter that samples the pad then reads as real. That
+        // renders, so nothing else here would say a word about it. Say
+        // it: what the render is short of is exactly what
+        // `requestedNeighborOffsets` names.
+        let world = 1i64 << z.min(30);
+        for (name, decl) in &self.doc.sources {
+            let bound = match self.bindings.get(name) {
+                Some(SourceBinding::Dem(m)) | Some(SourceBinding::Raster(m)) => m,
+                // Vector neighbours are collision candidates, not pixels;
+                // binding only the centre is a documented degrade.
+                _ => continue,
+            };
+            let wanted = ezu_paint::host::source_neighbor_offsets(decl, &requested, name);
+            // A row off the top or bottom of the world has no tile to
+            // bind, and clamping there is the right answer.
+            let missing = wanted
+                .iter()
+                .filter(|&&(dx, dy)| {
+                    let row = y as i64 + dy as i64;
+                    (0..world).contains(&row) && !bound.contains_key(&(dx, dy))
+                })
+                .count();
+            if missing > 0 {
+                tracing::warn!(
+                    "source `{name}`: {missing} of the {} neighbour tiles it asks for are \
+                     unbound for {z}/{x}/{y} — the pad they would fill is clamped from the \
+                     centre tile's edge, and whatever samples it will seam at the tile border. \
+                     Bind every offset `requestedNeighborOffsets(\"{name}\")` reports.",
+                    wanted.len(),
+                );
             }
         }
 

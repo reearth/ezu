@@ -42,7 +42,10 @@ class Renderer {
   // The tile to fetch from `name` in order to draw z/x/y. Past a
   // source's declared `max-zoom` this is the covering ancestor — bind
   // it with `{ sourceZoom: <returned z> }`. Keeps the ceiling in the
-  // style instead of a second copy in the host.
+  // style instead of a second copy in the host. Takes off-grid
+  // coordinates, as a neighbour walk produces: x wraps around the
+  // antimeridian, y does not (no tile above the pole — that row comes
+  // back as asked, misses, and the stitch clamps the edge).
   sourceTile(name: string, z: number, x: number, y: number):
     { z: number; x: number; y: number };
 
@@ -96,11 +99,14 @@ class Renderer {
   boundSources(): string[];
 
   // Neighbour offsets the style actually reads for this source, as
-  // [dx, dy] pairs (never [0, 0]). Only cross-tile label collision and
-  // edge-continuous DEM shading read neighbours, and only for the
-  // sources that need them — fetch these instead of the whole 3×3.
-  // Empty means the centre tile is enough, which is also what a dem /
-  // raster source declaring `neighbor-fetch: false` always reports.
+  // [dx, dy] pairs (never [0, 0]) — fetch these instead of a blind 3×3.
+  // A vector source answers from the graph, where cross-tile label
+  // collision is usually the only thing that names a neighbour, so the
+  // list is often empty. A dem / raster source stitches its window into
+  // one canvas-sized buffer, so `neighbor-fetch` (on by default) means
+  // all eight; leave one unbound and the pad it would fill is clamped
+  // from the centre tile's edge, and the tile seams. Empty means the
+  // centre is enough: `neighbor-fetch: false`, or no node reads it.
   requestedNeighborOffsets(name: string): [number, number][];
 
   // Codepoints the bound features can require, keyed by `glyphs`

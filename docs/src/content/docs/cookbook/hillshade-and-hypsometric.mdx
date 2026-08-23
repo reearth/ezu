@@ -76,9 +76,12 @@ A gradient at the tile's edge needs elevations from the next tile over. Without
 the neighbourhood, hillshade *steps* at every border — a grid of visible seams.
 The host stitches the 3×3 neighbourhood into one per-tile field before evaluation.
 
-Ask which neighbours are actually needed rather than fetching nine tiles blindly:
-`requestedNeighborOffsets('terrain')` in wasm,
-`requested_neighbor_offsets` natively.
+Ask what the source needs rather than assuming:
+`requestedNeighborOffsets('terrain')` in wasm, `source_neighbor_offsets`
+natively. With `neighbor-fetch` on — the default — that is all eight, and binding
+fewer does not simply shrink the neighbourhood: the stitch fills what is missing
+by clamping the tile's own edge, so the seam comes back, thinner and harder to
+spot.
 
 `geo_scale` is populated on a DEM field, which is what lets `hillshade` and
 `slope` produce real-world angles rather than unitless ones.

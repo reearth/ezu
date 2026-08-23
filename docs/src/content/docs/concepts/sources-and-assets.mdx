@@ -81,9 +81,12 @@ the policy says. `dem` also needs an `encoding` (`terrarium` or `mapbox-rgb`) �
 get it wrong and the terrain is noise, since the RGB channels mean different
 things.
 
-Both stitch the 3×3 neighbourhood so gradients are continuous at edges. Ask
-`requestedNeighborOffsets` / `requested_neighbor_offsets` which neighbours are
-actually read rather than fetching nine tiles blindly.
+Both stitch the 3×3 neighbourhood so gradients are continuous at edges, which is
+what `neighbor-fetch` (on by default) turns on. `requestedNeighborOffsets` in
+wasm and `source_neighbor_offsets` natively report the window to bind — all eight
+for these, none when the style turns `neighbor-fetch` off or no node reads the
+source. A neighbour left unbound is filled by clamping the centre tile's edge,
+and the seam that hides is the reason to bind the whole list.
 
 ## Text: `font` or `glyphs`
 

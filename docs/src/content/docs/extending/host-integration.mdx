@@ -53,11 +53,25 @@ required only by cross-tile label collision and edge-continuous DEM/raster
 shading:
 
 ```rust
-let offsets = ezu::paint::host::requested_neighbor_offsets(&graph, "terrain");
+let requested = graph.asset_inputs();
+let decl = &doc.sources["terrain"];
+let offsets = ezu::paint::host::source_neighbor_offsets(decl, &requested, "terrain");
 ```
 
 Empty means the centre tile is enough. Nine fetches versus one, per source, per
 tile.
+
+It takes the declaration because the answer depends on the source's kind. A
+vector source answers from `requested` — a node that wants a neighbour names it
+`<source>.<layer>@dx,dy` — and that is what the lower-level
+`requested_neighbor_offsets` reports on its own. A `dem` or `raster` binds under a
+bare source name that no node can suffix, so nothing in the graph can ever ask
+for its neighbours; its window is declared by `neighbor-fetch` instead, and
+`source_neighbor_offsets` is the one that knows to look there. Reach for the
+lower-level function only when the source is a feature source and you have the
+declaration nowhere to hand — asking it about a DEM gets you an empty list for a
+source that wants eight tiles, and the render comes out seamed rather than
+failing.
 
 ## `hash()` is not optional in practice
 

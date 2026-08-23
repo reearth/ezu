@@ -140,11 +140,25 @@ is fetched with the tile. Two things need more than that:
 Nothing else reads neighbours. In a wasm host, ask rather than assume:
 
 ```js
-r.requestedNeighborOffsets('terrain');   // [[dx, dy], …] — never [0, 0]; [] means centre is enough
+r.requestedNeighborOffsets('basemap');   // [] for a style with no cross-tile labels
+r.requestedNeighborOffsets('terrain');   // all eight, unless neighbor-fetch is off
 ```
 
-That is nine fetches versus one, per source, so it is worth the call. Native
-hosts get the same information through `requested_neighbor_offsets`.
+The answers differ because the two cases differ. A vector neighbour supplies
+*candidates*, and only a node that asked for them uses any, so the graph decides
+and the list is usually empty. A DEM or raster neighbour supplies *pixels* for
+one stitched buffer: the source's `neighbor-fetch` decides, it is on by default,
+and a neighbour left unbound is not absent data but wrong data — the stitch fills
+that pad by clamping the centre tile's own edge, and every filter reading the pad
+carries the guess back into the tile. That is a seam of a few pixels along the
+border, brightest where the graph amplifies (a glow, a `levels` lift), and it
+renders without an error.
+
+Native hosts get the same answer from `ezu::paint::host::source_neighbor_offsets`.
+Its sibling `requested_neighbor_offsets` answers the narrower question — what the
+*graph* named — so it reports nothing for a DEM, which binds under a bare source
+name that no node can suffix with `@dx,dy`. Ask the source-aware one unless you
+know you want the other.
 
 ## Missing neighbours
 

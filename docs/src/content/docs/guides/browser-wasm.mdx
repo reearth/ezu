@@ -98,12 +98,26 @@ centre being the default `[0, 0]`.
 Do not fetch a blind 3×3 for everything. Ask what the style actually reads:
 
 ```js
-r.requestedNeighborOffsets('terrain');   // e.g. [[-1,0],[1,0],[0,-1],[0,1]] — or []
+r.requestedNeighborOffsets('basemap');   // e.g. [[-1,0],[1,0],[0,-1],[0,1]] — or []
+r.requestedNeighborOffsets('terrain');   // all eight, unless neighbor-fetch is off
 ```
 
-Only cross-tile label collision and edge-continuous DEM shading read neighbours,
-and only for the sources that need them. A `dem` or `raster` source declaring
-`neighbor-fetch: false` always reports none.
+Only cross-tile label collision and edge-continuous DEM/raster shading read
+neighbours, and only for the sources that need them. A vector source answers from
+the graph, so its list is often empty; a `dem` or `raster` stitches its window
+into one buffer, so it asks for all eight unless it declares
+`neighbor-fetch: false`, or no node reads it.
+
+Bind every offset it reports. The centre tile alone is not a smaller render of
+the same thing — the stitch fills the missing pad by clamping the centre's edge
+pixels, and anything sampling the pad drags that guess back inside the tile as a
+seam along the border. The renderer warns when a `dem` or `raster` window comes
+up short — a host with a `LogSink` installed will see it.
+
+`sourceTile(name, z, x, y)` accepts off-grid coordinates for exactly this loop:
+`x` wraps around the antimeridian, and a `y` off the top or bottom of the world
+comes back unchanged, so its fetch misses and that edge clamps — which is what
+the pole should look like.
 
 ### Past a source's maxzoom
 
