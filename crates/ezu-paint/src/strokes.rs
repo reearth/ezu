@@ -109,6 +109,7 @@ pub fn paint_lines(
 
     let brush = color_overridden(brush, style.color);
     let geom = StrokeGeom::from_canvas(canvas, extent, tile);
+    let lines = visible_lines(lines, &geom, &brush, pw, ph);
 
     let mut surface = MemSurface::new();
     for line in lines {
@@ -149,11 +150,17 @@ pub fn paint_lines_parallel(
     }
 
     let geom = StrokeGeom::from_canvas(canvas, extent, tile);
+    // Cull before chunking so the workers split the lines that will
+    // actually be drawn, rather than sharing out the off-canvas ones.
+    let brush_template = color_overridden(brush, style.color);
+    let lines = visible_lines(lines, &geom, &brush_template, pw, ph);
+    if lines.is_empty() {
+        return;
+    }
     let chunk_size = lines.len().div_ceil(workers).max(1);
 
     // Each chunk produces its own MemSurface; collected in input order
     // so the composite is deterministic.
-    let brush_template = color_overridden(brush, style.color);
     let surfaces: Vec<MemSurface> = lines
         .par_chunks(chunk_size)
         .map(|chunk| {
@@ -172,6 +179,108 @@ pub fn paint_lines_parallel(
 }
 
 // ---------------------------------------------------------------------------
+// Off-canvas culling.
+
+/// `hokusai`'s gaussian is a sum of four uniforms, so a draw lands in
+/// `±2·sqrt(3)` exactly rather than merely with high probability. That
+/// makes every jitter below a hard bound instead of a distribution.
+const GAUSS_MAX: f32 = 3.464_102;
+
+/// Largest value a setting can evaluate to. Input mappings contribute an
+/// offset added to `base_value`, so summing each mapping's highest knot
+/// bounds the total. A mapping extrapolates past its last knot, but only
+/// for inputs outside their declared range, which brush inputs are not.
+fn setting_ceiling(sv: &hokusai::SettingValue) -> f32 {
+    sv.base_value
+        + sv.inputs
+            .iter()
+            .map(|m| m.points.iter().map(|&(_, y)| y).fold(0.0f32, f32::max))
+            .sum::<f32>()
+}
+
+/// Upper bound, in canvas pixels, on how far from a stroke vertex the
+/// brush can put ink: the widest dab it can draw plus the furthest the
+/// dab's centre can be jittered away from the vertex.
+fn max_dab_reach_px(brush: &Brush) -> f32 {
+    let radius_log = setting_ceiling(brush.get(BrushSetting::Radius));
+    let radius_jitter = setting_ceiling(brush.get(BrushSetting::RadiusByRandom)).max(0.0);
+    // `radius_by_random` perturbs the radius in log space, and the dab is
+    // clamped to the same ceiling the brush engine uses.
+    let radius = (radius_log + GAUSS_MAX * radius_jitter)
+        .exp()
+        .clamp(0.2, 1000.0);
+    // An elliptical dab is `ratio` times wider along its major axis.
+    let ratio = setting_ceiling(brush.get(BrushSetting::EllipticalDabRatio)).max(1.0);
+    // Both centre jitters are expressed as multiples of the dab radius.
+    let centre_jitter = setting_ceiling(brush.get(BrushSetting::OffsetByRandom)).max(0.0)
+        + setting_ceiling(brush.get(BrushSetting::TrackingNoise)).max(0.0);
+    let reach = radius * ratio + radius * GAUSS_MAX * centre_jitter;
+    // `offset_by_speed` and the ascension offsets scale with the dab too,
+    // and a stroke curve can lift the radius further than the settings
+    // alone admit. Double the bound rather than model each one.
+    reach * 2.0 + 64.0
+}
+
+/// Whether any of `line`'s ink can reach the canvas.
+///
+/// Overzoom hands a tile the geometry of an ancestor, scaled up by the
+/// zoom difference: at eight levels a parent's road network arrives 256
+/// times too large, so a single line can span tens of thousands of
+/// pixels and the overwhelming majority of lines miss the canvas
+/// entirely. Stroking one of those still walks every vertex and still
+/// allocates a surface tile per 64 px square it passes through, all of
+/// it thrown away by the composite, which reads back the canvas region
+/// alone. Dropping them changes no pixel — their ink lands where nothing
+/// can read it — and is what keeps a deep tile's cost near a shallow
+/// one's.
+fn line_touches_canvas(line: &[(i32, i32)], geom: &StrokeGeom, w: f32, h: f32, reach: f32) -> bool {
+    let (mut x0, mut x1) = (f32::MAX, f32::MIN);
+    let (mut y0, mut y1) = (f32::MAX, f32::MIN);
+    for &(x, y) in line {
+        let px = x as f32 * geom.sx + geom.pad;
+        let py = y as f32 * geom.sy + geom.pad;
+        x0 = x0.min(px);
+        x1 = x1.max(px);
+        y0 = y0.min(py);
+        y1 = y1.max(py);
+    }
+    x1 >= -reach && y1 >= -reach && x0 <= w + reach && y0 <= h + reach
+}
+
+/// Whether the brush samples the surface back through `get_color`.
+///
+/// A smudging brush picks up what earlier strokes left behind, and it
+/// does so wherever its own dabs land — off-canvas included. Ink placed
+/// off-canvas is therefore no longer unobservable: dropping a line could
+/// change what a *surviving* line picks up out there and carries back
+/// into the canvas. So culling is only offered to brushes that never
+/// read. This mirrors `hokusai`'s own gate for entering
+/// `update_smudge_color`, minus its `smudge_length` term, which is
+/// evaluated per dab.
+fn brush_reads_back(brush: &Brush) -> bool {
+    let smudge = brush.get(BrushSetting::Smudge);
+    smudge.base_value != 0.0 || !smudge.inputs.is_empty()
+}
+
+/// The lines of `lines` whose ink can reach the canvas, in input order.
+fn visible_lines<'a>(
+    lines: &'a [Vec<(i32, i32)>],
+    geom: &StrokeGeom,
+    brush: &Brush,
+    w: u32,
+    h: u32,
+) -> Vec<&'a Vec<(i32, i32)>> {
+    if brush_reads_back(brush) {
+        return lines.iter().collect();
+    }
+    let reach = max_dab_reach_px(brush);
+    let (w, h) = (w as f32, h as f32);
+    lines
+        .iter()
+        .filter(|line| line_touches_canvas(line, geom, w, h, reach))
+        .collect()
+}
+
 // Inner stroke kernel — shared between serial and parallel paths.
 
 /// Per-tile geometry constants needed to translate MVT coordinates into
@@ -492,5 +601,113 @@ mod parallel_tests {
         // No hard threshold yet — until halo + merge_premul_over land,
         // we measure but don't gate. The day hokusai grows the
         // primitive, drop the diff loop and `assert_eq!` the buffers.
+    }
+}
+
+#[cfg(test)]
+mod culling_tests {
+    use super::*;
+    use ezu_core::TileId;
+
+    const EXTENT: u32 = 4096;
+
+    fn smudging_brush() -> Brush {
+        let json = include_str!("../fixtures/watercolor_glazing.myb");
+        hokusai::myb::from_str(json).expect("parse fixture watercolor_glazing.myb")
+    }
+
+    /// The same fixture with its smudge turned off, which is what the
+    /// pencil and ink brushes look like — those are the ones overzoom
+    /// drives off the canvas.
+    fn dry_brush() -> Brush {
+        let mut b = smudging_brush();
+        b.get_mut(BrushSetting::Smudge).base_value = 0.0;
+        b.get_mut(BrushSetting::Smudge).inputs.clear();
+        b
+    }
+
+    fn paint(lines: &[Vec<(i32, i32)>], brush: &Brush) -> Vec<u8> {
+        let mut canvas = Canvas::new_padded(256, 256, 12).expect("non-zero canvas dims");
+        paint_lines(
+            &mut canvas,
+            lines,
+            EXTENT,
+            TileId::new(13, 7276, 3225),
+            brush,
+            &LineStrokeStyle::default(),
+        );
+        canvas.pixmap().data().to_vec()
+    }
+
+    fn crossing_line() -> Vec<(i32, i32)> {
+        (0..12).map(|ix| (ix * 300, 2000)).collect()
+    }
+
+    /// A line far enough away that no dab of it can reach the canvas
+    /// contributes nothing, so leaving it out has to leave every pixel
+    /// where it was. This is the property the culling rests on.
+    #[test]
+    fn a_line_that_cannot_reach_the_canvas_changes_no_pixel() {
+        let brush = dry_brush();
+        let far: Vec<(i32, i32)> = (0..12).map(|ix| (400_000 + ix * 300, 380_000)).collect();
+        assert_eq!(
+            paint(&[crossing_line()], &brush),
+            paint(&[crossing_line(), far], &brush),
+        );
+    }
+
+    /// Culling must not reach anything that still marks the canvas: a
+    /// line just outside the edge still bleeds in by its brush radius.
+    #[test]
+    fn a_line_just_off_the_edge_still_marks_the_canvas() {
+        let brush = dry_brush();
+        // A few MVT units above the top edge — well inside a dab radius.
+        let just_above: Vec<(i32, i32)> = (0..12).map(|ix| (ix * 300, -40)).collect();
+        let blank = paint(&[], &brush);
+        assert_ne!(paint(&[just_above], &brush), blank);
+    }
+
+    /// A brush that samples the canvas back can observe ink left off
+    /// canvas, so it is never offered the shortcut.
+    #[test]
+    fn a_smudging_brush_is_not_culled() {
+        assert!(brush_reads_back(&smudging_brush()));
+        assert!(!brush_reads_back(&dry_brush()));
+
+        let brush = smudging_brush();
+        let geom = StrokeGeom::from_canvas(
+            &Canvas::new_padded(256, 256, 12).expect("non-zero canvas dims"),
+            EXTENT,
+            TileId::new(13, 7276, 3225),
+        );
+        let far: Vec<Vec<(i32, i32)>> =
+            vec![(0..12).map(|ix| (400_000 + ix * 300, 380_000)).collect()];
+        assert_eq!(visible_lines(&far, &geom, &brush, 280, 280).len(), 1);
+        assert_eq!(visible_lines(&far, &geom, &dry_brush(), 280, 280).len(), 0);
+    }
+
+    /// The reach has to bound the brush, not approximate it: a dab is
+    /// drawn no further from its vertex than `max_dab_reach_px` says.
+    #[test]
+    fn the_reach_bounds_the_widest_dab_the_brush_can_draw() {
+        let mut b = dry_brush();
+        b.get_mut(BrushSetting::Radius).base_value = 3.0; // e^3 ≈ 20 px
+        let plain = max_dab_reach_px(&b);
+        assert!(plain > 20.0, "reach {plain} does not cover a 20 px dab");
+
+        // Every knob that widens a dab or moves it has to widen the reach.
+        for setting in [
+            BrushSetting::RadiusByRandom,
+            BrushSetting::EllipticalDabRatio,
+            BrushSetting::OffsetByRandom,
+            BrushSetting::TrackingNoise,
+        ] {
+            let mut wider = b.clone();
+            wider.get_mut(setting).base_value += 2.0;
+            assert!(
+                max_dab_reach_px(&wider) > plain,
+                "{setting:?} widens the dab but not the reach",
+            );
+        }
     }
 }
