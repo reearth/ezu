@@ -15,7 +15,10 @@
 //! Each run then shapes per its entry's backend: outline fonts go
 //! through rustybuzz (kerning and ligatures apply within the run); SDF
 //! glyph stacks map one codepoint to one glyph with the PBF advance —
-//! the MapLibre client behaviour, which has no shaping engine.
+//! the MapLibre client behaviour, which has no shaping engine. What an
+//! SDF stack does get is Arabic joining, by asking it for the
+//! presentation form the letter's context calls for instead of the
+//! letter itself (see [`super::arabic`]).
 //!
 //! Glyphs come out in **logical** order whichever backend produced
 //! them: rustybuzz emits a right-to-left run already reversed, and that
@@ -24,6 +27,7 @@
 
 use std::ops::Range;
 
+use super::arabic;
 use super::bidi;
 use super::font::FaceEntry;
 use super::sdf::{SdfCoverage, SDF_EM_PX};
@@ -87,6 +91,11 @@ pub(crate) struct ShapedText {
 struct Run {
     font: usize,
     text: String,
+    /// Per char of `text`, the codepoint the SDF backend draws it as —
+    /// its Arabic presentation form where one applies, `None` where a
+    /// neighbour's ligature already covers it. Unused by the outline
+    /// backend, which shapes `text` itself.
+    draw: Vec<Option<char>>,
     /// Index into the logical char sequence of the run's first char.
     char_start: usize,
     /// Bidi embedding level shared by every char of the run.
@@ -216,8 +225,20 @@ fn shape_run(
             }
         }
         FaceEntry::Sdf(stack) => {
+            // Letter spacing would open a gap inside a joined Arabic
+            // word, breaking the very joins the presentation forms
+            // draw, so a run holding one goes without.
+            let spacing = if run.text.chars().all(arabic::allows_letter_spacing) {
+                letter_spacing_em
+            } else {
+                0.0
+            };
             // 1 codepoint → 1 glyph; the PBF advance is in px at the 24 px em.
-            for (char_ix, c) in run.text.chars().enumerate() {
+            for (char_ix, draw) in run.draw.iter().enumerate() {
+                // A char a neighbour's ligature already drew.
+                let Some(c) = *draw else {
+                    continue;
+                };
                 // Coverage was checked during itemization; a miss here would be
                 // a racing range eviction, which the grow-only range map rules
                 // out.
@@ -227,7 +248,7 @@ fn shape_run(
                 glyphs.push(ShapedGlyph {
                     font: font_ix,
                     glyph_id: c as u16,
-                    x_advance: glyph.advance as f32 / SDF_EM_PX * scale + letter_spacing_em,
+                    x_advance: glyph.advance as f32 / SDF_EM_PX * scale + spacing,
                     x_offset: 0.0,
                     y_offset: 0.0,
                     char_ix: char_base + run.char_start + char_ix,
@@ -251,35 +272,29 @@ struct Itemized {
     missing_range: usize,
 }
 
+/// What one char resolved to: the stack entry that will draw it, and the
+/// codepoint that entry will be asked for — `None` for a char another
+/// glyph already covers (the alef of a lam-alef ligature).
+type Resolved = Option<(usize, Option<char>)>;
+
 /// Split `text` into runs by coverage and bidi level (`levels` per char of
 /// `text`). Uncovered chars shape to nothing but stay in `chars` (line
 /// breaking needs them) and end the open run, so every run's text is
 /// contiguous in the char sequence.
 fn itemize(text: &str, fonts: &[FaceEntry<'_>], levels: &[u8]) -> Itemized {
+    let all: Vec<char> = text.chars().collect();
+    let resolved = resolve(&all, fonts);
+
     let mut runs: Vec<Run> = Vec::new();
     let mut chars: Vec<char> = Vec::new();
     let mut covered: Vec<bool> = Vec::new();
     let mut dropped = 0usize;
     let mut missing_range = 0usize;
-    let mut prev_font: Option<usize> = None;
     // Logical index just past the open run's last char; a gap means an
     // uncovered char intervened and the run must not be extended.
     let mut run_end = 0usize;
-    for (ix, c) in text.chars().enumerate() {
-        let level = levels[ix];
-        let first_covering = fonts.iter().position(|f| f.covers(c));
-        // Combining marks stick to the preceding char's font (when it
-        // covers them) so base + mark shape as one cluster; otherwise
-        // fall back to normal first-covering-font itemization.
-        let picked = if is_combining_mark(c) {
-            match prev_font {
-                Some(p) if fonts[p].covers(c) => Some(p),
-                _ => first_covering,
-            }
-        } else {
-            first_covering
-        };
-        let Some(font) = picked else {
+    for (ix, &c) in all.iter().enumerate() {
+        let Some((font, draw)) = resolved[ix] else {
             dropped += 1;
             // Was any SDF entry unable to even consult its range?
             if fonts.iter().any(|f| {
@@ -289,16 +304,18 @@ fn itemize(text: &str, fonts: &[FaceEntry<'_>], levels: &[u8]) -> Itemized {
             }
             chars.push(c);
             covered.push(false);
-            prev_font = None;
             continue;
         };
+        let level = levels[ix];
         match runs.last_mut() {
             Some(run) if run.font == font && run.level == level && run_end == chars.len() => {
-                run.text.push(c)
+                run.text.push(c);
+                run.draw.push(draw);
             }
             _ => runs.push(Run {
                 font,
                 text: c.to_string(),
+                draw: vec![draw],
                 char_start: chars.len(),
                 level,
             }),
@@ -306,7 +323,6 @@ fn itemize(text: &str, fonts: &[FaceEntry<'_>], levels: &[u8]) -> Itemized {
         chars.push(c);
         covered.push(true);
         run_end = chars.len();
-        prev_font = Some(font);
     }
     Itemized {
         runs,
@@ -315,6 +331,104 @@ fn itemize(text: &str, fonts: &[FaceEntry<'_>], levels: &[u8]) -> Itemized {
         dropped,
         missing_range,
     }
+}
+
+/// Resolve every char of `all` against the stack: which entry draws it,
+/// and as which codepoint.
+///
+/// An outline entry is asked for the char itself — it has the tables to
+/// shape it. An SDF entry, which has neither tables nor outlines, is
+/// asked for the Arabic presentation form the char's joining context
+/// calls for, and only falls back to the char itself when the stack does
+/// not carry that form; this is where a glyph stack gets joined Arabic.
+fn resolve(all: &[char], fonts: &[FaceEntry<'_>]) -> Vec<Resolved> {
+    let mut out: Vec<Resolved> = vec![None; all.len()];
+    let mut prev_font: Option<usize> = None;
+    // Set on the alef a preceding lam ligated with: the pair draws as
+    // one glyph, so the alef contributes none of its own.
+    let mut ligated = vec![false; all.len()];
+    // The codepoints to try for the char in hand, most specific first;
+    // reused across chars so a label of plain Latin allocates nothing.
+    let mut wanted: Vec<char> = Vec::new();
+    for ix in 0..all.len() {
+        let c = all[ix];
+        if ligated[ix] {
+            // Stays on the lam's entry so the run does not break at it.
+            out[ix] = prev_font.map(|f| (f, None));
+            continue;
+        }
+        let (from_previous, to_next) = joining_context(all, ix);
+        wanted.clear();
+        let ligature = if arabic::is_lam(c) {
+            next_joinable(all, ix).and_then(|n| arabic::lam_alef(all[n], from_previous))
+        } else {
+            None
+        };
+        wanted.extend(ligature);
+        arabic::shaped_forms(c, from_previous, to_next, &mut wanted);
+        wanted.push(c);
+
+        // Marks stick to the preceding char's entry (when it covers
+        // them) so base + mark shape as one cluster; otherwise fall
+        // back to the first entry in the stack that covers the char.
+        let mark_font = if is_mark(c) { prev_font } else { None };
+        let order = mark_font.into_iter().chain(0..fonts.len());
+        let picked = order
+            .filter_map(|i| draws(&fonts[i], c, &wanted).map(|cp| (i, cp)))
+            .next();
+
+        let Some((font, cp)) = picked else {
+            prev_font = None;
+            continue;
+        };
+        if Some(cp) == ligature {
+            if let Some(n) = next_joinable(all, ix) {
+                ligated[n] = true;
+            }
+        }
+        out[ix] = Some((font, Some(cp)));
+        prev_font = Some(font);
+    }
+    out
+}
+
+/// The codepoint `entry` would draw `c` as, of the `wanted` shapes
+/// (most specific first, the bare char last), or `None` if it covers
+/// none of them.
+fn draws(entry: &FaceEntry<'_>, c: char, wanted: &[char]) -> Option<char> {
+    match entry {
+        // Its own `GSUB` does the joining, from the char itself.
+        FaceEntry::Outline { .. } => entry.covers(c).then_some(c),
+        FaceEntry::Sdf(_) => wanted.iter().copied().find(|&cp| entry.covers(cp)),
+    }
+}
+
+/// Whether the char before `all[ix]` joins to it and whether the char
+/// after does, looking past transparent marks on both sides.
+fn joining_context(all: &[char], ix: usize) -> (bool, bool) {
+    let previous = all[..ix]
+        .iter()
+        .rev()
+        .find(|c| !arabic::is_transparent(**c))
+        .copied();
+    let next = next_joinable(all, ix).map(|n| all[n]);
+    arabic::joined_sides(previous, all[ix], next)
+}
+
+/// The index of the first char after `ix` that joining looks at.
+fn next_joinable(all: &[char], ix: usize) -> Option<usize> {
+    all.iter()
+        .enumerate()
+        .skip(ix + 1)
+        .find(|(_, c)| !arabic::is_transparent(**c))
+        .map(|(i, _)| i)
+}
+
+/// Whether `c` is a mark that belongs on the preceding char's entry —
+/// the combining-diacritic blocks, plus the Arabic marks joining looks
+/// past.
+fn is_mark(c: char) -> bool {
+    arabic::is_transparent(c) || is_combining_mark(c)
 }
 
 /// Whether `c` is a combining mark (Unicode combining-diacritic blocks).

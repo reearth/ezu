@@ -1,10 +1,13 @@
 //! Right-to-left layout: a label's glyphs come out of `layout` in the
 //! order they are painted, left to right, whatever order its chars were
-//! written in (UAX #9).
+//! written in (UAX #9), and an Arabic one is drawn as the joined
+//! presentation forms its letters call for.
 //!
 //! Driven through the SDF backend over a synthetic glyph stack, so the
-//! expectations are about ordering alone and no font's own coverage or
-//! shaping is in the way.
+//! expectations are about ordering and codepoint choice alone and no
+//! font's own coverage or shaping is in the way. The stack is stocked
+//! explicitly per test, which is also how the fallback to unjoined
+//! letterforms is exercised: leave the presentation forms out of it.
 
 #![cfg(feature = "text")]
 
@@ -15,13 +18,13 @@ use ezu_core::text::{layout, FaceEntry, LayoutParams, SdfFontStack, StackEntry};
 mod glyph_pbf;
 use glyph_pbf::{box_glyph, encode_range};
 
-/// A glyph stack covering every char of `text` with an identical box, so
-/// each codepoint is present and none is wider than another.
-fn stack_over(text: &str) -> Arc<SdfFontStack> {
+/// A glyph stack carrying `codepoints`, each an identical box, so every
+/// one is present and none is wider than another.
+fn stack_of(codepoints: impl IntoIterator<Item = u32>) -> Arc<SdfFontStack> {
     let stack = SdfFontStack::new();
     let mut by_block: std::collections::BTreeMap<u32, Vec<u32>> = std::collections::BTreeMap::new();
-    for c in text.chars() {
-        by_block.entry(c as u32 >> 8).or_default().push(c as u32);
+    for cp in codepoints {
+        by_block.entry(cp >> 8).or_default().push(cp);
     }
     for (block, codepoints) in by_block {
         let glyphs: Vec<_> = codepoints.into_iter().map(box_glyph).collect();
@@ -31,6 +34,11 @@ fn stack_over(text: &str) -> Arc<SdfFontStack> {
             .expect("synthetic range decodes");
     }
     Arc::new(stack)
+}
+
+/// A glyph stack covering every char of `text`.
+fn stack_over(text: &str) -> Arc<SdfFontStack> {
+    stack_of(text.chars().map(|c| c as u32))
 }
 
 fn no_wrap() -> LayoutParams {
@@ -119,4 +127,88 @@ fn each_wrapped_line_reorders_on_its_own() {
         })
         .collect();
     assert_eq!(read, vec!["לת".to_string(), "ביבא".to_string()]);
+}
+
+// --- Arabic joining -----------------------------------------------------------
+
+/// The codepoints `text` draws as, over a stack carrying `stocked`,
+/// leftmost glyph first.
+fn drawn_over(text: &str, stocked: impl IntoIterator<Item = u32>) -> Vec<u32> {
+    let fonts = [StackEntry::Sdf(stack_of(stocked))];
+    let fonts = FaceEntry::prepare(&fonts);
+    let block = layout(text, &fonts, &no_wrap());
+    block.glyphs.iter().map(|g| u32::from(g.glyph_id)).collect()
+}
+
+/// The Arabic block plus both presentation-form blocks — what a host
+/// serving a MapLibre glyphs endpoint would bind for an Arabic label.
+fn arabic_and_forms() -> impl Iterator<Item = u32> {
+    (0x0600..=0x06FF)
+        .chain(0xFB50..=0xFDFF)
+        .chain(0xFE70..=0xFEFF)
+}
+
+#[test]
+fn an_arabic_word_draws_as_its_joined_forms() {
+    // الورود (Al Wurud): alef opens it unjoined, so the lam that follows
+    // is initial and the waw after that final; each letter following a
+    // right-joining one starts over isolated.
+    assert_eq!(
+        drawn_over("الورود", arabic_and_forms()),
+        vec![
+            0xFEA9, // dal isolated
+            0xFEED, // waw isolated
+            0xFEAD, // reh isolated
+            0xFEEE, // waw final
+            0xFEDF, // lam initial
+            0xFE8D, // alef isolated
+        ],
+        "read right to left: alef, lam, waw, reh, waw, dal"
+    );
+}
+
+#[test]
+fn a_stack_without_the_presentation_forms_falls_back_to_the_letters() {
+    // The Arabic block alone: unjoined, as before, rather than nothing.
+    assert_eq!(
+        drawn_over("الورود", 0x0600..=0x06FF),
+        vec![0x062F, 0x0648, 0x0631, 0x0648, 0x0644, 0x0627]
+    );
+}
+
+#[test]
+fn lam_alef_draws_as_one_ligature() {
+    assert_eq!(drawn_over("لا", arabic_and_forms()), vec![0xFEFB]);
+    // Joined to a beh before it, the pair takes its final shape.
+    assert_eq!(
+        drawn_over("بلا", arabic_and_forms()),
+        vec![0xFEFC, 0xFE91],
+        "beh initial, then the final lam-alef"
+    );
+}
+
+#[test]
+fn a_mark_between_two_letters_does_not_break_their_join() {
+    // بَت — the fatha sits over the beh, which still joins to the teh.
+    assert_eq!(
+        drawn_over("بَت", arabic_and_forms()),
+        vec![0xFE96, 0x064E, 0xFE91],
+        "teh final, the mark, beh initial"
+    );
+}
+
+#[test]
+fn an_arabic_run_is_drawn_without_letter_spacing() {
+    let fonts = [StackEntry::Sdf(stack_of(arabic_and_forms()))];
+    let fonts = FaceEntry::prepare(&fonts);
+    let spaced = LayoutParams {
+        letter_spacing_em: 0.5,
+        ..no_wrap()
+    };
+    let arabic = layout("الورود", &fonts, &spaced);
+    assert_eq!(
+        arabic.bbox.width(),
+        layout("الورود", &fonts, &no_wrap()).bbox.width(),
+        "letter spacing would open gaps inside the joined word"
+    );
 }

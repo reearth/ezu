@@ -12,7 +12,9 @@
 //! - **SDF** ([`SdfFontStack`]) — MapLibre glyph-PBF ranges from a
 //!   `glyphs` endpoint; 1 codepoint → 1 pre-rendered 24 px SDF bitmap,
 //!   MapLibre's fixed metrics. Lower fidelity, zero font files — see
-//!   [`sdf`] for the protocol constants and compat quirks.
+//!   [`sdf`] for the protocol constants and compat quirks. Arabic joins
+//!   through the Unicode presentation forms, the one shaping a
+//!   glyph stack can express.
 //!
 //! The pipeline is split in two so shaping cost is paid once per label
 //! and drawing once per placement:
@@ -34,14 +36,11 @@
 //!
 //! Deliberately not handled; callers should not expect them:
 //!
-//! - Arabic joining on the SDF backend — a glyph stack holds one
-//!   bitmap per codepoint and no `GSUB`, so an Arabic run drawn from
-//!   one comes out as isolated letterforms. The outline backend joins
-//!   normally.
 //! - vertical writing mode
 //! - color-emoji tables (`COLR` / `CBDT`) — such glyphs draw as their
 //!   monochrome outline, or not at all if the font has none
 
+mod arabic;
 mod bidi;
 pub mod collide;
 mod draw;
