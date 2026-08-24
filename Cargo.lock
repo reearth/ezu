@@ -773,6 +773,7 @@ dependencies = [
  "tracing",
  "ttf-parser",
  "unicode-bidi",
+ "unicode-script",
  "xxhash-rust",
 ]
 

@@ -180,7 +180,7 @@ fn shape_run(
     // from its own `GSUB`, and tracking pulls those joins apart just the
     // same. MapLibre suppresses over the same idea, though it decides per
     // label rather than per run, so its Latin half loses spacing too.
-    let spacing = if run.text.chars().all(arabic::allows_letter_spacing) {
+    let spacing = if run.text.chars().all(allows_letter_spacing) {
         letter_spacing_em
     } else {
         0.0
@@ -427,6 +427,35 @@ fn next_joinable(all: &[char], ix: usize) -> Option<usize> {
         .map(|(i, _)| i)
 }
 
+/// Whether letter spacing may be inserted around `c`.
+///
+/// It may not around a cursive script's letters: they are drawn joined
+/// to their neighbours — by the font's `GSUB` on the outline backend, by
+/// the presentation forms on the SDF one — and a gap breaks the join.
+/// The set is the scripts rustybuzz carries joining data for, plus
+/// Duployan, which joins through contextual substitution instead.
+/// MapLibre suppresses over a shorter list of the same kind.
+fn allows_letter_spacing(c: char) -> bool {
+    use unicode_script::{Script, UnicodeScript};
+    !matches!(
+        c.script(),
+        Script::Adlam
+            | Script::Arabic
+            | Script::Chorasmian
+            | Script::Duployan
+            | Script::Hanifi_Rohingya
+            | Script::Mandaic
+            | Script::Manichaean
+            | Script::Mongolian
+            | Script::Nko
+            | Script::Old_Uyghur
+            | Script::Phags_Pa
+            | Script::Psalter_Pahlavi
+            | Script::Sogdian
+            | Script::Syriac
+    )
+}
+
 /// Whether `c` is a mark that belongs on the preceding char's entry —
 /// the combining-diacritic blocks, plus the Arabic marks joining looks
 /// past.
@@ -444,4 +473,28 @@ fn is_combining_mark(c: char) -> bool {
         | 0x20D0..=0x20FF    // Combining Diacritical Marks for Symbols
         | 0xFE20..=0xFE2F // Combining Half Marks
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn letter_spacing_is_refused_across_the_cursive_scripts() {
+        // Arabic and the other joining scripts, which the outline
+        // backend really does join …
+        for c in [
+            '\u{0644}',  // Arabic lam
+            '\u{0710}',  // Syriac alaph
+            '\u{1820}',  // Mongolian a
+            '\u{07CA}',  // N'Ko a
+            '\u{1E921}', // Adlam alif
+        ] {
+            assert!(!allows_letter_spacing(c), "{c:?} is cursive");
+        }
+        // … and the scripts that are drawn as separate letters.
+        for c in ['a', '\u{05D0}', '\u{3042}', ' '] {
+            assert!(allows_letter_spacing(c), "{c:?} is not cursive");
+        }
+    }
 }

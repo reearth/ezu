@@ -307,16 +307,6 @@ pub fn presentation_forms(c: char) -> Vec<char> {
         .collect()
 }
 
-/// Whether letter spacing may be inserted around `c`. It may not around
-/// a joining Arabic letter: the gap would break the join the letter is
-/// drawing. MapLibre suppresses it over the same set.
-pub(crate) fn allows_letter_spacing(c: char) -> bool {
-    !matches!(
-        joining(c),
-        Joining::Right | Joining::Dual | Joining::Causing
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,24 +391,6 @@ mod tests {
             vec!['\u{FE8D}', '\u{FE8E}', '\u{FEFB}', '\u{FEFC}']
         );
         assert!(presentation_forms('a').is_empty());
-    }
-
-    #[test]
-    fn letter_spacing_is_refused_around_a_joining_letter() {
-        // Every letter that joins on a side refuses it; a letter that
-        // joins on neither, and everything outside the script, keeps it.
-        assert!(!allows_letter_spacing('\u{0644}'), "lam joins both sides");
-        assert!(
-            !allows_letter_spacing('\u{0627}'),
-            "alef joins the letter before it"
-        );
-        assert!(
-            !allows_letter_spacing('\u{0640}'),
-            "tatweel joins both sides"
-        );
-        assert!(allows_letter_spacing('\u{0621}'), "hamza joins neither");
-        assert!(allows_letter_spacing('a'));
-        assert!(allows_letter_spacing('\u{05D0}'), "Hebrew is not cursive");
     }
 
     #[test]

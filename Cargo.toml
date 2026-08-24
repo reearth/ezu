@@ -41,6 +41,7 @@ libblur = "0.24"
 ttf-parser = "0.25"
 rustybuzz = "0.20"
 unicode-bidi = "0.3"
+unicode-script = "0.5"
 fontdb = "0.23"
 noise = { version = "0.9", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "webp", "jpeg"] }

@@ -17,6 +17,7 @@ xxhash-rust = { workspace = true }
 ttf-parser = { workspace = true, optional = true }
 rustybuzz = { workspace = true, optional = true }
 unicode-bidi = { workspace = true, optional = true }
+unicode-script = { workspace = true, optional = true }
 tiny-skia = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
 tracing = { version = "0.1", optional = true }
@@ -24,12 +25,14 @@ lru = { version = "0.12", optional = true }
 
 [features]
 # Text shaping & layout (the `text` module): pulls in ttf-parser /
-# rustybuzz / unicode-bidi / tiny-skia. Off by default so light
-# consumers of the coord / seed / color types stay dependency-free.
+# rustybuzz / unicode-bidi / unicode-script / tiny-skia. Off by default
+# so light consumers of the coord / seed / color types stay
+# dependency-free.
 text = [
     "dep:ttf-parser",
     "dep:rustybuzz",
     "dep:unicode-bidi",
+    "dep:unicode-script",
     "dep:tiny-skia",
     "dep:thiserror",
     "dep:tracing",
