@@ -17,9 +17,10 @@
 //! The pipeline is split in two so shaping cost is paid once per label
 //! and drawing once per placement:
 //!
-//! 1. [`layout`] — transform / itemize / shape / line-break / anchor a
-//!    string against the fallback stack, producing a size-independent
-//!    [`TextBlock`] in em units.
+//! 1. [`layout`] — transform / resolve bidi / itemize / shape /
+//!    line-break / reorder / anchor a string against the fallback
+//!    stack, producing a size-independent [`TextBlock`] in em units.
+//!    Its glyphs come out in visual order, left to right.
 //! 2. [`draw`] — rasterize a [`TextBlock`] onto a `tiny_skia::PixmapMut`
 //!    at a given origin and font size, with fill color and optional halo.
 //!
@@ -33,11 +34,15 @@
 //!
 //! Deliberately not handled; callers should not expect them:
 //!
-//! - bidi / RTL reordering (input is laid out in logical order, LTR)
+//! - Arabic joining on the SDF backend — a glyph stack holds one
+//!   bitmap per codepoint and no `GSUB`, so an Arabic run drawn from
+//!   one comes out as isolated letterforms. The outline backend joins
+//!   normally.
 //! - vertical writing mode
 //! - color-emoji tables (`COLR` / `CBDT`) — such glyphs draw as their
 //!   monochrome outline, or not at all if the font has none
 
+mod bidi;
 pub mod collide;
 mod draw;
 mod font;

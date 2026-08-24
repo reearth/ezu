@@ -18,6 +18,7 @@
 //!   advances (so ligatures/kerning are measured exactly); break
 //!   candidates only exist at cluster boundaries.
 
+use super::bidi;
 use super::font::FaceEntry;
 use super::sdf::{SDF_EM_PX, SDF_Y_OFFSET_PX};
 use super::shape::{shape_sections, ShapeSection, ShapedGlyph, ShapedText};
@@ -382,7 +383,7 @@ pub fn layout_sections(
         let line_x = (block_w - line.width) * justify + shift_x;
         let baseline = baselines[line_ix] + shift_y;
         let mut pen = 0.0f32;
-        for g in line.glyphs {
+        for g in &line.glyphs {
             // A section smaller than the line's tallest is shifted within the
             // line box per its `vertical-align`; equal scales shift by 0.
             let valign = sections
@@ -434,16 +435,19 @@ fn valign_shift(v: VerticalAlign, base_asc: f32, base_desc: f32, s_line: f32, s_
     }
 }
 
-/// One wrapped line: its glyphs (whitespace-trimmed at both ends) and
-/// their total advance.
+/// One wrapped line: its glyphs in visual order (whitespace-trimmed at
+/// both ends) and their total advance.
 struct Line<'a> {
-    glyphs: &'a [ShapedGlyph],
+    glyphs: Vec<&'a ShapedGlyph>,
     width: f32,
 }
 
 /// Split the shaped glyphs at the char-index `breaks`, trimming
 /// whitespace glyphs at both ends of each line (a break eats the space
-/// it happened at, like MapLibre's `TaggedString.trim`).
+/// it happened at, like MapLibre's `TaggedString.trim`) and reordering
+/// each line from logical into visual order (UAX #9 rule L2). Trimming
+/// precedes reordering so the whitespace dropped is the logical line's,
+/// which is what rule L1 asks for.
 fn split_lines<'a>(shaped: &'a ShapedText, breaks: &[usize]) -> Vec<Line<'a>> {
     let mut lines = Vec::new();
     let mut glyph_start = 0usize;
@@ -466,9 +470,11 @@ fn split_lines<'a>(shaped: &'a ShapedText, breaks: &[usize]) -> Vec<Line<'a>> {
             }
             slice = &slice[..slice.len() - 1];
         }
+        let mut glyphs: Vec<&ShapedGlyph> = slice.iter().collect();
+        bidi::reorder_visual(&mut glyphs, |g| g.level);
         lines.push(Line {
-            glyphs: slice,
-            width: slice.iter().map(|g| g.x_advance).sum(),
+            width: glyphs.iter().map(|g| g.x_advance).sum(),
+            glyphs,
         });
         glyph_start = glyph_end;
     }

@@ -1,9 +1,11 @@
 //! Fallback itemization and shaping.
 //!
-//! The input string is split into contiguous *runs* by font coverage:
-//! for each char, the first stack entry that covers it wins; combining
-//! marks stick to the preceding char's entry (when that entry covers
-//! them) so a base + mark pair shapes together. Chars no entry covers
+//! The input string is split into contiguous *runs* by font coverage
+//! and bidi embedding level: for each char, the first stack entry that
+//! covers it wins; combining marks stick to the preceding char's entry
+//! (when that entry covers them) so a base + mark pair shapes together.
+//! A change of level ends a run too, so a run is always one direction
+//! and the shaper can be told which. Chars no entry covers
 //! draw nothing and are counted, so callers can surface a warning; they
 //! stay in the logical char sequence, which line breaking runs over (a
 //! `\n` is a mandatory break whether or not any font has a glyph for
@@ -14,9 +16,15 @@
 //! through rustybuzz (kerning and ligatures apply within the run); SDF
 //! glyph stacks map one codepoint to one glyph with the PBF advance —
 //! the MapLibre client behaviour, which has no shaping engine.
+//!
+//! Glyphs come out in **logical** order whichever backend produced
+//! them: rustybuzz emits a right-to-left run already reversed, and that
+//! is undone here so line breaking and [`super::layout`]'s reordering
+//! see one order. Visual order is settled once, per line, by rule L2.
 
 use std::ops::Range;
 
+use super::bidi;
 use super::font::FaceEntry;
 use super::sdf::{SdfCoverage, SDF_EM_PX};
 
@@ -44,6 +52,9 @@ pub(crate) struct ShapedGlyph {
     /// Index of the `format` section this glyph belongs to (`0` for plain
     /// text), used to look up the per-section paint at draw time.
     pub section: u16,
+    /// Bidi embedding level of the glyph's run (even = left-to-right),
+    /// which line reordering reverses stretches of.
+    pub level: u8,
 }
 
 /// One `format` section to shape: its text, the subrange of the flat font
@@ -71,12 +82,15 @@ pub(crate) struct ShapedText {
     pub missing_range: usize,
 }
 
-/// A maximal contiguous span of chars itemized to one stack entry.
+/// A maximal contiguous span of chars itemized to one stack entry and
+/// one bidi embedding level.
 struct Run {
     font: usize,
     text: String,
     /// Index into the logical char sequence of the run's first char.
     char_start: usize,
+    /// Bidi embedding level shared by every char of the run.
+    level: u8,
 }
 
 /// Shape a sequence of `format` sections against a flat font stack. Each
@@ -95,10 +109,18 @@ pub(crate) fn shape_sections(
     let mut covered: Vec<bool> = Vec::new();
     let mut dropped = 0usize;
     let mut missing_range = 0usize;
+    // Bidi resolves over the sections joined, not each on its own: they
+    // are one logical string, and a section boundary is not a paragraph
+    // break (`format` splits a label by styling, not by direction).
+    let joined: String = sections.iter().map(|s| s.text).collect();
+    let all_levels = bidi::levels(&joined);
+    let mut level_base = 0usize;
     for (sec_ix, sec) in sections.iter().enumerate() {
         let base = sec.fonts.start;
         let sub = &fonts[sec.fonts.clone()];
-        let it = itemize(sec.text, sub);
+        let sec_levels = &all_levels[level_base..level_base + sec.text.chars().count()];
+        level_base += sec_levels.len();
+        let it = itemize(sec.text, sub, sec_levels);
         let char_base = chars.len();
         chars.extend(it.chars);
         covered.extend(it.covered);
@@ -142,9 +164,11 @@ fn shape_run(
     glyphs: &mut Vec<ShapedGlyph>,
 ) {
     let font_ix = base + run.font;
+    let rtl = run.level % 2 == 1;
     match entry {
         FaceEntry::Outline { font, face } => {
             let units = 1.0 / font.units_per_em();
+            let first = glyphs.len();
             // Map a cluster (byte offset into the run's text) back to the
             // logical char index.
             let char_of_byte: Vec<usize> = {
@@ -156,6 +180,16 @@ fn shape_run(
             };
             let mut buffer = rustybuzz::UnicodeBuffer::new();
             buffer.push_str(&run.text);
+            // Guess first (it fills script and language from the run's
+            // chars), then override the direction it derived from the
+            // script with the one bidi resolved — they differ for, say,
+            // a Latin word quoted inside an Arabic sentence.
+            buffer.guess_segment_properties();
+            buffer.set_direction(if rtl {
+                rustybuzz::Direction::RightToLeft
+            } else {
+                rustybuzz::Direction::LeftToRight
+            });
             let shaped = rustybuzz::shape(face, &[], buffer);
             for (info, pos) in shaped
                 .glyph_infos()
@@ -171,7 +205,14 @@ fn shape_run(
                     char_ix: char_of_byte[info.cluster as usize],
                     scale,
                     section,
+                    level: run.level,
                 });
+            }
+            // rustybuzz hands back a right-to-left run in visual order;
+            // put it back in logical order so everything downstream sees
+            // one convention and rule L2 reverses it exactly once.
+            if rtl {
+                glyphs[first..].reverse();
             }
         }
         FaceEntry::Sdf(stack) => {
@@ -192,6 +233,7 @@ fn shape_run(
                     char_ix: char_base + run.char_start + char_ix,
                     scale,
                     section,
+                    level: run.level,
                 });
             }
         }
@@ -209,10 +251,11 @@ struct Itemized {
     missing_range: usize,
 }
 
-/// Split `text` into runs by coverage. Uncovered chars shape to nothing but
-/// stay in `chars` (line breaking needs them) and end the open run, so every
-/// run's text is contiguous in the char sequence.
-fn itemize(text: &str, fonts: &[FaceEntry<'_>]) -> Itemized {
+/// Split `text` into runs by coverage and bidi level (`levels` per char of
+/// `text`). Uncovered chars shape to nothing but stay in `chars` (line
+/// breaking needs them) and end the open run, so every run's text is
+/// contiguous in the char sequence.
+fn itemize(text: &str, fonts: &[FaceEntry<'_>], levels: &[u8]) -> Itemized {
     let mut runs: Vec<Run> = Vec::new();
     let mut chars: Vec<char> = Vec::new();
     let mut covered: Vec<bool> = Vec::new();
@@ -222,7 +265,8 @@ fn itemize(text: &str, fonts: &[FaceEntry<'_>]) -> Itemized {
     // Logical index just past the open run's last char; a gap means an
     // uncovered char intervened and the run must not be extended.
     let mut run_end = 0usize;
-    for c in text.chars() {
+    for (ix, c) in text.chars().enumerate() {
+        let level = levels[ix];
         let first_covering = fonts.iter().position(|f| f.covers(c));
         // Combining marks stick to the preceding char's font (when it
         // covers them) so base + mark shape as one cluster; otherwise
@@ -249,11 +293,14 @@ fn itemize(text: &str, fonts: &[FaceEntry<'_>]) -> Itemized {
             continue;
         };
         match runs.last_mut() {
-            Some(run) if run.font == font && run_end == chars.len() => run.text.push(c),
+            Some(run) if run.font == font && run.level == level && run_end == chars.len() => {
+                run.text.push(c)
+            }
             _ => runs.push(Run {
                 font,
                 text: c.to_string(),
                 char_start: chars.len(),
+                level,
             }),
         }
         chars.push(c);
