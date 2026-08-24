@@ -15,6 +15,14 @@ render against it.
 > reference as an opaque PNG directory, so a native generator can be
 > swapped in later without touching the comparison code.
 
+> Right-to-left text: maplibre-gl-js implements neither the bidirectional
+> algorithm nor Arabic joining, and draws an Arabic or Hebrew label in the
+> order its chars were written unless `mapbox-gl-rtl-text` is loaded. The
+> plugin is a dependency here and `render.mjs` loads it from a local port
+> (it has to answer CORS — maplibre's worker `importScripts` it), so the
+> reference is right on those tiles. maplibre-gl-native needs none of
+> this: it links ICU directly.
+
 ## Setup
 
 ```sh

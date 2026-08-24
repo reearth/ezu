@@ -5,9 +5,24 @@
 import { chromium } from "playwright";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { createServer } from "node:http";
+import { dirname, join } from "node:path";
 
 const require = createRequire(import.meta.url);
 const mlglJs = readFileSync(require.resolve("maplibre-gl/dist/maplibre-gl.js"), "utf8");
+// maplibre-gl-js carries no bidi or Arabic shaping of its own: without this
+// plugin it draws a right-to-left label in the order its chars were written,
+// unjoined. A reference rendered that way is not ground truth for any tile
+// with an Arabic or Hebrew name on it.
+// Its `exports` names only the ES entry, so the browser bundle — the one a
+// worker can `importScripts` — is reached from the package root instead.
+const rtlPluginJs = readFileSync(
+  join(
+    dirname(dirname(require.resolve("@mapbox/mapbox-gl-rtl-text"))),
+    "dist/mapbox-gl-rtl-text.js",
+  ),
+  "utf8",
+);
 
 const [, , styleArg, zArg, xArg, yArg, outArg, sizeArg] = process.argv;
 if (!styleArg || zArg === undefined || !outArg) {
@@ -30,6 +45,20 @@ if (!/^https?:\/\//.test(styleArg)) {
   style = JSON.parse(readFileSync(styleArg, "utf8"));
 }
 
+// The plugin is loaded by `importScripts` from maplibre's worker, so it needs
+// a real absolute URL that answers CORS — serve it from here rather than lean
+// on a CDN, which would pin the bench to the network and to whatever version
+// that CDN hands back today.
+const pluginServer = createServer((_, res) => {
+  res.writeHead(200, {
+    "Content-Type": "application/javascript",
+    "Access-Control-Allow-Origin": "*",
+  });
+  res.end(rtlPluginJs);
+});
+await new Promise((res) => pluginServer.listen(0, "127.0.0.1", res));
+const rtlPluginUrl = `http://127.0.0.1:${pluginServer.address().port}/mapbox-gl-rtl-text.js`;
+
 const browser = await chromium.launch({
   args: [
     "--use-gl=angle",
@@ -49,7 +78,14 @@ await page.setContent(
 await page.addScriptTag({ content: mlglJs });
 
 const dataUrl = await page.evaluate(
-  async ({ style, lon, lat, z }) => {
+  async ({ style, lon, lat, z, rtlPluginUrl }) => {
+    // Before the first Map: the plugin has to be in place when a symbol
+    // bucket shapes its text, and it can only be set once.
+    await maplibregl.setRTLTextPlugin(rtlPluginUrl, false);
+    const status = maplibregl.getRTLTextPluginStatus();
+    if (status !== "loaded") {
+      throw new Error(`RTL text plugin did not load (status: ${status})`);
+    }
     const map = new maplibregl.Map({
       container: "map",
       style,
@@ -67,11 +103,12 @@ const dataUrl = await page.evaluate(
     });
     return map.getCanvas().toDataURL("image/png");
   },
-  { style, lon, lat, z },
+  { style, lon, lat, z, rtlPluginUrl },
 );
 
 const png = Buffer.from(dataUrl.split(",")[1], "base64");
 const { writeFileSync } = await import("node:fs");
 writeFileSync(outArg, png);
 await browser.close();
+pluginServer.close();
 console.log(`OK ${z}/${x}/${y} -> ${outArg} (center ${lon.toFixed(5)},${lat.toFixed(5)})`);
