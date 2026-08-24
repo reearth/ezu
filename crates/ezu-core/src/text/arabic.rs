@@ -404,6 +404,24 @@ mod tests {
     }
 
     #[test]
+    fn letter_spacing_is_refused_around_a_joining_letter() {
+        // Every letter that joins on a side refuses it; a letter that
+        // joins on neither, and everything outside the script, keeps it.
+        assert!(!allows_letter_spacing('\u{0644}'), "lam joins both sides");
+        assert!(
+            !allows_letter_spacing('\u{0627}'),
+            "alef joins the letter before it"
+        );
+        assert!(
+            !allows_letter_spacing('\u{0640}'),
+            "tatweel joins both sides"
+        );
+        assert!(allows_letter_spacing('\u{0621}'), "hamza joins neither");
+        assert!(allows_letter_spacing('a'));
+        assert!(allows_letter_spacing('\u{05D0}'), "Hebrew is not cursive");
+    }
+
+    #[test]
     fn lam_alef_ligates_in_both_its_shapes() {
         assert_eq!(lam_alef('\u{0627}', false), Some('\u{FEFB}'));
         assert_eq!(lam_alef('\u{0627}', true), Some('\u{FEFC}'));

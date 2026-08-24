@@ -174,6 +174,17 @@ fn shape_run(
 ) {
     let font_ix = base + run.font;
     let rtl = run.level % 2 == 1;
+    // Letter spacing would open gaps inside a cursive word, breaking the
+    // very joins that were drawn for it, so a run holding one goes
+    // without. This is not an SDF concern: an outline font joins the run
+    // from its own `GSUB`, and tracking pulls those joins apart just the
+    // same. MapLibre suppresses over the same idea, though it decides per
+    // label rather than per run, so its Latin half loses spacing too.
+    let spacing = if run.text.chars().all(arabic::allows_letter_spacing) {
+        letter_spacing_em
+    } else {
+        0.0
+    };
     match entry {
         FaceEntry::Outline { font, face } => {
             let units = 1.0 / font.units_per_em();
@@ -208,7 +219,7 @@ fn shape_run(
                 glyphs.push(ShapedGlyph {
                     font: font_ix,
                     glyph_id: info.glyph_id as u16,
-                    x_advance: pos.x_advance as f32 * units * scale + letter_spacing_em,
+                    x_advance: pos.x_advance as f32 * units * scale + spacing,
                     x_offset: pos.x_offset as f32 * units * scale,
                     y_offset: pos.y_offset as f32 * units * scale,
                     char_ix: char_of_byte[info.cluster as usize],
@@ -225,14 +236,6 @@ fn shape_run(
             }
         }
         FaceEntry::Sdf(stack) => {
-            // Letter spacing would open a gap inside a joined Arabic
-            // word, breaking the very joins the presentation forms
-            // draw, so a run holding one goes without.
-            let spacing = if run.text.chars().all(arabic::allows_letter_spacing) {
-                letter_spacing_em
-            } else {
-                0.0
-            };
             // 1 codepoint → 1 glyph; the PBF advance is in px at the 24 px em.
             for (char_ix, draw) in run.draw.iter().enumerate() {
                 // A char a neighbour's ligature already drew.
