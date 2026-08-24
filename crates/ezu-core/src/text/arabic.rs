@@ -287,6 +287,26 @@ pub(crate) fn is_lam(c: char) -> bool {
     c == LAM
 }
 
+/// Every presentation form `c` could be drawn as, in any joining
+/// context — the lam-alef ligatures included, for a lam and for the
+/// four alefs one can ligate with.
+///
+/// Empty for anything that is not an Arabic letter. A host that must
+/// bind glyphs before a label can be shaped needs these codepoints, not
+/// just the letters themselves, since the letters are only what the
+/// label was written with.
+pub fn presentation_forms(c: char) -> Vec<char> {
+    let own = forms_of(c).into_iter().flatten().copied();
+    let ligatures = LAM_ALEF
+        .iter()
+        .filter(move |(alef, _)| c == LAM || u32::from(*alef) == c as u32)
+        .flat_map(|(_, pair)| pair.iter().copied());
+    own.chain(ligatures)
+        .filter(|&cp| cp != 0)
+        .filter_map(|cp| char::from_u32(u32::from(cp)))
+        .collect()
+}
+
 /// Whether letter spacing may be inserted around `c`. It may not around
 /// a joining Arabic letter: the gap would break the join the letter is
 /// drawing. MapLibre suppresses it over the same set.
@@ -367,6 +387,20 @@ mod tests {
         let (prev, next) = joined_sides(None, '\u{0628}', Some('\u{062A}'));
         assert_eq!((prev, next), (false, true));
         assert!(is_transparent('\u{064E}'));
+    }
+
+    #[test]
+    fn every_shape_a_letter_can_take_is_listed() {
+        // Waw has two forms and no ligature.
+        assert_eq!(presentation_forms('\u{0648}'), vec!['\u{FEED}', '\u{FEEE}']);
+        // Lam has four, plus both shapes of each lam-alef pair.
+        assert_eq!(presentation_forms('\u{0644}').len(), 4 + 2 * LAM_ALEF.len());
+        // An alef carries its own pair's two shapes as well as its own.
+        assert_eq!(
+            presentation_forms('\u{0627}'),
+            vec!['\u{FE8D}', '\u{FE8E}', '\u{FEFB}', '\u{FEFC}']
+        );
+        assert!(presentation_forms('a').is_empty());
     }
 
     #[test]

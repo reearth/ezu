@@ -716,6 +716,11 @@ impl Renderer {
     /// layers that build their string from something other than a `get`
     /// of a feature property (a literal, a `concat` of formatted values)
     /// contribute their literal text where it is a plain string.
+    ///
+    /// An Arabic letter contributes the presentation-form ranges as
+    /// well as its own: it is drawn as whichever of its joined shapes
+    /// the letters around it call for, and those shapes live in
+    /// U+FB50‥U+FDFF and U+FE70‥U+FEFF.
     #[wasm_bindgen(js_name = neededGlyphRanges)]
     pub fn needed_glyph_ranges(&self) -> Result<js_sys::Object, JsValue> {
         self.needed_glyphs_object(|cp| cp & !0xFF)
@@ -1694,6 +1699,16 @@ fn collect_codepoints(s: &str, out: &mut std::collections::BTreeSet<u32>) {
         if cp <= 0xFFFF {
             out.insert(cp);
         }
+        // An Arabic letter is drawn from a glyph stack as one of its
+        // presentation forms, chosen by the letters around it, so the
+        // codepoints the label needs are those and not only the letter
+        // it is written with. Which form depends on context this
+        // prepass does not have, so all of them are listed.
+        out.extend(
+            ezu_core::text::presentation_forms(c)
+                .into_iter()
+                .map(|f| f as u32),
+        );
     }
 }
 
@@ -1741,6 +1756,23 @@ mod tests {
         // Astral codepoints have no glyph the protocol can address.
         collect_codepoints("𝄞", &mut out);
         assert_eq!(out.len(), 4);
+    }
+
+    #[test]
+    fn an_arabic_letter_also_needs_its_presentation_forms() {
+        let mut out = std::collections::BTreeSet::new();
+        // Waw is drawn joined or not depending on what precedes it, so
+        // both of its shapes are needed alongside the letter itself.
+        collect_codepoints("\u{0648}", &mut out);
+        assert_eq!(
+            out.iter().copied().collect::<Vec<_>>(),
+            vec![0x0648, 0xFEED, 0xFEEE]
+        );
+        // A label that needs them names the blocks they live in, which
+        // is what a host fetching whole ranges binds.
+        let mut starts: Vec<u32> = out.iter().map(|cp| cp & !0xFF).collect();
+        starts.dedup();
+        assert_eq!(starts, vec![0x0600, 0xFE00]);
     }
 
     #[test]

@@ -53,6 +53,7 @@ pub mod pbf;
 pub mod sdf;
 mod shape;
 
+pub use arabic::presentation_forms;
 pub use collide::{
     place, place_layers, Aabb, Grid, LabelCandidate, PlaceRank, Placement, COLLISION_CELL_PX,
     DEDUP_QUANTUM,
