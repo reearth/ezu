@@ -3,6 +3,21 @@
 //! World coordinates are in the unit square `[0, 1] x [0, 1]` covering the whole
 //! Web-Mercator projection. This avoids zoom-dependent units and makes
 //! deterministic seeding zoom-stable.
+//!
+//! # Domain handling
+//!
+//! These are the raw projection formulas; **keeping inputs in range is the
+//! caller's job**, and callers do clamp for their own needs. Only
+//! [`lat_to_world_y`] clamps internally, because the projection diverges at
+//! the poles and there is no meaningful value to return past
+//! [`MERCATOR_MAX_LAT`]; that clamp is not invertible, so a latitude beyond
+//! the domain does not survive a round trip. Everything else extrapolates:
+//! [`lon_to_world_x`] maps `190` to `1.0277…`, and [`world_y_to_lat`] happily
+//! reports latitudes past the pole for a world y outside `[0, 1]`.
+//!
+//! World coordinates outside `[0, 1]` arise in normal operation — a padded
+//! canvas on the top row of tiles extends above `y = 0` — so consumers that
+//! need a bounded value clamp at the call site.
 
 /// A Web-Mercator XYZ tile identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -76,6 +91,25 @@ pub fn tile_to_world(tile: TileId, tx: f64, ty: f64, extent: f64) -> WorldPos {
     WorldPos {
         x: (tile.x as f64 + tx / extent) / n,
         y: (tile.y as f64 + ty / extent) / n,
+    }
+}
+
+/// Convert a position in tile pixels to world unit-square coordinates.
+///
+/// `px` / `py` are measured from the tile's own top-left corner in the
+/// canvas's pixel grid, so a padded canvas passes negative values for the
+/// margin above and left of the tile. `tile_w` / `tile_h` are the tile's
+/// pixel dimensions, taken separately because a canvas may be rectangular.
+///
+/// This is [`tile_to_world`] for consumers that have already scaled
+/// geometry into pixels; both are exact for power-of-two tile sizes, so two
+/// tiles naming the same point agree bit for bit.
+#[inline]
+pub fn tile_px_to_world(tile: TileId, px: f64, py: f64, tile_w: f64, tile_h: f64) -> WorldPos {
+    let n = tile.axis_tiles() as f64;
+    WorldPos {
+        x: (tile.x as f64 + px / tile_w) / n,
+        y: (tile.y as f64 + py / tile_h) / n,
     }
 }
 
@@ -159,6 +193,39 @@ mod tests {
         assert!(!parent.is_ancestor_of(TileId::new(7, 44, 81))); // wrong x branch
         assert!(!parent.is_ancestor_of(parent)); // not self
         assert!(!parent.is_ancestor_of(TileId::new(4, 5, 10))); // ancestor, not descendant
+    }
+
+    #[test]
+    fn tile_px_to_world_agrees_with_tile_to_world() {
+        let tile = TileId::new(6, 20, 41);
+        // The same point, expressed in extent units and in tile pixels.
+        for (frac, extent, tile_px) in [
+            (0.0, 4096.0, 512.0),
+            (0.25, 4096.0, 512.0),
+            (0.75, 4096.0, 256.0),
+        ] {
+            let a = tile_to_world(tile, frac * extent, frac * extent, extent);
+            let b = tile_px_to_world(tile, frac * tile_px, frac * tile_px, tile_px, tile_px);
+            assert_eq!(a.x, b.x, "x at {frac}");
+            assert_eq!(a.y, b.y, "y at {frac}");
+        }
+    }
+
+    #[test]
+    fn tile_px_to_world_scales_each_axis_independently() {
+        // A rectangular canvas: y must divide by the tile's own height.
+        let tile = TileId::new(3, 1, 2);
+        let p = tile_px_to_world(tile, 128.0, 64.0, 256.0, 128.0);
+        assert_eq!(p.x, (1.0 + 0.5) / 8.0);
+        assert_eq!(p.y, (2.0 + 0.5) / 8.0);
+    }
+
+    #[test]
+    fn tile_px_to_world_takes_the_padding_margin() {
+        // A padded canvas on the top-left tile reaches above and left of the
+        // world square; the conversion extrapolates rather than clamping.
+        let p = tile_px_to_world(TileId::new(2, 0, 0), -16.0, -16.0, 512.0, 512.0);
+        assert!(p.x < 0.0 && p.y < 0.0, "{p:?}");
     }
 
     #[test]
