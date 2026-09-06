@@ -36,11 +36,18 @@ pub fn cell_seed(i: i64, j: i64, salt: u32) -> u64 {
     xxh3_64_with_seed(&bytes, salt as u64)
 }
 
+/// The largest `f32` below `1.0`, the ceiling [`next_unit`] reports.
+const JUST_BELOW_ONE: f32 = 1.0 - f32::EPSILON / 2.0;
+
 /// Advance an LCG state and return the next value in `[0, 1)`.
 ///
 /// Seeded from [`world_seed`] or [`cell_seed`], this is the jitter source
 /// behind seamless scatter: the sequence depends only on the seed, never
 /// on which tile is being rendered or in what order.
+///
+/// The draw order is part of the contract: the value a call returns depends
+/// on how many calls precede it on the same state, so reordering, adding or
+/// skipping a draw changes every pixel that consumes it.
 #[inline]
 pub fn next_unit(state: &mut u64) -> f32 {
     *state = state
@@ -49,7 +56,13 @@ pub fn next_unit(state: &mut u64) -> f32 {
     // Take the top 32 bits — the low bits of an LCG are the weak ones —
     // and normalize by 2^32 so the result spans the whole unit interval.
     let x = (*state >> 32) as u32;
-    (x as f32) * (1.0 / (1u64 << 32) as f32)
+    let u = (x as f32) * (1.0 / (1u64 << 32) as f32);
+    // `x as f32` rounds to 24 bits, so the 128 largest `u32` values round up
+    // to 2^32 and the product lands on exactly 1.0 — outside the documented
+    // range, and out of bounds for a consumer indexing by `(u * n) as usize`.
+    // Capping is the minimal repair: it leaves every other draw untouched,
+    // where re-deriving the value from 24 bits would change every pixel.
+    u.min(JUST_BELOW_ONE)
 }
 
 #[cfg(test)]
@@ -82,6 +95,36 @@ mod tests {
         for _ in 0..1000 {
             let u = next_unit(&mut state);
             assert!((0.0..1.0).contains(&u), "u = {u}");
+        }
+    }
+
+    const LCG_A: u64 = 6364136223846793005;
+    const LCG_C: u64 = 1442695040888963407;
+
+    /// The state `next_unit` would have to start from to land on `next`.
+    /// The LCG is a bijection — `a` is odd, so it is invertible mod 2^64 —
+    /// which lets the test drive the top of the range directly instead of
+    /// waiting on a 1-in-33-million draw.
+    fn predecessor(next: u64) -> u64 {
+        let mut inv = LCG_A;
+        for _ in 0..6 {
+            inv = inv.wrapping_mul(2u64.wrapping_sub(LCG_A.wrapping_mul(inv)));
+        }
+        debug_assert_eq!(LCG_A.wrapping_mul(inv), 1);
+        next.wrapping_sub(LCG_C).wrapping_mul(inv)
+    }
+
+    /// The top of the range is a cliff, not a slope: `x as f32` rounds to 24
+    /// bits, so the 128 largest top words round up to 2^32 and would
+    /// normalize to exactly 1.0. Consumers index and compare against the
+    /// documented `[0, 1)`, so the ceiling has to hold for every state.
+    #[test]
+    fn next_unit_never_reaches_one() {
+        for x in (u32::MAX - 300)..=u32::MAX {
+            let mut state = predecessor((x as u64) << 32);
+            let u = next_unit(&mut state);
+            assert!(u < 1.0, "top word {x} produced {u}");
+            assert_eq!(state >> 32, x as u64, "predecessor did not land on {x}");
         }
     }
 
