@@ -113,8 +113,11 @@ where
 
     let mut out = Vec::new();
     for j in j0..=j1 {
-        // Row density is fixed by the cell's world row, not by the
-        // sample's jittered position, so it cannot differ between tiles.
+        // Density is a property of the cell, so it is measured at the cell's
+        // world centre rather than at wherever the sample jittered to:
+        // sampling at the offset point would let a point that strayed towards
+        // denser ground raise its own odds of being kept. Being a function of
+        // the row alone also hoists it out of the inner loop.
         let world_y_centre = (j as f64 + 0.5) * spacing;
         let keep_p = (density_at(world_y_centre) * cell_area).clamp(0.0, 1.0);
         if keep_p <= 0.0 {
