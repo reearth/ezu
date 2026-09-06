@@ -20,13 +20,13 @@ use tiny_skia::{PixmapPaint, PixmapRef, Transform};
 use xxhash_rust::xxh3::Xxh3;
 
 use ezu_core::{
+    coord::tile_px_to_world,
     seed::{next_unit, world_seed},
-    WorldPos,
 };
 
 use crate::nodes::common::{
-    canvas_into_raster, downcast_features, empty_raster, make_canvas, unwrap_raster_or_sprite,
-    ACCEPTS_RASTER_OR_SPRITE,
+    canvas_into_raster, core_tile, downcast_features, empty_raster, make_canvas,
+    unwrap_raster_or_sprite, ACCEPTS_RASTER_OR_SPRITE,
 };
 
 const STAMP_SALT: u32 = 0x5354_4d50; // 'STMP'
@@ -178,10 +178,18 @@ impl Node for StampNode {
         // jitter regardless of which tile it lands on — and regardless of
         // which group it belongs to, since the seed is keyed by world
         // position only).
-        let axis_tiles = (1u64 << ctx.tile.z) as f64;
-        let world_origin_x = ctx.tile.x as f64 / axis_tiles;
-        let world_origin_y = ctx.tile.y as f64 / axis_tiles;
-        let world_per_px = 1.0 / (axis_tiles * tile_w as f64);
+        let tile = core_tile(ctx);
+        let world_at = |px: f32, py: f32| {
+            // The pad is the margin above and left of the tile, so
+            // subtracting it gives tile-local pixels.
+            tile_px_to_world(
+                tile,
+                px as f64 - pad as f64,
+                py as f64 - pad as f64,
+                tile_w as f64,
+                tile_h as f64,
+            )
+        };
 
         // Stamp every point in `points` with `img` at the given scale /
         // rotation / opacity. Jitter is keyed by world position, so it does
@@ -197,12 +205,11 @@ impl Node for StampNode {
             for &(x, y) in points {
                 let px = x as f32 * sx + pad;
                 let py = y as f32 * sy + pad;
-                let wx = world_origin_x + (px as f64 - pad as f64) * world_per_px;
-                let wy = world_origin_y + (py as f64 - pad as f64) * world_per_px;
+                let w = world_at(px, py);
 
                 let (mut rot_off, mut scale_off) = (0.0_f32, 0.0_f32);
                 if rotation_jitter_deg != 0.0 || scale_jitter != 0.0 {
-                    let mut seed = world_seed(WorldPos::new(wx, wy), STAMP_SALT);
+                    let mut seed = world_seed(w, STAMP_SALT);
                     rot_off = (next_unit(&mut seed) - 0.5) * 2.0 * rotation_jitter_deg;
                     scale_off = (next_unit(&mut seed) - 0.5) * 2.0 * scale_jitter;
                 }
@@ -215,7 +222,7 @@ impl Node for StampNode {
                 // place in both tiles.
                 let (mut dx, mut dy) = (0.0_f32, 0.0_f32);
                 if position_jitter_px != 0.0 {
-                    let mut seed = world_seed(WorldPos::new(wx, wy), STAMP_POS_SALT);
+                    let mut seed = world_seed(w, STAMP_POS_SALT);
                     dx = (next_unit(&mut seed) - 0.5) * 2.0 * position_jitter_px;
                     dy = (next_unit(&mut seed) - 0.5) * 2.0 * position_jitter_px;
                 }

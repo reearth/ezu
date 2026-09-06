@@ -1,13 +1,18 @@
-//! Hokusai-backed dab scatter fill.
+//! Hokusai-backed dab scatter fill for polygons.
 //!
-//! Each candidate position is computed from a **world-space deterministic
-//! seed**, so the same world coordinate emits the same dab regardless of
-//! which tile is being rendered. That is what keeps polygon fills seamless
-//! across tile boundaries.
+//! The candidate lattice is anchored in **world space**, not on the tile
+//! being drawn: cells are indexed off the global pixel grid at this zoom, and
+//! each cell's jitter comes from that integer index alone. Two tiles meeting
+//! at a border therefore agree on where the cells are *and* on how each one
+//! jittered, which is what keeps polygon fills seamless.
+//!
+//! Anchoring on the canvas instead — counting cells from the tile's own
+//! corner — would only line up when `spacing_px` divided the tile width, and
+//! step the pattern by a fraction of a cell at every border otherwise.
 
 use ezu_core::{
-    seed::{next_unit, world_seed},
-    TileId, WorldPos,
+    seed::{cell_seed, next_unit},
+    TileId,
 };
 use ezu_features::Polygon;
 use hokusai::color::RgbaF32;
@@ -59,7 +64,7 @@ impl Default for DabFillStyle {
     }
 }
 
-/// Salt for the world seed used by dab scatter; lets other consumers
+/// Salt for the lattice seed used by dab scatter; lets other consumers
 /// (e.g. paper noise, edge stroking) derive uncorrelated sequences.
 pub const DAB_SCATTER_SALT: u32 = 0xE2_70_DA_B5;
 
@@ -83,30 +88,36 @@ pub fn paint_polygons_dabs(
     let mask = rasterize_mask(polygons, extent, canvas);
     let mut surface = MemSurface::new();
 
-    let spacing = style.spacing_px.max(0.5);
-    let axis_tiles = (1u64 << tile.z) as f64;
-    let world_origin_x = tile.x as f64 / axis_tiles;
-    let world_origin_y = tile.y as f64 / axis_tiles;
-    // World coord per tile pixel (square tiles).
-    let world_per_px = 1.0 / (axis_tiles * tile_w as f64);
+    let spacing = style.spacing_px.max(0.5) as f64;
+    let tile_h = canvas.tile_height();
+    // The tile's top-left corner on the global pixel grid at this zoom. Cell
+    // indices are taken there, so they name the same cell from whichever tile
+    // is asking.
+    let origin_px_x = tile.x as f64 * tile_w as f64;
+    let origin_px_y = tile.y as f64 * tile_h as f64;
+    // Padded canvas pixel `p` is global pixel `origin + p - pad`, so the
+    // canvas spans `[origin - pad, origin + pw - pad]`. Every cell meeting
+    // that span can put a dab in it.
+    let i0 = ((origin_px_x - pad as f64) / spacing).floor() as i64;
+    let i1 = ((origin_px_x + pw as f64 - pad as f64) / spacing).floor() as i64;
+    let j0 = ((origin_px_y - pad as f64) / spacing).floor() as i64;
+    let j1 = ((origin_px_y + ph as f64 - pad as f64) / spacing).floor() as i64;
 
-    let cols = (pw as f32 / spacing).ceil() as u32 + 1;
-    let rows = (ph as f32 / spacing).ceil() as u32 + 1;
+    for j in j0..=j1 {
+        for i in i0..=i1 {
+            // Back into this canvas's padded pixel frame.
+            let cell_px_x = (i as f64 * spacing - origin_px_x + pad as f64) as f32;
+            let cell_px_y = (j as f64 * spacing - origin_px_y + pad as f64) as f32;
 
-    for row in 0..rows {
-        for col in 0..cols {
-            let cell_px_x = col as f32 * spacing; // in padded canvas space
-            let cell_px_y = row as f32 * spacing;
+            // Seeded from the integer cell index alone: no dependence on the
+            // tile being drawn, on iteration order, or on any float world
+            // position that two tiles might round differently.
+            let mut state = cell_seed(i, j, DAB_SCATTER_SALT);
 
-            // Padded canvas pixel (cell_px) corresponds to tile pixel
-            // (cell_px - pad). World coord is anchored at tile origin.
-            let wx = world_origin_x + (cell_px_x as f64 - pad as f64) * world_per_px;
-            let wy = world_origin_y + (cell_px_y as f64 - pad as f64) * world_per_px;
-
-            let mut state = world_seed(WorldPos::new(wx, wy), DAB_SCATTER_SALT);
-
-            let jx = (next_unit(&mut state) - 0.5) * spacing * style.position_jitter;
-            let jy = (next_unit(&mut state) - 0.5) * spacing * style.position_jitter;
+            // Fixed draw order: x offset, y offset, then size, opacity, value.
+            let spacing_px = spacing as f32;
+            let jx = (next_unit(&mut state) - 0.5) * spacing_px * style.position_jitter;
+            let jy = (next_unit(&mut state) - 0.5) * spacing_px * style.position_jitter;
             let dab_x = cell_px_x + jx;
             let dab_y = cell_px_y + jy;
 

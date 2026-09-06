@@ -300,8 +300,21 @@ fn hcl_to_rgb([h, c, l, alpha]: [f32; 4]) -> [f32; 4] {
     lab_to_rgb([l, h.cos() * c, h.sin() * c, alpha])
 }
 
-/// HCL interpolation, faithful to `Color.interpolate('hcl')` including the
-/// pure-black/white chroma preservation.
+/// HCL interpolation, faithful to `Color.interpolate('hcl')` — including the
+/// lopsided chroma preservation described below.
+///
+/// When one endpoint is achromatic the other's hue carries the ramp, and the
+/// upstream guards its chroma against being lerped away with
+/// `light === 1 || light === 0`. Here — and in MapLibre — `light` is CIELAB's
+/// L on `0..=100`, so only the `0` arm can fire: **a pure black endpoint keeps
+/// its partner's chroma, a pure white one does not.** The test is inherited
+/// from chroma.js (`src/interpolator/_hsx.js`, cited by the upstream source),
+/// where lightness runs `0..=1` and `=== 1` did mean white; the meaning was
+/// lost when MapLibre reused it for HCL.
+///
+/// Left as-is deliberately: converted MapLibre ramps have to land on the same
+/// colours, and "fixing" the white arm would move every one that touches
+/// white. Verified against maplibre-gl 5.1.1.
 fn interp_hcl(from: [f32; 4], to: [f32; 4], t: f32) -> [f32; 4] {
     let [h0, c0, l0, a0] = rgb_to_hcl(from);
     let [h1, c1, l1, a1] = rgb_to_hcl(to);
