@@ -38,6 +38,8 @@ mod density;
 mod dot_density;
 #[path = "paint/feature_sources.rs"]
 mod feature_sources;
+#[path = "paint/fill_dabs_seam.rs"]
+mod fill_dabs_seam;
 #[path = "paint/functions.rs"]
 mod functions;
 #[path = "paint/generator_kinds.rs"]

@@ -23,12 +23,12 @@ pub mod brush;
 /// Colour-space stop interpolation (re-exported from `ezu-core` so the
 /// paint nodes and the MapLibre converter share one implementation).
 pub use ezu_core::color as color_interp;
-pub mod dabs;
+pub mod fill_dabs;
 pub mod render;
 pub mod strokes;
 
 pub use brush::BrushDefaults;
-pub use dabs::{paint_polygons_dabs, DabFillStyle};
+pub use fill_dabs::{paint_polygons_dabs, DabFillStyle};
 pub use hokusai::color::RgbaF32;
 pub use hokusai::Brush;
 #[cfg(feature = "parallel")]
