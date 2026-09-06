@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use ezu_core::coord::EARTH_CIRCUMFERENCE_M;
+use ezu_core::coord::metres_per_world_unit;
 use ezu_graph::{CanvasInfo, GeoScale, ScalarField, TileId};
 use ezu_style::DemEncoding;
 
@@ -104,9 +104,12 @@ pub fn stitch_padded_field(
         }
     }
 
-    let lat_rad = tile_centre_lat_rad(tile);
+    // Ground scale at the tile's centre. Taking one value per tile — rather
+    // than per row, as `dot-density` does — steps the scale slightly at every
+    // tile border; the step is well under a percent at the zooms hillshade is
+    // used at, and `GeoScale` has no room for a gradient.
     let world_pixels = canvas.tile_w as f64 * (1u64 << tile.z) as f64;
-    let mpp = (EARTH_CIRCUMFERENCE_M * lat_rad.cos() / world_pixels) as f32;
+    let mpp = (metres_per_world_unit(tile_centre_world_y(tile)) / world_pixels) as f32;
 
     Some(ScalarField {
         width: pw,
@@ -192,8 +195,6 @@ fn split_fraction(t: f32) -> (i32, f32) {
 }
 
 /// Latitude (radians) of a Web Mercator tile's vertical centre.
-fn tile_centre_lat_rad(tile: TileId) -> f64 {
-    let n = (1u64 << tile.z) as f64;
-    let y = tile.y as f64 + 0.5;
-    (std::f64::consts::PI * (1.0 - 2.0 * y / n)).sinh().atan()
+fn tile_centre_world_y(tile: TileId) -> f64 {
+    (tile.y as f64 + 0.5) / (1u64 << tile.z) as f64
 }

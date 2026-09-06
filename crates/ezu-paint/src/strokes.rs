@@ -16,8 +16,9 @@
 //!   canvas in chunk order. Output is byte-identical to `paint_lines`.
 
 use ezu_core::{
+    coord::tile_px_to_world,
     seed::{next_unit, world_seed},
-    TileId, WorldPos,
+    TileId,
 };
 use hokusai::tile_mem::MemSurface;
 use hokusai::{Brush, BrushInput, BrushSetting, BrushState, InputMapping};
@@ -301,25 +302,35 @@ struct StrokeGeom {
     sx: f32,
     sy: f32,
     pad: f32,
-    world_origin_x: f64,
-    world_origin_y: f64,
-    world_per_px: f64,
+    tile: TileId,
+    tile_w: f64,
+    tile_h: f64,
 }
 
 impl StrokeGeom {
     fn from_canvas(canvas: &Canvas, extent: u32, tile: TileId) -> Self {
         let tile_w = canvas.tile_width();
-        let sx = tile_w as f32 / extent as f32;
-        let sy = canvas.tile_height() as f32 / extent as f32;
-        let axis_tiles = (1u64 << tile.z) as f64;
+        let tile_h = canvas.tile_height();
         Self {
-            sx,
-            sy,
+            sx: tile_w as f32 / extent as f32,
+            sy: tile_h as f32 / extent as f32,
             pad: canvas.pad() as f32,
-            world_origin_x: tile.x as f64 / axis_tiles,
-            world_origin_y: tile.y as f64 / axis_tiles,
-            world_per_px: 1.0 / (axis_tiles * tile_w as f64),
+            tile,
+            tile_w: tile_w as f64,
+            tile_h: tile_h as f64,
         }
+    }
+
+    /// World position of a padded-canvas pixel. The pad is the margin above
+    /// and left of the tile, so subtracting it gives tile-local pixels.
+    fn world_at(&self, px: f32, py: f32) -> ezu_core::WorldPos {
+        tile_px_to_world(
+            self.tile,
+            px as f64 - self.pad as f64,
+            py as f64 - self.pad as f64,
+            self.tile_w,
+            self.tile_h,
+        )
     }
 }
 
@@ -373,11 +384,7 @@ fn stroke_one(
         // Padded canvas coords (tile-local px + pad).
         let px = x as f32 * geom.sx + geom.pad;
         let py = y as f32 * geom.sy + geom.pad;
-        // World coord is anchored at tile origin (subtract pad).
-        let wx = geom.world_origin_x + (px as f64 - geom.pad as f64) * geom.world_per_px;
-        let wy = geom.world_origin_y + (py as f64 - geom.pad as f64) * geom.world_per_px;
-
-        let mut seed = world_seed(WorldPos::new(wx, wy), LINE_STROKE_SALT);
+        let mut seed = world_seed(geom.world_at(px, py), LINE_STROKE_SALT);
         let pj = (next_unit(&mut seed) - 0.5) * 2.0 * style.pressure_jitter;
         let pressure = (style.pressure_base + pj).clamp(0.0, 1.0);
 
