@@ -326,3 +326,94 @@ fn cache_evicts_to_stay_within_its_byte_budget() {
         "oldest entry is evicted first"
     );
 }
+
+#[test]
+fn observer_sees_every_node_once_and_reports_cache_hits() {
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+
+    use crate::{NodeIx, NodeObserver, PortValue};
+
+    /// Records how a node's value arrived, per node.
+    #[derive(Default)]
+    struct Watcher(Mutex<Vec<(NodeIx, bool)>>);
+    impl NodeObserver for Watcher {
+        fn on_node(&self, ix: NodeIx, value: &PortValue, cache_hit: bool, _us: u128) {
+            assert_eq!(value.kind(), PortKind::Raster);
+            self.0
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .push((ix, cache_hit));
+        }
+    }
+    // Which nodes were seen, and whether each came from the cache. A
+    // node seen twice in one render would collapse here, so count too.
+    let tally = |w: &Watcher| -> (usize, BTreeMap<NodeIx, bool>) {
+        let seen = w.0.lock().unwrap_or_else(|p| p.into_inner());
+        (seen.len(), seen.iter().copied().collect())
+    };
+
+    // Diamond again: the shared upstream must be reported once, not
+    // once per consumer.
+    let pass = |op: &'static str| {
+        Mock::new(
+            op,
+            vec![PortSpec::new("input", &[PortKind::Raster])],
+            PortKind::Raster,
+        )
+        .boxed()
+    };
+    let mut b = GraphBuilder::new();
+    b.add_node(
+        "a",
+        Box::new(Forward(Counter::new("src", PortKind::Raster))),
+    )
+    .add_node("b", pass("b"))
+    .add_node("c", pass("c"))
+    .add_node(
+        "d",
+        Mock::new(
+            "merge",
+            vec![
+                PortSpec::new("left", &[PortKind::Raster]),
+                PortSpec::new("right", &[PortKind::Raster]),
+            ],
+            PortKind::Raster,
+        )
+        .boxed(),
+    )
+    .connect("a", "b", "input")
+    .connect("a", "c", "input")
+    .connect("b", "d", "left")
+    .connect("c", "d", "right")
+    .set_output("d");
+    let g = b.build().unwrap();
+    let cache = Cache::new();
+    let assets = NoAssets;
+    let tile = TileId { z: 0, x: 0, y: 0 };
+
+    let first = Watcher::default();
+    Evaluator::new(&g, &cache, &assets)
+        .with_observer(&first)
+        .render(tile, small_canvas(), &ParamValues::new(), 0)
+        .unwrap();
+    let (count, seen) = tally(&first);
+    assert_eq!(count, g.len(), "every node reported exactly once");
+    assert_eq!(seen.len(), g.len());
+    assert!(
+        seen.values().all(|hit| !hit),
+        "nothing is cached on the first render"
+    );
+
+    let second = Watcher::default();
+    Evaluator::new(&g, &cache, &assets)
+        .with_observer(&second)
+        .render(tile, small_canvas(), &ParamValues::new(), 0)
+        .unwrap();
+    let (count, seen) = tally(&second);
+    assert_eq!(count, g.len());
+    assert!(
+        seen.values().all(|hit| *hit),
+        "the same tile again comes entirely from the cache"
+    );
+}

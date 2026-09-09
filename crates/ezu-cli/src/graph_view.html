@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ezu graph</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --paper: #f2eee4;
+    --card: #fbf9f4;
+    --ink: #1a1815;
+    --muted: #6d675c;
+    --line: #cfc7b5;
+    --edge: #a89f8c;
+    --accent: #2a6fb0;
+    --accent-soft: #d9ecff;
+    --warm: #cc7a33;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #17161a;
+      --card: #201f25;
+      --ink: #e8e4da;
+      --muted: #9a9386;
+      --line: #3a3844;
+      --edge: #55525f;
+      --accent: #7db4e6;
+      --accent-soft: #1e3348;
+      --warm: #e0a061;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    background: var(--paper); color: var(--ink);
+    font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", sans-serif;
+  }
+
+  header {
+    position: fixed; inset: 0 0 auto 0; height: 46px; z-index: 20;
+    display: flex; align-items: center; gap: 14px; padding: 0 14px;
+    background: color-mix(in srgb, var(--paper) 88%, transparent);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+  }
+  header .name { font-weight: 600; }
+  header .meta { color: var(--muted); font-variant-numeric: tabular-nums; }
+  header .spacer { flex: 1; }
+  label.toggle { display: flex; align-items: center; gap: 5px; color: var(--muted); cursor: pointer; }
+  input[type=search] {
+    width: 170px; padding: 4px 8px; border-radius: 6px;
+    border: 1px solid var(--line); background: var(--card); color: inherit; font: inherit;
+  }
+  button {
+    border: 1px solid var(--line); background: var(--card); color: inherit;
+    border-radius: 6px; padding: 3px 9px; font: inherit; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+
+  #stage { position: absolute; inset: 46px 0 0 0; overflow: hidden; cursor: grab; }
+  #stage.panning { cursor: grabbing; }
+  #world { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+  #wires { position: absolute; top: 0; left: 0; overflow: visible; pointer-events: none; }
+  #wires path { fill: none; stroke: var(--edge); stroke-width: 1.4; }
+  #wires path.lit { stroke: var(--accent); stroke-width: 2.4; }
+
+  .node {
+    position: absolute; width: 148px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 9px;
+    padding: 6px; cursor: pointer; user-select: none;
+    transition: border-color .1s, box-shadow .1s, opacity .1s;
+  }
+  .node:hover { border-color: var(--accent); }
+  .node.lit { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .node.dim { opacity: .22; }
+  .node.out { border-color: var(--warm); border-width: 2px; }
+  .node .thumb {
+    width: 100%; aspect-ratio: 1; border-radius: 5px; display: block;
+    background-color: #fff;
+    background-image:
+      linear-gradient(45deg, #e2ddd2 25%, transparent 25%, transparent 75%, #e2ddd2 75%),
+      linear-gradient(45deg, #e2ddd2 25%, transparent 25%, transparent 75%, #e2ddd2 75%);
+    background-size: 12px 12px; background-position: 0 0, 6px 6px;
+    object-fit: contain;
+  }
+  .node .placeholder {
+    width: 100%; aspect-ratio: 1; border-radius: 5px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 4px; text-align: center; padding: 6px;
+    border: 1px dashed var(--line); color: var(--muted);
+  }
+  .node .placeholder .k { font-weight: 600; color: var(--ink); font-size: 12px; }
+  .node .placeholder .d { font-size: 10px; line-height: 1.35; overflow: hidden; }
+  .node .id {
+    margin-top: 5px; font-weight: 600; font-size: 12px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .node .op { color: var(--muted); font-size: 11px; display: flex; gap: 5px; }
+  .node .op .badge {
+    border: 1px solid var(--line); border-radius: 4px; padding: 0 4px;
+    font-size: 10px; line-height: 15px;
+  }
+  .node .heat { height: 3px; border-radius: 2px; margin-top: 4px; background: var(--line); }
+
+  .src {
+    position: absolute; width: 148px; padding: 8px 10px;
+    background: var(--accent-soft); border: 1px solid var(--accent);
+    border-radius: 20px; text-align: center; user-select: none;
+  }
+  .src .id { font-weight: 600; font-size: 12px; }
+  .src .op { color: var(--muted); font-size: 11px; }
+
+  #panel {
+    position: fixed; top: 46px; right: 0; bottom: 0; width: 340px; z-index: 15;
+    background: var(--card); border-left: 1px solid var(--line);
+    padding: 14px; overflow: auto; display: none;
+  }
+  #panel.open { display: block; }
+  #panel h2 { margin: 0 0 2px; font-size: 15px; word-break: break-all; }
+  #panel .sub { color: var(--muted); margin-bottom: 10px; }
+  #panel img {
+    width: 100%; border-radius: 6px; display: block; margin-bottom: 10px;
+    background-color: #fff;
+    background-image:
+      linear-gradient(45deg, #e2ddd2 25%, transparent 25%, transparent 75%, #e2ddd2 75%),
+      linear-gradient(45deg, #e2ddd2 25%, transparent 25%, transparent 75%, #e2ddd2 75%);
+    background-size: 16px 16px; background-position: 0 0, 8px 8px;
+  }
+  #panel dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 0 0 12px; }
+  #panel dt { color: var(--muted); }
+  #panel dd { margin: 0; word-break: break-word; }
+  #panel .close { position: absolute; top: 10px; right: 12px; }
+  #panel ul { margin: 4px 0 0; padding-left: 18px; }
+  #panel a { color: var(--accent); cursor: pointer; text-decoration: none; }
+  #panel a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="name" id="hName"></span>
+  <span class="meta" id="hMeta"></span>
+  <span class="spacer"></span>
+  <input type="search" id="find" placeholder="find a node…" autocomplete="off">
+  <label class="toggle"><input type="checkbox" id="expand"> expand functions</label>
+  <label class="toggle"><input type="checkbox" id="heat"> time</label>
+  <button id="fit">fit</button>
+</header>
+
+<div id="stage">
+  <div id="world">
+    <svg id="wires"></svg>
+  </div>
+</div>
+
+<aside id="panel"><button class="close" id="panelClose">close</button><div id="panelBody"></div></aside>
+
+<script>
+const DATA = __EZU_GRAPH__;
+
+const COL = 210, ROW = 24, NODE_W = 148;
+// thumbnail (square, minus the card's padding) + name + op line
+const NODE_H = NODE_W - 12 + 46;
+const stage = document.getElementById('stage');
+const world = document.getElementById('world');
+const wires = document.getElementById('wires');
+const panel = document.getElementById('panel');
+
+document.getElementById('hName').textContent = DATA.style;
+function setMeta(shown) {
+  const total = DATA.nodes.length;
+  const count = shown === total ? `${total} nodes` : `${shown} of ${total} nodes`;
+  document.getElementById('hMeta').textContent =
+    `${DATA.tile}  ·  ${count}  ·  ${DATA.tile_size}px, pad ${DATA.pad}`;
+}
+
+const byId = new Map(DATA.nodes.map(n => [n.id, n]));
+let view = null;      // the laid-out graph currently on screen
+let selected = null;
+
+/** The visible stand-in for a node: with functions folded, everything
+ *  inside a call collapses onto the call itself. */
+function visible(id, expanded) {
+  if (expanded) return id;
+  let cur = id;
+  while (cur.includes('/')) {
+    const up = cur.slice(0, cur.lastIndexOf('/'));
+    if (!byId.has(up)) break;
+    cur = up;
+  }
+  return cur;
+}
+
+function build(expanded) {
+  const nodes = [];
+  const seen = new Set();
+  const usedSources = new Map();
+
+  for (const n of DATA.nodes) {
+    if (visible(n.id, expanded) !== n.id) continue;
+    if (seen.has(n.id)) continue;
+    seen.add(n.id);
+    nodes.push({ id: n.id, data: n, kind: 'node', ins: new Set() });
+  }
+  const map = new Map(nodes.map(n => [n.id, n]));
+
+  // Edges are taken from every original node, then folded onto whatever
+  // stands in for it — an internal node's inputs become the call's.
+  for (const n of DATA.nodes) {
+    const dst = map.get(visible(n.id, expanded));
+    if (!dst) continue;
+    for (const inp of n.inputs) {
+      const src = visible(inp.from, expanded);
+      if (src !== dst.id) dst.ins.add(src);
+    }
+    for (const a of n.assets) {
+      if (!usedSources.has(a)) usedSources.set(a, new Set());
+      usedSources.get(a).add(dst.id);
+      dst.ins.add('source:' + a);
+    }
+  }
+  for (const [id, _] of usedSources) {
+    const decl = DATA.sources.find(s => s.id === id);
+    const node = { id: 'source:' + id, kind: 'source',
+                   data: { id, op: decl ? decl.kind : 'source' }, ins: new Set() };
+    nodes.push(node);
+    map.set(node.id, node);
+  }
+  // Drop edges whose source folded away entirely.
+  for (const n of nodes) n.ins = new Set([...n.ins].filter(i => map.has(i)));
+
+  layout(nodes, map);
+  return { nodes, map };
+}
+
+/** Longest-path layering, then barycentre sweeps to untangle the wires. */
+function layout(nodes, map) {
+  const outs = new Map(nodes.map(n => [n.id, []]));
+  for (const n of nodes) for (const i of n.ins) outs.get(i).push(n.id);
+
+  // Longest path from the roots. Iterating to a fixed point is enough
+  // here: the graph is a DAG, so the depths settle in at most one pass
+  // per level.
+  for (const n of nodes) n.layer = 0;
+  for (let pass = 0; pass < nodes.length; pass++) {
+    let moved = false;
+    for (const n of nodes) {
+      for (const i of n.ins) {
+        const want = map.get(i).layer + 1;
+        if (want > n.layer) { n.layer = want; moved = true; }
+      }
+    }
+    if (!moved) break;
+  }
+
+  // Then slide each node right until it sits just before whatever reads
+  // it. Depth-from-the-roots alone piles every source, noise field and
+  // solid into one enormous first column, when what they belong next to
+  // is the node that consumes them.
+  const depth = Math.max(...nodes.map(n => n.layer));
+  const byDepth = [...nodes].sort((a, b) => b.layer - a.layer);
+  for (const n of byDepth) {
+    const succ = outs.get(n.id);
+    n.layer = succ.length
+      ? Math.min(...succ.map(id => map.get(id).layer)) - 1
+      : depth;
+  }
+
+  const layers = [];
+  for (const n of nodes) (layers[n.layer] ||= []).push(n);
+  for (const l of layers) l.forEach((n, i) => { n.order = i; });
+
+  const mean = (n, dir) => {
+    const rel = dir === 'in' ? [...n.ins] : outs.get(n.id);
+    if (!rel.length) return n.order;
+    return rel.reduce((a, id) => a + map.get(id).order, 0) / rel.length;
+  };
+  for (let sweep = 0; sweep < 6; sweep++) {
+    const dir = sweep % 2 === 0 ? 'in' : 'out';
+    const seq = sweep % 2 === 0 ? layers : [...layers].reverse();
+    for (const l of seq) {
+      if (!l) continue;
+      l.sort((a, b) => mean(a, dir) - mean(b, dir));
+      l.forEach((n, i) => { n.order = i; });
+    }
+  }
+
+  // Nodes and source pills are different heights, so stack each column
+  // by running total rather than by a fixed row pitch, then centre the
+  // columns on one midline — a graph that narrows towards its output
+  // otherwise hangs off the top of an increasingly empty page.
+  const heights = layers.map(l =>
+    (l || []).reduce((a, n) => {
+      n.h = n.kind === 'source' ? 52 : NODE_H;
+      return a + n.h + ROW;
+    }, 0) - ROW);
+  const tallest = Math.max(...heights.filter(h => h > 0));
+  layers.forEach((l, li) => {
+    if (!l) return;
+    let y = 20 + (tallest - heights[li]) / 2;
+    for (const n of l) {
+      n.x = 24 + li * COL;
+      n.y = y;
+      y += n.h + ROW;
+    }
+  });
+  world.style.width = (24 + layers.length * COL) + 'px';
+  world.style.height = (tallest + 40) + 'px';
+}
+
+function paint(expanded) {
+  for (const el of world.querySelectorAll('.node, .src')) el.remove();
+  view = build(expanded);
+
+  for (const n of view.nodes) {
+    const el = document.createElement('div');
+    el.style.left = n.x + 'px';
+    el.style.top = n.y + 'px';
+    if (n.kind === 'source') {
+      el.className = 'src';
+      el.innerHTML = `<div class="id"></div><div class="op"></div>`;
+      el.querySelector('.id').textContent = n.data.id;
+      el.querySelector('.op').textContent = 'source · ' + n.data.op;
+    } else {
+      const d = n.data;
+      el.className = 'node' + (d.output ? ' out' : '');
+      el.innerHTML = `${figure(d)}
+        <div class="id"></div>
+        <div class="op"><span class="badge"></span><span class="k"></span></div>
+        <div class="heat"></div>`;
+      el.querySelector('.id').textContent = d.label;
+      el.querySelector('.id').title = d.id;
+      el.querySelector('.badge').textContent = d.op;
+      el.querySelector('.k').textContent = d.group ? '↳ ' + d.group : '';
+      el.onclick = () => select(n.id);
+    }
+    el.onmouseenter = () => light(n.id);
+    el.onmouseleave = () => light(selected);
+    n.el = el;
+    world.appendChild(el);
+  }
+  drawWires();
+  heatmap();
+  setMeta(view.nodes.filter(n => n.kind === 'node').length);
+  if (selected && view.map.has(selected)) light(selected); else selected = null;
+}
+
+function figure(d) {
+  if (d.img) return `<img class="thumb" loading="lazy" src="${d.img}" alt="">`;
+  const note = d.empty ? 'blank tile'
+    : d.detail ? d.detail
+    : d.summary || '';
+  const div = document.createElement('div');
+  div.className = 'placeholder';
+  div.innerHTML = `<div class="k"></div><div class="d"></div>`;
+  div.querySelector('.k').textContent = d.empty ? 'empty' : d.kind;
+  div.querySelector('.d').textContent = note;
+  return div.outerHTML;
+}
+
+function drawWires() {
+  const paths = [];
+  for (const n of view.nodes) {
+    for (const i of n.ins) {
+      const s = view.map.get(i);
+      const x1 = s.x + NODE_W, y1 = s.y + s.h / 2;
+      const x2 = n.x, y2 = n.y + n.h / 2;
+      const dx = Math.max(28, (x2 - x1) * 0.5);
+      paths.push(`<path data-from="${i}" data-to="${n.id}" d="M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}"/>`);
+    }
+  }
+  wires.setAttribute('width', world.style.width);
+  wires.setAttribute('height', world.style.height);
+  wires.innerHTML = paths.join('');
+}
+
+/** Highlight a node with everything it reads and everything that reads it. */
+function light(id) {
+  const on = new Set();
+  if (id && view.map.has(id)) {
+    on.add(id);
+    for (const i of view.map.get(id).ins) on.add(i);
+    for (const n of view.nodes) if (n.ins.has(id)) on.add(n.id);
+  }
+  for (const n of view.nodes) {
+    n.el.classList.toggle('lit', on.has(n.id) && n.id === id);
+    n.el.classList.toggle('dim', on.size > 0 && !on.has(n.id));
+  }
+  for (const p of wires.querySelectorAll('path')) {
+    p.classList.toggle('lit', p.dataset.from === id || p.dataset.to === id);
+  }
+}
+
+function heatmap() {
+  const on = document.getElementById('heat').checked;
+  const times = view.nodes.filter(n => n.kind === 'node').map(n => n.data.ms || 0);
+  const max = Math.max(1e-6, ...times);
+  for (const n of view.nodes) {
+    const bar = n.el.querySelector('.heat');
+    if (!bar) continue;
+    if (!on) { bar.style.background = 'var(--line)'; bar.style.width = '100%'; continue; }
+    const f = (n.data.ms || 0) / max;
+    bar.style.width = Math.max(2, f * 100) + '%';
+    bar.style.background = `hsl(${(1 - f) * 200}deg 70% 50%)`;
+  }
+}
+
+function select(id) {
+  selected = id;
+  const d = byId.get(id);
+  if (!d) return;
+  const body = document.getElementById('panelBody');
+  const row = (k, v) => v == null || v === '' ? '' : `<dt>${k}</dt><dd>${escapeHtml(String(v))}</dd>`;
+  body.innerHTML = `
+    <h2></h2>
+    <div class="sub"></div>
+    ${d.img ? `<img src="${d.img}" alt="">` : ''}
+    <dl>
+      ${row('kind', d.kind)}
+      ${row('op', d.op)}
+      ${row('value', d.summary)}
+      ${row('detail', d.detail)}
+      ${row('time', d.cached ? 'cache hit' : (d.ms != null ? d.ms.toFixed(2) + ' ms' : null))}
+      ${d.group ? row('function call', d.group) : ''}
+      ${d.output ? row('role', 'document output') : ''}
+    </dl>
+    ${d.inputs.length ? '<div class="sub">inputs</div><ul>' +
+      d.inputs.map(i => `<li>${escapeHtml(i.port)} ← <a data-go="${escapeAttr(i.from)}">${escapeHtml(i.from)}</a></li>`).join('') +
+      '</ul>' : ''}
+    ${d.assets.length ? '<div class="sub">sources</div><ul>' +
+      d.assets.map(a => `<li>${escapeHtml(a)}</li>`).join('') + '</ul>' : ''}
+  `;
+  body.querySelector('h2').textContent = d.id;
+  body.querySelector('.sub').textContent = d.empty ? 'nothing drawn on this tile' : (d.kind + ' port');
+  for (const a of body.querySelectorAll('a[data-go]')) {
+    a.onclick = () => { const t = visible(a.dataset.go, document.getElementById('expand').checked);
+                        select(a.dataset.go); light(t); centre(t); };
+  }
+  panel.classList.add('open');
+  light(visible(id, document.getElementById('expand').checked));
+}
+
+const escapeHtml = s => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+const escapeAttr = s => escapeHtml(s).replace(/"/g, '&quot;');
+
+// --- pan and zoom -----------------------------------------------------
+let tx = 0, ty = 0, scale = 1;
+const apply = () => { world.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`; };
+
+stage.addEventListener('wheel', e => {
+  e.preventDefault();
+  const r = stage.getBoundingClientRect();
+  const px = e.clientX - r.left, py = e.clientY - r.top;
+  const next = Math.min(2.5, Math.max(0.08, scale * Math.exp(-e.deltaY * 0.0015)));
+  tx = px - (px - tx) * (next / scale);
+  ty = py - (py - ty) * (next / scale);
+  scale = next;
+  apply();
+}, { passive: false });
+
+let drag = null;
+stage.addEventListener('pointerdown', e => {
+  if (e.target.closest('.node, .src')) return;
+  drag = { x: e.clientX - tx, y: e.clientY - ty };
+  stage.classList.add('panning');
+  stage.setPointerCapture(e.pointerId);
+});
+stage.addEventListener('pointermove', e => {
+  if (!drag) return;
+  tx = e.clientX - drag.x; ty = e.clientY - drag.y; apply();
+});
+stage.addEventListener('pointerup', () => { drag = null; stage.classList.remove('panning'); });
+
+function fit() {
+  const w = parseFloat(world.style.width), h = parseFloat(world.style.height);
+  const r = stage.getBoundingClientRect();
+  scale = Math.min((r.width - 40) / w, (r.height - 40) / h, 1);
+  tx = 20; ty = 20;
+  apply();
+}
+
+function centre(id) {
+  const n = view.map.get(id);
+  if (!n) return;
+  const r = stage.getBoundingClientRect();
+  tx = r.width / 2 - (n.x + NODE_W / 2) * scale;
+  ty = r.height / 2 - (n.y + n.h / 2) * scale;
+  apply();
+}
+
+// --- controls ---------------------------------------------------------
+document.getElementById('expand').onchange = e => paint(e.target.checked);
+document.getElementById('heat').onchange = heatmap;
+document.getElementById('fit').onclick = fit;
+document.getElementById('panelClose').onclick = () => {
+  panel.classList.remove('open'); selected = null; light(null);
+};
+document.getElementById('find').oninput = e => {
+  const q = e.target.value.trim().toLowerCase();
+  for (const n of view.nodes) {
+    const hit = !q || n.id.toLowerCase().includes(q) ||
+      (n.data.op || '').toLowerCase().includes(q);
+    n.el.classList.toggle('dim', !hit);
+    n.el.classList.toggle('lit', !!q && hit);
+  }
+};
+
+paint(false);
+fit();
+</script>
+</body>
+</html>

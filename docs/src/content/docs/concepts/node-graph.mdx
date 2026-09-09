@@ -87,3 +87,25 @@ ezu --verbose tile ...        # per-node op, cache hit/miss, output shape, durat
 
 The Mermaid output pastes straight into anything that renders Mermaid, which is
 the fastest way to understand a translated recipe you did not write.
+
+### With the pictures
+
+```sh
+ezu graph style.json --tile 14/14551/6451 --out graph.html
+```
+
+Add a tile and you get an HTML page of the same graph with **each node's own
+intermediate result drawn on it** — what the paper looked like before the ink,
+what the dry brush ate away, which layer was blank on this tile. Click a node
+for the full-size picture, its op, what it read, and how long it took. Ports
+that carry no pixels (`features`, `brush`, a scalar) show what they carry
+instead: how many features survived a filter, a colour's value, a field's range.
+
+It costs one render. The evaluator already walks every node to reach the
+output, so the page is built by watching that single pass — nothing is
+evaluated twice.
+
+Function calls are folded by default, so the shape matches the Mermaid diagram;
+the toggle in the header opens their bodies. Use `--image-size` to trade file
+size against sharpness, or `--sidecar` to write the pictures as files beside
+the page rather than into it.

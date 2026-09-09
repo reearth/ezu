@@ -1180,6 +1180,78 @@ pub fn crop_to_png(
     encode_rgba8_png(crop_w, crop_h, &rgba, compression)
 }
 
+/// [`crop_to_png`] with the crop shrunk so its long edge is at most
+/// `max_dim`. `max_dim` of `0`, or a crop already that small, encodes at
+/// full size.
+///
+/// Downscaling averages over the whole source rectangle rather than
+/// sampling it, so a thumbnail of a painterly tile keeps the density of
+/// the strokes instead of dropping most of them. The average is taken in
+/// premultiplied space: a transparent pixel carries no colour, and a
+/// straight average would let its RGB bleed into the result.
+pub fn crop_to_png_scaled(
+    buf: &RasterBuf,
+    crop_w: u32,
+    crop_h: u32,
+    pad: u32,
+    max_dim: u32,
+    compression: PngCompression,
+) -> Result<Vec<u8>, PaintError> {
+    if max_dim == 0 || crop_w.max(crop_h) <= max_dim || crop_w == 0 || crop_h == 0 {
+        return crop_to_png(buf, crop_w, crop_h, pad, compression);
+    }
+    let scale = f64::from(max_dim) / f64::from(crop_w.max(crop_h));
+    let dst_w = ((f64::from(crop_w) * scale).round() as u32).max(1);
+    let dst_h = ((f64::from(crop_h) * scale).round() as u32).max(1);
+    let src = crop_to_rgba8(buf, crop_w, crop_h, pad);
+    let dst = box_downsample(&src, crop_w, crop_h, dst_w, dst_h);
+    encode_rgba8_png(dst_w, dst_h, &dst, compression)
+}
+
+/// Box-filter `src` (straight RGBA8, `src_w` × `src_h`) down to
+/// `dst_w` × `dst_h`, returning straight RGBA8.
+fn box_downsample(src: &[u8], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> Vec<u8> {
+    let mut out = Vec::with_capacity((dst_w * dst_h * 4) as usize);
+    // Source-pixel boundaries per destination pixel, so every source row
+    // and column lands in exactly one box and none is counted twice.
+    let edge = |i: u32, n_dst: u32, n_src: u32| -> u32 {
+        ((u64::from(i) * u64::from(n_src)) / u64::from(n_dst)) as u32
+    };
+    for dy in 0..dst_h {
+        let (y0, y1) = (
+            edge(dy, dst_h, src_h),
+            edge(dy + 1, dst_h, src_h).max(edge(dy, dst_h, src_h) + 1),
+        );
+        for dx in 0..dst_w {
+            let (x0, x1) = (
+                edge(dx, dst_w, src_w),
+                edge(dx + 1, dst_w, src_w).max(edge(dx, dst_w, src_w) + 1),
+            );
+            let (mut r, mut g, mut b, mut a) = (0u64, 0u64, 0u64, 0u64);
+            let mut n = 0u64;
+            for y in y0..y1.min(src_h) {
+                for x in x0..x1.min(src_w) {
+                    let i = ((y * src_w + x) * 4) as usize;
+                    let alpha = u64::from(src[i + 3]);
+                    r += u64::from(src[i]) * alpha;
+                    g += u64::from(src[i + 1]) * alpha;
+                    b += u64::from(src[i + 2]) * alpha;
+                    a += alpha;
+                    n += 1;
+                }
+            }
+            if n == 0 || a == 0 {
+                out.extend_from_slice(&[0, 0, 0, 0]);
+                continue;
+            }
+            // `a / n` is the mean alpha; the colour channels divide by
+            // the alpha sum, which un-premultiplies in the same step.
+            out.extend_from_slice(&[(r / a) as u8, (g / a) as u8, (b / a) as u8, (a / n) as u8]);
+        }
+    }
+    out
+}
+
 fn encode_rgba8_png(
     width: u32,
     height: u32,

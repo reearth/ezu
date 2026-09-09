@@ -6,6 +6,7 @@
 //!          --bbox MIN_LNG,MIN_LAT,MAX_LNG,MAX_LAT --zoom Z [--out FILE]
 //! ```
 
+mod graph_view;
 mod serve;
 pub(crate) mod source;
 
@@ -16,7 +17,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use ezu::core::TileId as CoreTileId;
 use ezu::features::mvt;
 use ezu::graph::{
-    build_graph, Cache, CanvasInfo, Evaluator, Graph, ParamValues, PortValue, RasterBuf, TileId,
+    build_graph, Cache, CanvasInfo, Evaluator, Graph, NodeObserver, ParamValues, PortValue,
+    RasterBuf, TileId,
 };
 use ezu::paint::host::{
     bind_dem_sources, bind_raster_sources, build_dem_sources, build_raster_sources, pixmap_to_webp,
@@ -55,7 +57,9 @@ enum Cmd {
     /// Validate an Ezu Style document without rendering — exits non-zero
     /// on parse / graph / asset errors. Suitable for CI + pre-commit hooks.
     Check(CheckCmd),
-    /// Emit a Mermaid `graph LR` diagram of the style's node dependencies.
+    /// Emit a Mermaid `graph LR` diagram of the style's node
+    /// dependencies — or, with `--tile`, an HTML page of the same graph
+    /// with each node's own intermediate tile drawn on it.
     Graph(GraphCmd),
     /// Emit the style's declared legend as JSON, for a host to lay out
     /// beside the map.
@@ -160,6 +164,38 @@ struct GraphCmd {
     /// Output file. Writes to stdout when omitted.
     #[arg(long)]
     out: Option<PathBuf>,
+    /// Render this tile as `Z/X/Y` and draw each node's own
+    /// intermediate result onto the diagram. Switches the output from
+    /// Mermaid to a self-contained HTML viewer; `--out` is required.
+    #[arg(long, value_parser = parse_zxy)]
+    tile: Option<CoreTileId>,
+    /// Base directory for resolving asset `src` paths. Defaults to the
+    /// style file's parent directory (or the current directory when the
+    /// style is a URL).
+    #[arg(long)]
+    assets_dir: Option<PathBuf>,
+    /// PMTiles archive — local path or http(s):// URL.
+    #[arg(long, conflicts_with = "mvt")]
+    pmtiles: Option<String>,
+    /// Templated MVT tile source containing `{z}`, `{x}`, `{y}`.
+    #[arg(long, conflicts_with = "pmtiles")]
+    mvt: Option<String>,
+    /// Overzoom fallback depth for a missing tile, as in `ezu tile`.
+    #[arg(long, default_value_t = 4)]
+    overzoom_levels: u8,
+    /// Override a document parameter, as `name=value` (repeatable).
+    #[arg(long = "param", value_name = "NAME=VALUE")]
+    params: Vec<String>,
+    /// Long edge of each embedded node image, in pixels. `0` embeds
+    /// them at the style's own tile size — sharper, and a much larger
+    /// file on a graph of any size.
+    #[arg(long, default_value_t = 256)]
+    image_size: u32,
+    /// Write the node images as PNG files beside the HTML (in
+    /// `<out>.assets/`) instead of embedding them. Keeps the page
+    /// small; pair with `--image-size 0` for full-size pictures.
+    #[arg(long)]
+    sidecar: bool,
 }
 
 #[derive(Args, Debug)]
@@ -705,6 +741,9 @@ fn count_doc_scoped_sources(doc: &Document) -> usize {
 }
 
 async fn run_graph(args: GraphCmd) -> Result<(), Box<dyn std::error::Error>> {
+    if args.tile.is_some() {
+        return run_graph_view(args).await;
+    }
     let text = fetch_text(&args.style).await?;
     let doc = Document::from_json(&text)?;
     let mermaid = render_mermaid(&doc);
@@ -715,6 +754,86 @@ async fn run_graph(args: GraphCmd) -> Result<(), Box<dyn std::error::Error>> {
         }
         None => print!("{mermaid}"),
     }
+    Ok(())
+}
+
+/// `ezu graph --tile Z/X/Y`: render the tile once, watching every node,
+/// and write the diagram with each node's own picture on it.
+///
+/// The diagram here is of the *expanded* graph — the one that actually
+/// evaluated — so a function call's body shows up as `call/body` nodes.
+/// The viewer folds those onto the call by default, which reads like the
+/// Mermaid diagram does, and opens them on demand.
+async fn run_graph_view(args: GraphCmd) -> Result<(), Box<dyn std::error::Error>> {
+    let tile = args.tile.expect("checked by the caller");
+    let Some(out) = args.out.clone() else {
+        return Err("`--tile` writes an HTML page; give it a path with `--out`".into());
+    };
+
+    let common = CommonArgs {
+        style: args.style.clone(),
+        assets_dir: args.assets_dir.clone(),
+        pmtiles: args.pmtiles.clone(),
+        mvt: args.mvt.clone(),
+        overzoom_levels: args.overzoom_levels,
+        params: args.params.clone(),
+    };
+    let doc = Document::from_json(&fetch_text(&common.style).await?)?;
+    let prep = prepare(&common).await?;
+
+    let collector = Arc::new(graph_view::Collector::new(prep.canvas, args.image_size));
+    render_one(
+        Arc::clone(&prep.graph),
+        Arc::clone(&prep.cache),
+        Arc::clone(&prep.loader),
+        prep.source.clone(),
+        prep.source_name.clone(),
+        Arc::clone(&prep.dem_sources),
+        Arc::clone(&prep.raster_sources),
+        prep.canvas,
+        tile,
+        prep.overzoom_levels,
+        Arc::clone(&prep.params),
+        Some(Arc::clone(&collector) as Arc<dyn NodeObserver + Send + Sync>),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // One reference is held by the render that just finished; take the
+    // collector back now that it has.
+    let collected = Arc::try_unwrap(collector)
+        .map_err(|_| "the render still holds the node collector")?
+        .finish();
+
+    let sidecar = args.sidecar.then(|| {
+        let mut dir = out.clone();
+        dir.set_extension("assets");
+        dir
+    });
+    let mut params = serde_json::Map::new();
+    for raw in &args.params {
+        if let Some((name, value)) = raw.split_once('=') {
+            params.insert(
+                name.to_string(),
+                serde_json::Value::String(value.to_string()),
+            );
+        }
+    }
+    let payload = collected.into_payload(
+        &doc,
+        &prep.graph,
+        &format!("{}/{}/{}", tile.z, tile.x, tile.y),
+        &params,
+        sidecar.as_deref(),
+    )?;
+    let html = graph_view::render_html(&payload);
+    std::fs::write(&out, &html)?;
+    tracing::info!(
+        "wrote {} ({:.1} KiB, {} nodes)",
+        out.display(),
+        html.len() as f64 / 1024.0,
+        prep.graph.len(),
+    );
     Ok(())
 }
 
@@ -1022,6 +1141,7 @@ async fn run_tile(args: TileCmd) -> Result<(), Box<dyn std::error::Error>> {
         args.tile,
         prep.overzoom_levels,
         Arc::clone(&prep.params),
+        None,
     )
     .await
     .map_err(|e| e.to_string())?;
@@ -1078,6 +1198,7 @@ async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
                     tile,
                     overzoom_levels,
                     params,
+                    None,
                 )
                 .await?;
                 Ok::<(CoreTileId, Arc<RasterBuf>), Box<dyn std::error::Error + Send + Sync>>((
@@ -1167,6 +1288,7 @@ async fn run_tiles(args: TilesCmd) -> Result<(), Box<dyn std::error::Error>> {
                     tile,
                     prep.overzoom_levels,
                     Arc::clone(&prep.params),
+                    None,
                 )
                 .await?;
                 let bytes = tokio::task::spawn_blocking({
@@ -1210,6 +1332,9 @@ async fn render_one(
     tile: CoreTileId,
     overzoom_levels: u8,
     params: Arc<ParamValues>,
+    // Watches every node as the graph evaluates. `ezu graph --tile`
+    // uses it to collect one picture per node from this same render.
+    observer: Option<Arc<dyn NodeObserver + Send + Sync>>,
 ) -> Result<Arc<RasterBuf>, Box<dyn std::error::Error + Send + Sync>> {
     let fetched = match &source {
         Some(s) => s.fetch_with_fallback(tile, overzoom_levels).await?,
@@ -1294,6 +1419,10 @@ async fn render_one(
                 tile_loader.bind_raster(name, buf);
             }
             let ev = Evaluator::new(&graph, &cache, &tile_loader);
+            let ev = match observer.as_deref() {
+                Some(o) => ev.with_observer(o),
+                None => ev,
+            };
             let out = if serial_eval() {
                 ev.render(tile_id, canvas, &params, tile_seed(tile))?
             } else {

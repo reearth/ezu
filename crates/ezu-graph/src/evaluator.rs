@@ -17,6 +17,20 @@ pub struct Evaluator<'a> {
     pub graph: &'a Graph,
     pub cache: &'a Cache,
     pub assets: &'a dyn AssetLoader,
+    observer: Option<&'a dyn NodeObserver>,
+}
+
+/// Called once per node as it resolves, whichever value it came from —
+/// a fresh evaluation or the cache. Both `render` and `render_parallel`
+/// go through `eval_one`, so an observer sees every node in the graph
+/// exactly once per render, with no re-evaluation.
+///
+/// The parallel path calls this from Rayon workers, hence `Sync`; nodes
+/// arrive in completion order, not topological order, so identify them
+/// by `NodeIx` rather than by arrival. Set `EZU_SERIAL=1` in the CLI to
+/// force the deterministic serial walk.
+pub trait NodeObserver: Sync {
+    fn on_node(&self, ix: NodeIx, value: &PortValue, cache_hit: bool, elapsed_us: u128);
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -31,7 +45,18 @@ impl<'a> Evaluator<'a> {
             graph,
             cache,
             assets,
+            observer: None,
         }
+    }
+
+    /// Watch every node's value as the render walks the graph. The
+    /// values are handed out by reference and dropped as usual once
+    /// their consumers have run, so an observer that keeps only what it
+    /// needs (an encoded thumbnail, a summary line) costs no extra
+    /// residency.
+    pub fn with_observer(mut self, observer: &'a dyn NodeObserver) -> Self {
+        self.observer = Some(observer);
+        self
     }
 
     /// Evaluate the graph and return the value at the output node.
@@ -336,6 +361,9 @@ impl<'a> Evaluator<'a> {
                 tile = %format!("{}/{}/{}", ctx.tile.z, ctx.tile.x, ctx.tile.y),
                 "cache hit",
             );
+            if let Some(obs) = self.observer {
+                obs.on_node(ix, &v, true, 0);
+            }
             return Ok((v, key.0));
         }
         // `wasm32-unknown-unknown` has no monotonic clock — `Instant::now()`
@@ -358,6 +386,9 @@ impl<'a> Evaluator<'a> {
             elapsed_us,
             "evaluated",
         );
+        if let Some(obs) = self.observer {
+            obs.on_node(ix, &value, false, elapsed_us);
+        }
         if crate::mem::enabled() && !blank {
             crate::mem::acquired(node.op_name(), value.approx_bytes());
         }
@@ -412,7 +443,7 @@ fn intern_blank(value: PortValue) -> (PortValue, bool) {
 
 /// One-line human-readable summary of a `PortValue` for debug logs.
 /// Keeps the format dense so node lines stay readable in a tail.
-fn describe_value(v: &PortValue) -> String {
+pub fn describe_value(v: &PortValue) -> String {
     match v {
         PortValue::Raster(r) => format!("raster {}x{}", r.width, r.height),
         PortValue::Sprite(s) => format!("sprite {}x{}", s.width, s.height),

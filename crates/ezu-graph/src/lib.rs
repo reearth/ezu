@@ -31,7 +31,7 @@ pub use cache::{Cache, CacheKey, Hash128};
 pub use eval::{
     Asset, AssetError, AssetLoader, CanvasInfo, EvalCtx, EvalError, NoAssets, ParamValues, TileId,
 };
-pub use evaluator::{Evaluator, RenderError};
+pub use evaluator::{describe_value, Evaluator, NodeObserver, RenderError};
 pub use graph::{BuildError, Edge, Graph, GraphBuilder, NodeId, NodeIx, MAX_PAD};
 pub use input::{parse_param_value, In, InParts, InReader, PaddingIn, ScalarType, ACCEPTS_SCALAR};
 pub use neighbor::{neighbor_binding, neighbor_bindings, parse_neighbor_binding};
