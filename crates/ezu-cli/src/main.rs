@@ -264,6 +264,13 @@ struct TranslateCmd {
     /// `switch` (instead of dropping them).
     #[arg(long)]
     keep_hidden: bool,
+    /// Migrate the style's legacy forms to expressions first (legacy
+    /// filters, `{stops}` function objects, `{token}` label strings,
+    /// non-standard `hsl()` colours), as MapLibre's own `migrate` does.
+    /// Without it a legacy form is passed through untouched, with a
+    /// warning naming it. Requires a `version: 8` style.
+    #[arg(long)]
+    migrate: bool,
     /// Map a MapLibre fontstack entry to a font source, as `NAME=SOURCE`
     /// (repeatable). SOURCE is an installed-font reference
     /// (`system:Helvetica`, optionally `?weight=700&style=italic`) or a
@@ -1007,6 +1014,7 @@ async fn run_translate(args: TranslateCmd) -> Result<(), Box<dyn std::error::Err
         tile_size: args.tile_size,
         pad: args.pad,
         keep_hidden: args.keep_hidden,
+        migrate: args.migrate,
         fonts,
     };
     let (recipe, report) = ezu::translate::maplibre::convert(&style, &opts)?;

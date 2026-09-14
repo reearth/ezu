@@ -14,12 +14,17 @@
 //!   `fill-solid` per colour bucket (ezu membership filters do this
 //!   cleanly).
 //! - **filters**: `all` + `==` / `!=` / `in` / `!in`.
-//! - **zoom / data functions** (legacy `stops`, `interpolate`, `step`, and
-//!   any other MapLibre expression) are emitted **raw** onto the target
-//!   node's `*-expr` field and evaluated per tile by ezu-paint (via
+//! - **zoom / data functions** (`interpolate`, `step`, and any other
+//!   MapLibre expression) are emitted **raw** onto the target node's
+//!   `*-expr` field and evaluated per tile by ezu-paint (via
 //!   `maplibre-expr`, with the tile's zoom in the evaluation context). The
 //!   converter never bakes them to a constant, so one recipe renders
-//!   correctly at every zoom. Layer `minzoom`/`maxzoom` become the
+//!   correctly at every zoom. Legacy layout/paint forms — `{stops}`
+//!   function objects and `{token}` label strings — are converted only with
+//!   [`ConvertOptions::migrate`], by MapLibre's own `migrate`; otherwise they
+//!   are passed through as they are, with a warning naming each one. (A
+//!   legacy-form *filter* is always converted, as MapLibre's `createFilter`
+//!   does.) Layer `minzoom`/`maxzoom` become the
 //!   `features` node's `min-zoom`/`max-zoom` render-time gate — converted
 //!   rather than copied, since MapLibre's upper bound is exclusive and
 //!   ezu's is not.
@@ -78,10 +83,46 @@ pub(crate) fn const_color(v: &Value) -> Option<String> {
     v.as_str().map(str::to_string)
 }
 
-/// Whether the value is a MapLibre expression (array) or a legacy function
-/// object (`{stops}`, …) — i.e. it routes to a `*-expr` field, not a constant.
+/// Whether the value is anything but a plain literal — a MapLibre expression
+/// (array), or a legacy function object (`{stops}`, …) left unconverted
+/// because [`ConvertOptions::migrate`] is off — i.e. it routes to a `*-expr`
+/// field rather than a constant. The converter never interprets a function
+/// object itself: it is passed through verbatim, and ezu-paint rejects it at
+/// parse time.
 pub(crate) fn is_expr(v: &Value) -> bool {
     v.is_array() || v.is_object()
+}
+
+/// Warn about each legacy layout/paint form a layer still carries when
+/// [`ConvertOptions::migrate`] is off: function objects (`{stops}`, …) and
+/// `{token}` strings in token-accepting properties (`text-field`,
+/// `icon-image`). Neither is converted here — a function object is passed
+/// through raw for ezu-paint to reject, and a token string renders literally
+/// — so the warning is what tells the user to pass `--migrate`.
+fn warn_legacy_forms(id: &str, layer: &Map<String, Value>, report: &mut Report) {
+    for section in ["layout", "paint"] {
+        let Some(props) = layer.get(section).and_then(Value::as_object) else {
+            continue;
+        };
+        for (name, value) in props {
+            let what = match value {
+                Value::Object(_) => "a legacy function object",
+                Value::String(s)
+                    if s.contains('{')
+                        && maplibre_expr::migrate::property_spec(name)
+                            .and_then(|spec| spec.get("tokens"))
+                            == Some(&Value::Bool(true)) =>
+                {
+                    "a legacy `{token}` string"
+                }
+                _ => continue,
+            };
+            report.warn(format!(
+                "layer `{id}`: `{name}` is {what}, left as is — pass `--migrate` \
+                 (`ConvertOptions::migrate`) to convert legacy forms to expressions"
+            ));
+        }
+    }
 }
 
 /// Knobs controlling how a MapLibre style is lowered to an ezu recipe.
@@ -108,6 +149,19 @@ pub struct ConvertOptions {
     /// A hidden label layer also stays out of the shared label placement, so
     /// it knocks nothing out while off; it places its own labels once on.
     pub keep_hidden: bool,
+    /// Migrate the style's legacy forms to expressions first — the
+    /// counterpart of `maplibre-gl-style-spec`'s `migrate`: legacy layer
+    /// filters, function objects (`{stops}`, …) in layout/paint, `{token}`
+    /// strings in `text-field` / `icon-image`, and non-standard `hsl()`
+    /// colours, each converted with the property's spec so the result is
+    /// what MapLibre itself would evaluate. Off by default: a style is then
+    /// read as it is, and a legacy form it still carries is passed through
+    /// untouched (with a warning naming it) rather than guessed at — a
+    /// function object is rejected by ezu-paint, a token string renders
+    /// literally. Turn it on for a style written before expressions
+    /// (`stops`, `{name}` labels); a style already in expression form needs
+    /// nothing. The style must declare `version: 8`.
+    pub migrate: bool,
     /// MapLibre fontstack entry name → font source, used to lower
     /// `symbol` text (`text-font`) to ezu `font` sources (CLI:
     /// repeatable `--font NAME=SOURCE`). The source is passed straight
@@ -127,6 +181,7 @@ impl Default for ConvertOptions {
             tile_size: 512,
             pad: 16,
             keep_hidden: false,
+            migrate: false,
             fonts: std::collections::HashMap::new(),
         }
     }
@@ -203,6 +258,11 @@ pub enum ConvertError {
     NoLayers,
     #[error("no vector (MVT/PMTiles) source found; ezu needs tiled vector data")]
     NoVectorSource,
+    /// `ConvertOptions::migrate` was on and the style could not be
+    /// migrated (not `version: 8`, malformed layers, or an unconvertible
+    /// legacy filter).
+    #[error("cannot migrate style: {0}")]
+    Migrate(#[from] maplibre_expr::MigrateError),
 }
 
 /// Convert a parsed MapLibre GL style into an ezu recipe (Document JSON).
@@ -212,6 +272,16 @@ pub enum ConvertError {
 /// `ezu_style::Document::from_json` (or write it to a `.json` and run the
 /// `ezu` CLI) to render.
 pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), ConvertError> {
+    // Legacy forms are converted only on request, and then for the whole
+    // style at once, by the same conversion MapLibre applies; every step
+    // below reads the migrated style and never interprets a legacy form.
+    let migrated;
+    let style = if opts.migrate {
+        migrated = maplibre_expr::migrate(style)?;
+        &migrated
+    } else {
+        style
+    };
     let style = style.as_object().ok_or(ConvertError::NotAnObject)?;
     let mut report = Report::default();
 
@@ -255,6 +325,9 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
             == Some("none");
         if hidden && !opts.keep_hidden {
             continue;
+        }
+        if !opts.migrate {
+            warn_legacy_forms(id, layer, &mut report);
         }
         // MapLibre shows a layer for `minzoom <= z < maxzoom`. ezu recipes
         // are zoom-independent, so rather than dropping the layer at a baked

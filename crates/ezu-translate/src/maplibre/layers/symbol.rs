@@ -489,7 +489,7 @@ fn convert_text(
     let get = |key: &str| layout.and_then(|l| l.get(key));
 
     // `text-font`: a static string array (or absent → default) lowers to a
-    // single stack. A data-driven expression / legacy function (A) is
+    // single stack. A data-driven expression (A) is
     // enumerated for the literal stacks it can yield; each is lowered and
     // registered under its canonical key in `font-stacks`, the raw expression
     // is emitted as `font-expr`, and the first stack becomes the required
@@ -499,8 +499,8 @@ fn convert_text(
     // A static stack is a literal font-name array; an expression (even one
     // that is syntactically an all-string array, e.g. `["get", "x"]`) is
     // data-driven. `is_expression` is a head check against the operator set,
-    // matching how MapLibre itself disambiguates the two. A legacy function
-    // object also takes the data-driven path (its stacks come from `stops`).
+    // matching how MapLibre itself disambiguates the two. An unmigrated
+    // legacy function object also takes the data-driven path, raw.
     let is_static_stack = match text_font {
         None => true,
         Some(v @ Value::Array(_)) => !maplibre_expr::is_expression(v),
@@ -563,16 +563,12 @@ fn convert_text(
     };
     let font_value = Value::Array(font_refs.into_iter().map(Value::from).collect());
 
-    // `text-field`: a constant may carry `{token}`s (rewritten to a
-    // `concat`-of-`get` expression); expressions / legacy functions pass
+    // `text-field`: a constant string is the label as is (a `{token}` string
+    // is only an expression once the style is migrated); expressions pass
     // through raw. A `format` expression passes through too: the `text` node
     // renders its sections natively (font / scale / colour / vertical-align),
     // so we only register each section's `text-font` in the stack registry.
     let text_value = match get("text-field") {
-        Some(Value::String(s)) => match rewrite_field_tokens(s) {
-            Some(expr) => expr,
-            None => Value::String(s.clone()),
-        },
         Some(v @ Value::Array(_)) => {
             register_format_section_fonts(
                 v,
@@ -584,12 +580,7 @@ fn convert_text(
             );
             v.clone()
         }
-        // Legacy `{stops}` function: its output strings may carry
-        // `{token}`s that the raw passthrough would render literally.
-        Some(v @ Value::Object(_)) => match rewrite_legacy_stops_tokens(v) {
-            Some(expr) => expr,
-            None => v.clone(),
-        },
+        Some(v @ (Value::String(_) | Value::Object(_))) => v.clone(),
         _ => return,
     };
 
@@ -873,8 +864,7 @@ fn as_string_array(v: &Value) -> Option<Vec<String>> {
 
 /// Enumerate the literal font stacks a data-driven `text-font` value can
 /// yield, in document order, deduped: every `["literal", [<strings>]]` in the
-/// expression tree, plus a legacy function's `stops` outputs and `default`
-/// (both string arrays). MapLibre likewise requires data-driven `text-font`
+/// expression tree. MapLibre likewise requires data-driven `text-font`
 /// outputs to be literals, so a syntactic scan is faithful; anything it misses
 /// falls back to the default stack at eval.
 fn collect_font_stacks(v: &Value) -> Vec<Vec<String>> {
@@ -898,20 +888,9 @@ fn collect_font_stacks(v: &Value) -> Vec<Vec<String>> {
                     rec(x, out);
                 }
             }
+            // An option object (`format` section options and the like):
+            // its values may hold expressions.
             Value::Object(m) => {
-                // Legacy `{stops}` function: each stop is `[input, output]`.
-                if let Some(Value::Array(stops)) = m.get("stops") {
-                    for stop in stops {
-                        if let Some(output) = stop.as_array().and_then(|p| p.get(1)) {
-                            if let Some(names) = as_string_array(output) {
-                                push_unique(out, names);
-                            }
-                        }
-                    }
-                }
-                if let Some(names) = m.get("default").and_then(as_string_array) {
-                    push_unique(out, names);
-                }
                 for val in m.values() {
                     rec(val, out);
                 }
@@ -1059,84 +1038,6 @@ fn unique_source_id(source_defs: &Map<String, Value>, base: &str) -> String {
         n += 1;
     }
     id
-}
-
-/// Rewrite a constant `text-field` carrying `{token}`s into a MapLibre
-/// expression: `{name}` → `["to-string", ["get", "name"]]`, mixed text →
-/// `["concat", …]`. Returns `None` when the string has no tokens.
-fn rewrite_field_tokens(s: &str) -> Option<Value> {
-    let mut parts: Vec<Value> = Vec::new();
-    let mut literal = String::new();
-    let mut rest = s;
-    let mut found = false;
-    while let Some(open) = rest.find('{') {
-        let after = &rest[open + 1..];
-        let Some(close) = after.find('}') else {
-            break; // unclosed brace: literal from here on
-        };
-        let token = &after[..close];
-        literal.push_str(&rest[..open]);
-        if !literal.is_empty() {
-            parts.push(Value::String(std::mem::take(&mut literal)));
-        }
-        parts.push(serde_json::json!(["to-string", ["get", token]]));
-        found = true;
-        rest = &after[close + 1..];
-    }
-    if !found {
-        return None;
-    }
-    literal.push_str(rest);
-    if !literal.is_empty() {
-        parts.push(Value::String(literal));
-    }
-    if parts.len() == 1 {
-        return Some(parts.pop().expect("one part"));
-    }
-    let mut concat = vec![Value::String("concat".into())];
-    concat.extend(parts);
-    Some(Value::Array(concat))
-}
-
-/// Rewrite a legacy zoom-interval `{stops}` `text-field` whose output
-/// strings carry `{token}`s into a `["step", ["zoom"], …]` expression
-/// with each output token-expanded (legacy interval semantics — the
-/// first output also covers zooms below the first stop — match `step`).
-/// Returns `None` when nothing needs rewriting or the function isn't a
-/// plain zoom-interval string function (data-driven `property`,
-/// `categorical`, non-string outputs): those pass through raw as before.
-fn rewrite_legacy_stops_tokens(v: &Value) -> Option<Value> {
-    let obj = v.as_object()?;
-    if obj.contains_key("property") {
-        return None;
-    }
-    match obj.get("type").and_then(Value::as_str) {
-        None | Some("interval") => {}
-        Some(_) => return None,
-    }
-    let stops = obj.get("stops")?.as_array()?;
-    let mut pairs: Vec<(f64, &str)> = Vec::with_capacity(stops.len());
-    for stop in stops {
-        let pair = stop.as_array()?;
-        pairs.push((pair.first()?.as_f64()?, pair.get(1)?.as_str()?));
-    }
-    if pairs.is_empty() || !pairs.iter().any(|(_, s)| s.contains('{')) {
-        return None;
-    }
-    let expand = |s: &str| rewrite_field_tokens(s).unwrap_or_else(|| Value::String(s.into()));
-    if pairs.len() == 1 {
-        return Some(expand(pairs[0].1));
-    }
-    let mut step = vec![
-        Value::String("step".into()),
-        serde_json::json!(["zoom"]),
-        expand(pairs[0].1),
-    ];
-    for (input, output) in &pairs[1..] {
-        step.push(Value::from(*input));
-        step.push(expand(output));
-    }
-    Some(Value::Array(step))
 }
 
 /// A constant string layout property; an expression warns and yields

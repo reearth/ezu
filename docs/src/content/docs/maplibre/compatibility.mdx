@@ -69,8 +69,8 @@ broken by tile feature order, and placed greedily.
 **Fonts.** Zero-config: an unmapped `text-font` stack is served from the style's own
 `glyphs` endpoint as an SDF `glyphs` source — the same pre-rendered glyphs
 MapLibre draws. `--font "NAME=SOURCE"` (or `ConvertOptions::fonts`) overrides with
-a real font per entry for outline rendering. `{token}` fields are rewritten to
-expressions.
+a real font per entry for outline rendering. A `{token}` field is an expression
+once the style is migrated (`--migrate`, see below).
 
 ## Patterns and sprites
 
@@ -86,7 +86,8 @@ expressions.
 | --- | --- |
 | layer `filter`, expression form | passes through verbatim as the `features` node's `filter-expr` |
 | layer `filter`, legacy form (bare fields, `!in`, `!has`, `none`) | converted by `maplibre_expr::convert_legacy_filter` — MapLibre's own pre-compile conversion, strict-type semantics included |
-| zoom / data functions (`stops`, `interpolate`, `step`, any expression) | emitted raw onto the target node's `*-expr` field, evaluated per tile |
+| zoom / data functions (`interpolate`, `step`, any expression) | emitted raw onto the target node's `*-expr` field, evaluated per tile |
+| legacy forms — `{stops}` function objects, `{token}` label strings, non-standard `hsl()` colours | converted only with `--migrate` (`ConvertOptions::migrate`), by `maplibre_expr::migrate` — MapLibre's own `migrate`, each value converted with its property spec. Off by default: a legacy form is passed through untouched and named in a warning; a function object is then rejected by ezu-paint, a token string renders literally |
 | layer `minzoom` / `maxzoom` | the `features` node's `min-zoom` / `max-zoom` render-time gate |
 | multiple `vector` sources | all emitted; each `features` node targets its `(source, layer)` |
 | inline / remote `geojson` source | a `geojson` source; the host projects it per tile and binds one layer (`features` targets `(source, source)`) |

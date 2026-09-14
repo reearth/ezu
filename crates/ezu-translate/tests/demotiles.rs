@@ -8,7 +8,13 @@ const DEMOTILES: &str = include_str!("fixtures/demotiles.json");
 #[test]
 fn converts_and_parses_as_ezu_document() {
     let style: serde_json::Value = serde_json::from_str(DEMOTILES).unwrap();
-    let (recipe, report) = convert(&style, &ConvertOptions::default()).expect("conversion");
+    // The demotiles style predates expressions (`{stops}` functions, a
+    // `{token}` label), so it is converted with `migrate`.
+    let opts = ConvertOptions {
+        migrate: true,
+        ..Default::default()
+    };
+    let (recipe, report) = convert(&style, &opts).expect("conversion");
 
     // Both symbol layers convert — the line-placed `geolines-label` to a
     // `text` node with `placement: line`, no skipped-text warnings.

@@ -5,7 +5,7 @@
 //! Usage:
 //! ```text
 //! ezu-compare --style <path|url> --tiles 2/2/1,3/4/2 --out <dir> \
-//!     [--ref-dir <dir>] [--refgen-dir tools/mlgl-ref] [--threshold 16] [--stitch]
+//!     [--ref-dir <dir>] [--refgen-dir tools/mlgl-ref] [--threshold 16] [--stitch] [--migrate]
 //! ```
 //! For each tile it writes `<out>/<z>_<x>_<y>.{ezu,ref,diff}.png` and the
 //! converted `<out>/<z>_<x>_<y>.recipe.json`, then prints a summary table.
@@ -40,6 +40,10 @@ struct Args {
     refgen_dir: PathBuf,
     threshold: u8,
     stitch: bool,
+    /// Migrate the style's legacy forms (`{stops}`, `{token}`, legacy
+    /// filters) to expressions before converting, as `ezu translate
+    /// --migrate` does.
+    migrate: bool,
     /// Skip the reference render + pixel compare; only time ezu and print a
     /// per-op / per-node timing breakdown.
     bench: bool,
@@ -55,6 +59,7 @@ fn parse_args() -> R<Args> {
     let mut refgen_dir = PathBuf::from("tools/mlgl-ref");
     let mut threshold = 16u8;
     let mut stitch = false;
+    let mut migrate = false;
     let mut bench = false;
     let mut repeat = 1usize;
 
@@ -63,6 +68,7 @@ fn parse_args() -> R<Args> {
         match a.as_str() {
             "--style" => style = it.next(),
             "--stitch" => stitch = true,
+            "--migrate" => migrate = true,
             "--bench" => bench = true,
             "--repeat" => repeat = it.next().ok_or("--repeat needs a value")?.parse()?,
             "--tiles" => {
@@ -94,6 +100,7 @@ fn parse_args() -> R<Args> {
         refgen_dir,
         threshold,
         stitch,
+        migrate,
         bench,
         repeat: repeat.max(1),
     })
@@ -178,7 +185,10 @@ fn run_tile(
 
     // Recipes are zoom-independent: zoom/data functions are emitted as raw
     // `*-expr` and evaluated per tile, so one conversion serves every zoom.
-    let opts = ezu_translate::maplibre::ConvertOptions::default();
+    let opts = ezu_translate::maplibre::ConvertOptions {
+        migrate: args.migrate,
+        ..Default::default()
+    };
     let (recipe, _report) = ezu_translate::maplibre::convert(style_json, &opts)?;
     let recipe_text = serde_json::to_string_pretty(&recipe)?;
     std::fs::write(args.out.join(format!("{stem}.recipe.json")), &recipe_text)?;
@@ -331,7 +341,10 @@ fn run_bench(args: &Args) -> R<()> {
     let style_text = read_style(&args.style)?;
     let style_json: serde_json::Value = serde_json::from_str(&style_text)?;
 
-    let opts = ezu_translate::maplibre::ConvertOptions::default();
+    let opts = ezu_translate::maplibre::ConvertOptions {
+        migrate: args.migrate,
+        ..Default::default()
+    };
     let (recipe, _report) = ezu_translate::maplibre::convert(&style_json, &opts)?;
     let recipe_text = serde_json::to_string_pretty(&recipe)?;
 

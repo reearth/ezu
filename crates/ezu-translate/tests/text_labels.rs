@@ -118,7 +118,7 @@ fn system_font_source_passes_through_as_a_font_url() {
 }
 
 #[test]
-fn token_text_field_rewrites_to_an_expression() {
+fn token_text_field_migrates_to_an_expression() {
     const STYLE: &str = r##"{
       "version": 8,
       "name": "tokens",
@@ -133,11 +133,15 @@ fn token_text_field_rewrites_to_an_expression() {
       ]
     }"##;
     let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
-    let opts = opts_with_fonts(&[("F", "https://fonts.example/F.ttf")]);
-    let (recipe, _) = convert(&style, &opts).unwrap();
+    let opts = ConvertOptions {
+        migrate: true,
+        ..opts_with_fonts(&[("F", "https://fonts.example/F.ttf")])
+    };
+    let (recipe, report) = convert(&style, &opts).unwrap();
 
     let nodes = recipe["nodes"].as_object().unwrap();
-    // A bare `{name}` becomes a single to-string/get.
+    // A bare `{name}` becomes a single to-string/get (MapLibre's own
+    // `convertTokenString`).
     assert_eq!(
         nodes["bare__labels"]["text"],
         serde_json::json!(["to-string", ["get", "name"]])
@@ -145,16 +149,35 @@ fn token_text_field_rewrites_to_an_expression() {
     // Mixed literal + tokens become a concat.
     assert_eq!(
         nodes["mixed__labels"]["text"],
-        serde_json::json!([
-            "concat",
-            ["to-string", ["get", "name"]],
-            " (",
-            ["to-string", ["get", "ele"]],
-            " m)"
-        ])
+        serde_json::json!(["concat", ["get", "name"], " (", ["get", "ele"], " m)"])
     );
     // No tokens: the constant carries through.
     assert_eq!(nodes["plain__labels"]["text"], "Ocean");
+    assert!(
+        !report.warnings.iter().any(|w| w.contains("--migrate")),
+        "a migrated style has no legacy forms left to warn about: {:?}",
+        report.warnings
+    );
+
+    // Without `migrate`, the token string is a plain constant — the
+    // converter never guesses — and the report says what to do.
+    let opts = opts_with_fonts(&[("F", "https://fonts.example/F.ttf")]);
+    let (recipe, report) = convert(&style, &opts).unwrap();
+    let nodes = recipe["nodes"].as_object().unwrap();
+    assert_eq!(nodes["bare__labels"]["text"], "{name}");
+    assert_eq!(nodes["mixed__labels"]["text"], "{name} ({ele} m)");
+    let token_warnings = report
+        .warnings
+        .iter()
+        .filter(|w| {
+            w.contains("`text-field` is a legacy `{token}` string") && w.contains("--migrate")
+        })
+        .count();
+    assert_eq!(
+        token_warnings, 2,
+        "one warning per token field: {:?}",
+        report.warnings
+    );
 }
 
 #[test]
@@ -633,10 +656,11 @@ fn font_sources_dedupe_by_url_across_layers() {
 }
 
 #[test]
-fn legacy_stops_text_field_expands_tokens_into_a_step_expression() {
+fn legacy_stops_text_field_migrates_to_a_step_expression() {
     // demotiles-style `text-field`: a legacy zoom-interval function whose
-    // stop outputs carry `{token}`s. Raw passthrough would render the
-    // token text literally; it must lower to `step` with expanded outputs.
+    // stop outputs carry `{token}`s. With `migrate` it lowers to `step` with
+    // token-expanded outputs; without, it is passed through untouched and
+    // reported.
     const STYLE: &str = r##"{
       "version": 8,
       "name": "legacy-tokens",
@@ -655,7 +679,10 @@ fn legacy_stops_text_field_expands_tokens_into_a_step_expression() {
       ]
     }"##;
     let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
-    let opts = opts_with_fonts(&[("F", "https://fonts.example/F.ttf")]);
+    let opts = ConvertOptions {
+        migrate: true,
+        ..opts_with_fonts(&[("F", "https://fonts.example/F.ttf")])
+    };
     let (recipe, _) = convert(&style, &opts).unwrap();
 
     let nodes = recipe["nodes"].as_object().unwrap();
@@ -665,12 +692,29 @@ fn legacy_stops_text_field_expands_tokens_into_a_step_expression() {
             "step",
             ["zoom"],
             ["to-string", ["get", "ABBREV"]],
-            4.0,
+            4,
             ["to-string", ["get", "NAME"]]
         ])
     );
-    // Token-free legacy stops keep the raw passthrough.
+    assert_eq!(
+        nodes["plainstops__labels"]["text"],
+        serde_json::json!(["step", ["zoom"], "Sea", 4, "Ocean"])
+    );
+
+    // Without `migrate`: the function object is emitted as it is (ezu-paint
+    // rejects it at parse time) and the report names it.
+    let opts = opts_with_fonts(&[("F", "https://fonts.example/F.ttf")]);
+    let (recipe, report) = convert(&style, &opts).unwrap();
+    let nodes = recipe["nodes"].as_object().unwrap();
+    assert!(nodes["countries__labels"]["text"].is_object());
     assert!(nodes["plainstops__labels"]["text"].is_object());
+    assert!(
+        report.warnings.iter().any(|w| w
+            .contains("layer `countries`: `text-field` is a legacy function object")
+            && w.contains("--migrate")),
+        "expected a legacy-function warning: {:?}",
+        report.warnings
+    );
 }
 
 #[test]

@@ -147,7 +147,8 @@ fn data_driven_line_emits_color_expr_and_raw_width_expr() {
 #[test]
 fn zoom_functions_are_emitted_raw_not_baked() {
     // Legacy `{stops}` on `line-width` → `stroke.width-expr` holds the object
-    // verbatim (not baked to a constant).
+    // verbatim (not baked to a constant, not guessed at) and the report
+    // points at `migrate`.
     let stops = json!({ "stops": [[10, 1], [16, 4]] });
     let style = style_with_layer(json!({
         "id": "roads",
@@ -156,7 +157,7 @@ fn zoom_functions_are_emitted_raw_not_baked() {
         "source-layer": "transportation",
         "paint": { "line-width": stops }
     }));
-    let (recipe, _) = convert(&style, &ConvertOptions::default()).expect("conversion");
+    let (recipe, report) = convert(&style, &ConvertOptions::default()).expect("conversion");
     let nodes = recipe["nodes"].as_object().unwrap();
     let stroke = nodes
         .values()
@@ -167,6 +168,34 @@ fn zoom_functions_are_emitted_raw_not_baked() {
         Some(&stops),
         "legacy {{stops}} width should be emitted raw: {stroke}"
     );
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("`line-width` is a legacy function object")
+                && w.contains("--migrate")),
+        "expected a legacy-function warning: {:?}",
+        report.warnings
+    );
+
+    // With `migrate`, the same style yields the expression MapLibre itself
+    // would read: `line-width` interpolates, so `interpolate` on zoom.
+    let opts = ConvertOptions {
+        migrate: true,
+        ..Default::default()
+    };
+    let (recipe, report) = convert(&style, &opts).expect("conversion");
+    let nodes = recipe["nodes"].as_object().unwrap();
+    let stroke = nodes
+        .values()
+        .find(|n| n["op"] == "stroke")
+        .expect("a stroke node");
+    assert_eq!(
+        stroke.get("width-expr"),
+        Some(&json!(["interpolate", ["linear"], ["zoom"], 10, 1, 16, 4])),
+        "migrated {{stops}} width should be an interpolate: {stroke}"
+    );
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
 
     // `interpolate` on zoom for `fill-color` → `fill-expr` holds it verbatim.
     let fill_fn = json!([

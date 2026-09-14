@@ -70,6 +70,7 @@ endpoint, that layer's text is skipped, with a warning.
 | `--tile-size` | emitted canvas size (default 512, matching MapLibre) |
 | `--pad` | margin for geometry painted wider than its own extent, e.g. a thick stroke (default 16). Filter reach is sized by the renderer from the graph, so this is only about paint width — see [padding](/ezu/concepts/padding-and-neighbours/) |
 | `--keep-hidden` | keep `visibility: none` layers, gated off behind a `switch` instead of dropped |
+| `--migrate` | convert the style's legacy forms first — `{stops}` function objects, `{name}` label tokens, legacy filters, non-standard `hsl()` colours — as MapLibre's own `migrate` does. Pass it for a style written before expressions; without it a legacy form is left as it is and named in a warning |
 | `--pretty` | pretty-print the emitted JSON — do this if you intend to read it |
 | `--font NAME=SOURCE` | map a fontstack entry to a font source (repeatable) |
 

@@ -9,7 +9,13 @@ const STYLE: &str = include_str!("fixtures/versatiles-colorful.json");
 #[test]
 fn converts_full_osm_style_to_valid_document() {
     let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
-    let (recipe, report) = convert(&style, &ConvertOptions::default()).expect("conversion");
+    // The style is written with `{stops}` functions throughout, so it is
+    // converted with `migrate`.
+    let opts = ConvertOptions {
+        migrate: true,
+        ..Default::default()
+    };
+    let (recipe, report) = convert(&style, &opts).expect("conversion");
 
     // Big real style → a large recipe that still builds as an ezu Document.
     let text = serde_json::to_string(&recipe).unwrap();

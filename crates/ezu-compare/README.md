@@ -44,8 +44,10 @@ Flags: `--style <path|url>`, `--tiles z/x/y,…`, `--out <dir>`,
 `--ref-dir <dir>` (use precomputed references instead of the Node
 renderer), `--refgen-dir <dir>` (default `tools/mlgl-ref`),
 `--threshold <0-255>` (per-channel delta counted as "visibly different",
-default 16), `--stitch` (see below), `--bench` (timing only, no reference —
-see below), `--repeat <N>` (bench: render each tile N times, keep the fastest).
+default 16), `--stitch` (see below), `--migrate` (convert the style's legacy
+`{stops}` / `{token}` / filter forms first, as `ezu translate --migrate`
+does), `--bench` (timing only, no reference — see below), `--repeat <N>`
+(bench: render each tile N times, keep the fastest).
 
 ### `--bench` — timing only, no reference
 

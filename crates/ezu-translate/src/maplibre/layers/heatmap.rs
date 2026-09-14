@@ -166,16 +166,11 @@ pub(crate) fn convert_heatmap(
 }
 
 /// Derive a safe constant upper bound for a `heatmap-radius` expression.
-/// For `interpolate`/`step` (and the legacy `{stops}` object) whose outputs
-/// are all plain numeric literals, every possible output lies between the
-/// smallest and largest of them — so the max literal output is a sound
-/// (over-)estimate for the pad bound. Anything else returns `None`.
+/// For `interpolate`/`step` whose outputs are all plain numeric literals,
+/// every possible output lies between the smallest and largest of them — so
+/// the max literal output is a sound (over-)estimate for the pad bound.
+/// Anything else returns `None`.
 fn radius_bound_from_expr(v: &Value) -> Option<f64> {
-    // Legacy function object: `{ "stops": [[in, out], ...], ... }`.
-    if let Some(obj) = v.as_object() {
-        let stops = obj.get("stops")?.as_array()?;
-        return max_of(stops.iter().map(|s| s.get(1)));
-    }
     let arr = v.as_array()?;
     match arr.first()?.as_str()? {
         // ["interpolate", [..], input, in1, out1, in2, out2, ...]
