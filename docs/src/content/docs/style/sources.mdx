@@ -75,9 +75,26 @@ WebP / JPEG). `url` may be an XYZ template, a TileJSON document, or a `.pmtiles`
 archive. Stitched over the padded canvas and bound under the source name for the
 `raster` node.
 
-**`geojson`** — inline (`data`) or remote (`url`) GeoJSON in WGS84 lon/lat. The
-host projects it into each tile's frame and binds it as one layer named
-`<source>.<source>`.
+**`geojson`** — GeoJSON in WGS84 lon/lat, carried inline as `data` or named by
+`url`. Either way the host reads the document **once per style** and projects it
+into each tile's frame, binding it as one layer named `<source>.<source>`. A
+`url` may be `http(s)://`, `file:` (resolved against `--assets-dir`, so features
+can sit beside the style rather than inside it), or a `data:` URL:
+
+```jsonc
+"sources": {
+  // The whole document, in the style.
+  "pins":   { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
+  // Or beside it.
+  "routes": { "type": "geojson", "url": "file:routes.geojson" },
+  // Or anywhere.
+  "places": { "type": "geojson", "url": "https://example.com/places.geojson" }
+}
+```
+
+Unlike the tiled sources, a GeoJSON document is not tile-addressed: one document
+covers the world, so rendering a whole pyramid reads it exactly as many times as
+rendering one tile does.
 
 ## Pyramid options
 

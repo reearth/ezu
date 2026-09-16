@@ -10,6 +10,10 @@ pub mod raster_decode;
 pub use raster_decode::{
     decode_raster_tile, stitch_padded_raster, upsample_subregion_raster, RasterTile,
 };
+// Not gated on `http`: a geojson document has to be projected and bound on
+// wasm too, where the fetching half of it is the JS host's job.
+pub mod geojson;
+pub use geojson::{bind_geojson, bind_geojson_sources, GeoJsonSources};
 
 #[cfg(feature = "http")]
 pub mod dem;
@@ -819,6 +823,11 @@ impl<'a> TileLoader<'a> {
             bindings: HashMap::new(),
             tile,
         }
+    }
+
+    /// The tile every binding on this loader belongs to.
+    pub fn tile(&self) -> TileId {
+        self.tile
     }
 
     /// Bind a feature layer under `name`. By convention `name` is

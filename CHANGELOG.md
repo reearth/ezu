@@ -11,6 +11,25 @@ mean is spelled out in
 
 ## Unreleased
 
+### Fixed
+
+- `ezu tile`, `ezu bbox`, `ezu tiles` and `ezu graph --tile` ignored the
+  document's `geojson` sources outright: a style whose features came from
+  GeoJSON rendered blank, and said only `no MVT source` on the way. They bind
+  it now, exactly as `ezu serve` and the browser already did. The notice also
+  names all three feature source kinds, so it stops pointing at MVT when the
+  style declares none by design.
+
+### Added
+
+- A `geojson` source's `url` is read by the native hosts, not just the browser
+  one, and goes through the same resolver as any other document asset:
+  `http(s)://`, `file:` (relative to `--assets-dir`) and `data:` all work. The
+  document is read once per style rather than per tile, so a pyramid run costs
+  one read.
+- `ezu_paint::host::GeoJsonSources` and `bind_geojson_sources`, the resolve-once
+  / project-per-tile pair every host now shares.
+
 ## 0.10.0 — 2026-09-16
 
 ### Breaking

@@ -17,8 +17,8 @@ use ezu::core::TileId as CoreTileId;
 use ezu::features::mvt;
 use ezu::graph::{CanvasInfo, Evaluator, ParamValues, PortValue, TileId};
 use ezu::paint::host::{
-    bind_dem_sources, bind_raster_sources, raster_to_png, raster_to_webp,
-    requested_neighbor_offsets, BrushBankLoader, DemFetchError, DemSourceRegistry,
+    bind_dem_sources, bind_geojson_sources, bind_raster_sources, raster_to_png, raster_to_webp,
+    requested_neighbor_offsets, BrushBankLoader, DemFetchError, DemSourceRegistry, GeoJsonSources,
     RasterFetchError, RasterSourceRegistry, TileLoader,
 };
 use futures::stream::{self, Stream};
@@ -269,7 +269,17 @@ async fn get_tile(
     // Take only what we need from the snapshot to keep the lock window
     // short. Query-string parameter overrides are validated against
     // the document's `params` declarations while we hold the lock.
-    let (graph, cache, assets, dem_sources, raster_sources, geojson_inline, tile_size, pad, params) = {
+    let (
+        graph,
+        cache,
+        assets,
+        dem_sources,
+        raster_sources,
+        geojson_sources,
+        tile_size,
+        pad,
+        params,
+    ) = {
         let snap = s.style.read().await;
         let mut params = ParamValues::new();
         for (name, raw) in &q {
@@ -281,27 +291,13 @@ async fn get_tile(
                 .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
             params.set(name.clone(), v);
         }
-        // Inline GeoJSON sources are carried in the doc; project them per
-        // tile in the render task. Remote-URL geojson is not fetched here.
-        let geojson_inline: Vec<(String, serde_json::Value)> = snap
-            .doc
-            .sources
-            .iter()
-            .filter_map(|(name, decl)| match decl {
-                ezu::style::SourceDecl::GeoJson(g) => match &g.data {
-                    Some(d) if d.is_object() || d.is_array() => Some((name.clone(), d.clone())),
-                    _ => None,
-                },
-                _ => None,
-            })
-            .collect();
         (
             Arc::clone(&snap.graph),
             Arc::clone(&snap.cache),
             Arc::clone(&snap.assets),
             Arc::clone(&snap.dem_sources),
             Arc::clone(&snap.raster_sources),
-            geojson_inline,
+            Arc::clone(&snap.geojson_sources),
             snap.doc.tile_size,
             snap.pad,
             params,
@@ -352,7 +348,7 @@ async fn get_tile(
                 source_name.as_deref(),
                 dem_bindings,
                 raster_bindings,
-                geojson_inline,
+                &geojson_sources,
                 tile,
                 tile_size,
                 pad,
@@ -562,7 +558,7 @@ fn render_tile(
     source_name: Option<&str>,
     dem_bindings: Vec<(String, ezu::graph::ScalarField)>,
     raster_bindings: Vec<(String, ezu::graph::RasterBuf)>,
-    geojson_inline: Vec<(String, serde_json::Value)>,
+    geojson_sources: &GeoJsonSources,
     tile: CoreTileId,
     tile_size: u32,
     pad: u32,
@@ -622,43 +618,9 @@ fn render_tile(
     for (name, buf) in raster_bindings {
         tile_loader.bind_raster(name, buf);
     }
-    // Project inline GeoJSON (WGS84) into this tile's frame and bind it as a
-    // single feature layer under `<source>.<source>`. When the graph asks
-    // for neighbour features (cross-tile label collision), project into
-    // those neighbour tiles too and bind them under `@dx,dy` names.
-    let requested = graph.asset_inputs();
-    for (name, data) in geojson_inline {
-        let project = |z: u8, tx: u32, ty: u32| {
-            ezu::features::geojson::decode_projected(&data, z, tx, ty, 4096).map(|features| {
-                ezu::features::FeatureLayer {
-                    name: name.clone(),
-                    extent: 4096,
-                    features,
-                }
-            })
-        };
-        match project(tile.z, tile.x, tile.y) {
-            Ok(layer) => {
-                tile_loader.bind_features(format!("{name}.{name}"), layer);
-            }
-            Err(e) => tracing::warn!("geojson source `{name}`: {e}"),
-        }
-        let world = 1i64 << tile.z;
-        for (dx, dy) in requested_neighbor_offsets(&requested, &name) {
-            let ny = tile.y as i64 + dy as i64;
-            if ny < 0 || ny >= world {
-                continue;
-            }
-            let nx = (tile.x as i64 + dx as i64).rem_euclid(world) as u32;
-            match project(tile.z, nx, ny as u32) {
-                Ok(layer) => {
-                    let base = format!("{name}.{name}");
-                    tile_loader.bind_features(ezu::graph::neighbor_binding(&base, dx, dy), layer);
-                }
-                Err(e) => tracing::warn!("geojson neighbour `{name}` {dx},{dy}: {e}"),
-            }
-        }
-    }
+    // The documents were read when the snapshot was built; each tile only
+    // re-projects them into its own frame.
+    bind_geojson_sources(&mut tile_loader, geojson_sources, &graph.asset_inputs())?;
     let ev = Evaluator::new(graph, cache, &tile_loader);
     let out = ev
         .render(

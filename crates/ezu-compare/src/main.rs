@@ -20,9 +20,12 @@ use std::process::Command;
 use std::time::Instant;
 
 use ezu::features::mvt;
-use ezu::graph::{build_graph, Cache, CanvasInfo, Evaluator, ParamValues, PortValue, TileId};
+use ezu::graph::{
+    build_graph, Cache, CanvasInfo, Evaluator, Graph, ParamValues, PortValue, TileId,
+};
 use ezu::paint::host::{
-    bind_dem_sources, build_dem_sources, raster_to_rgba8, BrushBankLoader, TileLoader,
+    bind_dem_sources, bind_geojson_sources, build_dem_sources, raster_to_rgba8, BrushBankLoader,
+    GeoJsonSources, TileLoader,
 };
 use ezu::paint::nodes::default_registry;
 use ezu::style::Document;
@@ -240,6 +243,7 @@ fn render_ezu(
         client,
         recipe,
         &doc,
+        &graph,
         &mut tile_loader,
         tile_id,
         canvas,
@@ -282,10 +286,12 @@ fn load_sprites(client: &reqwest::blocking::Client, doc: &Document, loader: &mut
 /// (blur / warp / dab) at tile edges, since the output is cropped to the tile;
 /// it multiplies decode/render cost, so it's opt-in. Plain fill/line output is
 /// unchanged.
+#[allow(clippy::too_many_arguments)]
 fn bind_tile_data(
     client: &reqwest::blocking::Client,
     recipe: &serde_json::Value,
     doc: &Document,
+    graph: &Graph,
     tile_loader: &mut TileLoader,
     tile_id: TileId,
     canvas: CanvasInfo,
@@ -305,22 +311,17 @@ fn bind_tile_data(
     }
 
     // GeoJSON is WGS84 lon/lat, so it's projected into this tile's local frame
-    // (extent 4096) and bound as a single feature layer under
-    // `<source>.<source>` — matching the recipe's `features` node, which
-    // targets `(source, source)` for geojson layers.
-    for (src_name, data) in geojson_sources(client, recipe)? {
-        match ezu::features::geojson::decode_projected(&data, z, x, y, 4096) {
-            Ok(features) => {
-                let layer = ezu::features::FeatureLayer {
-                    name: src_name.clone(),
-                    extent: 4096,
-                    features,
-                };
-                tile_loader.bind_features(format!("{src_name}.{src_name}"), layer);
-            }
-            Err(e) => eprintln!("geojson source `{src_name}`: {e}"),
-        }
-    }
+    // and bound as a single feature layer under `<source>.<source>` — matching
+    // the recipe's `features` node, which targets `(source, source)` for
+    // geojson layers. Reading a `url` is async; run it on a scratch runtime,
+    // as the DEM binder below does.
+    let geojson_sources = {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        rt.block_on(GeoJsonSources::resolve(doc, std::path::Path::new(".")))?
+    };
+    bind_geojson_sources(tile_loader, &geojson_sources, &graph.asset_inputs())?;
 
     // DEM sources (for hillshade/terrain). The binder is async (stitches the
     // 3×3 neighbourhood over HTTP); run it on a scratch runtime.
@@ -406,6 +407,7 @@ fn bench_tile(
         client,
         recipe,
         &doc,
+        &graph,
         &mut tile_loader,
         tile_id,
         canvas,
@@ -475,42 +477,6 @@ fn load_sprite_sheet(
     };
     let icons = ezu::paint::host::build_sprite_icons(&sprite.index, fetched.as_deref())?;
     Ok(ezu::graph::SpriteSheet { atlas, icons })
-}
-
-/// All GeoJSON sources in a recipe as `(name, data)`, resolving each to its
-/// GeoJSON document: inline `data` objects are used directly; a `url` (or a
-/// string `data`) is fetched over HTTP.
-fn geojson_sources(
-    client: &reqwest::blocking::Client,
-    recipe: &serde_json::Value,
-) -> R<Vec<(String, serde_json::Value)>> {
-    let mut out = Vec::new();
-    let Some(srcs) = recipe.get("sources").and_then(|s| s.as_object()) else {
-        return Ok(out);
-    };
-    for (name, decl) in srcs {
-        if decl.get("type").and_then(|v| v.as_str()) != Some("geojson") {
-            continue;
-        }
-        // Inline object/array `data` is the document itself; a string `data`
-        // or a `url` points at a remote document to fetch.
-        let data = match decl.get("data") {
-            Some(d) if d.is_object() || d.is_array() => d.clone(),
-            other => {
-                let url = other
-                    .and_then(|v| v.as_str())
-                    .or_else(|| decl.get("url").and_then(|v| v.as_str()));
-                let Some(url) = url else {
-                    eprintln!("geojson source `{name}`: no `data`/`url` — skipped");
-                    continue;
-                };
-                let body = client.get(url).send()?.error_for_status()?.text()?;
-                serde_json::from_str(&body)?
-            }
-        };
-        out.push((name.clone(), data));
-    }
-    Ok(out)
 }
 
 /// Turn a source url into an `{z}/{x}/{y}` template. If it's a TileJSON

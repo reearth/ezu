@@ -21,8 +21,9 @@ use ezu::graph::{
     RasterBuf, TileId,
 };
 use ezu::paint::host::{
-    bind_dem_sources, bind_raster_sources, build_dem_sources, build_raster_sources, pixmap_to_webp,
-    raster_to_png, raster_to_webp, requested_neighbor_offsets, BrushBankLoader, DemSourceRegistry,
+    bind_dem_sources, bind_geojson_sources, bind_raster_sources, build_dem_sources,
+    build_raster_sources, pixmap_to_webp, raster_to_png, raster_to_webp,
+    requested_neighbor_offsets, BrushBankLoader, DemSourceRegistry, GeoJsonSources,
     RasterSourceRegistry, TileLoader,
 };
 use ezu::paint::nodes::default_registry;
@@ -445,6 +446,10 @@ struct Prepared {
     source_name: Option<Arc<str>>,
     dem_sources: Arc<DemSourceRegistry>,
     raster_sources: Arc<RasterSourceRegistry>,
+    /// The document's `geojson` sources, read once here rather than per
+    /// tile: one document covers the world, so a pyramid run fetches a
+    /// remote one exactly as often as a single tile does.
+    geojson_sources: Arc<GeoJsonSources>,
     canvas: CanvasInfo,
     overzoom_levels: u8,
     params: Arc<ParamValues>,
@@ -515,10 +520,9 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
                 )
                 .into());
         }
-        (None, None) => {
-            tracing::info!("no MVT source — `features` bindings will be empty");
-            (None, None)
-        }
+        // Whether this leaves `features` with nothing to read depends on
+        // the geojson sources too, so the notice waits until those are in.
+        (None, None) => (None, None),
     };
 
     let dem_sources = Arc::new(build_dem_sources(&doc));
@@ -531,6 +535,13 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
         let names: Vec<&str> = raster_sources.names().collect();
         tracing::info!("raster sources: {}", names.join(", "));
     }
+    let geojson_sources = Arc::new(GeoJsonSources::resolve(&doc, &assets_dir).await?);
+    if !geojson_sources.is_empty() {
+        let names: Vec<&str> = geojson_sources.names().collect();
+        tracing::info!("geojson sources: {}", names.join(", "));
+    } else if source.is_none() {
+        tracing::info!("no mvt, pmtiles or geojson source — `features` bindings will be empty");
+    }
 
     Ok(Prepared {
         graph,
@@ -540,6 +551,7 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
         source_name,
         dem_sources,
         raster_sources,
+        geojson_sources,
         canvas,
         overzoom_levels: common.overzoom_levels,
         params: Arc::new(parse_cli_params(&common.params, &doc)?),
@@ -797,6 +809,7 @@ async fn run_graph_view(args: GraphCmd) -> Result<(), Box<dyn std::error::Error>
         prep.source_name.clone(),
         Arc::clone(&prep.dem_sources),
         Arc::clone(&prep.raster_sources),
+        Arc::clone(&prep.geojson_sources),
         prep.canvas,
         tile,
         prep.overzoom_levels,
@@ -1145,6 +1158,7 @@ async fn run_tile(args: TileCmd) -> Result<(), Box<dyn std::error::Error>> {
         prep.source_name.as_ref().map(Arc::clone),
         Arc::clone(&prep.dem_sources),
         Arc::clone(&prep.raster_sources),
+        Arc::clone(&prep.geojson_sources),
         prep.canvas,
         args.tile,
         prep.overzoom_levels,
@@ -1190,6 +1204,7 @@ async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
             let source_name = prep.source_name.as_ref().map(Arc::clone);
             let dem_sources = Arc::clone(&prep.dem_sources);
             let raster_sources = Arc::clone(&prep.raster_sources);
+            let geojson_sources = Arc::clone(&prep.geojson_sources);
             let canvas = prep.canvas;
             let overzoom_levels = prep.overzoom_levels;
             let params = Arc::clone(&prep.params);
@@ -1202,6 +1217,7 @@ async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
                     source_name,
                     dem_sources,
                     raster_sources,
+                    geojson_sources,
                     canvas,
                     tile,
                     overzoom_levels,
@@ -1292,6 +1308,7 @@ async fn run_tiles(args: TilesCmd) -> Result<(), Box<dyn std::error::Error>> {
                     prep.source_name.as_ref().map(Arc::clone),
                     Arc::clone(&prep.dem_sources),
                     Arc::clone(&prep.raster_sources),
+                    Arc::clone(&prep.geojson_sources),
                     prep.canvas,
                     tile,
                     prep.overzoom_levels,
@@ -1336,6 +1353,7 @@ async fn render_one(
     source_name: Option<Arc<str>>,
     dem_sources: Arc<DemSourceRegistry>,
     raster_sources: Arc<RasterSourceRegistry>,
+    geojson_sources: Arc<GeoJsonSources>,
     canvas: CanvasInfo,
     tile: CoreTileId,
     overzoom_levels: u8,
@@ -1426,6 +1444,10 @@ async fn render_one(
             for (name, buf) in raster_bindings {
                 tile_loader.bind_raster(name, buf);
             }
+            // Projected here rather than fetched: the documents were read
+            // once at style load, and each tile re-projects them into its
+            // own frame.
+            bind_geojson_sources(&mut tile_loader, &geojson_sources, &graph.asset_inputs())?;
             let ev = Evaluator::new(&graph, &cache, &tile_loader);
             let ev = match observer.as_deref() {
                 Some(o) => ev.with_observer(o),

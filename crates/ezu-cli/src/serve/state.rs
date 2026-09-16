@@ -8,7 +8,7 @@ use dashmap::DashMap;
 use ezu::core::TileId;
 use ezu::graph::{build_graph, Cache, Graph};
 use ezu::paint::host::{
-    build_dem_sources, build_raster_sources, BrushBankLoader, DemSourceRegistry,
+    build_dem_sources, build_raster_sources, BrushBankLoader, DemSourceRegistry, GeoJsonSources,
     RasterSourceRegistry,
 };
 use ezu::paint::nodes::default_registry;
@@ -71,6 +71,9 @@ pub struct StyleSnapshot {
     pub dem_sources: Arc<DemSourceRegistry>,
     /// One fetcher per `raster` entry — RGBA imagery pyramids.
     pub raster_sources: Arc<RasterSourceRegistry>,
+    /// The document's `geojson` sources, read once here — including any
+    /// `url` — and re-projected per tile.
+    pub geojson_sources: Arc<GeoJsonSources>,
     pub text: String,
     pub version: u64,
 }
@@ -96,6 +99,11 @@ impl StyleSnapshot {
             .map_err(BuildSnapshotError::Assets)?;
         let dem_sources = Arc::new(build_dem_sources(&doc));
         let raster_sources = Arc::new(build_raster_sources(&doc, Some(assets_dir.to_path_buf())));
+        let geojson_sources = Arc::new(
+            GeoJsonSources::resolve(&doc, assets_dir)
+                .await
+                .map_err(BuildSnapshotError::Assets)?,
+        );
         let pad = crate::canvas_pad(&graph, &doc);
         Ok(Self {
             doc,
@@ -105,6 +113,7 @@ impl StyleSnapshot {
             assets: Arc::new(loader),
             dem_sources,
             raster_sources,
+            geojson_sources,
             text,
             version,
         })

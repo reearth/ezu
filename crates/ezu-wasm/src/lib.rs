@@ -71,7 +71,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ezu_core::TileId as CoreTileId;
-use ezu_features::FeatureLayer;
 use ezu_graph::{
     build_graph, parse_param_value, Cache, CanvasInfo, Evaluator, Graph, ParamValues, PortValue,
     SpriteSheet, TileId,
@@ -1165,29 +1164,20 @@ impl Renderer {
                     for (&(dx, dy), bytes) in byte_map {
                         let data: serde_json::Value =
                             serde_json::from_slice(bytes).map_err(|e| named_err(ERR_GEOJSON, e))?;
-                        bind_geojson(&mut tile_loader, name, &data, tile_id, dx, dy)?;
+                        ezu_paint::host::bind_geojson(&mut tile_loader, name, &data, dx, dy)
+                            .map_err(|e| named_err(ERR_GEOJSON, e))?;
                     }
                 }
             }
         }
 
-        // Inline GeoJSON needs no `bindSource` — project the document's `data`
-        // straight into this tile. Skip any that were bound remotely above.
-        // When the graph asks for neighbour features (cross-tile collision),
-        // project into those neighbour tiles too and bind under `@dx,dy`.
-        for (name, decl) in &self.doc.sources {
-            if let SourceDecl::GeoJson(g) = decl {
-                if self.bindings.contains_key(name) {
-                    continue;
-                }
-                if let Some(data) = g.data.as_ref().filter(|d| d.is_object() || d.is_array()) {
-                    bind_geojson(&mut tile_loader, name, data, tile_id, 0, 0)?;
-                    for (dx, dy) in ezu_paint::host::requested_neighbor_offsets(&requested, name) {
-                        bind_geojson(&mut tile_loader, name, data, tile_id, dx, dy)?;
-                    }
-                }
-            }
-        }
+        // Inline GeoJSON needs no `bindSource` — the document carries it, so
+        // project it straight into this tile. Anything bound remotely above
+        // is already done and drops out here.
+        let mut inline = ezu_paint::host::GeoJsonSources::inline(&self.doc);
+        inline.retain(|name| !self.bindings.contains_key(name));
+        ezu_paint::host::bind_geojson_sources(&mut tile_loader, &inline, &requested)
+            .map_err(|e| named_err(ERR_GEOJSON, e))?;
 
         // Validated against the document's declarations by the same
         // parser `--param` uses, so a bad value fails here rather than
@@ -1385,41 +1375,6 @@ fn parse_render_options(obj: Option<&js_sys::Object>) -> Result<RenderOptions, J
         }
     }
     Ok(out)
-}
-
-/// Project WGS84 GeoJSON `data` into `tile`'s local frame (extent 4096) and
-/// bind it as one feature layer under `<name>.<name>` — matching a
-/// converter-emitted `features` node's `(source, source)` target.
-/// Project inline/remote GeoJSON into the tile at neighbour offset
-/// `(dx, dy)` (`(0, 0)` = the tile itself) and bind it under
-/// `<name>.<name>` (own) or `<name>.<name>@dx,dy` (neighbour). Neighbour
-/// `x` wraps at the antimeridian; out-of-range `y` (poles) is skipped.
-fn bind_geojson(
-    tile_loader: &mut TileLoader<'_>,
-    name: &str,
-    data: &serde_json::Value,
-    tile: TileId,
-    dx: i32,
-    dy: i32,
-) -> Result<(), JsValue> {
-    let world = 1i64 << tile.z;
-    let ny = tile.y as i64 + dy as i64;
-    if ny < 0 || ny >= world {
-        return Ok(()); // top/bottom edge: no neighbour in Y
-    }
-    let nx = (tile.x as i64 + dx as i64).rem_euclid(world) as u32;
-    let features = ezu_features::geojson::decode_projected(data, tile.z, nx, ny as u32, 4096)
-        .map_err(|e| named_err(ERR_GEOJSON, e))?;
-    let base = format!("{name}.{name}");
-    tile_loader.bind_features(
-        ezu_graph::neighbor_binding(&base, dx, dy),
-        FeatureLayer {
-            name: name.to_string(),
-            extent: 4096,
-            features,
-        },
-    );
-    Ok(())
 }
 
 /// Parse the optional `{ index: "<sprite-json text>" }` payload to
