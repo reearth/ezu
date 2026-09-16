@@ -49,8 +49,13 @@ Rust API documentation is on [docs.rs](https://docs.rs/ezu).
 ## Quick start
 
 ```sh
-cargo install ezu-cli
+brew install reearth/tap/ezu
 ```
+
+On Windows, or anywhere without Homebrew, take a prebuilt `ezu` binary
+from the [latest release](https://github.com/reearth/ezu/releases/latest).
+Either way you need no Rust toolchain; with one, `cargo install ezu-cli`
+builds it from source.
 
 Then render a tile. This style keeps all of its data remote, so it needs
 nothing but the CLI:

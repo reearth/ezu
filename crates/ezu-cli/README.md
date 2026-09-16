@@ -7,6 +7,10 @@ Command-line renderer for the Ezu Style Spec — the `ezu` binary of the
 cargo install ezu-cli
 ```
 
+Or without a Rust toolchain: `brew install reearth/tap/ezu`, or take one
+of the prebuilt binaries for Linux, macOS and Windows attached to every
+[release](https://github.com/reearth/ezu/releases/latest).
+
 Point it at any style (URL or local path) and it renders PNGs. A style
 declares its own tile sources in a `sources` block (MVT, PMTiles, raster
 DEM, RGBA raster, GeoJSON), so most commands need nothing but a

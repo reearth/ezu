@@ -7,14 +7,17 @@ sidebar:
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-ezu needs a Rust toolchain to build from source (MSRV 1.89) and nothing at all to
-run — no system graphics libraries, no GPU driver, no browser.
+ezu runs on nothing at all — no system graphics libraries, no GPU driver, no
+browser. Installing it needs a Rust toolchain only if you want to build from
+source (MSRV 1.89).
 
 <Tabs>
   <TabItem label="CLI">
 
+On macOS and Linux, from the Re:Earth tap:
+
 ```sh
-cargo install ezu-cli
+brew install reearth/tap/ezu
 ```
 
 That puts an `ezu` binary on your `PATH`. Check it:
@@ -24,6 +27,32 @@ ezu --help
 ```
 
 Every command is listed in the [CLI reference](/ezu/reference/cli/).
+
+### From a release archive
+
+Homebrew installs a binary that every release also publishes directly, which is
+the route to take on Windows or anywhere without `brew`. Pick the archive for
+your platform from the
+[latest release](https://github.com/reearth/ezu/releases/latest) — `x86_64` and
+`aarch64` for Linux and macOS, `x86_64` for Windows — and put the binary
+somewhere on your `PATH`:
+
+```sh
+# Swap in the version and target you want.
+v=v0.9.0; t=aarch64-apple-darwin
+curl -fsSL "https://github.com/reearth/ezu/releases/download/$v/ezu-$v-$t.tar.gz" | tar xz
+sudo mv "ezu-$v-$t/ezu" /usr/local/bin/
+```
+
+`SHA256SUMS` in the same release lists a checksum for each archive. The Linux
+builds link against glibc 2.35, so they run on Ubuntu 22.04, Debian 12, RHEL 9
+and anything newer.
+
+### From source
+
+```sh
+cargo install ezu-cli
+```
 
   </TabItem>
   <TabItem label="Rust">

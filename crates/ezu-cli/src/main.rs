@@ -35,7 +35,7 @@ use tracing_subscriber::EnvFilter;
 use crate::source::{SourceSpec, TileSource};
 
 #[derive(Parser, Debug)]
-#[command(name = "ezu", about = "Render Ezu Style documents to PNG")]
+#[command(name = "ezu", version, about = "Render Ezu Style documents to PNG")]
 struct Cli {
     /// Emit per-node debug logs from the graph evaluator (op name,
     /// cache hit/miss, output shape, eval duration). Overrides

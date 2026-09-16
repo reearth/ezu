@@ -77,8 +77,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo install ezu-cli
+      - name: Install ezu
+        # A release binary, so the job needs no Rust toolchain and no
+        # compile. Pin whichever version your styles are checked against.
+        run: |
+          v=v0.9.0; t=x86_64-unknown-linux-gnu
+          curl -fsSL "https://github.com/reearth/ezu/releases/download/$v/ezu-$v-$t.tar.gz" | tar xz
+          echo "$PWD/ezu-$v-$t" >> "$GITHUB_PATH"
       - name: Validate every style
         run: |
           for style in styles/*.json; do
