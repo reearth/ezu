@@ -111,6 +111,12 @@ catalog says so on the page rather than leaving a silent gap.
 - Note any intended output change explicitly, since snapshots will move.
 - Run `cargo fmt` and `cargo clippy` on the crates you touched.
 - Write the description for someone who was not in the discussion.
+- Add a line under `## Unreleased` in
+  [`CHANGELOG.md`](https://github.com/reearth/ezu/blob/main/CHANGELOG.md) if the
+  change is one a user would notice — a new capability, a breaking change, a
+  fix to something they could have hit, or a render that moves. Internal
+  refactors need no entry. That section becomes the next release's notes
+  verbatim, so write it for someone deciding whether to upgrade.
 
 Bugs and design questions are both welcome as
 [issues](https://github.com/reearth/ezu/issues) — for anything large, an issue
