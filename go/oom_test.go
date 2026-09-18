@@ -35,7 +35,7 @@ func TestOutOfMemoryIsNamedAndEndsTheRenderer(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer renderer.Close(ctx)
-	if err := renderer.BindSource(ctx, "basemap", readFile(t, "testdata/basemap-14-14554-6454.mvt"), Bind{}); err != nil {
+	if err := renderer.BindSource(ctx, "basemap", readFile(t, "testdata/basemap-14-14554-6454.mvt")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -79,7 +79,7 @@ func TestAGenerousMemoryLimitChangesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer renderer.Close(ctx)
-	if err := renderer.BindSource(ctx, "basemap", readFile(t, "testdata/basemap-14-14554-6454.mvt"), Bind{}); err != nil {
+	if err := renderer.BindSource(ctx, "basemap", readFile(t, "testdata/basemap-14-14554-6454.mvt")); err != nil {
 		t.Fatal(err)
 	}
 	out, err := renderer.RenderTile(ctx, Tile{Z: 14, X: 14554, Y: 6454}, Render{})
@@ -112,7 +112,7 @@ func TestPoolDropsATrappedRenderer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := renderer.BindSource(ctx, "basemap", readFile(t, "testdata/basemap-14-14554-6454.mvt"), Bind{}); err != nil {
+	if err := renderer.BindSource(ctx, "basemap", readFile(t, "testdata/basemap-14-14554-6454.mvt")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := renderer.RenderTile(ctx, Tile{Z: 14, X: 14554, Y: 6454}, Render{}); err == nil {

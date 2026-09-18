@@ -17,7 +17,7 @@ import (
 
 func TestConcurrentEntryIsRefused(t *testing.T) {
 	ctx, renderer := open(t, stainedGlassStyle)
-	if err := renderer.BindSource(ctx, "basemap", readFile(t, "testdata/basemap-14-14554-6454.mvt"), Bind{}); err != nil {
+	if err := renderer.BindSource(ctx, "basemap", readFile(t, "testdata/basemap-14-14554-6454.mvt")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -69,7 +69,7 @@ func TestConcurrentEntryIsRefused(t *testing.T) {
 // to check it would be reporting the scheduler rather than the package.
 func TestARefusedCallLeavesNothingBehind(t *testing.T) {
 	ctx, renderer := open(t, stainedGlassStyle)
-	if err := renderer.BindSource(ctx, "basemap", readFile(t, "testdata/basemap-14-14554-6454.mvt"), Bind{}); err != nil {
+	if err := renderer.BindSource(ctx, "basemap", readFile(t, "testdata/basemap-14-14554-6454.mvt")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -116,7 +116,7 @@ func TestPoolRendersInParallel(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			err := pool.Do(ctx, func(r *Renderer) error {
-				if err := r.BindSource(ctx, "basemap", tile, Bind{}); err != nil {
+				if err := r.BindSource(ctx, "basemap", tile); err != nil {
 					return err
 				}
 				out, err := r.RenderTile(ctx, Tile{Z: 14, X: 14554, Y: 6454}, Render{})
@@ -181,7 +181,7 @@ func TestCompilationCacheIsReused(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := renderer.BindSource(ctx, "basemap", tile, Bind{}); err != nil {
+		if err := renderer.BindSource(ctx, "basemap", tile); err != nil {
 			t.Fatal(err)
 		}
 		out, err := renderer.RenderTile(ctx, Tile{Z: 14, X: 14554, Y: 6454}, Render{})
@@ -222,7 +222,7 @@ func TestOneRuntimeManyRenderers(t *testing.T) {
 		renderers = append(renderers, r)
 	}
 	// Separate linear memories: what one binds is invisible to the others.
-	if err := renderers[0].BindSource(ctx, "basemap", readFile(t, "testdata/basemap-14-14554-6454.mvt"), Bind{}); err != nil {
+	if err := renderers[0].BindSource(ctx, "basemap", readFile(t, "testdata/basemap-14-14554-6454.mvt")); err != nil {
 		t.Fatal(err)
 	}
 	for i, r := range renderers {

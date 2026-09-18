@@ -14,7 +14,7 @@
 //	r, err := rt.NewRenderer(ctx, styleJSON)
 //	defer r.Close(ctx)
 //
-//	r.BindSource(ctx, "basemap", mvtBytes, ezu.Bind{})
+//	r.BindSource(ctx, "basemap", mvtBytes)
 //	png, err := r.RenderTile(ctx, ezu.Tile{Z: 14, X: 14554, Y: 6454}, ezu.Render{})
 //	r.ClearSources(ctx)
 //
@@ -687,39 +687,61 @@ func (r *Renderer) withSlots(ctx context.Context, f func(slots uint32) (int64, e
 
 // --- options --------------------------------------------------------------
 
-// Bind is the per-binding options object. The zero value binds the tile
-// being rendered, at its own zoom, with no sprite index.
-type Bind struct {
-	// DX, DY place these bytes within the 3×3 neighbourhood. (0, 0), the
-	// zero value, is the tile being rendered.
-	//
-	// Cross-tile label collision and edge-continuous DEM or raster shading
-	// are the only things that read neighbours, and only for the sources
-	// that ask: [Renderer.RequestedNeighborOffsets] says which, so a host
-	// binds exactly the window the style needs rather than a blind 3×3.
-	DX, DY int32
-	// SourceZoom declares that the bytes are natively encoded at a
-	// shallower zoom than the tile being rendered — a source that stops at
-	// its max-zoom while you serve deeper tiles — and the renderer
-	// reprojects or resamples them into the tile's frame. Zero means "not
-	// set"; ask [Renderer.SourceTile] which tile to fetch and pass the zoom
-	// it answers with, which is a no-op below the ceiling.
-	SourceZoom int32
-	// Index is a sprite source's index document, when the style gives a URL
-	// for it rather than inlining it. Ignored by every other source kind.
-	Index string
+// BindOption qualifies one call to [Renderer.BindSource]. With none of
+// them, the bytes are the tile being rendered, at its own zoom, with no
+// sprite index.
+//
+// Absence is spelled by not passing the option, never by a zero or a nil —
+// zoom 0 is a real zoom and a sprite index may not be empty, so a struct
+// with a "means unset" field would be lying about one of them.
+type BindOption func(*bindOptions)
+
+type bindOptions struct {
+	offset        Offset
+	sourceZoom    int32
+	hasSourceZoom bool
+	index         string
 }
 
-func (b Bind) json() ([]byte, error) {
-	if b == (Bind{}) {
+// AtOffset places the bytes at a neighbour's position in the 3×3
+// neighbourhood rather than at the tile being rendered.
+//
+// Cross-tile label collision and edge-continuous DEM or raster shading are
+// the only things that read neighbours, and only for the sources that ask:
+// [Renderer.RequestedNeighborOffsets] says which, so a host binds exactly
+// the window the style needs rather than a blind 3×3.
+func AtOffset(o Offset) BindOption {
+	return func(b *bindOptions) { b.offset = o }
+}
+
+// FromZoom declares that the bytes are natively encoded at a shallower zoom
+// than the tile being rendered — a source that stops at its max-zoom while
+// you serve deeper tiles — so that the renderer reprojects or resamples
+// them into the tile's frame.
+//
+// Ask [Renderer.SourceTile] which tile to fetch and pass the Z it answers
+// with, which is a no-op below the ceiling.
+func FromZoom(z int32) BindOption {
+	return func(b *bindOptions) { b.sourceZoom, b.hasSourceZoom = z, true }
+}
+
+// WithSpriteIndex supplies a sprite source's index document, for a style
+// that gives a URL for it rather than inlining it. Ignored by every other
+// source kind.
+func WithSpriteIndex(index string) BindOption {
+	return func(b *bindOptions) { b.index = index }
+}
+
+func (b bindOptions) json() ([]byte, error) {
+	if b == (bindOptions{}) {
 		return nil, nil
 	}
-	payload := map[string]any{"coord": [2]int32{b.DX, b.DY}}
-	if b.SourceZoom != 0 {
-		payload["sourceZoom"] = b.SourceZoom
+	payload := map[string]any{"coord": [2]int32{b.offset.DX, b.offset.DY}}
+	if b.hasSourceZoom {
+		payload["sourceZoom"] = b.sourceZoom
 	}
-	if b.Index != "" {
-		payload["index"] = b.Index
+	if b.index != "" {
+		payload["index"] = b.index
 	}
 	return json.Marshal(payload)
 }
@@ -823,11 +845,11 @@ func (r *Renderer) TileSize(ctx context.Context) (uint32, error) {
 //   - brush — a .myb JSON document, into the persistent brush bank
 //   - image — PNG or WebP, into the persistent image bank
 //   - sprite — the atlas image, with its index inline in the style or in
-//     [Bind.Index]
+//     [WithSpriteIndex]
 //   - font — TTF, OTF or TTC bytes
 //   - glyphs — one SDF glyph PBF. Glyphs are filed by id, so repeated calls
 //     accumulate and a payload may be a whole {range}.pbf or any subset
-//   - mvt, pmtiles — vector tile bytes, per [Bind.DX]/[Bind.DY]
+//   - mvt, pmtiles — vector tile bytes, at [AtOffset]'s position
 //   - dem, raster — tile bytes, decoded and 3×3 stitched at render time
 //   - geojson — a remote GeoJSON document; inline data needs no binding
 //
@@ -839,8 +861,12 @@ func (r *Renderer) TileSize(ctx context.Context) (uint32, error) {
 // neighbour tiles, and [Renderer.NeededCodepoints] the glyphs. Text whose
 // glyphs are missing is dropped with a warning, which reaches you through
 // [Renderer.DrainLogs] and not as an error.
-func (r *Renderer) BindSource(ctx context.Context, name string, data []byte, opts Bind) error {
-	optsJSON, err := opts.json()
+func (r *Renderer) BindSource(ctx context.Context, name string, data []byte, opts ...BindOption) error {
+	var cfg bindOptions
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	optsJSON, err := cfg.json()
 	if err != nil {
 		return fmt.Errorf("ezu: encoding the bind options: %w", err)
 	}
@@ -902,9 +928,9 @@ type Source struct {
 	// the payload, so there is nothing to fetch and nothing to bind.
 	URL string `json:"url"`
 	// IndexURL is a sprite source's index document, when the style gives a
-	// URL for it rather than inlining it. Fetch it and pass the text as
-	// [Bind.Index] alongside the atlas image. Empty for every other kind,
-	// and for an inline index.
+	// URL for it rather than inlining it. Fetch it and pass the text to
+	// [WithSpriteIndex] alongside the atlas image. Empty for every other
+	// kind, and for an inline index.
 	IndexURL string `json:"indexUrl"`
 }
 
@@ -946,8 +972,14 @@ func (r *Renderer) BoundSources(ctx context.Context) ([]string, error) {
 }
 
 // SetGlyphBudget caps the glyph bytes each bound fontstack keeps resident.
-// A nil budget lifts the cap, which is where a fresh renderer starts and
-// how [Usage.GlyphBudget] reports it back.
+// [Renderer.ClearGlyphBudget] lifts the cap again; a fresh renderer starts
+// uncapped.
+//
+// Two calls rather than one taking a pointer, for the same reason
+// [BindOption] is a function: nothing in this package spells "no value" as
+// a zero or a nil that the caller has to construct. A budget of 0 is a real
+// budget — keep nothing — and it should not be the same word as no budget
+// at all.
 //
 // Uncapped, a fontstack keeps every range ever bound to it for the life of the
 // renderer — [Renderer.ClearSources] does not touch glyphs, and on a
@@ -959,11 +991,18 @@ func (r *Renderer) BoundSources(ctx context.Context) ([]string, error) {
 // italic stack can hold three times this. Anything trimmed must be bound
 // again before the next tile that needs it; a host that re-binds every tile
 // rather than tracking what it sent needs no other change.
-func (r *Renderer) SetGlyphBudget(ctx context.Context, bytes *uint64) error {
-	var value, set uint64
-	if bytes != nil {
-		value, set = *bytes, 1
-	}
+func (r *Renderer) SetGlyphBudget(ctx context.Context, bytes uint64) error {
+	return r.setGlyphBudget(ctx, bytes, 1)
+}
+
+// ClearGlyphBudget lifts the cap [Renderer.SetGlyphBudget] put on the glyph
+// bank, back to where a fresh renderer starts. It frees nothing: what is
+// resident stays resident, and stops being trimmed.
+func (r *Renderer) ClearGlyphBudget(ctx context.Context) error {
+	return r.setGlyphBudget(ctx, 0, 0)
+}
+
+func (r *Renderer) setGlyphBudget(ctx context.Context, value, set uint64) error {
 	_, err := r.call(ctx, func(ctx context.Context) (int64, error) {
 		return r.call1(ctx, "ezu_set_glyph_budget", uint64(r.handle), value, set)
 	})
@@ -1201,8 +1240,11 @@ type Usage struct {
 	GlyphBytes  uint64 `json:"glyphBytes"`
 	GlyphRanges uint64 `json:"glyphRanges"`
 	// GlyphBudget is the per-fontstack ceiling [Renderer.SetGlyphBudget]
-	// put on them, or nil if none. GlyphBytes totals every fontstack, so it
-	// can exceed the budget legitimately.
+	// put on them, or nil if there is none. A pointer here and not in the
+	// setter: reading "no budget" off a value is a nil check, whereas
+	// writing it would have been a nil the caller had to build.
+	// GlyphBytes totals every fontstack, so it can exceed the budget
+	// legitimately.
 	GlyphBudget *uint64 `json:"glyphBudget"`
 	// FontBytes are outline font files held in the font bank.
 	FontBytes uint64 `json:"fontBytes"`

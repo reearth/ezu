@@ -81,7 +81,7 @@ func TestRenderMatchesTheNativeRenderer(t *testing.T) {
 	for _, g := range goldens {
 		t.Run(g.name, func(t *testing.T) {
 			ctx, renderer := open(t, g.style)
-			if err := renderer.BindSource(ctx, "basemap", readFile(t, g.tileMVT), Bind{}); err != nil {
+			if err := renderer.BindSource(ctx, "basemap", readFile(t, g.tileMVT)); err != nil {
 				t.Fatal(err)
 			}
 
@@ -158,7 +158,7 @@ func assertSamePicture(t *testing.T, pngBytes, rgba []byte, size int) {
 func TestRenderIsDeterministic(t *testing.T) {
 	g := goldens[0]
 	ctx, renderer := open(t, g.style)
-	if err := renderer.BindSource(ctx, "basemap", readFile(t, g.tileMVT), Bind{}); err != nil {
+	if err := renderer.BindSource(ctx, "basemap", readFile(t, g.tileMVT)); err != nil {
 		t.Fatal(err)
 	}
 	first, err := renderer.RenderTile(ctx, g.tile, Render{})
@@ -180,7 +180,7 @@ func TestRenderIsDeterministic(t *testing.T) {
 func TestRenderOptionsReachTheRenderer(t *testing.T) {
 	g := goldens[0]
 	ctx, renderer := open(t, g.style)
-	if err := renderer.BindSource(ctx, "basemap", readFile(t, g.tileMVT), Bind{}); err != nil {
+	if err := renderer.BindSource(ctx, "basemap", readFile(t, g.tileMVT)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -214,7 +214,7 @@ func TestRenderTiming(t *testing.T) {
 	}
 	g := goldens[0]
 	ctx, renderer := open(t, g.style)
-	if err := renderer.BindSource(ctx, "basemap", readFile(t, g.tileMVT), Bind{}); err != nil {
+	if err := renderer.BindSource(ctx, "basemap", readFile(t, g.tileMVT)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -265,7 +265,7 @@ func BenchmarkRenderTile(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	if err := renderer.BindSource(ctx, "basemap", tile, Bind{}); err != nil {
+	if err := renderer.BindSource(ctx, "basemap", tile); err != nil {
 		b.Fatal(err)
 	}
 	b.ResetTimer()

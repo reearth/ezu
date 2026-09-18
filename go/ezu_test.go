@@ -145,7 +145,7 @@ func TestHandleSurvivesAcrossCalls(t *testing.T) {
 	ctx, renderer := open(t, stainedGlassStyle)
 	tile := readFile(t, "testdata/basemap-14-14554-6454.mvt")
 
-	if err := renderer.BindSource(ctx, "basemap", tile, Bind{}); err != nil {
+	if err := renderer.BindSource(ctx, "basemap", tile); err != nil {
 		t.Fatal(err)
 	}
 	// Unrelated traffic through the same instance, allocating and freeing

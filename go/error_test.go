@@ -48,7 +48,7 @@ func TestFailuresCarryTheirNames(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer renderer.Close(ctx)
-		err = renderer.BindSource(ctx, "not-in-the-style", []byte("x"), Bind{})
+		err = renderer.BindSource(ctx, "not-in-the-style", []byte("x"))
 		if !IsKind(err, KindUnknownSrc) {
 			t.Fatalf("binding an undeclared source gave %v, want UnknownSource", err)
 		}
@@ -62,7 +62,7 @@ func TestFailuresCarryTheirNames(t *testing.T) {
 		defer renderer.Close(ctx)
 		// A vector source validates its payload at bind time, where the
 		// host still knows which fetch produced it.
-		err = renderer.BindSource(ctx, "basemap", []byte("definitely not a vector tile"), Bind{})
+		err = renderer.BindSource(ctx, "basemap", []byte("definitely not a vector tile"))
 		if !IsKind(err, "MvtDecode") {
 			t.Fatalf("binding rubbish as MVT gave %v, want MvtDecode", err)
 		}
@@ -77,7 +77,7 @@ func TestFailuresCarryTheirNames(t *testing.T) {
 		// A DEM payload is decoded at render time, once the tile id is
 		// known, so this is the kind that surfaces from the render rather
 		// than from the bind.
-		if err := renderer.BindSource(ctx, "terrain", []byte("not an image"), Bind{}); err != nil {
+		if err := renderer.BindSource(ctx, "terrain", []byte("not an image")); err != nil {
 			t.Fatal(err)
 		}
 		_, err = renderer.RenderTile(ctx, demCoord, Render{})

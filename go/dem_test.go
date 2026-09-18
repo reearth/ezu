@@ -24,7 +24,7 @@ func TestDEMRendersFromTheCentreAloneAndSaysWhatItIsMissing(t *testing.T) {
 	if err := renderer.InitLog(ctx, LogWarn); err != nil {
 		t.Fatal(err)
 	}
-	if err := renderer.BindSource(ctx, demSource, readFile(t, demTile), Bind{}); err != nil {
+	if err := renderer.BindSource(ctx, demSource, readFile(t, demTile)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -81,7 +81,7 @@ func TestDEMWithEveryOffsetBoundIsSilent(t *testing.T) {
 	}
 	bytes := readFile(t, demTile)
 	for _, o := range append(offsets, Offset{0, 0}) {
-		if err := renderer.BindSource(ctx, demSource, bytes, Bind{DX: o.DX, DY: o.DY}); err != nil {
+		if err := renderer.BindSource(ctx, demSource, bytes, AtOffset(o)); err != nil {
 			t.Fatalf("binding %+v: %v", o, err)
 		}
 	}
@@ -107,7 +107,7 @@ func TestDEMWithEveryOffsetBoundIsSilent(t *testing.T) {
 // the same name the JavaScript shell throws.
 func TestBindRefusesAnOffsetOutsideTheNeighbourhood(t *testing.T) {
 	ctx, renderer := open(t, demStyle)
-	err := renderer.BindSource(ctx, demSource, readFile(t, demTile), Bind{DX: 2})
+	err := renderer.BindSource(ctx, demSource, readFile(t, demTile), AtOffset(Offset{DX: 2}))
 	if !IsKind(err, KindUnknownSrc) {
 		t.Fatalf("binding at dx=2 gave %v, want UnknownSource", err)
 	}

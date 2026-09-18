@@ -87,7 +87,7 @@ func TestSourcesDescribeTheBindLoop(t *testing.T) {
 	// And the loop it describes runs: the one tile-scoped source binds
 	// under the name it reported.
 	if err := renderer.BindSource(ctx, sources[0].Name,
-		readFile(t, "testdata/basemap-14-14554-6454.mvt"), Bind{}); err != nil {
+		readFile(t, "testdata/basemap-14-14554-6454.mvt")); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -103,7 +103,7 @@ func TestBoundSourcesFollowTheBindings(t *testing.T) {
 		t.Errorf("a fresh renderer reports %v bound", bound)
 	}
 
-	if err := renderer.BindSource(ctx, "basemap", readFile(t, "testdata/basemap-14-14554-6454.mvt"), Bind{}); err != nil {
+	if err := renderer.BindSource(ctx, "basemap", readFile(t, "testdata/basemap-14-14554-6454.mvt")); err != nil {
 		t.Fatal(err)
 	}
 	if bound, err = renderer.BoundSources(ctx); err != nil {
@@ -197,7 +197,7 @@ func TestSourceTileAnswersTheCeiling(t *testing.T) {
 // ranges to bind.
 func TestGlyphPrepass(t *testing.T) {
 	ctx, renderer := open(t, "testdata/labels.json")
-	if err := renderer.BindSource(ctx, "basemap", readFile(t, "testdata/basemap-14-14554-6454.mvt"), Bind{}); err != nil {
+	if err := renderer.BindSource(ctx, "basemap", readFile(t, "testdata/basemap-14-14554-6454.mvt")); err != nil {
 		t.Fatal(err)
 	}
 	codepoints, err := renderer.NeededCodepoints(ctx)
@@ -249,7 +249,7 @@ func TestMemoryUsageAndGlyphBudget(t *testing.T) {
 	}
 
 	budget := uint64(1 << 20)
-	if err := renderer.SetGlyphBudget(ctx, &budget); err != nil {
+	if err := renderer.SetGlyphBudget(ctx, budget); err != nil {
 		t.Fatal(err)
 	}
 	if usage, err = renderer.MemoryUsage(ctx); err != nil {
@@ -259,16 +259,27 @@ func TestMemoryUsageAndGlyphBudget(t *testing.T) {
 		t.Errorf("glyph budget reads back as %v, want %d", usage.GlyphBudget, budget)
 	}
 
-	// Unset is spelled the same way going in as coming out: a nil budget
-	// lifts the cap and reads back as none.
-	if err := renderer.SetGlyphBudget(ctx, nil); err != nil {
+	// A budget of zero is a real budget — keep nothing — and must not be
+	// confused with having none.
+	if err := renderer.SetGlyphBudget(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if usage, err = renderer.MemoryUsage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if usage.GlyphBudget == nil || *usage.GlyphBudget != 0 {
+		t.Errorf("a budget of 0 reads back as %v, want 0", usage.GlyphBudget)
+	}
+
+	// Clearing is the only way back to uncapped.
+	if err := renderer.ClearGlyphBudget(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if usage, err = renderer.MemoryUsage(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if usage.GlyphBudget != nil {
-		t.Errorf("a nil budget reads back as %d, want none", *usage.GlyphBudget)
+		t.Errorf("a cleared budget reads back as %d, want none", *usage.GlyphBudget)
 	}
 	if usage.CacheBudget == 0 {
 		t.Error("the render cache reports no eviction budget, so it would grow without bound")
@@ -279,7 +290,7 @@ func TestMemoryUsageAndGlyphBudget(t *testing.T) {
 // the bindings and the cache.
 func TestSetStyle(t *testing.T) {
 	ctx, renderer := open(t, stainedGlassStyle)
-	if err := renderer.BindSource(ctx, "basemap", readFile(t, "testdata/basemap-14-14554-6454.mvt"), Bind{}); err != nil {
+	if err := renderer.BindSource(ctx, "basemap", readFile(t, "testdata/basemap-14-14554-6454.mvt")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -299,7 +310,7 @@ func TestSetStyle(t *testing.T) {
 	}
 
 	// And the new style renders through the same handle.
-	if err := renderer.BindSource(ctx, "basemap", readFile(t, "testdata/basemap-13-7277-3227.mvt"), Bind{}); err != nil {
+	if err := renderer.BindSource(ctx, "basemap", readFile(t, "testdata/basemap-13-7277-3227.mvt")); err != nil {
 		t.Fatal(err)
 	}
 	out, err := renderer.RenderTile(ctx, Tile{Z: 13, X: 7277, Y: 3227}, Render{})
@@ -316,7 +327,7 @@ func TestSetStyle(t *testing.T) {
 // rendering something quietly wrong.
 func TestRenderParams(t *testing.T) {
 	ctx, renderer := open(t, stainedGlassStyle)
-	if err := renderer.BindSource(ctx, "basemap", readFile(t, "testdata/basemap-14-14554-6454.mvt"), Bind{}); err != nil {
+	if err := renderer.BindSource(ctx, "basemap", readFile(t, "testdata/basemap-14-14554-6454.mvt")); err != nil {
 		t.Fatal(err)
 	}
 	schema, err := renderer.ParamsSchema(ctx)
