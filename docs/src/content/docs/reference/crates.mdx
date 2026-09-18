@@ -18,7 +18,8 @@ map: what each crate is for, and which one to read.
 | [`ezu-paint`](https://github.com/reearth/ezu/tree/main/crates/ezu-paint) | [crates.io](https://crates.io/crates/ezu-paint) | [docs.rs](https://docs.rs/ezu-paint) | Painting primitives, the built-in ops, host glue (PNG/WebP, asset banks, fonts). |
 | [`ezu-translate`](https://github.com/reearth/ezu/tree/main/crates/ezu-translate) | [crates.io](https://crates.io/crates/ezu-translate) | [docs.rs](https://docs.rs/ezu-translate) | Lower other engines' styles into ezu recipes. MapLibre GL is the first frontend. |
 | [`ezu-cli`](https://github.com/reearth/ezu/tree/main/crates/ezu-cli) | [crates.io](https://crates.io/crates/ezu-cli) | [docs.rs](https://docs.rs/ezu-cli) | The `ezu` binary: rendering, `translate`, `check`, `graph`, `schema`, `serve`. |
-| [`ezu-wasm`](https://github.com/reearth/ezu/tree/main/crates/ezu-wasm) | — | — | WebAssembly bindings, published to npm as [`@reearth/ezu`](https://www.npmjs.com/package/@reearth/ezu). Not published to crates.io. |
+| [`ezu-renderer`](https://github.com/reearth/ezu/tree/main/crates/ezu-renderer) | — | — | The embedding renderer, host-neutral: bind a tile's bytes per source, render one tile. Everything the embedding shells share. Not published to crates.io. |
+| [`ezu-wasm`](https://github.com/reearth/ezu/tree/main/crates/ezu-wasm) | — | — | WebAssembly bindings over `ezu-renderer`, published to npm as [`@reearth/ezu`](https://www.npmjs.com/package/@reearth/ezu). Not published to crates.io. |
 | `ezu-compare` | — | — | Internal benchmark: convert a MapLibre style, render it, pixel-compare against maplibre-gl-js. Not published. |
 
 ## Sister repositories
@@ -37,10 +38,11 @@ ezu-core    (coords) ──┘                                   │
 ezu-features (MVT/GeoJSON) ────────────────────────────────┘
 
 ezu-translate ──> emits ezu-style JSON
-ezu-cli / ezu-wasm ──> hosts
+ezu-cli ──> native host
+ezu-renderer (bind + render, host-neutral) ──> ezu-wasm ──> JS host
 ```
 
-Two boundaries are worth knowing:
+Three boundaries are worth knowing:
 
 - **`ezu-graph` has no rendering dependencies.** `tiny-skia`, `hokusai`, and
   `libblur` all live in `ezu-paint`, which registers the concrete ops. That is why
@@ -48,6 +50,10 @@ Two boundaries are worth knowing:
   [custom ops](/ezu/extending/custom-ops/).
 - **`ezu-style` does not evaluate anything.** Parsing gives you a `Document`, which
   is data. `build_graph` turns it into something executable.
+- **An embedding shell holds no rendering logic.** `ezu-renderer` owns the whole
+  bind-then-render flow and names its failures; `ezu-wasm` reads JS option objects,
+  builds JS results, and converts errors. An embedding in another language is
+  written against `ezu-renderer` the same way, so the two cannot drift apart.
 
 ## Feature flags
 

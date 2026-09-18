@@ -827,6 +827,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ezu-renderer"
+version = "0.10.0"
+dependencies = [
+ "ezu-core",
+ "ezu-features",
+ "ezu-graph",
+ "ezu-paint",
+ "ezu-style",
+ "hokusai",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "ezu-style"
 version = "0.10.0"
 dependencies = [
@@ -857,14 +871,9 @@ name = "ezu-wasm"
 version = "0.10.0"
 dependencies = [
  "console_error_panic_hook",
- "ezu-core",
- "ezu-features",
- "ezu-graph",
  "ezu-paint",
- "ezu-style",
- "hokusai",
+ "ezu-renderer",
  "js-sys",
- "serde_json",
  "tracing",
  "tracing-subscriber",
  "wasm-bindgen",

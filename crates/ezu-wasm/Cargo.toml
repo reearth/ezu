@@ -14,13 +14,9 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-ezu-core = { workspace = true, features = ["text"] }
-ezu-graph = { workspace = true }
-ezu-features = { workspace = true }
+ezu-renderer = { workspace = true }
+# For `PngCompression`, which `renderTile`'s options name.
 ezu-paint = { workspace = true }
-ezu-style = { workspace = true }
-hokusai = { workspace = true, features = ["myb-json"] }
-serde_json = { workspace = true }
 wasm-bindgen = "0.2"
 js-sys = "0.3"
 console_error_panic_hook = { version = "0.1", optional = true }
@@ -45,8 +41,7 @@ panic-hook = ["dep:console_error_panic_hook"]
 # renderer uses the parallel evaluator once the pool is initialized.
 threads = [
     "dep:wasm-bindgen-rayon",
-    "ezu-graph/parallel",
-    "ezu-paint/parallel",
+    "ezu-renderer/parallel",
 ]
 
 [package.metadata.wasm-pack.profile.release]

@@ -74,8 +74,8 @@ jobs:
       # with a notice, so the workflow only attempts the *missing* crates.
       # `cargo publish --workspace` would fail hard on the first already-
       # uploaded crate, which is why we drive the loop manually.
-      # ezu-wasm is `publish = false` (shipped to npm instead) and is
-      # intentionally not listed.
+      # ezu-renderer and ezu-wasm are `publish = false` (the pair ships to
+      # npm instead) and are intentionally not listed.
       - name: Publish workspace
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
