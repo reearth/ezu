@@ -34,6 +34,7 @@
     },
     "landuse_f": {
       "op": "features",
+      "source": "basemap",
       "layer": "landuse"
     },
     "out": {

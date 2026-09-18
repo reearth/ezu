@@ -47,10 +47,12 @@
     },
     "roads_f": {
       "op": "features",
+      "source": "basemap",
       "layer": "roads"
     },
     "water_f": {
       "op": "features",
+      "source": "basemap",
       "layer": "water"
     },
     "coast_f": {

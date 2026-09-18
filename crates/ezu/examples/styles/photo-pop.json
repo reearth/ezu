@@ -15,7 +15,7 @@
                "attribution": "© 国土地理院" }
   },
   "nodes": {
-    "photo": { "op": "raster" },
+    "photo": { "op": "raster", "source": "photo" },
     "pop":   { "op": "hsl", "input": "@photo",
                "saturation": "$saturation", "lightness": "$lightness" },
     "out":   { "op": "posterize", "input": "@pop", "steps": 12 }

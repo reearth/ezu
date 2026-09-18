@@ -92,7 +92,7 @@
                          "high-color": "#6a5234",
                          "opacity": 0.18, "anchor": "world" },
 
-    "earth_feat":      { "op": "features", "layer": "earth" },
+    "earth_feat":      { "op": "features", "source": "basemap", "layer": "earth" },
     "earth_fill_raw":  { "op": "fill-solid", "features": "@earth_feat",
                          "fill": "#efe8d6", "fill-alpha": 1.0 },
     "earth_fill":      { "op": "warp", "input": "@earth_fill_raw",
@@ -103,17 +103,17 @@
     "pencil_hard_b":   { "op": "brush-file", "src": "@pencil_hard" },
     "pencil_soft_b":   { "op": "brush-file", "src": "@pencil_soft" },
 
-    "ocean_feat":      { "op": "features", "layer": "water",
+    "ocean_feat":      { "op": "features", "source": "basemap", "layer": "water",
                          "filter-expr": ["==", ["get","kind"], "ocean"] },
     "ocean_hatch":     { "op": "func", "fn": "water-hatch",
                          "features": "@ocean_feat", "brush": "@pencil_soft_b" },
 
-    "inland_feat":     { "op": "features", "layer": "water",
+    "inland_feat":     { "op": "features", "source": "basemap", "layer": "water",
                          "filter-expr": ["all", ["==",["get","kind"],"water"], ["in",["get","kind_detail"],["literal",["lake","basin"]]]] },
     "inland_hatch":    { "op": "func", "fn": "water-hatch",
                          "features": "@inland_feat", "brush": "@pencil_soft_b" },
 
-    "river_feat":      { "op": "features", "layer": "water",
+    "river_feat":      { "op": "features", "source": "basemap", "layer": "water",
                          "min-zoom-field": "min_zoom",
                          "filter-expr": ["in", ["get","kind"], ["literal", ["river", "canal", "stream"]]] },
     "river_strokes":   { "op": "func", "fn": "sketchy-line",
@@ -135,7 +135,7 @@
                          "radius-curve":  [[0.0, -1.4], [0.1, 0.0], [0.9, 0.0], [1.0, -1.6]],
                          "opacity-curve": [[0.0, -0.3], [0.08, 0.0], [0.92, 0.0], [1.0, -0.4]] },
 
-    "roads_minor_f":   { "op": "features", "layer": "roads",
+    "roads_minor_f":   { "op": "features", "source": "basemap", "layer": "roads",
                          "min-zoom-field": "min_zoom", "min-zoom": 12,
                          "filter-expr": ["==", ["get","kind"], "minor_road"] },
     "roads_minor":     { "op": "func", "fn": "sketchy-line",
@@ -147,7 +147,7 @@
                          "radius-curve":  [[0.0, -1.2], [0.12, 0.0], [0.88, 0.0], [1.0, -1.4]],
                          "opacity-curve": [[0.0, -0.3], [0.1, 0.0], [0.9, 0.0], [1.0, -0.4]] },
 
-    "roads_med_f":     { "op": "features", "layer": "roads",
+    "roads_med_f":     { "op": "features", "source": "basemap", "layer": "roads",
                          "min-zoom-field": "min_zoom",
                          "filter-expr": ["==", ["get","kind"], "medium_road"] },
     "roads_med":       { "op": "func", "fn": "sketchy-line",
@@ -159,7 +159,7 @@
                          "radius-curve":  [[0.0, -1.4], [0.1, 0.0], [0.9, 0.0], [1.0, -1.6]],
                          "opacity-curve": [[0.0, -0.3], [0.08, 0.0], [0.92, 0.0], [1.0, -0.4]] },
 
-    "roads_major_f":   { "op": "features", "layer": "roads",
+    "roads_major_f":   { "op": "features", "source": "basemap", "layer": "roads",
                          "min-zoom-field": "min_zoom",
                          "filter-expr": ["all", ["==",["get","kind"],"major_road"], ["in",["get","kind_detail"],["literal",["trunk","primary"]]]] },
     "roads_major_r":   { "op": "expr", "expr": ["step", ["zoom"], 1.2, 12, 2.0] },
@@ -173,7 +173,7 @@
                          "opacity-curve": [[0.0, -0.35], [0.06, 0.0], [0.94, 0.0], [1.0, -0.45]],
                          "dtime-curve":   [[0.0, 2.5], [0.1, 1.0], [0.9, 1.0], [1.0, 3.0]] },
 
-    "roads_path_f":    { "op": "features", "layer": "roads",
+    "roads_path_f":    { "op": "features", "source": "basemap", "layer": "roads",
                          "min-zoom-field": "min_zoom", "min-zoom": 14,
                          "filter-expr": ["all", ["==",["get","kind"],"path"], ["!", ["in",["get","kind_detail"],["literal",["steps"]]]]] },
     "roads_path":      { "op": "func", "fn": "sketchy-line",
@@ -185,7 +185,7 @@
                          "radius-curve":  [[0.0, -1.2], [0.12, 0.0], [0.88, 0.0], [1.0, -1.4]],
                          "opacity-curve": [[0.0, -0.3], [0.1, 0.0], [0.9, 0.0], [1.0, -0.4]] },
 
-    "roads_sec_f":     { "op": "features", "layer": "roads",
+    "roads_sec_f":     { "op": "features", "source": "basemap", "layer": "roads",
                          "min-zoom-field": "min_zoom", "min-zoom": 12,
                          "filter-expr": ["all", ["==",["get","kind"],"major_road"], ["in",["get","kind_detail"],["literal",["secondary","tertiary","primary_link"]]]] },
     "roads_sec":       { "op": "func", "fn": "sketchy-line",
@@ -197,7 +197,7 @@
                          "radius-curve":  [[0.0, -1.4], [0.1, 0.0], [0.9, 0.0], [1.0, -1.6]],
                          "opacity-curve": [[0.0, -0.3], [0.08, 0.0], [0.92, 0.0], [1.0, -0.4]] },
 
-    "roads_hwy_f":     { "op": "features", "layer": "roads",
+    "roads_hwy_f":     { "op": "features", "source": "basemap", "layer": "roads",
                          "min-zoom-field": "min_zoom",
                          "filter-expr": ["==", ["get","kind"], "highway"] },
     "roads_hwy_r":     { "op": "expr", "expr": ["step", ["zoom"], 1.6, 12, 2.7] },

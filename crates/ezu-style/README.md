@@ -14,11 +14,12 @@ evaluator. To execute a document, feed it to
   "name": "watercolor",
   "pad": 24,
   "sources": {
-    "glazing": { "type": "brush", "src": "file:brushes/watercolor_glazing.myb" }
+    "glazing": { "type": "brush", "src": "file:brushes/watercolor_glazing.myb" },
+    "basemap": { "type": "mvt", "url": "https://papers.reearth.land/protomaps/tilejson.json" }
   },
   "nodes": {
     "bg":            { "op": "solid", "color": "#fbf6e6" },
-    "water_feat":    { "op": "features", "layer": "water" },
+    "water_feat":    { "op": "features", "source": "basemap", "layer": "water" },
     "water":         { "op": "fill-dabs", "features": "@water_feat",
                        "color": "#5876a0", "opacity": 0.22,
                        "radius-px": 7, "spacing-px": 3 },

@@ -13,7 +13,7 @@ with pressure and speed varying over the stroke.
 "glazing":       { "type": "brush", "src": "file:brushes/watercolor_glazing.myb" },
 
 "glazing_brush": { "op": "brush-file", "src": "@glazing" },
-"roads_trunk_f": { "op": "features", "layer": "roads",
+"roads_trunk_f": { "op": "features", "source": "basemap", "layer": "roads",
                    "min-zoom-field": "min_zoom",
                    "filter-expr": ["in", ["get", "kind_detail"],
                                    ["literal", ["trunk", "primary", "motorway"]]] },

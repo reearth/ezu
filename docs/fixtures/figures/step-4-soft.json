@@ -15,6 +15,7 @@
     },
     "water_f": {
       "op": "features",
+      "source": "basemap",
       "layer": "water"
     },
     "water": {

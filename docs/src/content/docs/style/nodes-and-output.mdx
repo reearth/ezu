@@ -51,7 +51,7 @@ is evaluated once because the cache is content-addressed.
 filter and zoom gates live, and is shared by every consumer of that layer:
 
 ```json
-"roads_f": { "op": "features", "layer": "roads",
+"roads_f": { "op": "features", "source": "basemap", "layer": "roads",
              "filter-expr": ["==", ["get", "kind"], "highway"],
              "min-zoom": 8 },
 "roads":   { "op": "stroke", "features": "@roads_f", "color": "#333", "width-px": 1.5 }

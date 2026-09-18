@@ -15,12 +15,12 @@
   "nodes": {
     "night":      { "op": "solid", "color": "#101a24" },
 
-    "earth_f":    { "op": "features", "layer": "earth" },
+    "earth_f":    { "op": "features", "source": "basemap", "layer": "earth" },
     "land":       { "op": "fill-solid", "features": "@earth_f", "fill": "#16222e" },
-    "water_f":    { "op": "features", "layer": "water" },
+    "water_f":    { "op": "features", "source": "basemap", "layer": "water" },
     "water":      { "op": "fill-solid", "features": "@water_f", "fill": "#0c141c" },
 
-    "roads_f":    { "op": "features", "layer": "roads",
+    "roads_f":    { "op": "features", "source": "basemap", "layer": "roads",
                     "min-zoom-field": "min_zoom",
                     "filter-expr": ["in", ["get","kind"], ["literal", ["highway", "major_road"]]] },
     "roads":      { "op": "stroke", "features": "@roads_f", "color": "#2b3d4e",
@@ -29,7 +29,7 @@
 
     "base":       { "op": "stack", "layers": ["@night", "@land", "@water", "@roads"] },
 
-    "poi_f":      { "op": "features", "layer": "pois", "min-zoom-field": "min_zoom" },
+    "poi_f":      { "op": "features", "source": "basemap", "layer": "pois", "min-zoom-field": "min_zoom" },
     "field":      { "op": "density", "features": "@poi_f",
                     "radius": "$radius-px", "intensity": "$intensity" },
 

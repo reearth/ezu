@@ -19,10 +19,12 @@
     },
     "places_f": {
       "op": "features",
+      "source": "basemap",
       "layer": "places"
     },
     "roads_f": {
       "op": "features",
+      "source": "basemap",
       "layer": "roads"
     },
     "places_l": {

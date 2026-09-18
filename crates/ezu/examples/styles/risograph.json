@@ -43,10 +43,10 @@
     "screen":      { "op": "circles", "features": "@screen_pts",
                      "radius": "$dot-px", "color": "#ffffff" },
 
-    "water_f":     { "op": "features", "layer": "water" },
+    "water_f":     { "op": "features", "source": "basemap", "layer": "water" },
     "water_geo":   { "op": "transform", "features": "@water_f",
                      "translate": [-2, 2] },
-    "green_f":     { "op": "features", "layer": "landuse",
+    "green_f":     { "op": "features", "source": "basemap", "layer": "landuse",
                      "filter-expr": ["in", ["get","kind"], ["literal", ["park", "forest", "wood", "garden", "grass", "cemetery", "scrub"]]] },
     "green_geo":   { "op": "transform", "features": "@green_f",
                      "translate": [-2, 2] },
@@ -57,7 +57,7 @@
     "blue_drum":   { "op": "func", "fn": "screened",
                      "ink": "@blue_flat", "screen": "@screen" },
 
-    "roads_f":     { "op": "features", "layer": "roads",
+    "roads_f":     { "op": "features", "source": "basemap", "layer": "roads",
                      "min-zoom-field": "min_zoom",
                      "filter-expr": ["in", ["get","kind"], ["literal", ["highway", "major_road", "minor_road"]]] },
     "roads_geo":   { "op": "transform", "features": "@roads_f",
@@ -69,13 +69,13 @@
                                      2.0],
                      "cap": "round", "join": "round" },
 
-    "rail_f":      { "op": "features", "layer": "roads",
+    "rail_f":      { "op": "features", "source": "basemap", "layer": "roads",
                      "min-zoom-field": "min_zoom", "min-zoom": 12,
                      "filter-expr": ["==", ["get","kind"], "rail"] },
     "rail":        { "op": "stroke", "features": "@rail_f", "color": "#2f2b26",
                      "width-px": 1.2, "dasharray": [4.0, 4.0], "cap": "butt" },
 
-    "coast_f":     { "op": "features", "layer": "earth" },
+    "coast_f":     { "op": "features", "source": "basemap", "layer": "earth" },
     "coast_line":  { "op": "boundary", "features": "@coast_f" },
     "coast":       { "op": "stroke", "features": "@coast_line", "color": "#2f2b26",
                      "width-px": 1.0, "cap": "round" },

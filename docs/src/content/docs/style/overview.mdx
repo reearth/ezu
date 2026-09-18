@@ -106,7 +106,7 @@ file treated as JSON with comments — in VS Code, that means associating it wit
   },
   "nodes": {
     "bg":      { "op": "solid", "color": "#fbf6e6" },
-    "water_f": { "op": "features", "layer": "water" },
+    "water_f": { "op": "features", "source": "basemap", "layer": "water" },
     "water":   { "op": "fill-solid", "features": "@water_f", "fill": "#5876a0" },
     "out":     { "op": "blend", "base": "@bg", "over": "@water" }
   },

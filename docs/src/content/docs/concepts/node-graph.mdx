@@ -17,7 +17,7 @@ fields, and references to other nodes. There is no ordering in the document: the
 {
   "nodes": {
     "bg":      { "op": "solid", "color": "#fbf6e6" },
-    "water_f": { "op": "features", "layer": "water" },
+    "water_f": { "op": "features", "source": "basemap", "layer": "water" },
     "water":   { "op": "fill-dabs", "features": "@water_f", "color": "#5876a0" },
     "soft":    { "op": "blur", "input": "@water", "sigma": 3 },
     "out":     { "op": "blend", "base": "@bg", "over": "@soft" }

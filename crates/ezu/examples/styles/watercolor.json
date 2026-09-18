@@ -36,7 +36,7 @@
   "nodes": {
     "bg":              { "op": "solid", "color": "$paper" },
 
-    "earth_feat":      { "op": "features", "layer": "earth" },
+    "earth_feat":      { "op": "features", "source": "basemap", "layer": "earth" },
     "earth":           { "op": "fill-solid", "features": "@earth_feat",
                          "fill": "$earth" },
 
@@ -44,11 +44,11 @@
     "zfrac":           { "op": "math", "fn": "div", "a": "@z", "b": 16 },
     "lu_alpha":        { "op": "math", "fn": "mul", "a": "$landuse-alpha", "b": "@zfrac" },
 
-    "landuse_feat":    { "op": "features", "layer": "landuse" },
+    "landuse_feat":    { "op": "features", "source": "basemap", "layer": "landuse" },
     "landuse":         { "op": "fill-solid", "features": "@landuse_feat",
                          "fill": "#a6c084", "fill-alpha": "@lu_alpha" },
 
-    "water_feat":      { "op": "features", "layer": "water" },
+    "water_feat":      { "op": "features", "source": "basemap", "layer": "water" },
     "water":           { "op": "fill-dabs", "features": "@water_feat",
                          "color": "$water", "opacity": 0.22,
                          "radius-px": "$water-radius", "hardness": 0.5, "paint": 1.0,
@@ -58,7 +58,7 @@
 
     "glazing_brush":   { "op": "brush-file", "src": "@glazing" },
 
-    "roads_trunk_f":   { "op": "features", "layer": "roads",
+    "roads_trunk_f":   { "op": "features", "source": "basemap", "layer": "roads",
                          "min-zoom-field": "min_zoom",
                          "filter-expr": ["in", ["get","kind_detail"], ["literal", ["trunk", "primary", "motorway"]]] },
     "roads_trunk":     { "op": "line", "features": "@roads_trunk_f",

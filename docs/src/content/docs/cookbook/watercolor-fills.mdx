@@ -10,7 +10,7 @@ instead of filling a polygon with a colour, stamp many soft, semi-transparent da
 inside it and let them overlap.
 
 ```json
-"water_feat": { "op": "features", "layer": "water" },
+"water_feat": { "op": "features", "source": "basemap", "layer": "water" },
 "water": {
   "op": "fill-dabs",
   "features": "@water_feat",

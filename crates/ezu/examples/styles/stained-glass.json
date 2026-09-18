@@ -17,13 +17,13 @@
   "nodes": {
     "backlight":   { "op": "solid", "color": "$lead" },
 
-    "poi_seeds":   { "op": "features", "layer": "pois", "min-zoom-field": "min_zoom" },
+    "poi_seeds":   { "op": "features", "source": "basemap", "layer": "pois", "min-zoom-field": "min_zoom" },
     "grid_seeds":  { "op": "point-grid", "spacing": "$pane-px",
                      "extent": 512, "anchor": "world" },
 
-    "earth_f":     { "op": "features", "layer": "earth" },
-    "water_f":     { "op": "features", "layer": "water" },
-    "green_f":     { "op": "features", "layer": "landuse",
+    "earth_f":     { "op": "features", "source": "basemap", "layer": "earth" },
+    "water_f":     { "op": "features", "source": "basemap", "layer": "water" },
+    "green_f":     { "op": "features", "source": "basemap", "layer": "landuse",
                      "filter-expr": ["in", ["get","kind"], ["literal", ["park", "forest", "wood", "garden", "grass", "cemetery"]]] },
 
     "land_panes":  { "op": "voronoi-fracture", "features": "@earth_f", "seeds": "@poi_seeds" },
@@ -67,7 +67,7 @@
     "lead_green":  { "op": "stroke", "features": "@green_lead", "color": "$lead",
                      "width-px": "$lead-px", "cap": "round", "join": "round" },
 
-    "roads_f":     { "op": "features", "layer": "roads",
+    "roads_f":     { "op": "features", "source": "basemap", "layer": "roads",
                      "min-zoom-field": "min_zoom",
                      "filter-expr": ["in", ["get","kind"], ["literal", ["highway", "major_road"]]] },
     "road_lead":   { "op": "stroke", "features": "@roads_f", "color": "$lead",

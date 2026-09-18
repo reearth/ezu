@@ -32,7 +32,7 @@ functions, and legacy filter conversion. Same expression, same result.
 
 ```json
 "water_f": {
-  "op": "features", "layer": "water",
+  "op": "features", "source": "basemap", "layer": "water",
   "filter-expr": ["all", ["==", ["get", "kind"], "water"], ["has", "name"]]
 }
 ```

@@ -64,7 +64,7 @@ what the canvas is sized by. See
 `filter-expr` on a `features` node is the same mechanism used as a predicate:
 
 ```json
-"water_f": { "op": "features", "layer": "water",
+"water_f": { "op": "features", "source": "basemap", "layer": "water",
              "filter-expr": ["all", ["==", ["get", "kind"], "water"], ["has", "name"]] }
 ```
 

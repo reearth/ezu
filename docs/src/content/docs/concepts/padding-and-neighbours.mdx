@@ -35,7 +35,7 @@ knowable before anything renders:
 {
   "name": "soft",
   "nodes": {
-    "f":    { "op": "features", "layer": "earth" },
+    "f":    { "op": "features", "source": "basemap", "layer": "earth" },
     "fill": { "op": "fill-solid", "features": "@f", "fill": "#c2410c" },
     "out":  { "op": "blur", "input": "@fill", "sigma": 12 }
   },
