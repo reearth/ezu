@@ -7,8 +7,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/tetratelabs/wazero"
 )
 
 // The concurrency rule is a property of the package's shape, not only of
@@ -162,11 +160,7 @@ func TestPoolNeedsAtLeastOne(t *testing.T) {
 // does, and a cache is how a process stops paying for it on every start.
 func TestCompilationCacheIsReused(t *testing.T) {
 	ctx := context.Background()
-	cache, err := wazero.NewCompilationCacheWithDir(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cache.Close(ctx)
+	cacheDir := t.TempDir()
 
 	style := readFile(t, stainedGlassStyle)
 	tile := readFile(t, "testdata/basemap-14-14554-6454.mvt")
@@ -174,7 +168,7 @@ func TestCompilationCacheIsReused(t *testing.T) {
 	var elapsed [2]time.Duration
 	for i := range elapsed {
 		start := time.Now()
-		rt, err := NewRuntime(ctx, WithCompilationCache(cache))
+		rt, err := NewRuntime(ctx, WithCompilationCacheDir(cacheDir))
 		if err != nil {
 			t.Fatal(err)
 		}

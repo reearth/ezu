@@ -28,20 +28,20 @@ func TestAnUnwritableCacheDirDoesNotStopStartup(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 
+	// Building a cache over the directory once makes the versioned
+	// subdirectory the entries live in; taking write permission off both is
+	// what leaves a miss with nowhere to go.
 	cache, err := wazero.NewCompilationCacheWithDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cache.Close(ctx)
+	cache.Close(ctx)
 
-	// The construction above made the versioned subdirectory the entries
-	// live in; taking write permission off both is what leaves a miss with
-	// nowhere to go.
 	sub := onlySubdir(t, dir)
 	readOnly(t, sub)
 	readOnly(t, dir)
 
-	rt, err := NewRuntime(ctx, WithCompilationCache(cache))
+	rt, err := NewRuntime(ctx, WithCompilationCacheDir(dir))
 	if err != nil {
 		t.Fatalf("a cache that cannot be written failed the start: %v", err)
 	}
@@ -63,11 +63,7 @@ func TestADamagedCacheEntryDoesNotStopStartup(t *testing.T) {
 	dir := t.TempDir()
 
 	// Fill the cache the ordinary way, so the entry is a real one.
-	warm, err := wazero.NewCompilationCacheWithDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rt, err := NewRuntime(ctx, WithCompilationCache(warm))
+	rt, err := NewRuntime(ctx, WithCompilationCacheDir(dir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +71,6 @@ func TestADamagedCacheEntryDoesNotStopStartup(t *testing.T) {
 		t.Fatalf("a fresh writable cache should just work: %v", rt.CompilationCacheError())
 	}
 	rt.Close(ctx)
-	warm.Close(ctx)
 
 	entry := onlyEntry(t, onlySubdir(t, dir))
 	body, err := os.ReadFile(entry)
@@ -90,13 +85,7 @@ func TestADamagedCacheEntryDoesNotStopStartup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	damaged, err := wazero.NewCompilationCacheWithDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer damaged.Close(ctx)
-
-	again, err := NewRuntime(ctx, WithCompilationCache(damaged))
+	again, err := NewRuntime(ctx, WithCompilationCacheDir(dir))
 	if err != nil {
 		t.Fatalf("a truncated cache entry failed the start: %v", err)
 	}
@@ -125,15 +114,11 @@ func TestAUsableCacheReportsNothing(t *testing.T) {
 		t.Errorf("no cache was asked for, yet one was reported: %v", plain.CompilationCacheError())
 	}
 
-	cache, err := wazero.NewCompilationCacheWithDir(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cache.Close(ctx)
+	dir := t.TempDir()
 
 	// Cold, then warm off the entry the cold one wrote.
 	for _, when := range []string{"cold", "warm"} {
-		rt, err := NewRuntime(ctx, WithCompilationCache(cache))
+		rt, err := NewRuntime(ctx, WithCompilationCacheDir(dir))
 		if err != nil {
 			t.Fatalf("%s: %v", when, err)
 		}
@@ -144,32 +129,28 @@ func TestAUsableCacheReportsNothing(t *testing.T) {
 	}
 }
 
-// wazero's CompilationCache is an interface, but its own documentation
-// calls it "decoupling, not third-party implementations" and it is
-// type-asserted to wazero's concrete type with no comma-ok — so anything
-// else panics inside wazero, before this package sees a failure it could
-// fall back from. [WithCompilationCache] says so, and this is what pins it:
-// the day wazero refuses such a value rather than panicking, that sentence
-// needs rewriting.
-func TestOnlyWazerosOwnCompilationCacheCanBePassed(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Error("a foreign CompilationCache did not panic; WithCompilationCache documents that " +
-				"it does, and that doc comment is now wrong")
-		}
-	}()
+// The third shape: a path that cannot hold a cache at all, so the failure
+// happens before anything is compiled. Same answer as the other two.
+func TestACacheDirThatCannotExistDoesNotStopStartup(t *testing.T) {
 	ctx := context.Background()
-	rt, err := NewRuntime(ctx, WithCompilationCache(foreignCache{}))
-	if err == nil {
-		rt.Close(ctx)
+	notADir := filepath.Join(t.TempDir(), "occupied")
+	if err := os.WriteFile(notADir, []byte("a file where a directory was asked for"), 0o600); err != nil {
+		t.Fatal(err)
 	}
+
+	rt, err := NewRuntime(ctx, WithCompilationCacheDir(notADir))
+	if err != nil {
+		t.Fatalf("a cache directory that cannot exist failed the start: %v", err)
+	}
+	defer rt.Close(ctx)
+
+	if rt.CompilationCacheError() == nil {
+		t.Error("the cache directory could not be made and nothing said so")
+	} else {
+		t.Logf("reported: %v", rt.CompilationCacheError())
+	}
+	mustRender(t, ctx, rt)
 }
-
-// foreignCache satisfies wazero.CompilationCache — which is api.Closer and
-// nothing more — without being wazero's own.
-type foreignCache struct{}
-
-func (foreignCache) Close(context.Context) error { return nil }
 
 // mustRender checks that a runtime built after a cache was thrown away is a
 // working one and not merely a value: the module compiled, the constructors

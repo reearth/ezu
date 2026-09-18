@@ -78,11 +78,13 @@ const hostModule = "ezu_host"
 // cheap. Safe for concurrent use.
 //
 // Compiling is by far the expensive part — several seconds for a module
-// this size — and it is what [WithCompilationCache] lets a process skip on
-// the next start.
+// this size — and it is what [WithCompilationCacheDir] lets a process skip
+// on the next start.
 type Runtime struct {
 	runtime  wazero.Runtime
 	compiled wazero.CompiledModule
+	// The cache this runtime made for itself, closed with it.
+	cache wazero.CompilationCache
 	// Why a compilation cache was abandoned, if one was. See
 	// [Runtime.CompilationCacheError].
 	cacheErr error
@@ -98,7 +100,7 @@ type Option func(*config)
 
 type config struct {
 	moduleBytes      []byte
-	cache            wazero.CompilationCache
+	cacheDir         string
 	memoryLimitPages uint32
 }
 
@@ -109,32 +111,37 @@ func WithModule(wasm []byte) Option {
 	return func(c *config) { c.moduleBytes = wasm }
 }
 
-// WithCompilationCache reuses wazero's compiled form across processes, so
-// only the first start pays to compile the module.
+// WithCompilationCacheDir reuses wazero's compiled form across processes,
+// keeping it in the directory named, so that only the first start pays to
+// compile the module.
 //
-//	cache, err := wazero.NewCompilationCacheWithDir("/var/cache/ezu")
-//	rt, err := ezu.NewRuntime(ctx, ezu.WithCompilationCache(cache))
+//	rt, err := ezu.NewRuntime(ctx, ezu.WithCompilationCacheDir("/var/cache/ezu"))
 //
-// The cache is keyed by the module's bytes and by wazero's own version, so
-// a rebuilt module or an upgraded wazero recompiles rather than serving
-// something stale. Close the cache when the last runtime using it is done.
+// The directory is created if it is not there. The runtime owns the cache
+// it builds and closes it with itself, so there is nothing else to keep
+// hold of; two runtimes may name the same directory.
 //
-// The parameter is an interface, but the only value you may pass is the one
-// [wazero.NewCompilationCacheWithDir] returns. wazero's own documentation
-// calls the interface "decoupling, not third-party implementations", and it
-// type-asserts the value to its own concrete type without checking, so an
-// implementation of your own panics inside wazero rather than being
-// refused.
+// The cache is keyed by the module's bytes and by wazero's own version,
+// architecture and OS, so a rebuilt module or an upgraded wazero recompiles
+// rather than serving something stale.
 //
-// A cache is an optimisation and is treated as one: if the module cannot be
-// compiled with it — a miss against a read-only directory, a truncated or
-// corrupted entry — the runtime is built again without it, and the start
-// costs a full compile instead of failing. [Runtime.CompilationCacheError]
-// says when that happened, and is worth logging: a service quietly paying
-// over a second per start for a cache it believes is working has a bug it
-// cannot see.
-func WithCompilationCache(cache wazero.CompilationCache) Option {
-	return func(c *config) { c.cache = cache }
+// A path rather than a [wazero.CompilationCache] on purpose. wazero's
+// interface is, in its own documentation, "decoupling, not third-party
+// implementations": it type-asserts the value to its own concrete type with
+// no comma-ok, so anything but the return of
+// [wazero.NewCompilationCacheWithDir] panics inside wazero rather than
+// being refused. A directory is the only thing that was ever accepted, so
+// it is the only thing this package asks for.
+//
+// A cache is an optimisation and is treated as one: if it cannot be built,
+// or the module cannot be compiled with it — a miss against a read-only
+// directory, a truncated or corrupted entry — the runtime is built again
+// without it, and the start costs a full compile instead of failing.
+// [Runtime.CompilationCacheError] says when that happened, and is worth
+// logging: a service quietly paying over a second per start for a cache it
+// believes is working has a bug it cannot see.
+func WithCompilationCacheDir(path string) Option {
+	return func(c *config) { c.cacheDir = path }
 }
 
 // WithMemoryLimit caps the linear memory any one renderer from this runtime
@@ -156,8 +163,8 @@ func WithCompilationCache(cache wazero.CompilationCache) Option {
 //
 // The cap is per renderer but set on the runtime, so every renderer from
 // one runtime gets the same one. Two caps means two runtimes; a runtime is
-// only expensive because of the compile, and [WithCompilationCache] makes
-// the second one cheap.
+// only expensive because of the compile, and [WithCompilationCacheDir]
+// makes the second one cheap.
 func WithMemoryLimit(bytes uint64) Option {
 	return func(c *config) {
 		pages := (bytes + 65535) / 65536
@@ -171,16 +178,37 @@ func WithMemoryLimit(bytes uint64) Option {
 // NewRuntime compiles the module. Close it when the last renderer is done.
 //
 // A compilation cache that cannot be used does not stop a runtime being
-// built: see [WithCompilationCache] and [Runtime.CompilationCacheError].
+// built: see [WithCompilationCacheDir] and [Runtime.CompilationCacheError].
 func NewRuntime(ctx context.Context, opts ...Option) (*Runtime, error) {
 	cfg := config{moduleBytes: wasmModule}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
 
-	rt, err := newRuntime(ctx, cfg, cfg.cache)
-	if err == nil || cfg.cache == nil {
-		return rt, err
+	var cache wazero.CompilationCache
+	if cfg.cacheDir != "" {
+		built, err := wazero.NewCompilationCacheWithDir(cfg.cacheDir)
+		if err != nil {
+			// The directory is unusable before anything was compiled with
+			// it — it is a file, or a path nothing may create. Same bargain
+			// as below: a slow start beats no start.
+			plain, plainErr := newRuntime(ctx, cfg, nil)
+			if plainErr != nil {
+				return nil, plainErr
+			}
+			plain.cacheErr = err
+			return plain, nil
+		}
+		cache = built
+	}
+
+	rt, err := newRuntime(ctx, cfg, cache)
+	if err == nil {
+		rt.cache = cache
+		return rt, nil
+	}
+	if cache == nil {
+		return nil, err
 	}
 
 	// Every way a cache path fails arrives here as an error out of
@@ -192,6 +220,7 @@ func NewRuntime(ctx context.Context, opts ...Option) (*Runtime, error) {
 	// sake of something that only ever saves time. So drop the cache and
 	// compile: the worst case is a slow start rather than no start.
 	plain, plainErr := newRuntime(ctx, cfg, nil)
+	_ = cache.Close(ctx)
 	if plainErr != nil {
 		// The module itself will not compile; the cache was a red herring.
 		return nil, plainErr
@@ -200,16 +229,16 @@ func NewRuntime(ctx context.Context, opts ...Option) (*Runtime, error) {
 	return plain, nil
 }
 
-// CompilationCacheError reports why the compilation cache given to
-// [WithCompilationCache] was abandoned, or nil when there was none to
-// abandon — either because no cache was passed or because it worked.
+// CompilationCacheError reports why the compilation cache asked for by
+// [WithCompilationCacheDir] was abandoned, or nil when there was none to
+// abandon — either because none was asked for or because it worked.
 //
 // It is not a failure: the runtime it is read from is fully built, having
 // compiled the module the slow way. It is the thing to log, because the
 // only other symptom is a start that takes about a second longer than
 // whoever configured the cache expects, every time.
 //
-//	rt, err := ezu.NewRuntime(ctx, ezu.WithCompilationCache(cache))
+//	rt, err := ezu.NewRuntime(ctx, ezu.WithCompilationCacheDir("/var/cache/ezu"))
 //	if err != nil {
 //		return err
 //	}
@@ -247,8 +276,17 @@ func newRuntime(ctx context.Context, cfg config, cache wazero.CompilationCache) 
 	return rt, nil
 }
 
-// Close releases the runtime and every renderer instantiated from it.
-func (r *Runtime) Close(ctx context.Context) error { return r.runtime.Close(ctx) }
+// Close releases the runtime, every renderer instantiated from it, and the
+// compilation cache it built for itself.
+func (r *Runtime) Close(ctx context.Context) error {
+	err := r.runtime.Close(ctx)
+	if r.cache != nil {
+		if cacheErr := r.cache.Close(ctx); err == nil {
+			err = cacheErr
+		}
+	}
+	return err
+}
 
 // instantiateHost exports the one function the module imports:
 // ezu_host.oom, which its global allocator calls when the heap cannot grow.
