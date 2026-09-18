@@ -19,9 +19,9 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 ezu-renderer = { workspace = true }
-# For `PngCompression`, which `renderTile`'s options name. `ezu-renderer`
-# names the type in its own public API without re-exporting it, so every
-# shell reaches past it to the same place `ezu-wasm` does.
+# For the node registry `ezu_op_count` and `ezu_op_names` report on, which
+# is a diagnostic about the linked module rather than anything the renderer
+# exposes.
 ezu-paint = { workspace = true }
 serde_json = { workspace = true }
 tracing = "0.1"

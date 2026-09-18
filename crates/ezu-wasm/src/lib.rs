@@ -75,8 +75,7 @@ mod log;
 
 pub use log::LogSink;
 
-use ezu_paint::host::PngCompression;
-use ezu_renderer::{BindOptions, Error, ErrorKind, OutputFormat, RenderOptions};
+use ezu_renderer::{BindOptions, Error, ErrorKind, OutputFormat, PngCompression, RenderOptions};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
@@ -300,9 +299,64 @@ impl Renderer {
     /// before the next tile that needs it. `neededCodepoints()` already
     /// names exactly what to bind, and a host that re-binds every tile
     /// (rather than tracking what it sent) needs no other change.
+    ///
+    /// A budget of `0xFFFFFFFF` — the largest value this host can express,
+    /// since an address here is 32 bits — lifts the cap again, and is what
+    /// `memoryUsage().glyphBudget` reports as `Infinity`. A number that
+    /// big cannot be a real ceiling: it is every byte the module could
+    /// ever address.
     #[wasm_bindgen(js_name = setGlyphBudget)]
     pub fn set_glyph_budget(&mut self, bytes: usize) {
-        self.inner.set_glyph_budget(bytes);
+        self.inner
+            .set_glyph_budget((bytes != usize::MAX).then_some(bytes));
+    }
+
+    /// Every source the style declares, in declaration order, as an array
+    /// of `{ name, type, tileScoped, url?, indexUrl? }`.
+    ///
+    /// This is what a host walks before it fetches anything: `type` is the
+    /// style's own word for the kind (`"mvt"`, `"dem"`, `"glyphs"`, …) and
+    /// says what `bindSource` will do with the bytes, and `url` is where
+    /// they come from — an XYZ template for a tile pyramid, a document
+    /// URL, or, for `glyphs`, the endpoint with `{fontstack}` already
+    /// substituted and `{range}` left to fill in per block. `boundSources`
+    /// answers the opposite question, what is already bound, and cannot
+    /// start the loop.
+    ///
+    /// `tileScoped` says whether a binding of that kind is dropped by
+    /// `clearSources` and has to be rebound for the next tile; the rest go
+    /// into the persistent banks and are bound once.
+    ///
+    /// `url` is absent only for a `geojson` source with inline `data`: the
+    /// style carries the payload, so there is nothing to fetch and nothing
+    /// to bind. `indexUrl` appears on a `sprite` source whose index is a
+    /// URL rather than inline — fetch it and pass the text as
+    /// `bindSource(name, atlasBytes, { index })`.
+    #[wasm_bindgen(js_name = sources)]
+    pub fn sources(&self) -> Result<js_sys::Array, JsValue> {
+        let out = js_sys::Array::new();
+        for source in self.inner.sources() {
+            let entry = js_sys::Object::new();
+            js_sys::Reflect::set(&entry, &"name".into(), &JsValue::from_str(source.name))?;
+            js_sys::Reflect::set(
+                &entry,
+                &"type".into(),
+                &JsValue::from_str(source.kind.name()),
+            )?;
+            js_sys::Reflect::set(
+                &entry,
+                &"tileScoped".into(),
+                &JsValue::from_bool(source.kind.is_tile_scoped()),
+            )?;
+            if let Some(url) = &source.url {
+                js_sys::Reflect::set(&entry, &"url".into(), &JsValue::from_str(url))?;
+            }
+            if let Some(index_url) = source.index_url {
+                js_sys::Reflect::set(&entry, &"indexUrl".into(), &JsValue::from_str(index_url))?;
+            }
+            out.push(&entry);
+        }
+        Ok(out)
     }
 
     /// Names of every source with at least one pending binding.

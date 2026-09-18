@@ -55,7 +55,7 @@ use ezu_renderer::{Error, ErrorKind, Renderer};
 /// code's meaning, or an export appearing or leaving. The Go package
 /// checks it at instantiation, which is what catches a committed module
 /// that was not rebuilt.
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 2;
 
 /// Every function this shell exports, in one list, so a test can compare
 /// it with what the committed module actually carries. The linker's own
@@ -82,6 +82,7 @@ pub const EXPORTS: &[&str] = &[
     "ezu_legend",
     "ezu_bind_source",
     "ezu_clear_sources",
+    "ezu_sources",
     "ezu_bound_sources",
     "ezu_set_glyph_budget",
     "ezu_source_tile",
@@ -467,6 +468,46 @@ pub extern "C" fn ezu_legend(handle: u32, zoom: u32, out_ptr: u32, out_len: u32)
     })
 }
 
+/// Every source the style declares, in declaration order, as a JSON array
+/// of `{"name": …, "type": …, "tileScoped": …, "url": …, "indexUrl": …}`.
+///
+/// This is what a host walks before it fetches anything: `type` is the
+/// style's own word for the kind (`"mvt"`, `"dem"`, `"glyphs"`, …) and says
+/// what [`ezu_bind_source`] will do with the bytes, `url` is where they come
+/// from — an XYZ template for a tile pyramid, a document URL, or, for
+/// `glyphs`, the endpoint with `{fontstack}` already substituted and
+/// `{range}` left to fill in per block. [`ezu_bound_sources`] answers the
+/// opposite question, what is already bound, and cannot start the loop.
+///
+/// `tileScoped` says whether a binding of that kind is dropped by
+/// [`ezu_clear_sources`] and has to be rebound for the next tile; the rest
+/// go into the persistent banks and are bound once.
+///
+/// `url` is `null` only for a `geojson` source with inline `data`: the style
+/// carries the payload, so there is nothing to fetch and nothing to bind.
+/// `indexUrl` is non-null on a `sprite` source whose index is a URL rather
+/// than inline — fetch it and pass the text as the bind options' `index`.
+#[unsafe(no_mangle)]
+pub extern "C" fn ezu_sources(handle: u32, out_ptr: u32, out_len: u32) -> i64 {
+    with_renderer(handle, |r| {
+        let declared: Vec<serde_json::Value> = r
+            .sources()
+            .into_iter()
+            .map(|s| {
+                serde_json::json!({
+                    "name": s.name,
+                    "type": s.kind.name(),
+                    "tileScoped": s.kind.is_tile_scoped(),
+                    "url": s.url,
+                    "indexUrl": s.index_url,
+                })
+            })
+            .collect();
+        let json = serde_json::to_string(&declared).unwrap_or_else(|_| "[]".into());
+        unsafe { reply_json(out_ptr, out_len, json) }
+    })
+}
+
 /// Names of every source with at least one pending binding, as a JSON
 /// array. Order matches the style's `sources` declaration order.
 #[unsafe(no_mangle)]
@@ -690,10 +731,17 @@ pub extern "C" fn ezu_clear_sources(handle: u32) -> i64 {
 /// italic stack can hold three times what is set here. This host cannot
 /// refetch, so anything trimmed must be bound again before the next tile
 /// that needs it — [`ezu_needed_codepoints`] names exactly what.
+///
+/// `set` is how this host spells "unset": zero lifts the cap and ignores
+/// `bytes`, which is where a fresh renderer starts and what
+/// [`ezu_memory_usage`] reports back as a `null` `glyphBudget`. Anything
+/// else applies `bytes`, saturated at the largest address this module has —
+/// a budget past that is not a ceiling anything could reach.
 #[unsafe(no_mangle)]
-pub extern "C" fn ezu_set_glyph_budget(handle: u32, bytes: u64) -> i64 {
+pub extern "C" fn ezu_set_glyph_budget(handle: u32, bytes: u64, set: u32) -> i64 {
+    let budget = (set != 0).then(|| bytes.min(usize::MAX as u64) as usize);
     with_renderer_mut(handle, |r| {
-        r.set_glyph_budget(bytes.min(usize::MAX as u64) as usize);
+        r.set_glyph_budget(budget);
         0
     })
 }

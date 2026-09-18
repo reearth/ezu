@@ -52,8 +52,7 @@ fn every_error_kind_has_its_own_code() {
 
 mod options {
     use crate::options::{parse_bind, parse_render};
-    use ezu_paint::host::PngCompression;
-    use ezu_renderer::OutputFormat;
+    use ezu_renderer::{OutputFormat, PngCompression};
 
     #[test]
     fn an_empty_payload_is_the_default() {

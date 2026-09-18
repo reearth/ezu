@@ -9,8 +9,7 @@
 //! host. Values that are present but wrong are refused: silently answering
 //! PNG to `"format": "jpeg"` hands back bytes the caller was not expecting.
 
-use ezu_paint::host::PngCompression;
-use ezu_renderer::{BindOptions, Error, ErrorKind, OutputFormat, RenderOptions};
+use ezu_renderer::{BindOptions, Error, ErrorKind, OutputFormat, PngCompression, RenderOptions};
 use serde_json::Value;
 
 fn err(kind: ErrorKind, message: impl std::fmt::Display) -> Error {

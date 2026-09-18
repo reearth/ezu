@@ -137,6 +137,13 @@
     log(`  ${name}: ${label}${mod.simdEnabled() ? " +simd128" : ""}`);
   }
 
+  // The name the fetched tile bytes bind under: the style's first `mvt` or
+  // `pmtiles` source, whatever it is called.
+  function vectorSource() {
+    const s = renderer.sources().find(s => s.type === "mvt" || s.type === "pmtiles");
+    return s ? s.name : "basemap";
+  }
+
   function drawRgba(buf) {
     const w = renderer.tileSize, h = renderer.tileSize;
     const cv = $("cv");
@@ -174,11 +181,11 @@
 
     const format = $("format").value;
     const t1 = performance.now();
-    // Bind into the first MVT source the style declared, render, clear.
-    // (Demo styles all use a `basemap` source; for real apps, list the
-    // names with `renderer.boundSources()` after binding.)
+    // Bind into the first vector source the style declared, render, clear.
+    // `renderer.sources()` is what names it, so the page never reads the
+    // style itself.
     renderer.clearSources();
-    if (bytes) renderer.bindSource("basemap", bytes);
+    if (bytes) renderer.bindSource(vectorSource(), bytes);
     const out = renderer.renderTile(z, x, y, { format, parallel });
     const tRender = performance.now() - t1;
     $("render-ms").textContent = tRender.toFixed(1);
@@ -199,7 +206,7 @@
     const fmt = $("format").value;
     const call = (b) => {
       renderer.clearSources();
-      if (b) renderer.bindSource("basemap", b);
+      if (b) renderer.bindSource(vectorSource(), b);
       return renderer.renderTile(z, x, y, { format: fmt, parallel });
     };
 

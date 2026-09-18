@@ -122,6 +122,24 @@ class Renderer {
   clearSources(): void;
   boundSources(): string[];     // names with at least one pending tile-scoped binding
 
+  // Every source the style declares, in declaration order — what to
+  // fetch, what kind it is, and whether the binding has to be repeated
+  // per tile. Walk this rather than parsing the style yourself; `url` is
+  // absent only for inline `geojson`, which needs no binding at all, and
+  // a `glyphs` url comes back with `{fontstack}` already substituted.
+  sources(): Array<{
+    name: string;
+    type: "mvt" | "pmtiles" | "dem" | "raster" | "geojson"
+        | "sprite" | "font" | "glyphs" | "brush" | "image";
+    tileScoped: boolean;
+    url?: string;
+    indexUrl?: string;          // a sprite index that is a URL, not inline
+  }>;
+
+  // Cap the resident glyph bytes per fontstack. 0xFFFFFFFF lifts the cap
+  // (and reads back as `Infinity` from `memoryUsage().glyphBudget`).
+  setGlyphBudget(bytes: number): void;
+
   // Single unified render. `opts.format` picks the encoder; `tileSize`
   // / `pad` override the canvas for hi-DPI / preview.
   renderTile(z: number, x: number, y: number, opts?: {

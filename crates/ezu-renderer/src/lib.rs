@@ -9,7 +9,9 @@
 //! [`Renderer`] holds a parsed style document, its built graph, an
 //! in-memory asset bank, and a per-tile binding buffer that mirrors the
 //! style's `sources` block. The flow mirrors the CLI's: bind every
-//! source the style declares, render, clear.
+//! source the style declares, render, clear. [`Renderer::sources`] says
+//! what those are and where to fetch them, so a host drives the loop
+//! without reading the style itself.
 //!
 //! ```no_run
 //! # use ezu_renderer::{BindOptions, RenderOptions, Renderer};
@@ -52,9 +54,16 @@
 
 mod error;
 mod options;
+mod sources;
 
 pub use error::{Error, ErrorKind};
 pub use options::{BindOptions, OutputFormat, RenderOptions};
+pub use sources::{SourceInfo, SourceKind};
+
+/// Effort the PNG encoder spends, named by
+/// [`RenderOptions::png_compression`]. Re-exported so a shell needs this
+/// crate and nothing under it.
+pub use ezu_paint::host::PngCompression;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
@@ -151,8 +160,8 @@ pub struct Renderer {
     /// the style. Cleared by [`Renderer::clear_sources`].
     bindings: HashMap<String, SourceBinding>,
     /// Ceiling on resident glyph bytes per fontstack, applied after each
-    /// render. `usize::MAX` (the default) keeps every bound range.
-    glyph_budget: usize,
+    /// render. `None` (the default) keeps every bound range.
+    glyph_budget: Option<usize>,
 }
 
 impl Renderer {
@@ -165,7 +174,7 @@ impl Renderer {
             cache: Arc::new(Cache::new()),
             assets: BrushBankLoader::new(),
             bindings: HashMap::new(),
-            glyph_budget: usize::MAX,
+            glyph_budget: None,
         })
     }
 
@@ -230,6 +239,29 @@ impl Renderer {
         self.bindings.clear();
     }
 
+    /// Every source the style declares, in declaration order: its name,
+    /// what kind it is, and where its bytes come from.
+    ///
+    /// This is what a host walks before it fetches anything.
+    /// [`bound_sources`](Self::bound_sources) answers the opposite
+    /// question — what is already bound — and cannot start the loop. The
+    /// alternative to this call is for each host to parse the style a
+    /// second time and re-derive the dispatch
+    /// [`bind_source`](Self::bind_source) already performs, which is the
+    /// style interpretation the renderer exists to keep in one place.
+    ///
+    /// [`SourceKind::is_tile_scoped`] says whether a binding is dropped by
+    /// [`clear_sources`](Self::clear_sources) and so has to be rebound per
+    /// tile; [`SourceInfo::url`] is `None` only for an inline `geojson`,
+    /// which needs no binding at all.
+    pub fn sources(&self) -> Vec<SourceInfo<'_>> {
+        self.doc
+            .sources
+            .iter()
+            .map(|(name, decl)| SourceInfo::new(name, decl))
+            .collect()
+    }
+
     /// Names of every source with at least one pending binding. Order
     /// matches the style's `sources` declaration order.
     pub fn bound_sources(&self) -> Vec<String> {
@@ -242,16 +274,18 @@ impl Renderer {
     }
 
     /// Cap the glyph bytes each bound fontstack keeps resident, in bytes.
+    /// `None` lifts the cap, which is where a fresh renderer starts, and
+    /// is the spelling [`MemoryUsage::glyph_budget`] reports it back with.
     ///
-    /// Unset, a fontstack keeps every range ever bound to it for the life
-    /// of the renderer — `clear_sources` does not touch glyphs, and on a
-    /// long-lived instance rendering across a basemap that is usually
+    /// Uncapped, a fontstack keeps every range ever bound to it for the
+    /// life of the renderer — `clear_sources` does not touch glyphs, and
+    /// on a long-lived instance rendering across a basemap that is usually
     /// what grew. Trimming happens **after** each render, not while
     /// binding, so a render never loses glyphs that were bound for it.
     ///
     /// It is a per-fontstack ceiling: a style with a regular, a medium
     /// and an italic stack can hold three times what is set here.
-    pub fn set_glyph_budget(&mut self, bytes: usize) {
+    pub fn set_glyph_budget(&mut self, bytes: Option<usize>) {
         self.glyph_budget = bytes;
         for stack in self
             .assets
@@ -260,7 +294,7 @@ impl Renderer {
             .expect("glyphs bank poisoned")
             .values()
         {
-            stack.set_byte_budget(bytes);
+            stack.set_byte_budget(bytes.unwrap_or(usize::MAX));
         }
     }
 
@@ -410,7 +444,7 @@ impl Renderer {
                         Some(stack) => stack,
                         None => {
                             let stack = Arc::new(ezu_core::text::SdfFontStack::new());
-                            stack.set_byte_budget(self.glyph_budget);
+                            stack.set_byte_budget(self.glyph_budget.unwrap_or(usize::MAX));
                             self.assets.insert_glyphs(key, stack.clone());
                             stack
                         }
@@ -567,7 +601,7 @@ impl Renderer {
         MemoryUsage {
             glyph_bytes,
             glyph_ranges,
-            glyph_budget: (self.glyph_budget != usize::MAX).then_some(self.glyph_budget),
+            glyph_budget: self.glyph_budget,
             font_bytes,
             image_bytes,
             cache_bytes: self.cache.bytes(),
@@ -594,7 +628,7 @@ impl Renderer {
     /// Bring every bound fontstack back under the glyph budget. A no-op
     /// until a host sets one with `set_glyph_budget`.
     fn trim_glyphs(&self) {
-        if self.glyph_budget == usize::MAX {
+        if self.glyph_budget.is_none() {
             return;
         }
         for stack in self
@@ -1328,6 +1362,70 @@ mod tests {
         let mut starts: Vec<u32> = out.iter().map(|cp| cp & !0xFF).collect();
         starts.dedup();
         assert_eq!(starts, vec![0x0000, 0x4E00, 0x6700]);
+    }
+
+    #[test]
+    fn declared_sources_carry_their_kind_and_where_to_fetch_them() {
+        // The whole point of the call: a host reads the bind loop off this
+        // and never looks at the style itself. So every field a loop
+        // branches on is pinned here — the kind, whether it survives
+        // `clear_sources`, and the address, including the two shapes that
+        // are not simply "the url as written".
+        let r = Renderer::new(
+            r##"{
+                "name": "test",
+                "tile-size": 8,
+                "sources": {
+                    "basemap": { "type": "mvt", "url": "https://x/{z}/{x}/{y}.mvt" },
+                    "terrain": { "type": "dem", "url": "https://x/dem/{z}/{x}/{y}.png",
+                                 "encoding": "terrarium" },
+                    "labels": { "type": "glyphs",
+                                "url": "https://x/fonts/{fontstack}/{range}.pbf",
+                                "fontstack": "Noto Sans Regular" },
+                    "icons": { "type": "sprite", "image": "https://x/sprite.png",
+                               "index": "https://x/sprite.json" },
+                    "here": { "type": "geojson",
+                              "data": { "type": "FeatureCollection", "features": [] } }
+                },
+                "nodes": { "bg": { "op": "solid", "color": "#ffffff" } },
+                "output": "bg"
+            }"##,
+        )
+        .expect("the style builds");
+
+        let got: Vec<String> = r
+            .sources()
+            .iter()
+            .map(|s| {
+                format!(
+                    "{} {} tile-scoped={} url={:?} index={:?}",
+                    s.name,
+                    s.kind.name(),
+                    s.kind.is_tile_scoped(),
+                    s.url.as_deref().unwrap_or("-"),
+                    s.index_url.unwrap_or("-"),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                "basemap mvt tile-scoped=true url=\"https://x/{z}/{x}/{y}.mvt\" index=\"-\"",
+                "terrain dem tile-scoped=true url=\"https://x/dem/{z}/{x}/{y}.png\" index=\"-\"",
+                // `{fontstack}` is substituted and percent-encoded here so
+                // the host does not have to know how MapLibre spells it;
+                // `{range}` stays, since it is fetched per block.
+                "labels glyphs tile-scoped=false \
+                 url=\"https://x/fonts/Noto%20Sans%20Regular/{range}.pbf\" index=\"-\"",
+                // A sprite is two fetches: the atlas, and the index the
+                // atlas is bound with.
+                "icons sprite tile-scoped=false url=\"https://x/sprite.png\" \
+                 index=\"https://x/sprite.json\"",
+                // Inline geojson has nothing to fetch and nothing to bind.
+                "here geojson tile-scoped=true url=\"-\" index=\"-\"",
+            ],
+            "sources come back in declaration order"
+        );
     }
 
     #[test]

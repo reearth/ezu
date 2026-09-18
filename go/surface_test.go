@@ -55,6 +55,43 @@ func TestStyleQueries(t *testing.T) {
 	t.Logf("tile size %d, attribution %q, legend present: %v", size, attribution, legend != nil)
 }
 
+// Sources is where a bind loop starts, so what it has to carry is
+// everything a loop branches on: the name to bind under, the kind, whether
+// the binding survives a ClearSources, and the address to fetch from.
+// testdata/labels.json has both a tile pyramid and a glyph endpoint, which
+// is the one whose URL is not simply what the style wrote.
+func TestSourcesDescribeTheBindLoop(t *testing.T) {
+	ctx, renderer := open(t, "testdata/labels.json")
+
+	sources, err := renderer.Sources(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Source{
+		{Name: "basemap", Type: "mvt", TileScoped: true,
+			URL: "https://papers.reearth.land/protomaps/tilejson.json"},
+		// {fontstack} comes back substituted and percent-encoded the way
+		// MapLibre spells it; {range} stays, since it is fetched per block.
+		{Name: "noto", Type: "glyphs", TileScoped: false,
+			URL: "https://example.invalid/fonts/Noto%20Sans%20Regular/{range}.pbf"},
+	}
+	if len(sources) != len(want) {
+		t.Fatalf("the style declares %d sources, got %v", len(want), sources)
+	}
+	for i, w := range want {
+		if sources[i] != w {
+			t.Errorf("source %d is %+v, want %+v", i, sources[i], w)
+		}
+	}
+
+	// And the loop it describes runs: the one tile-scoped source binds
+	// under the name it reported.
+	if err := renderer.BindSource(ctx, sources[0].Name,
+		readFile(t, "testdata/basemap-14-14554-6454.mvt"), Bind{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestBoundSourcesFollowTheBindings(t *testing.T) {
 	ctx, renderer := open(t, stainedGlassStyle)
 
@@ -211,8 +248,8 @@ func TestMemoryUsageAndGlyphBudget(t *testing.T) {
 		t.Errorf("a fresh renderer reports a glyph budget of %d; none was set", *usage.GlyphBudget)
 	}
 
-	const budget = 1 << 20
-	if err := renderer.SetGlyphBudget(ctx, budget); err != nil {
+	budget := uint64(1 << 20)
+	if err := renderer.SetGlyphBudget(ctx, &budget); err != nil {
 		t.Fatal(err)
 	}
 	if usage, err = renderer.MemoryUsage(ctx); err != nil {
@@ -220,6 +257,18 @@ func TestMemoryUsageAndGlyphBudget(t *testing.T) {
 	}
 	if usage.GlyphBudget == nil || *usage.GlyphBudget != budget {
 		t.Errorf("glyph budget reads back as %v, want %d", usage.GlyphBudget, budget)
+	}
+
+	// Unset is spelled the same way going in as coming out: a nil budget
+	// lifts the cap and reads back as none.
+	if err := renderer.SetGlyphBudget(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	if usage, err = renderer.MemoryUsage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if usage.GlyphBudget != nil {
+		t.Errorf("a nil budget reads back as %d, want none", *usage.GlyphBudget)
 	}
 	if usage.CacheBudget == 0 {
 		t.Error("the render cache reports no eviction budget, so it would grow without bound")

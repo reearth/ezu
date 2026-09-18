@@ -68,7 +68,7 @@ var wasmModule []byte
 // The ABI this package was written against. ezu_abi_version must agree or
 // the embedded module is stale — which is the cost of committing a built
 // artefact, and the check that keeps the cost cheap.
-const abiVersion = 1
+const abiVersion = 2
 
 // The host module the wasm side imports its out-of-memory report from. See
 // oomHandler and crates/ezu-cabi/src/oom.rs.
@@ -776,6 +776,57 @@ func (r *Renderer) ClearSources(ctx context.Context) error {
 	return err
 }
 
+// Source is one entry of the style's sources block, as much of it as you
+// need to fetch the bytes and bind them.
+type Source struct {
+	// Name is the sources.<name> key, which is what [Renderer.BindSource]
+	// takes.
+	Name string `json:"name"`
+	// Type is the style's own word for the kind — "mvt", "pmtiles", "dem",
+	// "raster", "geojson", "sprite", "font", "glyphs", "brush", "image" —
+	// and says what BindSource will do with the bytes.
+	Type string `json:"type"`
+	// TileScoped says the binding belongs to one tile: it is dropped by
+	// [Renderer.ClearSources] and rebound for the next. The rest go into
+	// the persistent banks and are bound once.
+	TileScoped bool `json:"tileScoped"`
+	// URL is where the bytes come from, as the style wrote it: an XYZ
+	// template with {z}/{x}/{y} (or a TileJSON URL) for a tile pyramid, a
+	// PMTiles archive, a document URL, a file src, or — for glyphs — the
+	// endpoint with {fontstack} already substituted and {range} left to
+	// fill in per block.
+	//
+	// Empty only for a geojson source with inline data: the style carries
+	// the payload, so there is nothing to fetch and nothing to bind.
+	URL string `json:"url"`
+	// IndexURL is a sprite source's index document, when the style gives a
+	// URL for it rather than inlining it. Fetch it and pass the text as
+	// [Bind.Index] alongside the atlas image. Empty for every other kind,
+	// and for an inline index.
+	IndexURL string `json:"indexUrl"`
+}
+
+// Sources is every source the style declares, in declaration order.
+//
+// This is what you walk before you fetch anything: it says which names to
+// bind, what kind of bytes each one wants, and where they live, so the bind
+// loop needs no second reading of the style on this side.
+// [Renderer.BoundSources] answers the opposite question — what is already
+// bound — and cannot start the loop.
+func (r *Renderer) Sources(ctx context.Context) ([]Source, error) {
+	var out []Source
+	_, payload, err := r.withSlots(ctx, func(slots uint32) (int64, error) {
+		return r.call1(ctx, "ezu_sources", uint64(r.handle), uint64(slots), uint64(slots+4))
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(payload, &out); err != nil {
+		return nil, fmt.Errorf("ezu: reading the declared sources: %w", err)
+	}
+	return out, nil
+}
+
 // BoundSources names every source with at least one pending binding, in the
 // style's declaration order.
 func (r *Renderer) BoundSources(ctx context.Context) ([]string, error) {
@@ -793,8 +844,10 @@ func (r *Renderer) BoundSources(ctx context.Context) ([]string, error) {
 }
 
 // SetGlyphBudget caps the glyph bytes each bound fontstack keeps resident.
+// A nil budget lifts the cap, which is where a fresh renderer starts and
+// how [Usage.GlyphBudget] reports it back.
 //
-// Unset, a fontstack keeps every range ever bound to it for the life of the
+// Uncapped, a fontstack keeps every range ever bound to it for the life of the
 // renderer — [Renderer.ClearSources] does not touch glyphs, and on a
 // long-lived instance rendering across a basemap that is usually what grew.
 // Trimming happens after each render, never while binding, so a render
@@ -804,9 +857,13 @@ func (r *Renderer) BoundSources(ctx context.Context) ([]string, error) {
 // italic stack can hold three times this. Anything trimmed must be bound
 // again before the next tile that needs it; a host that re-binds every tile
 // rather than tracking what it sent needs no other change.
-func (r *Renderer) SetGlyphBudget(ctx context.Context, bytes uint64) error {
+func (r *Renderer) SetGlyphBudget(ctx context.Context, bytes *uint64) error {
+	var value, set uint64
+	if bytes != nil {
+		value, set = *bytes, 1
+	}
 	_, err := r.call(ctx, func(ctx context.Context) (int64, error) {
-		return r.call1(ctx, "ezu_set_glyph_budget", uint64(r.handle), bytes)
+		return r.call1(ctx, "ezu_set_glyph_budget", uint64(r.handle), value, set)
 	})
 	return err
 }
