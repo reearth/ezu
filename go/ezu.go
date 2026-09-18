@@ -83,6 +83,9 @@ const hostModule = "ezu_host"
 type Runtime struct {
 	runtime  wazero.Runtime
 	compiled wazero.CompiledModule
+	// Why a compilation cache was abandoned, if one was. See
+	// [Runtime.CompilationCacheError].
+	cacheErr error
 	// Instance name → the renderer it belongs to, so a host call made from
 	// inside the module can find whose allocator failed.
 	mu        sync.Mutex
@@ -115,6 +118,21 @@ func WithModule(wasm []byte) Option {
 // The cache is keyed by the module's bytes and by wazero's own version, so
 // a rebuilt module or an upgraded wazero recompiles rather than serving
 // something stale. Close the cache when the last runtime using it is done.
+//
+// The parameter is an interface, but the only value you may pass is the one
+// [wazero.NewCompilationCacheWithDir] returns. wazero's own documentation
+// calls the interface "decoupling, not third-party implementations", and it
+// type-asserts the value to its own concrete type without checking, so an
+// implementation of your own panics inside wazero rather than being
+// refused.
+//
+// A cache is an optimisation and is treated as one: if the module cannot be
+// compiled with it — a miss against a read-only directory, a truncated or
+// corrupted entry — the runtime is built again without it, and the start
+// costs a full compile instead of failing. [Runtime.CompilationCacheError]
+// says when that happened, and is worth logging: a service quietly paying
+// over a second per start for a cache it believes is working has a bug it
+// cannot see.
 func WithCompilationCache(cache wazero.CompilationCache) Option {
 	return func(c *config) { c.cache = cache }
 }
@@ -151,15 +169,61 @@ func WithMemoryLimit(bytes uint64) Option {
 }
 
 // NewRuntime compiles the module. Close it when the last renderer is done.
+//
+// A compilation cache that cannot be used does not stop a runtime being
+// built: see [WithCompilationCache] and [Runtime.CompilationCacheError].
 func NewRuntime(ctx context.Context, opts ...Option) (*Runtime, error) {
 	cfg := config{moduleBytes: wasmModule}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
 
+	rt, err := newRuntime(ctx, cfg, cfg.cache)
+	if err == nil || cfg.cache == nil {
+		return rt, err
+	}
+
+	// Every way a cache path fails arrives here as an error out of
+	// compilation, and none of them is the caller's doing: wazero writes a
+	// missing entry into the cache directory and propagates the write
+	// error, and it reports a truncated or checksum-mismatched entry rather
+	// than recompiling over it. A read-only mount, a half-copied image
+	// layer or a bad block would therefore stop a service starting for the
+	// sake of something that only ever saves time. So drop the cache and
+	// compile: the worst case is a slow start rather than no start.
+	plain, plainErr := newRuntime(ctx, cfg, nil)
+	if plainErr != nil {
+		// The module itself will not compile; the cache was a red herring.
+		return nil, plainErr
+	}
+	plain.cacheErr = err
+	return plain, nil
+}
+
+// CompilationCacheError reports why the compilation cache given to
+// [WithCompilationCache] was abandoned, or nil when there was none to
+// abandon — either because no cache was passed or because it worked.
+//
+// It is not a failure: the runtime it is read from is fully built, having
+// compiled the module the slow way. It is the thing to log, because the
+// only other symptom is a start that takes about a second longer than
+// whoever configured the cache expects, every time.
+//
+//	rt, err := ezu.NewRuntime(ctx, ezu.WithCompilationCache(cache))
+//	if err != nil {
+//		return err
+//	}
+//	if err := rt.CompilationCacheError(); err != nil {
+//		slog.Warn("ezu compiled without its cache", "err", err)
+//	}
+func (r *Runtime) CompilationCacheError() error { return r.cacheErr }
+
+// newRuntime builds one runtime with exactly the cache it is handed, so
+// that [NewRuntime] can try again without one.
+func newRuntime(ctx context.Context, cfg config, cache wazero.CompilationCache) (*Runtime, error) {
 	runtimeConfig := wazero.NewRuntimeConfig()
-	if cfg.cache != nil {
-		runtimeConfig = runtimeConfig.WithCompilationCache(cfg.cache)
+	if cache != nil {
+		runtimeConfig = runtimeConfig.WithCompilationCache(cache)
 	}
 	if cfg.memoryLimitPages > 0 {
 		runtimeConfig = runtimeConfig.WithMemoryLimitPages(cfg.memoryLimitPages)
