@@ -165,7 +165,7 @@ func TestHandleSurvivesAcrossCalls(t *testing.T) {
 	if len(bound) != 1 || bound[0] != "basemap" {
 		t.Fatalf("bound sources %v after unrelated calls, want [basemap]", bound)
 	}
-	png, err := renderer.RenderTile(ctx, 14, 14554, 6454, Render{})
+	png, err := renderer.RenderTile(ctx, Tile{Z: 14, X: 14554, Y: 6454}, Render{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -31,7 +31,7 @@ func TestConcurrentEntryIsRefused(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			_, err := renderer.RenderTile(ctx, 14, 14554, 6454, Render{})
+			_, err := renderer.RenderTile(ctx, Tile{Z: 14, X: 14554, Y: 6454}, Render{})
 			switch {
 			case err == nil:
 				succeeded.Add(1)
@@ -119,7 +119,7 @@ func TestPoolRendersInParallel(t *testing.T) {
 				if err := r.BindSource(ctx, "basemap", tile, Bind{}); err != nil {
 					return err
 				}
-				out, err := r.RenderTile(ctx, 14, 14554, 6454, Render{})
+				out, err := r.RenderTile(ctx, Tile{Z: 14, X: 14554, Y: 6454}, Render{})
 				if err != nil {
 					return err
 				}
@@ -184,7 +184,7 @@ func TestCompilationCacheIsReused(t *testing.T) {
 		if err := renderer.BindSource(ctx, "basemap", tile, Bind{}); err != nil {
 			t.Fatal(err)
 		}
-		out, err := renderer.RenderTile(ctx, 14, 14554, 6454, Render{})
+		out, err := renderer.RenderTile(ctx, Tile{Z: 14, X: 14554, Y: 6454}, Render{})
 		if err != nil {
 			t.Fatal(err)
 		}

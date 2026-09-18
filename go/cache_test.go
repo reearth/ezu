@@ -15,8 +15,8 @@ import (
 // back as errors from compilation, and a service pointed at a read-only
 // mount or handed a half-copied image layer would not start at all.
 //
-// These are the two shapes that produced that, and what each one must do
-// now instead: build the runtime the slow way and say so.
+// These are the shapes that produced that, and what each one must do now
+// instead: build the runtime the slow way and say so.
 
 // A cache directory nothing can be written to, which is what a read-only
 // mount is, and a miss in it — which is what a rebuilt module or an
@@ -165,7 +165,7 @@ func mustRender(t *testing.T, ctx context.Context, rt *Runtime) {
 	if err := renderer.BindSource(ctx, "basemap", readFile(t, "testdata/basemap-14-14554-6454.mvt"), Bind{}); err != nil {
 		t.Fatal(err)
 	}
-	out, err := renderer.RenderTile(ctx, 14, 14554, 6454, Render{})
+	out, err := renderer.RenderTile(ctx, Tile{Z: 14, X: 14554, Y: 6454}, Render{})
 	if err != nil {
 		t.Fatal(err)
 	}

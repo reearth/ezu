@@ -155,7 +155,7 @@ func TestSourceTileAnswersTheCeiling(t *testing.T) {
 	ctx, renderer := open(t, hillshadeStyle)
 
 	// Below any ceiling, the answer is the tile itself.
-	got, err := renderer.SourceTile(ctx, "terrain", 10, 909, 402)
+	got, err := renderer.SourceTile(ctx, "terrain", Tile{Z: 10, X: 909, Y: 402})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,20 +165,20 @@ func TestSourceTileAnswersTheCeiling(t *testing.T) {
 
 	// Deep enough to be past whatever ceiling the style declares: the
 	// answer must be an ancestor of the request, whatever the ceiling is.
-	const z, x, y = 22, 3728270, 1649855
-	got, err = renderer.SourceTile(ctx, "terrain", z, x, y)
+	deep := Tile{Z: 22, X: 3728270, Y: 1649855}
+	got, err = renderer.SourceTile(ctx, "terrain", deep)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Z > z {
-		t.Fatalf("answered zoom %d for a request at %d", got.Z, z)
+	if got.Z > deep.Z {
+		t.Fatalf("answered zoom %d for a request at %d", got.Z, deep.Z)
 	}
-	if shift := z - got.Z; got.X != x>>shift || got.Y != y>>shift {
-		t.Errorf("answered %+v, which is not the ancestor of %d/%d/%d at zoom %d", got, z, x, y, got.Z)
+	if shift := deep.Z - got.Z; got.X != deep.X>>shift || got.Y != deep.Y>>shift {
+		t.Errorf("answered %+v, which is not the ancestor of %+v at zoom %d", got, deep, got.Z)
 	}
 
 	// X wraps around the antimeridian; Y does not.
-	west, err := renderer.SourceTile(ctx, "terrain", 2, -1, 1)
+	west, err := renderer.SourceTile(ctx, "terrain", Tile{Z: 2, X: 0, Y: 1}.Add(Offset{DX: -1}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +302,7 @@ func TestSetStyle(t *testing.T) {
 	if err := renderer.BindSource(ctx, "basemap", readFile(t, "testdata/basemap-13-7277-3227.mvt"), Bind{}); err != nil {
 		t.Fatal(err)
 	}
-	out, err := renderer.RenderTile(ctx, 13, 7277, 3227, Render{})
+	out, err := renderer.RenderTile(ctx, Tile{Z: 13, X: 7277, Y: 3227}, Render{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +335,7 @@ func TestRenderParams(t *testing.T) {
 
 	// A name the style does not declare is refused, which is what says the
 	// params reached the validator at all rather than being dropped.
-	_, err = renderer.RenderTile(ctx, 14, 14554, 6454, Render{
+	_, err = renderer.RenderTile(ctx, Tile{Z: 14, X: 14554, Y: 6454}, Render{
 		Params: map[string]any{"definitely-not-a-param": 1},
 	})
 	if !IsKind(err, KindInvalidStyle) {

@@ -80,7 +80,7 @@ func TestFailuresCarryTheirNames(t *testing.T) {
 		if err := renderer.BindSource(ctx, "terrain", []byte("not an image"), Bind{}); err != nil {
 			t.Fatal(err)
 		}
-		_, err = renderer.RenderTile(ctx, demZ, demX, demY, Render{})
+		_, err = renderer.RenderTile(ctx, demCoord, Render{})
 		if !IsKind(err, "DemDecode") {
 			t.Fatalf("rendering from rubbish DEM bytes gave %v, want DemDecode", err)
 		}
@@ -94,10 +94,10 @@ func TestFailuresCarryTheirNames(t *testing.T) {
 		defer renderer.Close(ctx)
 		// The JS shell refuses an unrecognised format with InvalidStyle
 		// rather than quietly answering PNG, and so does this one.
-		if _, err := renderer.RenderTile(ctx, 14, 14554, 6454, Render{Format: "jpeg"}); !IsKind(err, KindInvalidStyle) {
+		if _, err := renderer.RenderTile(ctx, Tile{Z: 14, X: 14554, Y: 6454}, Render{Format: "jpeg"}); !IsKind(err, KindInvalidStyle) {
 			t.Errorf("an unknown format gave %v, want InvalidStyle", err)
 		}
-		if _, err := renderer.RenderTile(ctx, 14, 14554, 6454, Render{PNGCompression: "maximum"}); !IsKind(err, KindInvalidStyle) {
+		if _, err := renderer.RenderTile(ctx, Tile{Z: 14, X: 14554, Y: 6454}, Render{PNGCompression: "maximum"}); !IsKind(err, KindInvalidStyle) {
 			t.Errorf("an unknown png compression gave %v, want InvalidStyle", err)
 		}
 	})

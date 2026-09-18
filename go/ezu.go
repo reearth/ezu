@@ -15,7 +15,7 @@
 //	defer r.Close(ctx)
 //
 //	r.BindSource(ctx, "basemap", mvtBytes, ezu.Bind{})
-//	png, err := r.RenderTile(ctx, 14, 14554, 6454, ezu.Render{})
+//	png, err := r.RenderTile(ctx, ezu.Tile{Z: 14, X: 14554, Y: 6454}, ezu.Render{})
 //	r.ClearSources(ctx)
 //
 // # Concurrency
@@ -697,14 +697,14 @@ type Bind struct {
 	// are the only things that read neighbours, and only for the sources
 	// that ask: [Renderer.RequestedNeighborOffsets] says which, so a host
 	// binds exactly the window the style needs rather than a blind 3×3.
-	DX, DY int
+	DX, DY int32
 	// SourceZoom declares that the bytes are natively encoded at a
 	// shallower zoom than the tile being rendered — a source that stops at
 	// its max-zoom while you serve deeper tiles — and the renderer
 	// reprojects or resamples them into the tile's frame. Zero means "not
 	// set"; ask [Renderer.SourceTile] which tile to fetch and pass the zoom
 	// it answers with, which is a no-op below the ceiling.
-	SourceZoom int
+	SourceZoom int32
 	// Index is a sprite source's index document, when the style gives a URL
 	// for it rather than inlining it. Ignored by every other source kind.
 	Index string
@@ -714,7 +714,7 @@ func (b Bind) json() ([]byte, error) {
 	if b == (Bind{}) {
 		return nil, nil
 	}
-	payload := map[string]any{"coord": [2]int{b.DX, b.DY}}
+	payload := map[string]any{"coord": [2]int32{b.DX, b.DY}}
 	if b.SourceZoom != 0 {
 		payload["sourceZoom"] = b.SourceZoom
 	}
@@ -996,7 +996,7 @@ func (r *Renderer) ParamsSchema(ctx context.Context) (json.RawMessage, error) {
 
 // AllZooms asks [Renderer.Legend] for every entry rather than the ones that
 // apply at one zoom.
-const AllZooms = 255
+const AllZooms int32 = 255
 
 // Legend is the style's declared legend as JSON, or nil when it declares
 // none. Pass a zoom to keep only the entries that apply there, or
@@ -1005,10 +1005,10 @@ const AllZooms = 255
 // Entries name the node that draws the symbol rather than restating a
 // colour, so you lay out the labels and ask the map itself for the
 // swatches: render the named node.
-func (r *Renderer) Legend(ctx context.Context, zoom uint8) (json.RawMessage, error) {
+func (r *Renderer) Legend(ctx context.Context, zoom int32) (json.RawMessage, error) {
 	code, payload, err := r.withSlots(ctx, func(slots uint32) (int64, error) {
 		return r.call1(ctx, "ezu_legend",
-			uint64(r.handle), uint64(zoom), uint64(slots), uint64(slots+4))
+			uint64(r.handle), uint64(uint32(zoom)), uint64(slots), uint64(slots+4))
 	})
 	if err != nil || code == 0 {
 		return nil, err
@@ -1016,15 +1016,44 @@ func (r *Renderer) Legend(ctx context.Context, zoom uint8) (json.RawMessage, err
 	return json.RawMessage(payload), nil
 }
 
-// Tile is a tile coordinate.
+// Tile is a tile coordinate: the tile being rendered, a tile to fetch from
+// a source, or a neighbour of either. One type for all three, carried
+// through the whole surface, so that a bind loop moves coordinates around
+// instead of converting them.
+//
+// All three fields are int32, deliberately one width and deliberately
+// signed. Signed because a neighbourhood walk goes off the grid — the
+// western neighbour of x=0 is x=-1, and [Renderer.SourceTile] is defined on
+// exactly those coordinates. 32 bits because the ABI carries x and y as
+// 32-bit words and an index is bounded by 2^z with z at most 30, so the
+// whole grid fits with room over. Z is the same width rather than a uint8
+// so that comparing it to a zoom, or passing it back as a source zoom,
+// needs no conversion either.
 type Tile struct {
-	Z uint8 `json:"z"`
-	X int64 `json:"x"`
-	Y int64 `json:"y"`
+	Z int32 `json:"z"`
+	X int32 `json:"x"`
+	Y int32 `json:"y"`
+}
+
+// Offset is a neighbour tile's position relative to the tile being
+// rendered, as [Renderer.RequestedNeighborOffsets] reports it.
+type Offset struct{ DX, DY int32 }
+
+// Add is the tile that many columns east and rows south of t, at t's own
+// zoom — the whole of the arithmetic a neighbour loop needs.
+//
+//	for _, o := range offsets {
+//	    neighbour, err := r.SourceTile(ctx, source, tile.Add(o))
+//	}
+//
+// It does no wrapping or clamping: off-grid coordinates are meaningful
+// here, and [Renderer.SourceTile] is where they are resolved.
+func (t Tile) Add(o Offset) Tile {
+	return Tile{Z: t.Z, X: t.X + o.DX, Y: t.Y + o.DY}
 }
 
 // SourceTile is the tile you should actually fetch from name in order to
-// draw z/x/y.
+// draw tile.
 //
 // For a source that declares max-zoom, a request past the ceiling answers
 // with the covering ancestor: fetch that, and bind it with
@@ -1042,7 +1071,7 @@ type Tile struct {
 // tile above the north pole — and an out-of-range row comes back unchanged,
 // so the fetch for it misses and the stitch clamps that edge, which is what
 // the pole should look like.
-func (r *Renderer) SourceTile(ctx context.Context, name string, z uint8, x, y int32) (Tile, error) {
+func (r *Renderer) SourceTile(ctx context.Context, name string, tile Tile) (Tile, error) {
 	var out Tile
 	_, payload, err := r.withSlots(ctx, func(slots uint32) (int64, error) {
 		namePtr, err := r.writeBytes(ctx, []byte(name))
@@ -1052,7 +1081,7 @@ func (r *Renderer) SourceTile(ctx context.Context, name string, z uint8, x, y in
 		defer r.free(ctx, namePtr, uint32(len(name)))
 		return r.call1(ctx, "ezu_source_tile",
 			uint64(r.handle), uint64(namePtr), uint64(len(name)),
-			uint64(z), uint64(uint32(x)), uint64(uint32(y)),
+			uint64(uint32(tile.Z)), uint64(uint32(tile.X)), uint64(uint32(tile.Y)),
 			uint64(slots), uint64(slots+4))
 	})
 	if err != nil {
@@ -1063,10 +1092,6 @@ func (r *Renderer) SourceTile(ctx context.Context, name string, z uint8, x, y in
 	}
 	return out, nil
 }
-
-// Offset is a neighbour tile's position relative to the tile being
-// rendered.
-type Offset struct{ DX, DY int }
 
 // RequestedNeighborOffsets names the neighbour tiles the active style
 // actually asks for from source, never including the centre. An empty
@@ -1081,7 +1106,7 @@ type Offset struct{ DX, DY int }
 // but a pad filled by clamping the tile's own edge, which shows up as a
 // seam in whatever samples it.
 func (r *Renderer) RequestedNeighborOffsets(ctx context.Context, source string) ([]Offset, error) {
-	var pairs [][2]int
+	var pairs [][2]int32
 	_, payload, err := r.withSlots(ctx, func(slots uint32) (int64, error) {
 		namePtr, err := r.writeBytes(ctx, []byte(source))
 		if err != nil {
@@ -1207,7 +1232,7 @@ func (r *Renderer) MemoryUsage(ctx context.Context) (Usage, error) {
 
 // RenderTile renders one tile from whatever sources are currently bound and
 // returns the encoded bytes.
-func (r *Renderer) RenderTile(ctx context.Context, z uint8, x, y uint32, opts Render) ([]byte, error) {
+func (r *Renderer) RenderTile(ctx context.Context, tile Tile, opts Render) ([]byte, error) {
 	optsJSON, err := opts.json()
 	if err != nil {
 		return nil, fmt.Errorf("ezu: encoding the render options: %w", err)
@@ -1219,7 +1244,8 @@ func (r *Renderer) RenderTile(ctx context.Context, z uint8, x, y uint32, opts Re
 		}
 		defer r.free(ctx, optsPtr, uint32(len(optsJSON)))
 		return r.call1(ctx, "ezu_render_tile",
-			uint64(r.handle), uint64(z), uint64(x), uint64(y),
+			uint64(r.handle),
+			uint64(uint32(tile.Z)), uint64(uint32(tile.X)), uint64(uint32(tile.Y)),
 			uint64(optsPtr), uint64(len(optsJSON)),
 			uint64(slots), uint64(slots+4))
 	})

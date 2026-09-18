@@ -50,8 +50,7 @@ var goldens = []struct {
 	name    string
 	style   string
 	tileMVT string
-	z       uint8
-	x, y    uint32
+	tile    Tile
 	png     string
 	webp    string
 }{
@@ -59,7 +58,7 @@ var goldens = []struct {
 		name:    "stained-glass",
 		style:   stainedGlassStyle,
 		tileMVT: "testdata/basemap-14-14554-6454.mvt",
-		z:       14, x: 14554, y: 6454,
+		tile:    Tile{Z: 14, X: 14554, Y: 6454},
 		png:  "daeb73b96d495681a2d95c3043a5ce65a27d3e3ce857e95c10255a5c5861d69a",
 		webp: "63677330cdd1e31f9fcaa12aaffa35ee691362c3b34e3d9ac9b9b665b9fc617f",
 	},
@@ -67,7 +66,7 @@ var goldens = []struct {
 		name:    "risograph",
 		style:   risographStyle,
 		tileMVT: "testdata/basemap-13-7277-3227.mvt",
-		z:       13, x: 7277, y: 3227,
+		tile:    Tile{Z: 13, X: 7277, Y: 3227},
 		png:  "1f30f5442904edbdc70cd9f736cb01df85058bcfd31dd2f3b0259961c284faf2",
 		webp: "35f31eff6f470ad0be48a52af9f2fe0ca70331ea03ce331e12aff86ddca3b78f",
 	},
@@ -86,7 +85,7 @@ func TestRenderMatchesTheNativeRenderer(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			gotPNG, err := renderer.RenderTile(ctx, g.z, g.x, g.y, Render{})
+			gotPNG, err := renderer.RenderTile(ctx, g.tile, Render{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -94,7 +93,7 @@ func TestRenderMatchesTheNativeRenderer(t *testing.T) {
 				t.Errorf("PNG sha256 %s (%d bytes), want %s", got, len(gotPNG), g.png)
 			}
 
-			gotWebP, err := renderer.RenderTile(ctx, g.z, g.x, g.y, Render{Format: FormatWebP})
+			gotWebP, err := renderer.RenderTile(ctx, g.tile, Render{Format: FormatWebP})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -107,7 +106,7 @@ func TestRenderMatchesTheNativeRenderer(t *testing.T) {
 			// against. The check that means something is that it is the
 			// same picture as the PNG, pixel for pixel — which is also what
 			// says the crop and the row order are right.
-			gotRGBA, err := renderer.RenderTile(ctx, g.z, g.x, g.y, Render{Format: FormatRGBA})
+			gotRGBA, err := renderer.RenderTile(ctx, g.tile, Render{Format: FormatRGBA})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -162,11 +161,11 @@ func TestRenderIsDeterministic(t *testing.T) {
 	if err := renderer.BindSource(ctx, "basemap", readFile(t, g.tileMVT), Bind{}); err != nil {
 		t.Fatal(err)
 	}
-	first, err := renderer.RenderTile(ctx, g.z, g.x, g.y, Render{})
+	first, err := renderer.RenderTile(ctx, g.tile, Render{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := renderer.RenderTile(ctx, g.z, g.x, g.y, Render{})
+	second, err := renderer.RenderTile(ctx, g.tile, Render{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +184,7 @@ func TestRenderOptionsReachTheRenderer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	small, err := renderer.RenderTile(ctx, g.z, g.x, g.y, Render{Format: FormatRGBA, TileSize: 64, Pad: 4})
+	small, err := renderer.RenderTile(ctx, g.tile, Render{Format: FormatRGBA, TileSize: 64, Pad: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,11 +192,11 @@ func TestRenderOptionsReachTheRenderer(t *testing.T) {
 		t.Errorf("a tileSize override gave %d bytes, want %d", len(small), want)
 	}
 
-	fast, err := renderer.RenderTile(ctx, g.z, g.x, g.y, Render{PNGCompression: CompressionFast})
+	fast, err := renderer.RenderTile(ctx, g.tile, Render{PNGCompression: CompressionFast})
 	if err != nil {
 		t.Fatal(err)
 	}
-	best, err := renderer.RenderTile(ctx, g.z, g.x, g.y, Render{PNGCompression: CompressionBest})
+	best, err := renderer.RenderTile(ctx, g.tile, Render{PNGCompression: CompressionBest})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +219,7 @@ func TestRenderTiming(t *testing.T) {
 	}
 
 	start := time.Now()
-	out, err := renderer.RenderTile(ctx, g.z, g.x, g.y, Render{})
+	out, err := renderer.RenderTile(ctx, g.tile, Render{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +229,7 @@ func TestRenderTiming(t *testing.T) {
 	const runs = 10
 	for i := 0; i < runs; i++ {
 		start = time.Now()
-		if _, err := renderer.RenderTile(ctx, g.z, g.x, g.y, Render{}); err != nil {
+		if _, err := renderer.RenderTile(ctx, g.tile, Render{}); err != nil {
 			t.Fatal(err)
 		}
 		if d := time.Since(start); d < best {
@@ -271,7 +270,7 @@ func BenchmarkRenderTile(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := renderer.RenderTile(ctx, g.z, g.x, g.y, Render{}); err != nil {
+		if _, err := renderer.RenderTile(ctx, g.tile, Render{}); err != nil {
 			b.Fatal(err)
 		}
 	}

@@ -17,7 +17,7 @@ const (
 	demTile   = "testdata/terrain-10-909-402.webp"
 )
 
-const demZ, demX, demY = 10, 909, 402
+var demCoord = Tile{Z: 10, X: 909, Y: 402}
 
 func TestDEMRendersFromTheCentreAloneAndSaysWhatItIsMissing(t *testing.T) {
 	ctx, renderer := open(t, demStyle)
@@ -32,7 +32,7 @@ func TestDEMRendersFromTheCentreAloneAndSaysWhatItIsMissing(t *testing.T) {
 	// into the pad — and that is exactly why it has to warn. A seam at the
 	// tile border is not an error and would otherwise reach a caller as a
 	// picture with nothing said about it.
-	out, err := renderer.RenderTile(ctx, demZ, demX, demY, Render{})
+	out, err := renderer.RenderTile(ctx, demCoord, Render{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestDEMWithEveryOffsetBoundIsSilent(t *testing.T) {
 	if _, err := renderer.DrainLogs(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := renderer.RenderTile(ctx, demZ, demX, demY, Render{}); err != nil {
+	if _, err := renderer.RenderTile(ctx, demCoord, Render{}); err != nil {
 		t.Fatal(err)
 	}
 	lines, err := renderer.DrainLogs(ctx)

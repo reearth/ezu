@@ -39,7 +39,7 @@ func TestOutOfMemoryIsNamedAndEndsTheRenderer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = renderer.RenderTile(ctx, 14, 14554, 6454, Render{})
+	_, err = renderer.RenderTile(ctx, Tile{Z: 14, X: 14554, Y: 6454}, Render{})
 	if err == nil {
 		t.Skip("this style rendered inside the cap; nothing to say about running out")
 	}
@@ -56,7 +56,7 @@ func TestOutOfMemoryIsNamedAndEndsTheRenderer(t *testing.T) {
 	// And the instance is finished: every later call says so rather than
 	// reading whatever is left in a linear memory that was abandoned
 	// mid-allocation.
-	if _, err := renderer.RenderTile(ctx, 14, 14554, 6454, Render{}); err != ErrRendererDead {
+	if _, err := renderer.RenderTile(ctx, Tile{Z: 14, X: 14554, Y: 6454}, Render{}); err != ErrRendererDead {
 		t.Errorf("a call after the trap gave %v, want ErrRendererDead", err)
 	}
 	if _, err := renderer.BoundSources(ctx); err != ErrRendererDead {
@@ -82,7 +82,7 @@ func TestAGenerousMemoryLimitChangesNothing(t *testing.T) {
 	if err := renderer.BindSource(ctx, "basemap", readFile(t, "testdata/basemap-14-14554-6454.mvt"), Bind{}); err != nil {
 		t.Fatal(err)
 	}
-	out, err := renderer.RenderTile(ctx, 14, 14554, 6454, Render{})
+	out, err := renderer.RenderTile(ctx, Tile{Z: 14, X: 14554, Y: 6454}, Render{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestPoolDropsATrappedRenderer(t *testing.T) {
 	if err := renderer.BindSource(ctx, "basemap", readFile(t, "testdata/basemap-14-14554-6454.mvt"), Bind{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := renderer.RenderTile(ctx, 14, 14554, 6454, Render{}); err == nil {
+	if _, err := renderer.RenderTile(ctx, Tile{Z: 14, X: 14554, Y: 6454}, Render{}); err == nil {
 		t.Skip("this style rendered inside the cap")
 	}
 	pool.Release(renderer)
