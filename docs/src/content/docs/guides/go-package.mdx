@@ -45,10 +45,10 @@ if err != nil {
 }
 defer r.Close(ctx)
 
-if err := r.BindSource(ctx, "basemap", mvt, ezu.Bind{}); err != nil {
+if err := r.BindSource(ctx, "basemap", mvt); err != nil {
     return err
 }
-png, err := r.RenderTile(ctx, 14, 14554, 6454, ezu.Render{})
+png, err := r.RenderTile(ctx, ezu.Tile{Z: 14, X: 14554, Y: 6454}, ezu.Render{})
 if err != nil {
     return err
 }
@@ -85,7 +85,7 @@ Each `ezu.Source` carries the four things a fetch needs:
 `URL` is empty only for a `geojson` source with inline `data`: the style carries
 the payload, so there is nothing to fetch and nothing to bind. A `sprite` source
 also reports `IndexURL` when its index is a URL rather than inline — fetch it and
-pass the text as `ezu.Bind{Index: …}` alongside the atlas image.
+pass the text as `ezu.WithSpriteIndex(…)` alongside the atlas image.
 
 A `glyphs` URL arrives with `{fontstack}` **already substituted and
 percent-encoded** the way MapLibre encodes it, and `{range}` left for you, so the
@@ -101,10 +101,13 @@ interpretation, and the two drift; `Sources` hands you the one the renderer
 itself used. `BoundSources` answers the opposite question — what is already bound
 — and cannot start the loop.
 
+One `ezu.Tile` carries every coordinate in here — the tile being rendered, the
+tile a source says to fetch, and each neighbour — so nothing in the loop converts
+between widths, and `tile.Add(offset)` is the whole of the neighbour arithmetic.
 A tile then looks like this:
 
 ```go
-func renderTile(ctx context.Context, r *ezu.Renderer, z uint8, x, y uint32) ([]byte, error) {
+func renderTile(ctx context.Context, r *ezu.Renderer, tile ezu.Tile) ([]byte, error) {
     sources, err := r.Sources(ctx)
     if err != nil {
         return nil, err
@@ -119,15 +122,15 @@ func renderTile(ctx context.Context, r *ezu.Renderer, z uint8, x, y uint32) ([]b
         }
         // Where the source stops short of this zoom, fetch the covering
         // ancestor and say which zoom the bytes came from.
-        tile, err := r.SourceTile(ctx, s.Name, z, int32(x), int32(y))
+        from, err := r.SourceTile(ctx, s.Name, tile)
         if err != nil {
             return nil, err
         }
-        body, err := fetch(tileURL(s.URL, tile))
+        body, err := fetch(tileURL(s.URL, from))
         if err != nil {
             return nil, err
         }
-        if err := r.BindSource(ctx, s.Name, body, ezu.Bind{SourceZoom: int(tile.Z)}); err != nil {
+        if err := r.BindSource(ctx, s.Name, body, ezu.FromZoom(from.Z)); err != nil {
             return nil, err
         }
 
@@ -137,17 +140,15 @@ func renderTile(ctx context.Context, r *ezu.Renderer, z uint8, x, y uint32) ([]b
             return nil, err
         }
         for _, o := range offsets {
-            nt, err := r.SourceTile(ctx, s.Name, z, int32(x)+int32(o.DX), int32(y)+int32(o.DY))
+            from, err := r.SourceTile(ctx, s.Name, tile.Add(o))
             if err != nil {
                 return nil, err
             }
-            body, err := fetch(tileURL(s.URL, nt))
+            body, err := fetch(tileURL(s.URL, from))
             if err != nil {
                 continue // off the top or bottom of the world: that edge clamps
             }
-            if err := r.BindSource(ctx, s.Name, body, ezu.Bind{
-                DX: o.DX, DY: o.DY, SourceZoom: int(nt.Z),
-            }); err != nil {
+            if err := r.BindSource(ctx, s.Name, body, ezu.AtOffset(o), ezu.FromZoom(from.Z)); err != nil {
                 return nil, err
             }
         }
@@ -163,7 +164,7 @@ func renderTile(ctx context.Context, r *ezu.Renderer, z uint8, x, y uint32) ([]b
             return nil, err
         }
     }
-    return r.RenderTile(ctx, z, x, y, ezu.Render{})
+    return r.RenderTile(ctx, tile, ezu.Render{})
 }
 ```
 
@@ -182,10 +183,39 @@ of tiles that are wrong rather than missing:
   comes back unchanged, so its fetch misses and that edge clamps — which is what
   the pole should look like.
 - **Missing glyphs are not an error.** Text whose glyphs were never bound is
-  dropped with a warning, and warnings arrive through `InitLog` / `DrainLogs`
-  rather than as a returned error. `NeededCodepoints` is the precise form of
-  `NeededGlyphRanges` for a host that can assemble its own PBF; on CJK labels that
-  is the difference between a few thousand glyphs and tens of megabytes.
+  dropped with a warning rather than a returned error, so the order above —
+  bind the features, ask `NeededGlyphRanges` what they need, bind that, then
+  render — is load-bearing, and getting it wrong loses labels quietly. Give the
+  runtime a [logger](#hearing-that-a-tile-came-out-wrong) and you hear about it.
+  `NeededCodepoints` is the precise form of `NeededGlyphRanges` for a host that
+  can assemble its own PBF; on CJK labels that is the difference between a few
+  thousand glyphs and tens of megabytes.
+
+## Hearing that a tile came out wrong
+
+The failures above do not fail. A DEM bound without the neighbours its style
+asked for still renders, and seams at the tile border; text whose glyphs never
+arrived is dropped and the tile comes back a label short. Both are warnings, and
+a warning nobody collects is a tile that is wrong in a way only a human looking
+at the picture will notice.
+
+So give the runtime a logger, once, and every renderer it makes — including the
+ones inside a `Pool` — reports through it:
+
+```go
+rt, err := ezu.NewRuntime(ctx, ezu.WithLogger(slog.Default()))
+```
+
+The package drains the module's buffer after each call, so the lines arrive
+attributed to the call that produced them, at their own level, with the instance
+that drew the tile named in a `renderer` attribute. `ezu.WithLogLevel` chooses how
+much is collected; the default is warn, which is everything a host is likely to
+act on.
+
+`InitLog` and `DrainLogs` are the pull side of the same buffer, for a host that
+wants the lines itself — to attach them to a response, or to assert on them in a
+test. Use one or the other: a runtime with a logger has already emptied the
+buffer by the time you ask.
 
 ## One renderer, one goroutine
 
@@ -212,7 +242,7 @@ if err != nil {
 defer pool.Close(ctx)
 
 err = pool.Do(ctx, func(r *ezu.Renderer) error {
-    out, err := renderTile(ctx, r, z, x, y)
+    out, err := renderTile(ctx, r, tile)
     if err != nil {
         return err
     }
@@ -262,7 +292,10 @@ u, err := r.MemoryUsage(ctx)
 ```
 
 `SetGlyphBudget` caps the glyph bytes each bound fontstack keeps resident, which
-is the one bank that otherwise accumulates for the life of a renderer.
+is the one bank that otherwise accumulates for the life of a renderer;
+`ClearGlyphBudget` lifts the cap again. Two calls rather than one taking a
+pointer, because a budget of `0` is a real budget — keep nothing — and should not
+be the same word as having none.
 
 Hitting the limit is not a silent kill. The module's allocator reports the failed
 allocation on its way out, so the call returns an `*ezu.Error` named
@@ -320,13 +353,7 @@ Compiling the module costs **about 1.3 s, once per process**. A compilation cach
 makes the next start about **45 ms**:
 
 ```go
-cache, err := wazero.NewCompilationCacheWithDir("/var/cache/ezu")
-if err != nil {
-    return err
-}
-defer cache.Close(ctx)
-
-rt, err := ezu.NewRuntime(ctx, ezu.WithCompilationCache(cache))
+rt, err := ezu.NewRuntime(ctx, ezu.WithCompilationCacheDir("/var/cache/ezu"))
 if err != nil {
     return err
 }
@@ -343,7 +370,14 @@ second slower than whoever configured the cache expects, every time.
 
 The cache is keyed by the module's bytes and by wazero's version, architecture
 and OS, so a rebuilt module or an upgraded wazero misses and recompiles rather
-than serving something stale.
+than serving something stale. The runtime owns the cache it builds and closes it
+with itself, so there is nothing else to hold on to.
+
+The option takes a path rather than a `wazero.CompilationCache` because a path
+is all that was ever accepted: the interface is, in wazero's own words,
+"decoupling, not third-party implementations", and it is type-asserted to
+wazero's concrete type with no comma-ok, so anything but the return of
+`wazero.NewCompilationCacheWithDir` panics inside wazero.
 
 ### Baking the cache into an image
 
@@ -376,10 +410,6 @@ bitten:
   both into a slow start, which is what makes the recipe safe to attempt at all —
   but it means a bad entry costs you the whole speedup silently, so log
   `CompilationCacheError`.)
-- **A custom `CompilationCache` panics.** The option's parameter is an interface,
-  but wazero type-asserts it to its own concrete type without checking, so the
-  only value you may pass is the return of `wazero.NewCompilationCacheWithDir`.
-
 Regenerate the entry whenever the wasm module changes or the wazero dependency is
 bumped. Drift's only symptom is a silent return to 1.3 s starts, so a CI check
 that recomputes the key and compares is worth the one line.
