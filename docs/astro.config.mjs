@@ -40,6 +40,7 @@ export default defineConfig({
             { label: 'Validate in CI', link: '/guides/validate-in-ci/' },
             { label: 'Use from Rust', link: '/guides/rust-library/' },
             { label: 'Use in the browser', link: '/guides/browser-wasm/' },
+            { label: 'Use from Go', link: '/guides/go-package/' },
             { label: 'Serve tiles', link: '/guides/serving-tiles/' },
           ],
         },

@@ -81,6 +81,20 @@ as a missing widget instead of a knob that silently does nothing.
 
 ## Binding sources
 
+Start from what the style declares rather than from names you assume:
+
+```js
+for (const s of r.sources()) {
+  // s.name, s.type, s.tileScoped, s.url, s.indexUrl
+}
+```
+
+`url` is absent only for a `geojson` source with inline `data` — nothing to fetch
+and nothing to bind — and a `glyphs` url arrives with `{fontstack}` already
+substituted and percent-encoded, leaving `{range}` for you to fill in per block.
+`boundSources()` answers the opposite question, what is already bound, and cannot
+start the loop.
+
 `bindSource(name, bytes, opts?)` dispatches on the declared `type` of that
 source:
 

@@ -1,0 +1,426 @@
+---
+title: Use from Go
+description: Render tiles in a Go service with the embedded wasm module and wazero — no cgo, no Rust toolchain.
+sidebar:
+  order: 10
+---
+
+```sh
+go get github.com/reearth/ezu/go
+```
+
+The module path ends in `go` and the package is called `ezu`, so most files name
+it in the import:
+
+```go
+import ezu "github.com/reearth/ezu/go"
+```
+
+It embeds the renderer as a 4.2 MiB wasm module and runs it on
+[wazero](https://wazero.io). Nothing is compiled at `go get` time: the module is
+a committed artefact, so there is no Rust toolchain to install, no cgo, no C
+compiler, and cross-compiling stays `GOOS=… GOARCH=… go build`. `go test` works
+in a fresh checkout.
+
+The bargain is the same one the [browser bindings](/ezu/guides/browser-wasm/)
+strike, over the same host-neutral renderer: **ezu fetches nothing.** You bind
+the bytes — vector tiles, DEM or imagery, GeoJSON, sprites, fonts, glyph ranges,
+brushes — and ask for a tile. Rendering the same style from a Go service and
+from a browser gives the same pixels.
+
+## The shape of a render
+
+```go
+ctx := context.Background()
+
+rt, err := ezu.NewRuntime(ctx)          // compiles the module — once per process
+if err != nil {
+    return err
+}
+defer rt.Close(ctx)
+
+r, err := rt.NewRenderer(ctx, styleJSON) // one wasm instance, one style
+if err != nil {
+    return err
+}
+defer r.Close(ctx)
+
+if err := r.BindSource(ctx, "basemap", mvt, ezu.Bind{}); err != nil {
+    return err
+}
+png, err := r.RenderTile(ctx, 14, 14554, 6454, ezu.Render{})
+if err != nil {
+    return err
+}
+r.ClearSources(ctx)                      // between tiles
+```
+
+`Runtime` holds the compiled module and is safe for concurrent use.
+`Renderer` holds a style, its built graph and its asset banks, and is not — see
+[one renderer, one goroutine](#one-renderer-one-goroutine).
+
+`ezu.Render{}` renders PNG at the style's own canvas size. `Format:
+ezu.FormatRGBA` skips the container when the bytes are going into an image
+buffer, `ezu.FormatWebP` for lossless WebP, and `Params` overrides the style's
+[declared params](/ezu/style/params/) per render, validated the same way the
+CLI's `--param` is.
+
+## The bind loop
+
+Ask the renderer what the style declares rather than reading the style yourself:
+
+```go
+sources, err := r.Sources(ctx)
+```
+
+Each `ezu.Source` carries the four things a fetch needs:
+
+| Field | What it is |
+| --- | --- |
+| `Name` | the `sources.<name>` key, which is what `BindSource` takes |
+| `Type` | the style's own word — `mvt`, `pmtiles`, `dem`, `raster`, `geojson`, `sprite`, `font`, `glyphs`, `brush`, `image` — and what the bind dispatches on |
+| `TileScoped` | whether the binding is dropped by `ClearSources` and rebound per tile, or goes into a persistent bank and is bound once |
+| `URL` | where the bytes come from, as the style wrote it |
+
+`URL` is empty only for a `geojson` source with inline `data`: the style carries
+the payload, so there is nothing to fetch and nothing to bind. A `sprite` source
+also reports `IndexURL` when its index is a URL rather than inline — fetch it and
+pass the text as `ezu.Bind{Index: …}` alongside the atlas image.
+
+A `glyphs` URL arrives with `{fontstack}` **already substituted and
+percent-encoded** the way MapLibre encodes it, and `{range}` left for you, so the
+only thing to fill in is the block you are fetching:
+
+```go
+url := strings.ReplaceAll(g.URL, "{range}", fmt.Sprintf("%d-%d", start, start+255))
+```
+
+That division is the point of the call. A host that re-derives the kinds, the
+scopes and the `{fontstack}` spelling from the style keeps a second copy of style
+interpretation, and the two drift; `Sources` hands you the one the renderer
+itself used. `BoundSources` answers the opposite question — what is already bound
+— and cannot start the loop.
+
+A tile then looks like this:
+
+```go
+func renderTile(ctx context.Context, r *ezu.Renderer, z uint8, x, y uint32) ([]byte, error) {
+    sources, err := r.Sources(ctx)
+    if err != nil {
+        return nil, err
+    }
+    if err := r.ClearSources(ctx); err != nil {
+        return nil, err
+    }
+
+    for _, s := range sources {
+        if !s.TileScoped || s.URL == "" {
+            continue // persistent banks are bound once; inline GeoJSON not at all
+        }
+        // Where the source stops short of this zoom, fetch the covering
+        // ancestor and say which zoom the bytes came from.
+        tile, err := r.SourceTile(ctx, s.Name, z, int32(x), int32(y))
+        if err != nil {
+            return nil, err
+        }
+        body, err := fetch(tileURL(s.URL, tile))
+        if err != nil {
+            return nil, err
+        }
+        if err := r.BindSource(ctx, s.Name, body, ezu.Bind{SourceZoom: int(tile.Z)}); err != nil {
+            return nil, err
+        }
+
+        // And whichever neighbours this source actually asks for.
+        offsets, err := r.RequestedNeighborOffsets(ctx, s.Name)
+        if err != nil {
+            return nil, err
+        }
+        for _, o := range offsets {
+            nt, err := r.SourceTile(ctx, s.Name, z, int32(x)+int32(o.DX), int32(y)+int32(o.DY))
+            if err != nil {
+                return nil, err
+            }
+            body, err := fetch(tileURL(s.URL, nt))
+            if err != nil {
+                continue // off the top or bottom of the world: that edge clamps
+            }
+            if err := r.BindSource(ctx, s.Name, body, ezu.Bind{
+                DX: o.DX, DY: o.DY, SourceZoom: int(nt.Z),
+            }); err != nil {
+                return nil, err
+            }
+        }
+    }
+
+    // This host cannot fetch lazily, so text needs its glyphs before the render.
+    needed, err := r.NeededGlyphRanges(ctx)
+    if err != nil {
+        return nil, err
+    }
+    for name, ranges := range needed {
+        if err := bindGlyphs(ctx, r, sources, name, ranges); err != nil {
+            return nil, err
+        }
+    }
+    return r.RenderTile(ctx, z, x, y, ezu.Render{})
+}
+```
+
+Three things in there are worth saying plainly, because each of them is a source
+of tiles that are wrong rather than missing:
+
+- **Do not fetch a blind 3×3.** `RequestedNeighborOffsets` names what the style
+  reads, per source: often nothing for a vector source, and all eight for a `dem`
+  or `raster`, which stitch their window into one buffer. A neighbour left
+  unbound there is not a smaller render — the stitch fills the pad by clamping
+  the centre's edge pixels, and anything sampling it drags that guess back inside
+  the tile as a seam.
+- **`SourceTile` owns each source's ceiling**, so you do not keep a copy of every
+  maxzoom. It accepts off-grid coordinates for exactly the neighbour loop above:
+  `x` wraps around the antimeridian, and a `y` off the top or bottom of the world
+  comes back unchanged, so its fetch misses and that edge clamps — which is what
+  the pole should look like.
+- **Missing glyphs are not an error.** Text whose glyphs were never bound is
+  dropped with a warning, and warnings arrive through `InitLog` / `DrainLogs`
+  rather than as a returned error. `NeededCodepoints` is the precise form of
+  `NeededGlyphRanges` for a host that can assemble its own PBF; on CJK labels that
+  is the difference between a few thousand glyphs and tens of megabytes.
+
+## One renderer, one goroutine
+
+**A `Renderer` is one wasm instance, and a wasm instance is single-threaded.** It
+has one linear memory, one allocator and no locks anywhere inside it. Two
+goroutines calling into the same instance interleave two allocation sequences
+that were written on the assumption that they could not, which is heap corruption
+rather than a slow answer.
+
+Nothing serialises for you. A second goroutine entering a call already in
+progress gets `ezu.ErrConcurrentUse` and no side effects — an error rather than a
+lock, because a caller who asked for parallel tiles and silently got a queue
+would see correct pixels, no error, and none of the throughput, and would find
+out in production.
+
+Rendering tiles in parallel therefore means several renderers. `ezu.Pool` is the
+bookkeeping that makes that the easy thing to do:
+
+```go
+pool, err := rt.NewPool(ctx, 4, styleJSON)
+if err != nil {
+    return err
+}
+defer pool.Close(ctx)
+
+err = pool.Do(ctx, func(r *ezu.Renderer) error {
+    out, err := renderTile(ctx, r, z, x, y)
+    if err != nil {
+        return err
+    }
+    return write(out)
+})
+```
+
+`Do` acquires, runs and releases; `Acquire` / `Release` are there when the
+lifetime does not fit a function. `Acquire` blocks until a renderer is free or
+`ctx` is done.
+
+Size the pool by **memory, not by cores**. Every renderer is a full linear memory
+with its own copies of whatever it has been given — glyphs, sprites, its own
+render cache — so N renderers cost roughly N times one renderer's
+`MemoryUsage`, and that is usually the binding constraint long before cores are.
+The persistent banks are per renderer too: a brush, font, sprite or glyph range
+bound to one is unknown to the others, so bind to each of them, or bind per tile.
+
+The expensive artefact is the compiled module, and that is in the `Runtime`,
+which is shared: instantiating a renderer from it is a fresh linear memory and
+little else.
+
+## Memory limits and running out
+
+`WithMemoryLimit` caps the linear memory any one renderer from that runtime may
+grow to, in bytes, rounded up to wasm's 64 KiB page:
+
+```go
+rt, err := ezu.NewRuntime(ctx, ezu.WithMemoryLimit(512<<20))
+```
+
+There is deliberately no default and no recommended number here. What a render
+needs is a property of the style and the tile size — a 512 px tile through a few
+blurs is not a 1024 px one through a brush engine and a CJK label pass — so
+measure your own styles with `MemoryUsage` and set it from what you see. Zero,
+the default, means the wasm maximum of 4 GiB and leaves the limiting to whatever
+the process runs under.
+
+`MemoryUsage` reports what a renderer is holding, so you can shed load before an
+allocation fails rather than after:
+
+```go
+u, err := r.MemoryUsage(ctx)
+// u.HeapBytes is what the cap applies to. It is a high-water mark: freeing Rust
+// values returns them to the allocator, never to the host, so it only grows.
+// u.GlyphBytes is usually what grew — glyphs survive ClearSources.
+```
+
+`SetGlyphBudget` caps the glyph bytes each bound fontstack keeps resident, which
+is the one bank that otherwise accumulates for the life of a renderer.
+
+Hitting the limit is not a silent kill. The module's allocator reports the failed
+allocation on its way out, so the call returns an `*ezu.Error` named
+`OutOfMemory` carrying the number of bytes it could not have:
+
+```go
+if ezu.IsKind(err, ezu.KindOutOfMemory) { … }
+```
+
+**That instance is finished.** The allocation trapped mid-render, leaving
+half-built values and an allocator whose bookkeeping is whatever it was, so every
+later call on it returns `ezu.ErrRendererDead` rather than reading a linear
+memory nobody can vouch for. This is diagnosis, not recovery: close the renderer
+and build another. A `Pool` does that for you — a renderer that trapped is closed
+rather than handed to the next caller, and the pool shrinks by one, so one failed
+render does not become every later one. A pool that has shrunk to nothing makes
+`Acquire` block, which is the signal to rebuild it.
+
+## Errors
+
+A failure reported by the renderer itself comes back as an `*ezu.Error` with the
+kind's name in `Name`:
+
+| `Name` | When |
+| --- | --- |
+| `InvalidStyle` | `NewRenderer` / `SetStyle` rejected the JSON, or a render option was not one of the accepted values |
+| `BrushParse` | a brush source's `.myb` JSON would not parse |
+| `MvtDecode` | vector tile bytes would not decode |
+| `DemDecode` | a raster-DEM tile would not decode |
+| `RasterDecode`, `GeoJsonDecode`, `SpriteDecode`, `FontParse`, `GlyphDecode` | the same, for the other source kinds |
+| `UnknownSource` | `BindSource` got a name the style's `sources` block does not declare |
+| `RenderFailed` | a node's evaluation failed — a missing brush, a downcast mismatch |
+| `PngEncode`, `WebpEncode` | encoding the output failed |
+| `OutOfMemory` | the wasm heap could not grow |
+
+**These are the same names the npm package raises** as a thrown `Error`'s `.name`
+(the table in the [`ezu-wasm` README](https://github.com/reearth/ezu/tree/main/crates/ezu-wasm)
+is the same list), because both shells expose one renderer's own error kinds. A
+style that is rejected in a browser is rejected with the same word in a Go
+service, so the two hosts describe a failure the same way and handling written
+against one reads as handling for the other.
+
+`ezu.IsKind(err, name)` is the branch, and `ezu.KindInvalidStyle`,
+`KindUnknownSrc`, `KindRenderFailed` and `KindOutOfMemory` are constants for the
+names most worth branching on; the rest are plain strings. `Error.Message` is the
+detail without the name, and `Error.Bytes` is the size an `OutOfMemory` could not
+have.
+
+`ErrConcurrentUse` and `ErrRendererDead` are not renderer errors but rules of
+this package, and are plain sentinel values.
+
+## Cold start
+
+Compiling the module costs **about 1.3 s, once per process**. A compilation cache
+makes the next start about **45 ms**:
+
+```go
+cache, err := wazero.NewCompilationCacheWithDir("/var/cache/ezu")
+if err != nil {
+    return err
+}
+defer cache.Close(ctx)
+
+rt, err := ezu.NewRuntime(ctx, ezu.WithCompilationCache(cache))
+if err != nil {
+    return err
+}
+if err := rt.CompilationCacheError(); err != nil {
+    slog.Warn("ezu compiled without its cache", "err", err)
+}
+```
+
+A cache is an optimisation and the package treats it as one: if the module cannot
+be compiled with it, the runtime is built again without it and the start costs a
+full compile instead of failing. `CompilationCacheError` is how you hear about
+that, and it is worth logging — otherwise the only symptom is a start that is a
+second slower than whoever configured the cache expects, every time.
+
+The cache is keyed by the module's bytes and by wazero's version, architecture
+and OS, so a rebuilt module or an upgraded wazero misses and recompiles rather
+than serving something stale.
+
+### Baking the cache into an image
+
+If 1.3 s sits on somebody's critical path, the cache can be filled at build time
+and shipped. The shape that works is **an embedded cache entry unpacked to a
+fresh temp directory at startup** — not a pre-built cache directory mounted
+read-only:
+
+1. In the build, a `main` package using wazero compiles the same module bytes
+   into an empty directory and prints the entry's filename, which is the cache
+   key. `go:embed` the entry (gzipped, it is about the size of the wasm itself;
+   raw it is roughly four times that) and the key.
+2. At startup: `os.MkdirTemp`, `wazero.NewCompilationCacheWithDir(tmp)`, then
+   write the decompressed entry into the single `wazero-<version>-<arch>-<os>`
+   subdirectory that call creates, under the key filename. Entries are read
+   lazily at compile time, so writing after construction is fine.
+3. `os.RemoveAll(tmp)` on shutdown.
+
+That takes a start to roughly 60 ms raw, or 129 ms gzipped, and the unpack itself
+is about 10 ms of it. Three things make the shape non-obvious, and each one has
+bitten:
+
+- **A miss against a read-only directory is a startup failure, not a slow start.**
+  wazero writes new entries into the cache directory, so a miss there is a write
+  error out of compilation — and a miss is exactly what a rebuilt module or a
+  wazero upgrade produces. A fresh temp directory is writable by construction.
+- **A damaged entry errors rather than recompiling.** A truncated copy gives
+  `unexpected EOF`, a flipped byte gives a checksum mismatch; the CRC catches
+  corruption but wazero does not recover from it. (This package's fallback turns
+  both into a slow start, which is what makes the recipe safe to attempt at all —
+  but it means a bad entry costs you the whole speedup silently, so log
+  `CompilationCacheError`.)
+- **A custom `CompilationCache` panics.** The option's parameter is an interface,
+  but wazero type-asserts it to its own concrete type without checking, so the
+  only value you may pass is the return of `wazero.NewCompilationCacheWithDir`.
+
+Regenerate the entry whenever the wasm module changes or the wazero dependency is
+bumped. Drift's only symptom is a silent return to 1.3 s starts, so a CI check
+that recomputes the key and compares is worth the one line.
+
+And the honest version: **the case for baking is proportional to how often a
+process starts.** For a long-lived service — one process per pod, restarted on
+deploy — 1.3 s once is not worth a build-time dependency, and the right answer is
+an ordinary cache directory, or nothing at all. It earns its keep for per-request
+workers, CLI-shaped invocations, scale-to-zero, and anything where a cold start
+sits in front of a user.
+
+## Byte-for-byte with the CLI — except WebP
+
+Nothing in the render path depends on the host, so a tile rendered through wazero
+is the same file the CLI writes. The package's tests pin exactly that, against
+hashes produced by `ezu tile`.
+
+**WebP is the one exception, and it is a container difference rather than a
+picture difference.** For the same tile the CLI and the module produce two
+different files of identical length whose decoded RGBA is identical — 0 of
+1,048,576 samples differ. The lossless encoder's cost estimates run through
+floating-point transcendentals, and Rust serves those from the platform's libm
+natively and from its own implementation on wasm; a last-bit difference there
+moves a tie and picks another encoding of the same size. It is not the SIMD
+build: a module compiled without `+simd128` agrees with one that has it, in both
+formats. PNG is unaffected because deflate does no floating-point arithmetic at
+all.
+
+So: compare PNG bytes across the two if you like, and **do not write a test that
+asserts the CLI and the module produce the same WebP bytes** — it will pass on
+some styles and fail on others, and neither outcome means anything. Pin the
+module's WebP against the module, or compare decoded pixels.
+
+## Keeping the module honest
+
+The wasm module is committed, which is what spares consumers a Rust toolchain and
+what allows it to go stale. Three things catch that: the ABI version is checked
+when a renderer is instantiated, a Rust test compares the committed module's
+export list against what the source builds, and CI runs the Go suite a second
+time against a freshly built module. `go generate ./...` rebuilds it, and
+`ezu.WithModule` runs a module you supply in place of the embedded one.
+
+`OpCount` is the smoke test for the wasm module's life-before-main constructors:
+zero means they never ran and every style is about to fail with "unknown op".

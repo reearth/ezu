@@ -1,6 +1,6 @@
 ---
 title: Install
-description: The CLI, the Rust crates, and the npm package.
+description: The CLI, the Rust crates, the npm package, and the Go module.
 sidebar:
   order: 2
 ---
@@ -82,6 +82,19 @@ npm install @reearth/ezu
 The package ships browser, Node, and `workerd` builds, in scalar and SIMD
 variants, and exposes them through conditional exports — your bundler picks the
 right one. See [use in the browser](/ezu/guides/browser-wasm/).
+
+  </TabItem>
+  <TabItem label="Go">
+
+```sh
+go get github.com/reearth/ezu/go
+```
+
+The module path ends in `go` and the package is called `ezu`, so name it in the
+import: `import ezu "github.com/reearth/ezu/go"`. It embeds the renderer as a
+wasm module and runs it on [wazero](https://wazero.io), so there is no cgo and no
+Rust toolchain — the module is a committed artefact, not something built at
+`go get` time. See [use from Go](/ezu/guides/go-package/).
 
   </TabItem>
 </Tabs>

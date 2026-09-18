@@ -52,14 +52,27 @@ Before you fetch anything, ask what the style actually needs. Neighbour tiles ar
 required only by cross-tile label collision and edge-continuous DEM/raster
 shading:
 
+Walk the declarations rather than naming a source you assume is there — the
+style is the only thing that knows which sources exist, of which kind, and a
+host that hard-codes one renders nothing the day a style is written without it:
+
 ```rust
 let requested = graph.asset_inputs();
-let decl = &doc.sources["terrain"];
-let offsets = ezu::paint::host::source_neighbor_offsets(decl, &requested, "terrain");
+for (name, decl) in &doc.sources {
+    let offsets = ezu::paint::host::source_neighbor_offsets(decl, &requested, name);
+    // fetch the centre tile, plus one tile per offset
+}
 ```
 
 Empty means the centre tile is enough. Nine fetches versus one, per source, per
 tile.
+
+The embedding shells answer the same question without reading the document at
+all: `renderer.sources()` in Rust, `sources()` in JavaScript, `Sources()` in
+[Go](/ezu/guides/go-package/#the-bind-loop). Each entry names the source, its
+kind, whether the binding is tile-scoped, and where the bytes come from — with a
+`glyphs` URL already carrying the encoded `{fontstack}` — so the bind loop needs
+no second reading of the style.
 
 It takes the declaration because the answer depends on the source's kind. A
 vector source answers from `requested` — a node that wants a neighbour names it

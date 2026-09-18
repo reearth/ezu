@@ -39,6 +39,17 @@ mean is spelled out in
   one renderer serves one goroutine at a time and says so — a concurrent entry
   is refused rather than serialised. Rendering tiles in parallel means several
   renderers, which `ezu.Pool` exists to hold.
+- `sources()` on the npm package, which answers what a style declares before
+  anything has been bound: every source in declaration order, with its kind,
+  whether the binding is tile-scoped, where the bytes come from, and — for a
+  sprite — the index document to fetch alongside the atlas. A `glyphs` url comes
+  back with `{fontstack}` already substituted and percent-encoded, leaving only
+  `{range}` to fill in per block, and an inline `geojson` source reports no url,
+  which is how it says it needs no binding. `boundSources()` answers the opposite
+  question and cannot start a bind loop, so every host was reading the style a
+  second time and re-deriving the dispatch `bindSource` already performs. The Go
+  package's `Sources()` is the same call, and the bundled demo page now names its
+  vector source from it instead of assuming one called `basemap`.
 - `--strict` on `ezu check` and on `ezu tile` / `bbox` / `tiles`: a build
   warning fails the run instead of scrolling past. `check --strict` still writes
   its report first, so a CI job gets the findings and the verdict. `ezu serve`
@@ -62,6 +73,25 @@ mean is spelled out in
   one read.
 - `ezu_paint::host::GeoJsonSources` and `bind_geojson_sources`, the resolve-once
   / project-per-tile pair every host now shares.
+
+### Changed
+
+- The npm package's wasm module is a quarter smaller — 6,103,052 → 4,665,571
+  bytes, gzipped 2,215,214 → 1,751,120 — by keeping out of the wasm build two
+  dependencies that cannot run there: ICU's collation tables, which
+  `maplibre-expr`'s `collator` feature carries, and Rayon, which `geo` pulls in
+  for a target with no threads. The cost is that a `collator` or
+  `resolved-locale` expression now errors at evaluation time in the browser, as
+  a `system:` font source already did; native builds are unchanged and render
+  the same bytes.
+- Expressions are evaluated by `maplibre-expr` 0.5.2, a correctness pass
+  collated against the MapLibre style spec. Error messages are now upstream's
+  word for word, so the text surfacing from a bad expression field reads
+  differently; colour parsing is a real port of CSS Color 4 and is stricter
+  about malformed input; and `to-number`, `to-string` and `number-format` follow
+  JavaScript more closely. Five ways to crash on ordinary input are fixed,
+  including one reachable from `--migrate` on any style carrying an empty
+  filter.
 
 ## 0.10.0 — 2026-09-16
 

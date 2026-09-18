@@ -2,7 +2,7 @@
 title: Serve tiles
 description: Putting ezu behind a tile endpoint — caching, overzoom, and what a host owes the renderer.
 sidebar:
-  order: 10
+  order: 11
 ---
 
 There are three ways to get ezu tiles in front of a client, in increasing order
@@ -35,8 +35,10 @@ and one process. But it renders the same bytes a library host would.
 ## 3. Embed the library
 
 For production, host the renderer yourself — `ezu` in a Rust service
-([use from Rust](/ezu/guides/rust-library/)) or `@reearth/ezu` in a Worker
-([use in the browser](/ezu/guides/browser-wasm/)). You own fetching, caching, and
+([use from Rust](/ezu/guides/rust-library/)), `@reearth/ezu` in a Worker
+([use in the browser](/ezu/guides/browser-wasm/)), or
+`github.com/reearth/ezu/go` in a Go service
+([use from Go](/ezu/guides/go-package/)). You own fetching, caching, and
 concurrency, which is the point: ezu does no I/O, so nothing surprises your
 network layer.
 
