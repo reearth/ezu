@@ -58,6 +58,8 @@ Options:
           When a requested tile is missing, fall back to a parent tile up to this many zoom levels up and re-project its geometry onto the requested tile (MVT "overzoom"). `0` disables [default: 4]
       --param <NAME=VALUE>
           Override a document parameter, as `name=value` (repeatable). Values are validated against the style's `params` declarations: numbers respect `min`/`max`, colors are `#rrggbb[aa]`, bools are `true`/`false`
+      --strict
+          Refuse to render a style that raises build warnings — an unnamed `source`, a `$param` baked in at build time. For CI, where a warning is a style that will surprise someone later
       --tile <TILE>
           Tile coordinate as `Z/X/Y`
       --out <OUT>
@@ -90,6 +92,8 @@ Options:
           When a requested tile is missing, fall back to a parent tile up to this many zoom levels up and re-project its geometry onto the requested tile (MVT "overzoom"). `0` disables [default: 4]
       --param <NAME=VALUE>
           Override a document parameter, as `name=value` (repeatable). Values are validated against the style's `params` declarations: numbers respect `min`/`max`, colors are `#rrggbb[aa]`, bools are `true`/`false`
+      --strict
+          Refuse to render a style that raises build warnings — an unnamed `source`, a `$param` baked in at build time. For CI, where a warning is a style that will surprise someone later
       --bbox <BBOX>
           Bounding box `min_lng,min_lat,max_lng,max_lat` (WGS84)
       --zoom <ZOOM>
@@ -124,6 +128,8 @@ Options:
           When a requested tile is missing, fall back to a parent tile up to this many zoom levels up and re-project its geometry onto the requested tile (MVT "overzoom"). `0` disables [default: 4]
       --param <NAME=VALUE>
           Override a document parameter, as `name=value` (repeatable). Values are validated against the style's `params` declarations: numbers respect `min`/`max`, colors are `#rrggbb[aa]`, bools are `true`/`false`
+      --strict
+          Refuse to render a style that raises build warnings — an unnamed `source`, a `$param` baked in at build time. For CI, where a warning is a style that will surprise someone later
       --bbox <BBOX>
           Bounding box `min_lng,min_lat,max_lng,max_lat` (WGS84). When omitted, every tile at each zoom is generated — at z=14 that is 268M tiles, so a bbox is strongly recommended
       --min-zoom <MIN_ZOOM>
@@ -155,6 +161,7 @@ Options:
   -v, --verbose                  Emit per-node debug logs from the graph evaluator (op name, cache hit/miss, output shape, eval duration). Overrides `RUST_LOG` for this run
       --no-fetch                 Skip fetching URL assets and reading local asset files — only run parse + `build_graph`. Faster and works offline; misses errors like an unreachable brush URL or a missing image file
       --json                     Write the report to stdout as JSON instead of log lines: name, version, counts, padding, attribution, and the style's params schema. Logs move to stderr so the stream stays parseable
+      --strict                   Exit non-zero when the style raises build warnings, not just on errors. For CI, where a warning is a style that will surprise someone later
   -h, --help                     Print help
 ```
 

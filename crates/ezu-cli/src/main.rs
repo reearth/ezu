@@ -109,6 +109,11 @@ struct CommonArgs {
     /// are `true`/`false`.
     #[arg(long = "param", value_name = "NAME=VALUE")]
     params: Vec<String>,
+    /// Refuse to render a style that raises build warnings — an
+    /// unnamed `source`, a `$param` baked in at build time. For CI,
+    /// where a warning is a style that will surprise someone later.
+    #[arg(long)]
+    strict: bool,
 }
 
 /// Output raster format. Pure-Rust pipelines on both sides — WebP is
@@ -156,6 +161,11 @@ struct CheckCmd {
     /// schema. Logs move to stderr so the stream stays parseable.
     #[arg(long)]
     json: bool,
+    /// Exit non-zero when the style raises build warnings, not just on
+    /// errors. For CI, where a warning is a style that will surprise
+    /// someone later.
+    #[arg(long)]
+    strict: bool,
 }
 
 #[derive(Args, Debug)]
@@ -480,7 +490,7 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
 
     let registry = default_registry();
     let graph = Arc::new(build_graph(&doc, &registry)?);
-    report_warnings(&graph);
+    report_warnings(&graph, common.strict)?;
     report_pad(&graph, &doc);
     let cache = Arc::new(Cache::with_limits(
         ezu::graph::cache::DEFAULT_CAPACITY,
@@ -610,11 +620,13 @@ pub(crate) fn canvas_pad(graph: &Graph, doc: &Document) -> u32 {
     }
 }
 
-/// Log what the style got away with but should have spelled out.
-fn report_warnings(graph: &Graph) {
+/// Log what the style got away with but should have spelled out. Under
+/// `--strict` the same list stops the run instead.
+fn report_warnings(graph: &Graph, strict: bool) -> Result<(), Box<dyn std::error::Error>> {
     for w in graph.warnings() {
         tracing::warn!("{w}");
     }
+    strict_verdict(strict, graph.warnings())
 }
 
 /// Say what the canvas margin will be and where it came from.
@@ -733,11 +745,13 @@ async fn run_check(args: CheckCmd) -> Result<(), Box<dyn std::error::Error>> {
             attribution: attributions,
             params: doc.params_schema(),
             assets_resolved: !args.no_fetch,
-            warnings,
+            warnings: warnings.clone(),
         };
         println!("{}", serde_json::to_string_pretty(&report)?);
-        return Ok(());
+        return strict_verdict(args.strict, &warnings);
     }
+
+    strict_verdict(args.strict, &warnings)?;
 
     tracing::info!(
         "ok: {} v{} ({} nodes, {} sources){}",
@@ -751,6 +765,16 @@ async fn run_check(args: CheckCmd) -> Result<(), Box<dyn std::error::Error>> {
             ""
         },
     );
+    Ok(())
+}
+
+/// `--strict` turns the run's warnings into a non-zero exit. The report
+/// is already out by the time this is called — a CI job gets both the
+/// full picture and the verdict.
+fn strict_verdict(strict: bool, warnings: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    if strict && !warnings.is_empty() {
+        return Err(format!("--strict: {} warning(s); see above", warnings.len()).into());
+    }
     Ok(())
 }
 
@@ -808,6 +832,9 @@ async fn run_graph_view(args: GraphCmd) -> Result<(), Box<dyn std::error::Error>
         mvt: args.mvt.clone(),
         overzoom_levels: args.overzoom_levels,
         params: args.params.clone(),
+        // A diagram of what the graph does; warnings are worth seeing
+        // here, not worth refusing to draw over.
+        strict: false,
     };
     let doc = Document::from_json(&fetch_text(&common.style).await?)?;
     let prep = prepare(&common).await?;

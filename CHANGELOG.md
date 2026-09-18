@@ -27,6 +27,10 @@ mean is spelled out in
 
 ### Added
 
+- `--strict` on `ezu check` and on `ezu tile` / `bbox` / `tiles`: a build
+  warning fails the run instead of scrolling past. `check --strict` still writes
+  its report first, so a CI job gets the findings and the verdict. `ezu serve`
+  has no such flag — a live editor that walks out over a warning is no use.
 - A source node that resolves its `source` implicitly now says so. A
   `features`, `raster` or `dem` node with no `source` still falls back to the
   document's only source of that type, but the fallback raises a build warning

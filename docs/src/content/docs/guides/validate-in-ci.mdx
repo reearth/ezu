@@ -23,6 +23,28 @@ ezu check style.json --no-fetch   # parse + build graph only — offline, fast
 On success it prints a one-line summary — style name, version, node count, source
 count. On failure it names the offending node.
 
+## Warnings, and making them fail
+
+Some things a style does are legal but unsaid. A `features`, `raster` or `dem`
+node with no `source` resolves to the document's only source of that type — until
+someone adds a second one, at which point the node stops building and the style's
+meaning was never written down anywhere. A field that reads a `$param` gets the
+param's declared default baked in at build time, so render-time overrides of that
+param quietly do nothing.
+
+Neither is an error, so `ezu check` reports them and still exits zero. `--strict`
+flips that: any warning fails the run.
+
+```sh
+ezu check style.json --strict     # warnings are errors
+ezu tile --style style.json --tile 3/4/5 --strict
+```
+
+The warnings are in the `--json` report as well, under `warnings`, so a job can
+read them without parsing the log. `ezu serve` never refuses to start over a
+warning — the live editor's job is to show you the style you have, not to walk
+out on it.
+
 ## A machine-readable report
 
 `--json` writes the same findings to stdout as a JSON object, with the log stream
@@ -40,7 +62,8 @@ ezu check style.json --json | jq .pad
   "sources": 2,
   "pad": { "declared": 24, "needed": 12 },
   "params": { "$schema": "...", "properties": { "softness": { "type": "number", "minimum": 0, "maximum": 4, "default": 0 } } },
-  "assets_resolved": true
+  "assets_resolved": true,
+  "warnings": ["node `water_f`: `source` is not set — falling back to the document's only `mvt`/`pmtiles`/`geojson` source, `basemap`. Name it: the style changes meaning the day a second one is declared."]
 }
 ```
 
