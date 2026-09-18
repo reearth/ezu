@@ -128,12 +128,12 @@ pub(super) fn resolve_field(
                     .params
                     .get(p)
                     .ok_or_else(|| FactoryError::UnknownParam(p.to_string()))?;
-                tracing::warn!(
+                ctx.warn(format!(
                     "field `{name}`: `${p}` is read when the graph is built, so its \
                      declared default ({}) is baked in and render-time overrides of \
                      `{p}` will not change this field",
                     decl.default,
-                );
+                ));
                 return Ok(decl.default.clone());
             }
             spec::FieldRef::Node(_) => {
@@ -541,6 +541,58 @@ pub(super) fn read_optional_string(
         msg: "expected string".into(),
     })?;
     Ok(Some(s.to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// Source resolution
+
+/// Resolve the `source` field of a source node (`features`, `raster`,
+/// `dem`, …) against the document's `sources` block. `kinds` names the
+/// declaration types the node accepts, for error and warning text
+/// (e.g. `` "`dem`" ``), and `accepts` decides which ones match.
+///
+/// Omitting `source` still falls back to the document's single matching
+/// source, but that fallback makes the style depend on something it
+/// never says, and it silently changes meaning the day a second source
+/// is declared — so it comes with a build warning.
+pub(super) fn resolve_source(
+    fields: &serde_json::Map<String, Value>,
+    ctx: &FactoryCtx<'_>,
+    kinds: &str,
+    accepts: fn(&spec::SourceDecl) -> bool,
+) -> Result<String, FactoryError> {
+    if let Some(name) = read_optional_string(fields, "source")? {
+        return match ctx.sources.get(&name) {
+            Some(decl) if accepts(decl) => Ok(name),
+            Some(_) => Err(FactoryError::BadField {
+                field: "source".into(),
+                msg: format!("`{name}` exists but is not a {kinds} source"),
+            }),
+            None => Err(FactoryError::BadField {
+                field: "source".into(),
+                msg: format!("no source named `{name}` in document"),
+            }),
+        };
+    }
+
+    let mut matches = ctx.sources.iter().filter(|(_, decl)| accepts(decl));
+    match (matches.next(), matches.next()) {
+        (Some((name, _)), None) => {
+            ctx.warn(format!(
+                "`source` is not set — falling back to the document's only {kinds} source, \
+                 `{name}`. Name it: the style changes meaning the day a second one is declared."
+            ));
+            Ok(name.clone())
+        }
+        (None, _) => Err(FactoryError::BadField {
+            field: "source".into(),
+            msg: format!("no {kinds} source in document; declare one or pass `source` explicitly"),
+        }),
+        (Some(_), Some(_)) => Err(FactoryError::BadField {
+            field: "source".into(),
+            msg: format!("multiple {kinds} sources in document; pass `source` explicitly"),
+        }),
+    }
 }
 
 // ---------------------------------------------------------------------------

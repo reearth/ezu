@@ -15,15 +15,15 @@ Ops with no demo image below produce no visible result on their own — they fee
 
 ### `dem`
 
-Sample a host-bound raster DEM as a ScalarField. `source` names a `dem` entry in the document's `sources` block; optional when the document declares exactly one such source.
+Sample a host-bound raster DEM as a ScalarField. `source` names a `dem` entry in the document's `sources` block; omitting it falls back to the document's only `dem` source, with a build warning.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `source` | string | no | Name of a `dem` source in the document's `sources` block. Optional when there is exactly one. |
+| `source` | string | no | Name of a `dem` source in the document's `sources` block. Omitting it resolves to the only such source and warns at build time. |
 
 ### `features`
 
-Sample features from a host-bound feature layer. `source` names an `mvt`/`pmtiles`/`geojson` entry in the document's `sources` block (optional when exactly one exists); `layer` selects a layer within that source (for `geojson`, the layer name equals the source name).
+Sample features from a host-bound feature layer. `source` names an `mvt`/`pmtiles`/`geojson` entry in the document's `sources` block (omitting it resolves to the only such source, with a build warning); `layer` selects a layer within that source (for `geojson`, the layer name equals the source name).
 
 <figure class="op-demo">
   <div class="op-demo__images">
@@ -39,7 +39,7 @@ Sample features from a host-bound feature layer. `source` names an `mvt`/`pmtile
 | `max-zoom` | integer (0…24) | no | Style-level maximum zoom. Above this zoom the node emits an empty layer. |
 | `min-zoom` | integer (0…24) | no | Style-level minimum zoom. Below this zoom the node emits an empty layer (the asset is not even loaded). |
 | `min-zoom-field` | string | no | Per-feature property name carrying its data-side `min_zoom`. Features with `<field> > z` are dropped. |
-| `source` | string | no | Name of an `mvt`, `pmtiles`, or `geojson` entry in the document's `sources`. Optional — defaults to the only such source when the document declares exactly one. |
+| `source` | string | no | Name of an `mvt`, `pmtiles`, or `geojson` entry in the document's `sources`. Omitting it resolves to the only such source and warns at build time. |
 
 ### `graticule`
 
@@ -122,11 +122,11 @@ Random points at a given mean spacing, covering the tile. Where `point-grid` put
 
 ### `raster`
 
-Sample a host-bound RGBA tile pyramid (satellite imagery, pre-rendered basemaps) as a canvas-padded Raster. `source` names a `raster` entry in the document's `sources` block; optional when the document declares exactly one such source.
+Sample a host-bound RGBA tile pyramid (satellite imagery, pre-rendered basemaps) as a canvas-padded Raster. `source` names a `raster` entry in the document's `sources` block; omitting it falls back to the document's only `raster` source, with a build warning.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `source` | string | no | Name of a `raster` source in the document's `sources` block. Optional when there is exactly one. |
+| `source` | string | no | Name of a `raster` source in the document's `sources` block. Omitting it resolves to the only such source and warns at build time. |
 
 ### `tile-bounds`
 

@@ -32,11 +32,42 @@ pub struct BuiltNode {
     pub connections: Vec<Connection>,
 }
 
+/// Collector for build-time warnings — things a document does that are
+/// legal but ill-advised, such as leaning on a field's implicit default
+/// instead of naming what it means. Filled during
+/// [`build_graph`](crate::build_graph) and handed to the caller on the
+/// finished [`Graph`](crate::Graph).
+#[derive(Debug, Default)]
+pub struct Warnings(std::cell::RefCell<Vec<String>>);
+
+impl Warnings {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn push(&self, msg: impl Into<String>) {
+        self.0.borrow_mut().push(msg.into());
+    }
+    pub fn into_vec(self) -> Vec<String> {
+        self.0.into_inner()
+    }
+}
+
 /// Read-only context handed to factories: lets them resolve `$param`
-/// and source references during construction.
+/// and source references during construction, and report a warning
+/// against the node being built.
 pub struct FactoryCtx<'a> {
     pub params: &'a indexmap::IndexMap<String, spec::ParamDecl>,
     pub sources: &'a indexmap::IndexMap<String, spec::SourceDecl>,
+    /// Id of the node currently being built, for warning messages.
+    pub node: &'a str,
+    pub warnings: &'a Warnings,
+}
+
+impl FactoryCtx<'_> {
+    /// Record a build-time warning, prefixed with the node's id.
+    pub fn warn(&self, msg: impl std::fmt::Display) {
+        self.warnings.push(format!("node `{}`: {msg}", self.node));
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

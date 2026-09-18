@@ -480,6 +480,7 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
 
     let registry = default_registry();
     let graph = Arc::new(build_graph(&doc, &registry)?);
+    report_warnings(&graph);
     report_pad(&graph, &doc);
     let cache = Arc::new(Cache::with_limits(
         ezu::graph::cache::DEFAULT_CAPACITY,
@@ -609,6 +610,13 @@ pub(crate) fn canvas_pad(graph: &Graph, doc: &Document) -> u32 {
     }
 }
 
+/// Log what the style got away with but should have spelled out.
+fn report_warnings(graph: &Graph) {
+    for w in graph.warnings() {
+        tracing::warn!("{w}");
+    }
+}
+
 /// Say what the canvas margin will be and where it came from.
 fn report_pad(graph: &Graph, doc: &Document) {
     let needed = match graph.required_pad() {
@@ -675,6 +683,7 @@ async fn run_check(args: CheckCmd) -> Result<(), Box<dyn std::error::Error>> {
             None
         }
     };
+    warnings.extend(graph.warnings().iter().cloned());
     let attributions = doc.attributions();
     if !args.json {
         match needed {
@@ -683,7 +692,10 @@ async fn run_check(args: CheckCmd) -> Result<(), Box<dyn std::error::Error>> {
                 doc.pad,
             ),
             Some(needed) => tracing::info!("pad: {} declared, {needed} needed", doc.pad),
-            None => tracing::warn!("{}", warnings[0]),
+            None => {}
+        }
+        for w in &warnings {
+            tracing::warn!("{w}");
         }
         if !attributions.is_empty() {
             tracing::info!("attribution: {}", attributions.join(" | "));

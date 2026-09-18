@@ -22,6 +22,18 @@ mean is spelled out in
 
 ### Added
 
+- A source node that resolves its `source` implicitly now says so. A
+  `features`, `raster` or `dem` node with no `source` still falls back to the
+  document's only source of that type, but the fallback raises a build warning
+  naming the node and the source it landed on: the style depends on something it
+  never states, and stops meaning the same thing the day a second source is
+  declared. `ezu check` reports the warnings (and lists them under `warnings` in
+  `--json`), `ezu tile` / `bbox` / `tiles` and `ezu serve` log them, and the
+  browser renderer logs them to the console.
+- `Graph::warnings()`, the build-time warnings a host can surface, and
+  `FactoryCtx::warn` for a node factory to raise one. The warning a field raises
+  when it reads a `$param` at build time goes through the same channel, so it
+  now names its node and reaches `ezu check --json` too.
 - A `geojson` source's `url` is read by the native hosts, not just the browser
   one, and goes through the same resolver as any other document asset:
   `http(s)://`, `file:` (relative to `--assets-dir`) and `data:` all work. The

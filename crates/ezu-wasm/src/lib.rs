@@ -1509,6 +1509,9 @@ fn parse_and_build(style_json: &str) -> Result<(Document, Graph), JsValue> {
     let doc = Document::from_json(style_json).map_err(|e| named_err(ERR_STYLE, e))?;
     let registry = default_registry();
     let graph = build_graph(&doc, &registry).map_err(|e| named_err(ERR_STYLE, e))?;
+    for w in graph.warnings() {
+        tracing::warn!("{w}");
+    }
     Ok((doc, graph))
 }
 

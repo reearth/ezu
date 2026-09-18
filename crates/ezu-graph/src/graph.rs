@@ -98,6 +98,12 @@ pub struct Graph {
     /// `Sprite`) have their actual output kind decided here at build
     /// time based on their connected inputs.
     output_kinds: Vec<PortKind>,
+    /// Build-time warnings collected by node factories — legal but
+    /// ill-advised things the document does, such as relying on a
+    /// field's implicit default. Set by
+    /// [`build_graph`](crate::build_graph); empty for graphs assembled
+    /// through [`GraphBuilder`] directly.
+    warnings: Vec<String>,
 }
 
 /// Maximum allowed pad propagated to any node, in pixels. Prevents
@@ -293,6 +299,7 @@ impl GraphBuilder {
             output: output_ix,
             topo,
             output_kinds,
+            warnings: Vec::new(),
         })
     }
 }
@@ -426,6 +433,18 @@ impl std::fmt::Debug for Graph {
 }
 
 impl Graph {
+    /// Build-time warnings raised while constructing this graph's
+    /// nodes, in node order. Hosts should surface these to the style's
+    /// author — each one names a node that works today but relies on
+    /// something the style does not say out loud.
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
+    }
+
+    pub(crate) fn set_warnings(&mut self, warnings: Vec<String>) {
+        self.warnings = warnings;
+    }
+
     /// Number of nodes.
     pub fn len(&self) -> usize {
         self.nodes.len()

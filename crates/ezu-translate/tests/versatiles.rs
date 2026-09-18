@@ -26,6 +26,16 @@ fn converts_full_osm_style_to_valid_document() {
         doc.nodes.len()
     );
 
+    // Every source node names the source it reads — 300+ nodes is
+    // exactly where an unnamed one would hide.
+    let graph = ezu_graph::build_graph(&doc, &ezu_paint::nodes::default_registry())
+        .expect("recipe builds as a graph");
+    assert!(
+        graph.warnings().is_empty(),
+        "conversion left build warnings:\n{:#?}",
+        graph.warnings()
+    );
+
     // Expression-form filters must survive conversion (not be silently
     // dropped): the style uses `["in", ["get", "kind"], ["literal", [...]]]`
     // and other expression filters heavily. These now pass through verbatim

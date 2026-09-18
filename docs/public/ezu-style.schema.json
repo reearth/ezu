@@ -1022,14 +1022,14 @@
             "type": "object"
           },
           {
-            "description": "Sample a host-bound raster DEM as a ScalarField. `source` names a `dem` entry in the document's `sources` block; optional when the document declares exactly one such source.",
+            "description": "Sample a host-bound raster DEM as a ScalarField. `source` names a `dem` entry in the document's `sources` block; omitting it falls back to the document's only `dem` source, with a build warning.",
             "properties": {
               "op": {
                 "const": "dem",
                 "description": "Selects the `dem` operation."
               },
               "source": {
-                "description": "Name of a `dem` source in the document's `sources` block. Optional when there is exactly one.",
+                "description": "Name of a `dem` source in the document's `sources` block. Omitting it resolves to the only such source and warns at build time.",
                 "type": "string"
               }
             },
@@ -1526,7 +1526,7 @@
             "type": "object"
           },
           {
-            "description": "Sample features from a host-bound feature layer. `source` names an `mvt`/`pmtiles`/`geojson` entry in the document's `sources` block (optional when exactly one exists); `layer` selects a layer within that source (for `geojson`, the layer name equals the source name).",
+            "description": "Sample features from a host-bound feature layer. `source` names an `mvt`/`pmtiles`/`geojson` entry in the document's `sources` block (omitting it resolves to the only such source, with a build warning); `layer` selects a layer within that source (for `geojson`, the layer name equals the source name).",
             "properties": {
               "filter-expr": {
                 "description": "A MapLibre filter expression (JSON array, e.g. [\"all\", [\"==\", [\"get\", \"class\"], \"primary\"], [\"has\", \"name\"]]), evaluated per feature. A feature passes only when the expression is truthy. Supports the full expression language (any/has/comparisons/geometry-type)."
@@ -1556,7 +1556,7 @@
                 "description": "Selects the `features` operation."
               },
               "source": {
-                "description": "Name of an `mvt`, `pmtiles`, or `geojson` entry in the document's `sources`. Optional — defaults to the only such source when the document declares exactly one.",
+                "description": "Name of an `mvt`, `pmtiles`, or `geojson` entry in the document's `sources`. Omitting it resolves to the only such source and warns at build time.",
                 "type": "string"
               }
             },
@@ -3868,14 +3868,14 @@
             "type": "object"
           },
           {
-            "description": "Sample a host-bound RGBA tile pyramid (satellite imagery, pre-rendered basemaps) as a canvas-padded Raster. `source` names a `raster` entry in the document's `sources` block; optional when the document declares exactly one such source.",
+            "description": "Sample a host-bound RGBA tile pyramid (satellite imagery, pre-rendered basemaps) as a canvas-padded Raster. `source` names a `raster` entry in the document's `sources` block; omitting it falls back to the document's only `raster` source, with a build warning.",
             "properties": {
               "op": {
                 "const": "raster",
                 "description": "Selects the `raster` operation."
               },
               "source": {
-                "description": "Name of a `raster` source in the document's `sources` block. Optional when there is exactly one.",
+                "description": "Name of a `raster` source in the document's `sources` block. Omitting it resolves to the only such source and warns at build time.",
                 "type": "string"
               }
             },

@@ -39,7 +39,7 @@ pub use node::{InfluenceCtx, InkReach, Node};
 pub use port::{CoordSpace, PortKind, PortSpec};
 pub use registry::{
     schema_frag, take_input_ref, take_optional_input_ref, BuiltNode, Connection, FactoryCtx,
-    FactoryError, NodeFactory, NodeRegistry, StaticOp,
+    FactoryError, NodeFactory, NodeRegistry, StaticOp, Warnings,
 };
 
 #[doc(hidden)]

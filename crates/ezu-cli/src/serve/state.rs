@@ -91,6 +91,9 @@ impl StyleSnapshot {
         let doc = Document::from_json(&text).map_err(BuildSnapshotError::Parse)?;
         let registry = default_registry();
         let graph = build_graph(&doc, &registry).map_err(BuildSnapshotError::Graph)?;
+        for w in graph.warnings() {
+            tracing::warn!("{w}");
+        }
         let mut loader = BrushBankLoader::new()
             .with_dir(assets_dir.to_path_buf())
             .with_images_dir(assets_dir.to_path_buf());

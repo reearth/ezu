@@ -75,6 +75,17 @@ fn converts_and_parses_as_ezu_document() {
     let doc = ezu_style::Document::from_json(&text).expect("recipe parses as ezu Document");
     assert!(!doc.nodes.is_empty());
 
+    // A converted recipe names every source it reads: the style is
+    // written by a machine, and a machine has no excuse for leaving the
+    // reader (or a second source added later) to guess.
+    let graph = ezu_graph::build_graph(&doc, &ezu_paint::nodes::default_registry())
+        .expect("recipe builds as a graph");
+    assert!(
+        graph.warnings().is_empty(),
+        "conversion left build warnings:\n{:#?}",
+        graph.warnings()
+    );
+
     eprintln!(
         "--- conversion report ({} warnings) ---",
         report.warnings.len()

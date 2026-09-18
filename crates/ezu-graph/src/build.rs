@@ -5,7 +5,7 @@ use ezu_style as spec;
 
 use crate::graph::{BuildError, Graph, GraphBuilder};
 use crate::port::PortKind;
-use crate::registry::{FactoryCtx, FactoryError, NodeRegistry};
+use crate::registry::{FactoryCtx, FactoryError, NodeRegistry, Warnings};
 
 #[derive(Debug, thiserror::Error)]
 pub enum BuildGraphError {
@@ -82,10 +82,7 @@ pub fn build_graph(
         None => (doc, &[][..]),
     };
 
-    let ctx = FactoryCtx {
-        params: &doc.params,
-        sources: &doc.sources,
-    };
+    let warnings = Warnings::new();
 
     let mut gb = GraphBuilder::new();
     let mut pending: Vec<(String, Vec<crate::registry::Connection>)> = Vec::new();
@@ -97,6 +94,13 @@ pub fn build_graph(
                 node: id.clone(),
                 op: spec.op.clone(),
             })?;
+
+        let ctx = FactoryCtx {
+            params: &doc.params,
+            sources: &doc.sources,
+            node: id,
+            warnings: &warnings,
+        };
 
         let built = factory
             .build(&spec.fields, &ctx)
@@ -116,7 +120,8 @@ pub fn build_graph(
     }
 
     gb.set_output(doc.output.as_str().to_string());
-    let graph = gb.build()?;
+    let mut graph = gb.build()?;
+    graph.set_warnings(warnings.into_vec());
 
     // Verify each call site's declared kinds against the resolved port
     // kinds. Argument sources and the call's output node are plain

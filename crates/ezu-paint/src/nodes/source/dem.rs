@@ -7,8 +7,8 @@
 //! the resulting [`ScalarField`] under the source's bare name via
 //! `TileLoader::bind_scalar_field` before each render. The style's
 //! `dem` node references it via `source: "<name>"` matching the
-//! document's `sources` entry; the field is optional when the
-//! document has exactly one `dem` source.
+//! document's `sources` entry; omitting the field falls back to the
+//! document's only `dem` source and warns at build time.
 
 use std::sync::Arc;
 
@@ -19,7 +19,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::read_optional_string;
+use crate::nodes::common::resolve_source;
 
 struct DemNode {
     name: String,
@@ -89,11 +89,11 @@ impl NodeFactory for DemFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Sample a host-bound raster DEM as a ScalarField. `source` names a `dem` entry in the document's `sources` block; optional when the document declares exactly one such source.",
+            "description": "Sample a host-bound raster DEM as a ScalarField. `source` names a `dem` entry in the document's `sources` block; omitting it falls back to the document's only `dem` source, with a build warning.",
             "properties": {
                 "source": {
                     "type": "string",
-                    "description": "Name of a `dem` source in the document's `sources` block. Optional when there is exactly one."
+                    "description": "Name of a `dem` source in the document's `sources` block. Omitting it resolves to the only such source and warns at build time."
                 }
             },
         })
@@ -104,35 +104,9 @@ fn resolve_dem_source(
     fields: &serde_json::Map<String, Value>,
     ctx: &FactoryCtx<'_>,
 ) -> Result<String, FactoryError> {
-    if let Some(name) = read_optional_string(fields, "source")? {
-        match ctx.sources.get(&name) {
-            Some(ezu_style::SourceDecl::Dem(_)) => Ok(name),
-            Some(_) => Err(FactoryError::BadField {
-                field: "source".into(),
-                msg: format!("`{name}` exists but is not a `dem` source"),
-            }),
-            None => Err(FactoryError::BadField {
-                field: "source".into(),
-                msg: format!("no source named `{name}` in document"),
-            }),
-        }
-    } else {
-        let mut matches = ctx
-            .sources
-            .iter()
-            .filter(|(_, decl)| matches!(decl, ezu_style::SourceDecl::Dem(_)));
-        match (matches.next(), matches.next()) {
-            (Some((name, _)), None) => Ok(name.clone()),
-            (None, _) => Err(FactoryError::BadField {
-                field: "source".into(),
-                msg: "no `dem` source in document; declare one or pass `source` explicitly".into(),
-            }),
-            (Some(_), Some(_)) => Err(FactoryError::BadField {
-                field: "source".into(),
-                msg: "multiple `dem` sources in document; pass `source` explicitly".into(),
-            }),
-        }
-    }
+    resolve_source(fields, ctx, "`dem`", |decl| {
+        matches!(decl, ezu_style::SourceDecl::Dem(_))
+    })
 }
 
 ezu_graph::submit_node!(DemFactory);
