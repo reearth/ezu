@@ -49,7 +49,10 @@ image = { version = "0.25", default-features = false, features = ["png", "webp",
 # Geo
 geozero = { version = "0.15", default-features = false, features = ["with-mvt"] }
 geojson = "0.24"
-geo = "0.33"
+# `multithreading` (a `geo` default) pulls Rayon in through `geo-types`
+# and `i_overlay`. There are no threads in a plain wasm build, so the
+# consumers add it back only for non-wasm targets; see `ezu-features`.
+geo = { version = "0.33", default-features = false, features = ["earcut", "spade"] }
 i_overlay = "6"
 voronoice = "0.2"
 delaunator = "1"
@@ -62,7 +65,11 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
-maplibre-expr = "0.5.2"
+# `collator` (a `maplibre-expr` default) carries ICU's collation tables,
+# ~1.2 MB of them. Every consumer turns it back on for non-wasm targets;
+# on wasm the `collator` / `resolved-locale` expressions error at
+# runtime, the same bargain `fontdb` strikes for `system:` fonts.
+maplibre-expr = { version = "0.5.2", default-features = false }
 schemars = "1"
 thiserror = "2"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }

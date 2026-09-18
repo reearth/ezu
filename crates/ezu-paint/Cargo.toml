@@ -43,8 +43,14 @@ http = ["dep:reqwest", "dep:pmtiles", "dep:tokio"]
 # System-font resolution (`system:` font scheme) queries the OS font
 # database. There is no such database in a browser, so keep `fontdb`
 # off the wasm build — the `system:` path errors at runtime there.
+#
+# `maplibre-expr`'s `collator` feature carries ICU's collation tables —
+# ~1.2 MB, most of a wasm bundle, for two rarely-used expressions. Keep
+# it off wasm, where a `collator` / `resolved-locale` expression errors
+# at evaluation time, and on everywhere else.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 fontdb = { workspace = true }
+maplibre-expr = { workspace = true, features = ["collator"] }
 
 [dependencies.rayon]
 version = "1"

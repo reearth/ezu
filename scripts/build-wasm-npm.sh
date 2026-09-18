@@ -102,10 +102,14 @@ build_variant() {
   done
 
   if command -v wasm-opt >/dev/null 2>&1; then
+    # `-Oz` is binaryen's size pass over code rustc has already
+    # optimized at `opt-level = 3`; it is not `opt-level = "z"`. Measured
+    # ~1% smaller than `-O3` with render time unchanged.
+    #
     # `--enable-simd` only *permits* v128 opcodes; the vectorization
     # comes from the compiler. Withhold it from the plain build so that
     # binary provably stays SIMD-free for pre-16.4 Safari.
-    local opt_flags=(-O3)
+    local opt_flags=(-Oz)
     if [ -n "$rustflags" ]; then
       opt_flags+=(--enable-simd)
     fi

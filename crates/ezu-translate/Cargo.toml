@@ -18,6 +18,15 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 
+# ICU's collation tables are ~1.2 MB, which is most of a wasm bundle and
+# nothing a browser build can use — there is no locale database to
+# collate against there. Off on wasm, where a translated `collator` /
+# `resolved-locale` expression errors at evaluation time; on everywhere
+# else, where it is a documented, conformance-tested part of the
+# MapLibre expression surface.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+maplibre-expr = { workspace = true, features = ["collator"] }
+
 [dev-dependencies]
 ezu-style = { workspace = true }
 ezu-graph = { workspace = true }

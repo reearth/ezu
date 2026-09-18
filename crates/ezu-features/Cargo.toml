@@ -22,3 +22,9 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 voronoice = { workspace = true }
 delaunator = { workspace = true }
+
+# `geo`'s `multithreading` feature hands its overlay work to Rayon. A
+# plain wasm build has no threads to hand it to, so the feature only
+# costs code there; native builds keep it.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+geo = { workspace = true, features = ["multithreading"] }
