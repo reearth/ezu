@@ -59,16 +59,16 @@ var goldens = []struct {
 		style:   stainedGlassStyle,
 		tileMVT: "testdata/basemap-14-14554-6454.mvt",
 		tile:    Tile{Z: 14, X: 14554, Y: 6454},
-		png:  "daeb73b96d495681a2d95c3043a5ce65a27d3e3ce857e95c10255a5c5861d69a",
-		webp: "63677330cdd1e31f9fcaa12aaffa35ee691362c3b34e3d9ac9b9b665b9fc617f",
+		png:     "daeb73b96d495681a2d95c3043a5ce65a27d3e3ce857e95c10255a5c5861d69a",
+		webp:    "63677330cdd1e31f9fcaa12aaffa35ee691362c3b34e3d9ac9b9b665b9fc617f",
 	},
 	{
 		name:    "risograph",
 		style:   risographStyle,
 		tileMVT: "testdata/basemap-13-7277-3227.mvt",
 		tile:    Tile{Z: 13, X: 7277, Y: 3227},
-		png:  "1f30f5442904edbdc70cd9f736cb01df85058bcfd31dd2f3b0259961c284faf2",
-		webp: "35f31eff6f470ad0be48a52af9f2fe0ca70331ea03ce331e12aff86ddca3b78f",
+		png:     "1f30f5442904edbdc70cd9f736cb01df85058bcfd31dd2f3b0259961c284faf2",
+		webp:    "35f31eff6f470ad0be48a52af9f2fe0ca70331ea03ce331e12aff86ddca3b78f",
 	},
 }
 
