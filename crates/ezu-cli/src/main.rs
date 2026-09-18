@@ -412,13 +412,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))
     };
-    // `check --json` owns stdout for its report, so its log lines go to
-    // stderr — a pipe into `jq` has to see JSON and nothing else.
-    let fmt = tracing_subscriber::fmt().with_env_filter(filter);
-    match &cli.cmd {
-        Cmd::Check(a) if a.json => fmt.with_writer(std::io::stderr).init(),
-        _ => fmt.init(),
-    }
+    // Logs go to stderr, always: `check --json`, `legend` and
+    // `translate` write their payload to stdout, and a pipe into `jq`
+    // has to see JSON and nothing else.
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .init();
     match cli.cmd {
         Cmd::Tile(args) => run_tile(args).await,
         Cmd::Bbox(args) => run_bbox(args).await,

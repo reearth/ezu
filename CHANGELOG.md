@@ -13,6 +13,11 @@ mean is spelled out in
 
 ### Fixed
 
+- The CLI wrote its log lines to stdout, where `ezu translate`, `ezu legend` and
+  `ezu graph` write the document they produce. A single warning was enough to
+  corrupt a redirected recipe — `ezu translate style.json > recipe.json` left a
+  file that no longer parsed. Logs go to stderr now, for every command; only
+  `check --json` was already spared.
 - `ezu tile`, `ezu bbox`, `ezu tiles` and `ezu graph --tile` ignored the
   document's `geojson` sources outright: a style whose features came from
   GeoJSON rendered blank, and said only `no MVT source` on the way. They bind
