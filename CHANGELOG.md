@@ -39,6 +39,12 @@ mean is spelled out in
   one renderer serves one goroutine at a time and says so — a concurrent entry
   is refused rather than serialised. Rendering tiles in parallel means several
   renderers, which `ezu.Pool` exists to hold.
+
+  The renderer's warnings — a DEM stitched against neighbours that were never
+  bound, a label dropped for want of glyphs, both of which render and return no
+  error — go to an `*slog.Logger` given to the runtime with `ezu.WithLogger`,
+  from every renderer it makes, pooled ones included. Nobody has to opt in to
+  hear that their tile came out wrong.
 - `sources()` on the npm package, which answers what a style declares before
   anything has been bound: every source in declaration order, with its kind,
   whether the binding is tile-scoped, where the bytes come from, and — for a
