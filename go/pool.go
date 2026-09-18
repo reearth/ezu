@@ -21,6 +21,10 @@ import (
 // renderer's [Renderer.MemoryUsage], and that is usually the binding
 // constraint long before cores are.
 //
+// Warnings need no per-renderer setup: a pool's renderers come from the
+// runtime, so a runtime built with [WithLogger] logs from all of them, with
+// the instance named on every line.
+//
 // The persistent banks are per renderer, not per pool: a brush, font,
 // sprite or glyph range bound to one is unknown to the others. Bind what a
 // style needs to each of them, or bind per tile — [Renderer.NeededCodepoints]

@@ -53,6 +53,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -88,6 +89,11 @@ type Runtime struct {
 	// Why a compilation cache was abandoned, if one was. See
 	// [Runtime.CompilationCacheError].
 	cacheErr error
+	// Where every renderer's log events go, and how much of them the
+	// module collects. Nil means nobody is listening and the module's sink
+	// is never installed.
+	logger   *slog.Logger
+	logLevel LogLevel
 	// Instance name → the renderer it belongs to, so a host call made from
 	// inside the module can find whose allocator failed.
 	mu        sync.Mutex
@@ -102,6 +108,8 @@ type config struct {
 	moduleBytes      []byte
 	cacheDir         string
 	memoryLimitPages uint32
+	logger           *slog.Logger
+	logLevel         LogLevel
 }
 
 // WithModule runs a module the caller supplies instead of the embedded one
@@ -144,6 +152,41 @@ func WithCompilationCacheDir(path string) Option {
 	return func(c *config) { c.cacheDir = path }
 }
 
+// WithLogger sends the renderer's log events to a [slog.Logger], from every
+// renderer this runtime makes, pooled or not.
+//
+//	rt, err := ezu.NewRuntime(ctx, ezu.WithLogger(slog.Default()))
+//
+// This is the one thing worth turning on in a service, because the
+// renderer's warnings are how a *wrong* tile announces itself. A tile with
+// a DEM neighbour left unbound, or with a label dropped because its glyphs
+// never arrived, renders and returns no error: the picture is a seam or a
+// blank where a name should be, and the only other way to find out is to
+// look at it. Without a logger the events have to be pulled, per renderer,
+// with [Renderer.InitLog] and [Renderer.DrainLogs] — which works, and
+// which nobody remembers to do.
+//
+// The buffer is drained inside the package after every call that could have
+// filled it, so the lines arrive attributed to the call that produced them
+// and nothing accumulates. Each is logged at its own level with the
+// renderer's instance name and the module target as attributes; the
+// message is the module's line from the target onwards, fields and all,
+// because the module writes them as text and re-splitting text into
+// attributes here would guess wrong on any message containing a space.
+//
+// [WithLogLevel] chooses how much is collected; the default is [LogWarn],
+// which is everything a host is likely to act on.
+func WithLogger(logger *slog.Logger) Option {
+	return func(c *config) { c.logger = logger }
+}
+
+// WithLogLevel sets how much the renderer collects for [WithLogger],
+// defaulting to [LogWarn]. Levels below warn are for working out why a
+// style draws what it draws, and cost a string per event.
+func WithLogLevel(level LogLevel) Option {
+	return func(c *config) { c.logLevel = level }
+}
+
 // WithMemoryLimit caps the linear memory any one renderer from this runtime
 // may grow to, in bytes, rounded up to wasm's 64 KiB page. Zero, the
 // default, means the wasm maximum (4 GiB) and leaves the limiting to
@@ -180,7 +223,7 @@ func WithMemoryLimit(bytes uint64) Option {
 // A compilation cache that cannot be used does not stop a runtime being
 // built: see [WithCompilationCacheDir] and [Runtime.CompilationCacheError].
 func NewRuntime(ctx context.Context, opts ...Option) (*Runtime, error) {
-	cfg := config{moduleBytes: wasmModule}
+	cfg := config{moduleBytes: wasmModule, logLevel: LogWarn}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
@@ -261,7 +304,12 @@ func newRuntime(ctx context.Context, cfg config, cache wazero.CompilationCache) 
 	runtime := wazero.NewRuntimeWithConfig(ctx, runtimeConfig)
 	wasi_snapshot_preview1.MustInstantiate(ctx, runtime)
 
-	rt := &Runtime{runtime: runtime, renderers: map[string]*Renderer{}}
+	rt := &Runtime{
+		runtime:   runtime,
+		renderers: map[string]*Renderer{},
+		logger:    cfg.logger,
+		logLevel:  cfg.logLevel,
+	}
 	if err := rt.instantiateHost(ctx); err != nil {
 		runtime.Close(ctx)
 		return nil, err
@@ -449,6 +497,15 @@ func (r *Runtime) instantiate(ctx context.Context, name string, start startMode)
 			"ezu: the module speaks ABI %d, this package speaks %d — rebuild it (go generate ./...)",
 			got, abiVersion)
 	}
+
+	// Before the style is parsed, so that a graph that builds with warnings
+	// is heard on the very first call.
+	if r.logger != nil {
+		if _, err := renderer.call1(ctx, "ezu_log_init", uint64(uint32(r.logLevel))); err != nil {
+			renderer.Close(ctx)
+			return nil, err
+		}
+	}
 	return renderer, nil
 }
 
@@ -565,6 +622,9 @@ func (r *Renderer) call(ctx context.Context, f func(context.Context) (int64, err
 		}
 		return 0, err
 	}
+	// Still inside the guard, so the lines belong to the call that just
+	// ran and to no other goroutine's.
+	r.emitLogs(ctx)
 	if got < 0 {
 		return 0, r.errorOf(ctx, got)
 	}
@@ -859,8 +919,8 @@ func (r *Renderer) TileSize(ctx context.Context) (uint32, error) {
 // This host cannot fetch anything on its own, so everything a render needs
 // must be bound before it: [Renderer.RequestedNeighborOffsets] names the
 // neighbour tiles, and [Renderer.NeededCodepoints] the glyphs. Text whose
-// glyphs are missing is dropped with a warning, which reaches you through
-// [Renderer.DrainLogs] and not as an error.
+// glyphs are missing is dropped with a warning rather than an error, so a
+// runtime built with [WithLogger] is how you find out.
 func (r *Renderer) BindSource(ctx context.Context, name string, data []byte, opts ...BindOption) error {
 	var cfg bindOptions
 	for _, opt := range opts {
@@ -1337,9 +1397,13 @@ func (r *Renderer) HeapBytes(ctx context.Context) (uint64, error) {
 	return uint64(n), err
 }
 
-// Log levels for [Renderer.InitLog].
+// LogLevel is how much the renderer collects. The numbers are the module's
+// own.
+type LogLevel int
+
+// Log levels for [WithLogLevel] and [Renderer.InitLog].
 const (
-	LogOff = iota
+	LogOff LogLevel = iota
 	LogError
 	LogWarn
 	LogInfo
@@ -1347,15 +1411,22 @@ const (
 	LogTrace
 )
 
-// InitLog starts collecting the renderer's log events at the given level.
-// Idempotent per instance; the first level wins.
-//
 // The renderer says things through this channel that are not errors and so
 // do not come back from a call: a style whose graph built with warnings, a
 // DEM source whose 3×3 was not fully bound so the tile will seam at its
-// border, a label whose glyphs were missing and was dropped. Turn it on at
-// [LogWarn] and drain after each render if you want to hear them.
-func (r *Renderer) InitLog(ctx context.Context, level int) error {
+// border, a label whose glyphs were missing and was dropped.
+//
+// [WithLogger] is how to hear them without asking. What follows is the pull
+// side, for a host that would rather take the lines itself — to attach them
+// to a tile in a response, say, or to assert on them in a test.
+
+// InitLog starts collecting the renderer's log events at the given level.
+// Idempotent per instance; the first level wins, including the one
+// [WithLogger] installs.
+//
+// Only needed without a logger on the runtime. Drain after each render with
+// [Renderer.DrainLogs].
+func (r *Renderer) InitLog(ctx context.Context, level LogLevel) error {
 	_, err := r.call(ctx, func(ctx context.Context) (int64, error) {
 		return r.call1(ctx, "ezu_log_init", uint64(uint32(level)))
 	})
@@ -1368,13 +1439,77 @@ func (r *Renderer) InitLog(ctx context.Context, level int) error {
 // There is no timestamp on a line: the module has no clock worth importing,
 // and a host that drains right after the call it cares about knows when
 // they happened better than the module does.
+//
+// A runtime built with [WithLogger] drains the buffer itself after every
+// call, so this returns what the one call since the last drain produced —
+// usually nothing. Pull or push, not both.
 func (r *Renderer) DrainLogs(ctx context.Context) ([]string, error) {
-	_, payload, err := r.withSlots(ctx, func(slots uint32) (int64, error) {
-		_, err := r.call1(ctx, "ezu_drain_logs", uint64(slots), uint64(slots+4))
+	var payload []byte
+	_, err := r.call(ctx, func(ctx context.Context) (int64, error) {
+		var err error
+		payload, err = r.drainLogs(ctx)
 		return 0, err
 	})
 	if err != nil || len(payload) == 0 {
 		return nil, err
 	}
 	return strings.Split(string(payload), "\n"), nil
+}
+
+// drainLogs is the raw drain, without the concurrency guard, so that it can
+// be called from inside a call that already holds it.
+func (r *Renderer) drainLogs(ctx context.Context) ([]byte, error) {
+	slots, err := r.alloc(ctx, 8)
+	if err != nil {
+		return nil, err
+	}
+	defer r.free(ctx, slots, 8)
+	if _, err := r.call1(ctx, "ezu_drain_logs", uint64(slots), uint64(slots+4)); err != nil {
+		return nil, err
+	}
+	return r.takeReply(ctx, slots)
+}
+
+// emitLogs pushes whatever the call just made produced into the runtime's
+// logger.
+//
+// Best effort throughout: a failure to read the buffer is not allowed to
+// turn a render that worked into an error, and the alternative — a log line
+// about not being able to log — helps nobody.
+func (r *Renderer) emitLogs(ctx context.Context) {
+	if r.rt.logger == nil {
+		return
+	}
+	payload, err := r.drainLogs(ctx)
+	if err != nil || len(payload) == 0 {
+		return
+	}
+	for _, line := range strings.Split(string(payload), "\n") {
+		level, rest := splitLogLine(line)
+		r.rt.logger.LogAttrs(ctx, level, rest, slog.String("renderer", r.name))
+	}
+}
+
+// splitLogLine takes the module's level word off the front of a line and
+// maps it onto slog's scale. The rest is left as it stands: the module
+// writes "<target>: <message> k=v …" as text, and a message may hold spaces
+// and equals signs of its own, so splitting it back into attributes here
+// would be guessing.
+func splitLogLine(line string) (slog.Level, string) {
+	word, rest, found := strings.Cut(line, " ")
+	if !found {
+		return slog.LevelInfo, line
+	}
+	switch word {
+	case "ERROR":
+		return slog.LevelError, rest
+	case "WARN":
+		return slog.LevelWarn, rest
+	case "INFO":
+		return slog.LevelInfo, rest
+	case "DEBUG", "TRACE":
+		return slog.LevelDebug, rest
+	default:
+		return slog.LevelInfo, line
+	}
 }
