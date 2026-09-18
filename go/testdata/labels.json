@@ -1,0 +1,30 @@
+{
+  "name": "labels",
+  "tile-size": 256,
+  "sources": {
+    "basemap": { "type": "mvt", "url": "https://papers.reearth.land/protomaps/tilejson.json" },
+    "noto": {
+      "type": "glyphs",
+      "url": "https://example.invalid/fonts/{fontstack}/{range}.pbf",
+      "fontstack": "Noto Sans Regular"
+    }
+  },
+  "nodes": {
+    "bg": { "op": "solid", "color": "#ffffff" },
+    "places": { "op": "features", "source": "basemap", "layer": "places" },
+    "labels": {
+      "op": "text-labels",
+      "features": "@places",
+      "source": "basemap",
+      "layer": "places",
+      "font": ["noto"],
+      "text": ["get", "name"],
+      "size": 12,
+      "color": "#111111"
+    },
+    "place": { "op": "label-placement", "labels": ["@labels"] },
+    "draw": { "op": "text-draw", "labels": "@labels", "placement": "@place" },
+    "out": { "op": "stack", "layers": ["@bg", "@draw"] }
+  },
+  "output": "@out"
+}

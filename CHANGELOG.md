@@ -27,6 +27,18 @@ mean is spelled out in
 
 ### Added
 
+- A Go package, `github.com/reearth/ezu/go`, which embeds the renderer as a
+  wasm module and runs it on [wazero](https://wazero.io): pure Go, no cgo, and
+  no Rust toolchain to install — the module is committed. It offers the same
+  surface the browser bindings do, from the same host-neutral renderer, so a Go
+  service and a browser render one style to the same bytes. The wasm module is
+  built by `scripts/build-wasm-go.sh` from the new `ezu-cabi` crate, a flat C
+  ABI over `ezu-renderer`; neither is published to crates.io.
+
+  A renderer is one wasm instance, and a wasm instance is single-threaded, so
+  one renderer serves one goroutine at a time and says so — a concurrent entry
+  is refused rather than serialised. Rendering tiles in parallel means several
+  renderers, which `ezu.Pool` exists to hold.
 - `--strict` on `ezu check` and on `ezu tile` / `bbox` / `tiles`: a build
   warning fails the run instead of scrolling past. `check --strict` still writes
   its report first, so a CI job gets the findings and the verdict. `ezu serve`

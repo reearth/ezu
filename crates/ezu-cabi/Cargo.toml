@@ -1,0 +1,38 @@
+[package]
+name = "ezu-cabi"
+description = "Flat C ABI over the ezu renderer, for wasm32-wasip1 hosts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+# cdylib is the artefact a wasm runtime loads; rlib keeps the crate testable
+# natively, so the op count the module reports can be compared with the one a
+# native `cargo test` sees, and so the export list can be checked against the
+# committed module.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ezu-renderer = { workspace = true }
+# For `PngCompression`, which `renderTile`'s options name. `ezu-renderer`
+# names the type in its own public API without re-exporting it, so every
+# shell reaches past it to the same place `ezu-wasm` does.
+ezu-paint = { workspace = true }
+serde_json = { workspace = true }
+tracing = "0.1"
+# Deliberately without `env-filter`: it is 366 kB of regex machinery for a
+# feature this shell does not offer. The level is an integer here, and a
+# `LevelFilter` is all that is needed to honour it. (The npm package keeps
+# `env-filter`, because papers configures logging through a filter string.)
+tracing-subscriber = { version = "0.3", default-features = false, features = ["registry"] }
+
+[dev-dependencies]
+# Reads the export section out of the committed `go/ezu_cabi.wasm` so a test
+# can compare it with the surface this source declares. Dev-only, so it is
+# not in the module.
+wasmparser = "0.239"

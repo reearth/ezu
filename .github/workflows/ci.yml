@@ -139,6 +139,94 @@ jobs:
             -C link-arg=--export=__tls_align
             -C link-arg=--export=__tls_base
 
+  # The wasip1 flavour, which is a different target from the browser one
+  # above: `ezu-cabi` compiled for `wasm32-wasip1` is what the Go package
+  # embeds. Compile-only here; the Go jobs below run it.
+  wasip1:
+    name: wasip1 build (ezu-cabi)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+          targets: wasm32-wasip1
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+      # With `+simd128`, which is how the committed module is built — and
+      # the build that would have silently lost the reactor pin if it lived
+      # in `.cargo/config.toml` instead of `crates/ezu-cabi/build.rs`, since
+      # a RUSTFLAGS in the environment replaces that file wholesale.
+      - run: cargo build -p ezu-cabi --target wasm32-wasip1 --release
+        env:
+          RUSTFLAGS: -C target-feature=+simd128 -Dwarnings
+
+  # The Go package against the module that is committed. This is the run
+  # that says whether what a `go get` would fetch actually works.
+  go:
+    name: go (committed module)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-go@41dfa10bad2bb2ae585af6ee5bb4d7d973ad74ed # v5.1.0
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - run: go vet ./...
+      - run: go test ./...
+
+  # And the same tests against a module built from this source.
+  #
+  # The committed artefact can go stale, and not by comparing bytes: Rust
+  # builds are not reproducible across environments, and a check that cried
+  # wolf on every toolchain bump would teach people to ignore it. Three
+  # things catch the drift instead, and between them they cover it:
+  #
+  #   * the module's ABI version is checked when the Go package instantiates
+  #     it, so a version bump that was not copied fails every Go test at once
+  #   * a Rust test (`crates/ezu-cabi/src/tests.rs`) compares the committed
+  #     module's export list and linkage shape with what this source
+  #     declares — structural, so no toolchain agreement is needed
+  #   * this job, which runs the Go tests a second time against a freshly
+  #     built module and so catches behaviour that changed without the
+  #     surface changing — in both directions, since the job above used the
+  #     committed one
+  embedded:
+    name: the committed module still matches the source
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+          targets: wasm32-wasip1
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+      - uses: actions/setup-go@41dfa10bad2bb2ae585af6ee5bb4d7d973ad74ed # v5.1.0
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - name: Install binaryen
+        run: sudo apt-get update && sudo apt-get install -y binaryen
+      - name: Build the module from source
+        run: ./scripts/build-wasm-go.sh
+      - name: Test against it
+        working-directory: go
+        run: go test ./...
+
   msrv:
     name: MSRV (1.89)
     runs-on: ubuntu-latest

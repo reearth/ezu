@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/ezu",
+    "crates/ezu-cabi",
     "crates/ezu-cli",
     "crates/ezu-compare",
     "crates/ezu-core",
