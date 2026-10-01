@@ -1,0 +1,35 @@
+{
+  "name": "figure",
+  "tile-size": 512,
+  "pad": 8,
+  "nodes": {
+    "fbm": {
+      "op": "noise",
+      "kind": "scalar",
+      "type": "perlin",
+      "scale-px": 320,
+      "octaves": 6,
+      "gain": 0.55
+    },
+    "out": {
+      "op": "color-ramp",
+      "field": "@fbm",
+      "space": "lab",
+      "stops": [
+        {
+          "value": -0.2,
+          "color": "#3d7cc9"
+        },
+        {
+          "value": 0.05,
+          "color": "#8db8e8"
+        },
+        {
+          "value": 0.35,
+          "color": "#ffffff"
+        }
+      ]
+    }
+  },
+  "output": "@out"
+}

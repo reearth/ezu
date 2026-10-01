@@ -1,0 +1,39 @@
+{
+  "name": "texture-wood",
+  "tile-size": 512,
+  "pad": 32,
+  "nodes": {
+    "rings": {
+      "op": "noise",
+      "type": "perlin",
+      "scale-px": [1400, 26],
+      "octaves": 3,
+      "gain": 0.4,
+      "low-color": "#000000",
+      "high-color": "#ffffff"
+    },
+    "wobble": { "op": "warp", "input": "@rings", "amp-px": 14, "scale-px": 260, "octaves": 2 },
+    "lum": { "op": "pick-channel", "input": "@wobble", "channel": "luminance" },
+    "base": {
+      "op": "color-ramp",
+      "field": "@lum",
+      "space": "lab",
+      "stops": [
+        { "value": 0.2, "color": "#6b3f1f" },
+        { "value": 0.45, "color": "#a9703d" },
+        { "value": 0.6, "color": "#c48a52" },
+        { "value": 0.8, "color": "#d9a56c" }
+      ]
+    },
+    "fibre": {
+      "op": "noise",
+      "type": "value",
+      "scale-px": [220, 1.5],
+      "octaves": 2,
+      "low-color": "#4a2a12",
+      "high-color": "#ffffff"
+    },
+    "out": { "op": "blend", "base": "@base", "over": "@fibre", "mode": "multiply", "opacity": 0.35 }
+  },
+  "output": "@out"
+}

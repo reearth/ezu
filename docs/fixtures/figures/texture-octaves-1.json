@@ -1,0 +1,16 @@
+{
+  "name": "figure",
+  "tile-size": 512,
+  "pad": 8,
+  "nodes": {
+    "out": {
+      "op": "noise",
+      "type": "perlin",
+      "scale-px": 256,
+      "octaves": 1,
+      "low-color": "#111111",
+      "high-color": "#f4f4f4"
+    }
+  },
+  "output": "@out"
+}

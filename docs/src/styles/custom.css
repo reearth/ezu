@@ -91,8 +91,24 @@
   line-height: 1.5;
 }
 
+/* A short progression of steps, or a set of variants, read left to right. */
+.page-fig--trio .page-fig__images {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.page-fig--quad .page-fig__images {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+@media (max-width: 48rem) {
+  .page-fig--quad .page-fig__images {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 32rem) {
-  .page-fig__images {
+  .page-fig__images,
+  .page-fig--trio .page-fig__images {
     grid-template-columns: 1fr;
   }
 }
@@ -152,6 +168,12 @@
   border-radius: 0.5rem;
   border: 1px solid var(--sl-color-gray-5);
   background: #fbfaf7;
+}
+
+/* A top-down graph is narrow and tall; at full column width it would fill
+   the screen several times over. */
+.diagram--narrow img {
+  max-width: 26rem;
 }
 
 .diagram figcaption {

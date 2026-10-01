@@ -1,0 +1,37 @@
+{
+  "name": "figure",
+  "tile-size": 512,
+  "pad": 8,
+  "nodes": {
+    "bands": {
+      "op": "noise",
+      "type": "perlin",
+      "scale-px": [
+        900,
+        70
+      ],
+      "octaves": 2,
+      "low-color": "#000000",
+      "high-color": "#ffffff"
+    },
+    "warped": {
+      "op": "warp",
+      "input": "@bands",
+      "amp-px": 70,
+      "scale-px": 180,
+      "octaves": 5
+    },
+    "lum": {
+      "op": "pick-channel",
+      "input": "@warped",
+      "channel": "luminance"
+    },
+    "out": {
+      "op": "stack",
+      "layers": [
+        "@bands"
+      ]
+    }
+  },
+  "output": "@out"
+}

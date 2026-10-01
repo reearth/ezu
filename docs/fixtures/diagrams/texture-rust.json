@@ -1,0 +1,35 @@
+{
+  "name": "texture-rust",
+  "tile-size": 512,
+  "pad": 8,
+  "nodes": {
+    "metal": {
+      "op": "noise",
+      "type": "value",
+      "scale-px": [400, 2],
+      "octaves": 3,
+      "low-color": "#7d838a",
+      "high-color": "#b4bac0"
+    },
+    "patches": { "op": "noise", "kind": "scalar", "type": "perlin", "scale-px": 160, "octaves": 6, "gain": 0.6 },
+    "mask_f": { "op": "threshold", "field": "@patches", "value": 0.1, "softness": 0.08, "low": 0, "high": 1 },
+    "mask": {
+      "op": "color-ramp",
+      "field": "@mask_f",
+      "stops": [
+        { "value": 0, "color": "#00000000" },
+        { "value": 1, "color": "#ffffff" }
+      ]
+    },
+    "rust": {
+      "op": "noise",
+      "type": "perlin",
+      "scale-px": 12,
+      "octaves": 4,
+      "low-color": "#5a2a12",
+      "high-color": "#b8622a"
+    },
+    "out": { "op": "blend", "base": "@metal", "over": "@rust", "mask": "@mask" }
+  },
+  "output": "@out"
+}

@@ -1,0 +1,42 @@
+{
+  "name": "texture-cobblestone",
+  "tile-size": 512,
+  "pad": 48,
+  "nodes": {
+    "tile": { "op": "tile-bounds" },
+    "area": { "op": "buffer", "features": "@tile", "distance": 48 },
+    "seeds": { "op": "point-scatter", "spacing": 320 },
+    "cells": { "op": "voronoi-fracture", "features": "@area", "seeds": "@seeds" },
+    "shrunk": { "op": "buffer", "features": "@cells", "distance": -3, "join": "round" },
+    "stones": { "op": "smooth", "features": "@shrunk", "iterations": 3 },
+
+    "silhouette": { "op": "fill-solid", "features": "@stones", "fill": "#ffffff" },
+    "rounded": { "op": "blur", "input": "@silhouette", "sigma": 4 },
+    "coverage": { "op": "pick-channel", "input": "@rounded", "channel": "a" },
+    "height": { "op": "map-range", "field": "@coverage", "out-min": 0, "out-max": 6 },
+    "relief": { "op": "hillshade", "field": "@height", "mode": "relief" },
+
+    "tone": {
+      "op": "noise",
+      "type": "perlin",
+      "scale-px": 34,
+      "octaves": 2,
+      "low-color": "#6e655b",
+      "high-color": "#c4b8a4"
+    },
+    "grain": {
+      "op": "noise",
+      "type": "perlin",
+      "scale-px": 4,
+      "octaves": 3,
+      "low-color": "#00000050",
+      "high-color": "#ffffff40"
+    },
+    "toned": { "op": "blend", "base": "@silhouette", "over": "@tone", "clip": true },
+    "grained": { "op": "blend", "base": "@toned", "over": "@grain", "mode": "overlay", "clip": true },
+    "stones_lit": { "op": "blend", "base": "@grained", "over": "@relief", "mode": "multiply", "clip": true },
+    "joints": { "op": "solid", "color": "#3a3128" },
+    "out": { "op": "stack", "layers": ["@joints", "@stones_lit"] }
+  },
+  "output": "@out"
+}

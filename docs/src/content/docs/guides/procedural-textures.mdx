@@ -1,0 +1,397 @@
+---
+title: Textures from nothing
+description: Noise, a few shaping nodes and some geometry make clouds, marble, wood, rust, cobblestones, brick and a whole island — with no data at all.
+---
+
+3D artists rarely paint their textures by hand. A brick wall, a marble floor or
+a rusty panel is usually *generated*: start from noise, stretch it, bend it,
+threshold it, and stack the results until the surface reads as the material.
+Nothing is loaded from disk. The texture is a recipe.
+
+An ezu style is the same kind of recipe, which makes this the quickest way to
+get a feel for building one. Every image on this page comes from a style with
+**no `sources` block** — no map data, no images — just nodes. Once the moves
+feel natural, putting a map underneath them is a small step, and the
+[last section](#putting-it-on-a-map) takes it.
+
+Each finished texture is a complete style under
+[`docs/fixtures/diagrams/`](https://github.com/reearth/ezu/tree/main/docs/fixtures/diagrams).
+Render any of them yourself:
+
+```sh
+ezu tile --style docs/fixtures/diagrams/texture-marble.json --tile 13/7276/3225 --out marble.png
+```
+
+The tile coordinate only picks *which part* of an endless texture you see. Try
+another and the pattern carries on.
+
+## The raw material: noise
+
+Almost everything below starts with one op, [`noise`](/ezu/style/nodes/raster/#noise).
+It fills the canvas with a smooth random field. Four `type`s give four
+characters:
+
+<figure class="page-fig page-fig--quad">
+  <div class="page-fig__images">
+    <img src="/ezu/figures/texture-noise-white.webp" alt="White noise: independent random grey per pixel" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/figures/texture-noise-value.webp" alt="Value noise: blurry grey blocks on a grid" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/figures/texture-noise-perlin.webp" alt="Perlin noise: smooth rounded blobs with no grid" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/figures/texture-noise-worley.webp" alt="Worley noise: flat polygonal cells, one grey per cell" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption><code>white</code>, <code>value</code>, <code>perlin</code> and <code>worley</code>, each at <code>scale-px: 48</code>.</figcaption>
+</figure>
+
+```json
+"out": { "op": "noise", "type": "perlin", "scale-px": 48,
+         "low-color": "#111111", "high-color": "#f4f4f4" }
+```
+
+- **`white`** is a fresh random value per pixel — grain, sparkle, dither.
+- **`value`** picks random values on a grid and blends between them. The grid
+  shows, which is sometimes what you want.
+- **`perlin`** (and `simplex`) blends random *slopes* instead, so the blobs are
+  rounded and the grid disappears. This is the workhorse.
+- **`worley`** splits the plane into cells and gives each one flat value — a
+  start for anything made of pieces.
+
+`scale-px` is the size of a feature in pixels. Give it two numbers, `[x, y]`,
+and the noise stretches: that one knob turns blobs into the grain of wood or
+the layers of stone, as you will see.
+
+## Octaves: detail on top of detail
+
+A single layer of noise is too smooth to look like anything natural. Real
+surfaces have large shapes, smaller shapes on those, and smaller ones still.
+`octaves` adds copies of the noise, each at twice the frequency (`lacunarity`)
+and a fraction of the strength (`gain`) of the one before. This sum is called
+*fractal Brownian motion*, fBm. Now give it colour with
+[`color-ramp`](/ezu/style/nodes/raster/#color-ramp):
+
+<figure class="page-fig page-fig--trio">
+  <div class="page-fig__images">
+    <img src="/ezu/figures/texture-octaves-1.webp" alt="One octave of Perlin noise: a few large soft blobs" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/figures/texture-octaves-6.webp" alt="Six octaves: the same blobs with ragged, detailed edges" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/figures/texture-clouds.webp" alt="The six-octave field coloured from sky blue to white: clouds" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>One octave, six octaves, and the six-octave field through a three-stop ramp.</figcaption>
+</figure>
+
+```json
+"fbm": { "op": "noise", "kind": "scalar", "type": "perlin",
+         "scale-px": 320, "octaves": 6, "gain": 0.55 },
+"out": { "op": "color-ramp", "field": "@fbm", "space": "lab",
+         "stops": [ { "value": -0.2, "color": "#3d7cc9" },
+                    { "value": 0.05, "color": "#8db8e8" },
+                    { "value": 0.35, "color": "#ffffff" } ] }
+```
+
+`kind: "scalar"` makes `noise` emit the raw numbers — a `ScalarField` running
+from −1 to 1 — instead of pixels. A field is not a picture yet; it is something
+to *decide with*. `color-ramp` decides colour from it. Where the stops sit is
+the whole design: all the blue lives below 0.05 and white takes over by 0.35,
+so the sky shows through in the hollows of the field.
+
+That is the first move worth keeping: **make a field, then decide what it
+means.**
+
+## Marble: stretch, then warp
+
+Marble is layers of sediment that were folded while soft. A recipe can do the
+same in that order.
+
+<figure class="page-fig page-fig--trio">
+  <div class="page-fig__images">
+    <img src="/ezu/figures/texture-marble-bands.webp" alt="Noise stretched horizontally into soft parallel bands" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/figures/texture-marble-warped.webp" alt="The bands pushed around by a second noise into folded, flowing shapes" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/figures/texture-marble.webp" alt="Cream marble with thin dark veins where the folded bands cross the middle grey" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Stretched noise, warped, and a ramp that only darkens a narrow band.</figcaption>
+</figure>
+
+<figure class="diagram">
+  <img src="/ezu/diagrams/texture-marble.svg" alt="bands (noise) → warped (warp) → lum (pick-channel) → out (color-ramp) → output" loading="lazy" decoding="async" />
+  <figcaption>Four nodes. <code>ezu graph texture-marble.json</code> draws this.</figcaption>
+</figure>
+
+1. **Lay down sediment.** `"scale-px": [900, 70]` makes noise that changes
+   slowly sideways and quickly downwards: horizontal bands.
+2. **Fold it.** [`warp`](/ezu/style/nodes/raster/#warp) reads each pixel from
+   somewhere nearby instead of from where it is, and *where* comes from its own
+   noise. This is *domain warping*: the shapes do not change colour, they get
+   moved. `amp-px` is how far.
+3. **Draw the veins.** [`pick-channel`](/ezu/style/nodes/util/#pick-channel)
+   turns the grey picture back into a field, and the ramp does the rest:
+
+```json
+"stops": [ { "value": 0.0,  "color": "#d9d4c7" },
+           { "value": 0.44, "color": "#f3f0e8" },
+           { "value": 0.49, "color": "#8a8478" },
+           { "value": 0.5,  "color": "#4a463f" },
+           { "value": 0.51, "color": "#8a8478" },
+           { "value": 0.56, "color": "#f3f0e8" },
+           { "value": 1.0,  "color": "#e4dfd2" } ]
+```
+
+Almost the whole range is cream. Only the values right around 0.5 go dark, so
+a vein appears wherever the field *crosses* the middle — a thin line that
+follows every fold. A ramp is not just a colour scale; a narrow spike in one
+is how you draw contour-like lines out of a smooth field.
+
+## Wood: the same moves, different numbers
+
+Wood needs nothing new, only different proportions: noise stretched much
+further (`[1400, 26]`), warped only a little, and a ramp from dark late wood
+to pale early wood. A second, extremely thin noise (`[220, 1.5]`) laid on with
+`multiply` adds the fibres.
+
+<figure class="page-fig">
+  <img src="/ezu/figures/texture-wood.webp" alt="Brown wood grain: long wavy rings with fine fibres" width="768" height="768" loading="lazy" decoding="async" />
+  <figcaption>Stretched, gently warped noise through a brown ramp, with a fibre layer multiplied on top.</figcaption>
+</figure>
+
+```json
+"rings":  { "op": "noise", "type": "perlin", "scale-px": [1400, 26], "octaves": 3, "gain": 0.4,
+            "low-color": "#000000", "high-color": "#ffffff" },
+"wobble": { "op": "warp", "input": "@rings", "amp-px": 14, "scale-px": 260, "octaves": 2 },
+"fibre":  { "op": "noise", "type": "value", "scale-px": [220, 1.5], "octaves": 2,
+            "low-color": "#4a2a12", "high-color": "#ffffff" },
+"out":    { "op": "blend", "base": "@base", "over": "@fibre", "mode": "multiply", "opacity": 0.35 }
+```
+
+Marble and wood share a graph shape. What makes them different materials is the
+ratio of the stretch, the strength of the warp and the colours of the ramp.
+Most procedural work is this: a handful of shapes, tuned.
+
+## Rust: noise as a mask
+
+So far noise has always become colour. It can just as well decide *where*.
+[`threshold`](/ezu/style/nodes/raster/#threshold) cuts a field into 0 and 1, and
+`blend` takes a `mask` that says how much of the top layer gets through.
+
+<figure class="page-fig page-fig--pair">
+  <div class="page-fig__images">
+    <img src="/ezu/figures/texture-rust-mask.webp" alt="A black and white mask with ragged white patches" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/figures/texture-rust.webp" alt="Brushed grey metal with orange rust in the same ragged patches" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>The thresholded field, and the rust layer let through it onto brushed metal.</figcaption>
+</figure>
+
+<figure class="diagram">
+  <img src="/ezu/diagrams/texture-rust.svg" alt="patches (noise) → mask_f (threshold) → mask (color-ramp) → out (blend); metal (noise) and rust (noise) are the blend's base and over" loading="lazy" decoding="async" />
+  <figcaption>Three noises, three jobs: the metal, the rust, and where the rust goes.</figcaption>
+</figure>
+
+```json
+"patches": { "op": "noise", "kind": "scalar", "type": "perlin", "scale-px": 160, "octaves": 6, "gain": 0.6 },
+"mask_f":  { "op": "threshold", "field": "@patches", "value": 0.1, "softness": 0.08, "low": 0, "high": 1 },
+"out":     { "op": "blend", "base": "@metal", "over": "@rust", "mask": "@mask" }
+```
+
+The brushed metal is one more stretched noise, this time `[400, 2]`: long thin
+streaks. Raise the threshold `value` and the rust retreats; lower it and the
+panel corrodes. One number now controls the *amount of wear*, which is the kind
+of knob you would expose as a [`$param`](/ezu/style/params/).
+
+## Cobblestones: geometry is procedural too
+
+Noise is not the only generator. Points, cells and lines can be made from
+nothing as well, and they are better at anything with crisp, countable pieces.
+
+<figure class="page-fig page-fig--trio">
+  <div class="page-fig__images">
+    <img src="/ezu/figures/texture-cobblestone-cells.webp" alt="Red seed points, the Voronoi cells around them, and a rounded stone inside each cell" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/figures/texture-cobblestone-height.webp" alt="Grey hillshade of the blurred stone shapes: rounded bumps lit from the upper left" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/figures/texture-cobblestone.webp" alt="Grey cobblestones with speckled surfaces and shading, set in dark joints" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Seeds, cells and stones; the stones read as a height map; the finished paving.</figcaption>
+</figure>
+
+<figure class="diagram diagram--narrow">
+  <img src="/ezu/diagrams/texture-cobblestone.svg" alt="The cobblestone graph: point-scatter and tile-bounds, grown by buffer, feed voronoi-fracture, then buffer and smooth make the stones; the stones are filled, blurred and turned into a height field for hillshade; noise layers tone the stone, and the result is stacked over a dark joint colour" loading="lazy" decoding="async" />
+  <figcaption>The trunk builds the shapes; the left branch turns them into light, the right one gives them a surface.</figcaption>
+</figure>
+
+**The shapes.**
+[`point-scatter`](/ezu/style/nodes/source/#point-scatter) throws random seed
+points, [`voronoi-fracture`](/ezu/style/nodes/geometry/#voronoi-fracture) cuts
+an area into one cell per seed, a negative
+[`buffer`](/ezu/style/nodes/geometry/#buffer) pulls every cell in by 3 px to
+open the joints, and [`smooth`](/ezu/style/nodes/geometry/#smooth) rounds the
+corners off.
+
+```json
+"tile":   { "op": "tile-bounds" },
+"area":   { "op": "buffer", "features": "@tile", "distance": 48 },
+"seeds":  { "op": "point-scatter", "spacing": 320 },
+"cells":  { "op": "voronoi-fracture", "features": "@area", "seeds": "@seeds" },
+"shrunk": { "op": "buffer", "features": "@cells", "distance": -3, "join": "round" },
+"stones": { "op": "smooth", "features": "@shrunk", "iterations": 3 }
+```
+
+The area is the tile grown by 48 px, not the tile itself.
+[`tile-bounds`](/ezu/style/nodes/source/#tile-bounds) is exactly the visible
+square, and stones cut against it would stop dead at the tile's edge. The
+seeds already cover the margin around the tile, so once the area does too,
+a stone on the border is cut from the same seeds by both tiles that show it.
+
+`point-scatter` measures its `spacing` in feature-extent units, 4096 to a tile,
+so 320 is about 40 px on a 512 px tile. Every other length here is in pixels.
+
+**The light.** This is the trick worth stealing. Fill the stones white and
+[`blur`](/ezu/style/nodes/raster/#blur) them: the edges become soft ramps from
+0 to 1. Read that as *height* — 0 in the joints, rising to a plateau in the
+middle of each stone — and [`hillshade`](/ezu/style/nodes/raster/#hillshade),
+which was written for real terrain, lights it:
+
+```json
+"silhouette": { "op": "fill-solid", "features": "@stones", "fill": "#ffffff" },
+"rounded":    { "op": "blur", "input": "@silhouette", "sigma": 4 },
+"coverage":   { "op": "pick-channel", "input": "@rounded", "channel": "a" },
+"height":     { "op": "map-range", "field": "@coverage", "out-min": 0, "out-max": 6 },
+"relief":     { "op": "hillshade", "field": "@height", "mode": "relief" }
+```
+
+`sigma` decides how rounded the stones are, and `out-max` how tall. Any mask can
+be turned into relief this way: lettering, field boundaries, a coastline.
+
+**The surface.** Two noises — a broad one for tone, a fine one for grain — are
+blended with `clip: true`, which keeps them inside the stones, and the relief is
+multiplied over them.
+
+## Brick: regularity is a recipe too
+
+Brick looks like the opposite of noise: a strict pattern. It is still built
+from nothing; the pattern is just made of lines instead of fields.
+
+<figure class="page-fig page-fig--trio">
+  <div class="page-fig__images">
+    <img src="/ezu/figures/texture-brick-joints.webp" alt="Red horizontal lines every course, with blue and green vertical dashes alternating between courses" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/figures/texture-brick-flat.webp" alt="Flat red brick with pale mortar: a clean running bond" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/figures/texture-brick.webp" alt="Weathered brick: mottled clay, gritty surface, slightly wavy mortar and dark soot" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>The joints as geometry, stroked flat, then weathered.</figcaption>
+</figure>
+
+<figure class="diagram">
+  <img src="/ezu/diagrams/texture-brick.svg" alt="The brick graph: tile-bounds, grown by buffer, feeds three hatch nodes; two are cut by dash into alternating head joints; all three are stroked and stacked into mortar, which is warped; separately clay and grain noise, a blurred shadow line and soot noise are blended into the final image" loading="lazy" decoding="async" />
+  <figcaption>The right side lays the bricks; the left side makes them look old.</figcaption>
+</figure>
+
+**Laying the bond.** [`hatch`](/ezu/style/nodes/geometry/#hatch) fills a
+polygon with parallel lines. Horizontal lines every 32 px are the bed joints.
+The vertical joints are the clever part: vertical lines every 72 px, cut by
+[`dash`](/ezu/style/nodes/geometry/#dash) into 32 px on, 32 px off, so they only
+exist in every other course. A second set is shifted half a brick sideways
+(`phase: 0.5`) and one course down (`phase-px: 32`), filling the courses the
+first set skipped.
+
+```json
+"area":        { "op": "buffer", "features": "@tile", "distance": 64 },
+"bed":         { "op": "hatch", "features": "@area", "angle-deg": 0, "spacing": 32 },
+"verticals_a": { "op": "hatch", "features": "@area", "angle-deg": 90, "spacing": 72 },
+"head_a":      { "op": "dash", "features": "@verticals_a", "dash-px": 32, "gap-px": 32 },
+"verticals_b": { "op": "hatch", "features": "@area", "angle-deg": 90, "spacing": 72, "phase": 0.5 },
+"head_b":      { "op": "dash", "features": "@verticals_b", "dash-px": 32, "gap-px": 32, "phase-px": 32 }
+```
+
+The area is grown past the tile here too, so the joints run into the margin
+and the warp below has mortar to pull in from beyond the edge. It grows by
+64 px, two courses, for a reason: `dash` counts its pattern from where each
+line starts, and a line that starts a whole number of courses above the tile
+keeps its dashes on the courses.
+
+Stroke all three in the mortar colour, put them over a flat red, and you have
+the middle image — correct, and obviously fake.
+
+**Making it believable.** Nothing in the real world is that clean, and the
+weathering is all noise again:
+
+- the clay is a broad noise between two reds instead of one flat colour;
+- a very fine noise (`scale-px: 3`) blended with `overlay` gives the fired grit;
+- the bed joints are stroked a second time in black, wide, and blurred, and
+  that soft line is multiplied in as the shadow under each course;
+- `warp` with a tiny `amp-px: 1.5` makes the mortar wander, because nobody lays
+  bricks with a ruler;
+- one last broad, transparent-to-dark noise multiplies in soot.
+
+Each of those is one or two nodes, and each removes one reason the eye had to
+call it computer-made.
+
+## A map of nowhere
+
+Here is where it comes back to maps. fBm is not only a good cloud — it is a
+good *terrain*. Map the field to metres and every cartographic op that expects
+a DEM accepts it.
+
+<figure class="page-fig">
+  <img src="/ezu/figures/texture-terrain.webp" alt="An imaginary landscape: a blue bay with shallows, green lowlands, brown hills and snowy peaks, with hill shading" width="768" height="768" loading="lazy" decoding="async" />
+  <figcaption>Four adjacent tiles of one fBm field, read as elevation. The bay runs across all four borders without a seam.</figcaption>
+</figure>
+
+<figure class="diagram">
+  <img src="/ezu/diagrams/texture-terrain.svg" alt="fbm (noise) → dem (map-range) → tint (color-ramp), and dem → land (map-range) → relief (hillshade); tint and relief blend into out" loading="lazy" decoding="async" />
+  <figcaption>The same graph a real DEM would use, with <code>noise</code> where the <code>dem</code> source would be.</figcaption>
+</figure>
+
+```json
+"fbm":    { "op": "noise", "kind": "scalar", "type": "perlin", "scale-px": 420, "octaves": 7, "gain": 0.5 },
+"dem":    { "op": "map-range", "field": "@fbm", "in-min": -1, "in-max": 1, "out-min": -1800, "out-max": 2600 },
+"land":   { "op": "map-range", "field": "@dem", "in-min": 0, "in-max": 2600, "out-min": 0, "out-max": 2600, "clamp": true },
+"relief": { "op": "hillshade", "field": "@land", "mode": "relief", "exaggeration": 0.02, "multidirectional": true }
+```
+
+The tint is an ordinary hypsometric ramp — deep blue, shallows, beach, green,
+brown, snow — exactly as in
+[hillshade and hypsometric tints](/ezu/cookbook/hillshade-and-hypsometric/).
+Two details:
+
+- **The sea is flat.** `land` clamps everything below 0 m to 0 before shading,
+  so only the land gets relief.
+- **The exaggeration is set by eye.** A real DEM knows how many metres a pixel
+  covers; a noise field does not, so `hillshade` cannot know how steep "2600 m
+  over 420 px" should look. Turn `exaggeration` until it does.
+
+The figure is four tiles side by side, rendered separately. They join because
+`noise` defaults to `anchor: world`: the field is defined over the whole world
+and each tile looks at its own window onto it, so neighbours agree at the edge.
+`warp`, `point-scatter` and `hatch` are anchored the same way, and that is
+what lets a texture cover a map rather than a single square — provided, as the
+cobblestones and brick showed, the shapes reach past the tile's edge too. More
+in [tiles and determinism](/ezu/concepts/tiles-and-determinism/).
+
+## Putting it on a map
+
+Everything above made a texture for the whole tile. A style makes one for the
+places that need it, and that is a single `mask`: here, the brick texture from
+before, unchanged, let through a fill of real building footprints at z17.
+
+<figure class="page-fig">
+  <img src="/ezu/figures/texture-on-map.webp" alt="A city block map where every building footprint is filled with red brick, over cream streets" width="768" height="768" loading="lazy" decoding="async" />
+  <figcaption>Brick through a mask of buildings. Tokyo, z17. Map data © OpenStreetMap contributors, © Protomaps.</figcaption>
+</figure>
+
+```json
+"buildings":  { "op": "features", "source": "basemap", "layer": "buildings" },
+"footprints": { "op": "fill-solid", "features": "@buildings", "fill": "#ffffff" },
+"out":        { "op": "blend", "base": "@base", "over": "@brick", "mask": "@footprints" }
+```
+
+Look across neighbouring buildings and the courses line up: the brick is laid
+once, over the whole world, and the buildings are windows onto it. From here
+the moves combine freely — a thresholded noise as a mask on top of the
+footprints for patchy wear, the blur-and-hillshade trick on the footprints for
+raised blocks, marble in a plaza, `point-scatter` instead of `tile-bounds` for
+trees.
+
+## Where to go next
+
+- The [node catalog](/ezu/style/nodes/raster/) has a picture for most ops; it is
+  the fastest way to find the next ingredient.
+- `ezu graph style.json --tile 13/7276/3225 --out graph.html` draws any style's
+  graph with every node's own output on it — the best way to see what each step
+  of a recipe contributes.
+- The [cookbook](/ezu/cookbook/watercolor-fills/) applies the same thinking to
+  painterly fills, brush strokes and halftones.
+- The [live editor](/ezu/guides/live-editor/) re-renders as you type. Tuning a
+  texture is change a number, look, change it again, and it makes that loop
+  short.

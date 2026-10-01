@@ -1,0 +1,35 @@
+{
+  "name": "texture-terrain",
+  "tile-size": 512,
+  "pad": 8,
+  "nodes": {
+    "fbm": { "op": "noise", "kind": "scalar", "type": "perlin", "scale-px": 420, "octaves": 7, "gain": 0.5 },
+    "dem": { "op": "map-range", "field": "@fbm", "in-min": -1, "in-max": 1, "out-min": -1800, "out-max": 2600 },
+    "tint": {
+      "op": "color-ramp",
+      "field": "@dem",
+      "space": "lab",
+      "stops": [
+        { "value": -400, "color": "#3b6fa0" },
+        { "value": -1, "color": "#86b4d4" },
+        { "value": 0, "color": "#d9cf9c" },
+        { "value": 60, "color": "#8fb36e" },
+        { "value": 500, "color": "#5f8a4a" },
+        { "value": 1000, "color": "#b49a6a" },
+        { "value": 1400, "color": "#f2efe8" }
+      ]
+    },
+    "land": {
+      "op": "map-range",
+      "field": "@dem",
+      "in-min": 0,
+      "in-max": 2600,
+      "out-min": 0,
+      "out-max": 2600,
+      "clamp": true
+    },
+    "relief": { "op": "hillshade", "field": "@land", "mode": "relief", "exaggeration": 0.02, "multidirectional": true },
+    "out": { "op": "blend", "base": "@tint", "over": "@relief", "mode": "multiply" }
+  },
+  "output": "@out"
+}

@@ -1,0 +1,148 @@
+{
+  "name": "figure",
+  "tile-size": 512,
+  "pad": 8,
+  "nodes": {
+    "tile": {
+      "op": "tile-bounds"
+    },
+    "area": {
+      "op": "buffer",
+      "features": "@tile",
+      "distance": 64
+    },
+    "bed": {
+      "op": "hatch",
+      "features": "@area",
+      "angle-deg": 0,
+      "spacing": 32
+    },
+    "verticals_a": {
+      "op": "hatch",
+      "features": "@area",
+      "angle-deg": 90,
+      "spacing": 72
+    },
+    "head_a": {
+      "op": "dash",
+      "features": "@verticals_a",
+      "dash-px": 32,
+      "gap-px": 32
+    },
+    "verticals_b": {
+      "op": "hatch",
+      "features": "@area",
+      "angle-deg": 90,
+      "spacing": 72,
+      "phase": 0.5
+    },
+    "head_b": {
+      "op": "dash",
+      "features": "@verticals_b",
+      "dash-px": 32,
+      "gap-px": 32,
+      "phase-px": 32
+    },
+    "bed_joints": {
+      "op": "stroke",
+      "features": "@bed",
+      "color": "#cfc7b6",
+      "width-px": 4
+    },
+    "head_joints_a": {
+      "op": "stroke",
+      "features": "@head_a",
+      "color": "#cfc7b6",
+      "width-px": 4,
+      "cap": "square"
+    },
+    "head_joints_b": {
+      "op": "stroke",
+      "features": "@head_b",
+      "color": "#cfc7b6",
+      "width-px": 4,
+      "cap": "square"
+    },
+    "mortar": {
+      "op": "stack",
+      "layers": [
+        "@bed_joints",
+        "@head_joints_a",
+        "@head_joints_b"
+      ]
+    },
+    "mortar_wobbly": {
+      "op": "warp",
+      "input": "@mortar",
+      "amp-px": 1.5,
+      "scale-px": 30,
+      "octaves": 2,
+      "boundary": "transparent"
+    },
+    "clay": {
+      "op": "noise",
+      "type": "perlin",
+      "scale-px": 140,
+      "octaves": 3,
+      "low-color": "#8c3a24",
+      "high-color": "#b65a38"
+    },
+    "grain": {
+      "op": "noise",
+      "type": "perlin",
+      "scale-px": 3,
+      "octaves": 2,
+      "low-color": "#00000055",
+      "high-color": "#ffffff40"
+    },
+    "shadow_line": {
+      "op": "stroke",
+      "features": "@bed",
+      "color": "#000000",
+      "width-px": 8
+    },
+    "shadow": {
+      "op": "blur",
+      "input": "@shadow_line",
+      "sigma": 2.5
+    },
+    "soot": {
+      "op": "noise",
+      "type": "perlin",
+      "scale-px": 220,
+      "octaves": 4,
+      "low-color": "#3a2a2000",
+      "high-color": "#3a2a20"
+    },
+    "clay_grain": {
+      "op": "blend",
+      "base": "@clay",
+      "over": "@grain",
+      "mode": "overlay"
+    },
+    "clay_shaded": {
+      "op": "blend",
+      "base": "@clay_grain",
+      "over": "@shadow",
+      "mode": "multiply",
+      "opacity": 0.35
+    },
+    "laid": {
+      "op": "blend",
+      "base": "@clay_shaded",
+      "over": "@mortar_wobbly"
+    },
+    "out": {
+      "op": "stack",
+      "layers": [
+        "@flat_clay",
+        "@mortar"
+      ]
+    },
+    "flat_clay": {
+      "op": "solid",
+      "color": "#a4472f"
+    }
+  },
+  "output": "@out"
+}

@@ -55,6 +55,13 @@ function chromium() {
 /** Mermaid theme to render with. See the note above about the light card. */
 const THEME = 'neutral';
 
+/**
+ * Diagrams drawn top-to-bottom instead of `ezu graph`'s left-to-right. A graph
+ * twenty nodes deep is too wide to read once it is shrunk to the content
+ * column; standing it up keeps the labels at a legible size.
+ */
+const TOP_DOWN = new Set(['texture-brick', 'texture-cobblestone']);
+
 async function main() {
   mkdirSync(OUT, { recursive: true });
   mkdirSync(TMP, { recursive: true });
@@ -76,7 +83,7 @@ async function main() {
     const style = join(FIXTURES, `${name}.json`);
     const mmd = join(TMP, `${name}.mmd`);
     const { stdout } = await run(EZU, ['graph', style], { cwd: REPO, maxBuffer: 8 * 1024 * 1024 });
-    writeFileSync(mmd, stdout);
+    writeFileSync(mmd, TOP_DOWN.has(name) ? stdout.replace(/^graph LR/m, 'graph TB') : stdout);
 
     const svg = join(OUT, `${name}.svg`);
     await run(

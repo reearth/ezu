@@ -11,7 +11,7 @@
 // network access — and its output is committed.
 
 import { execFile } from 'node:child_process';
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -39,6 +39,35 @@ const style = (nodes, extra = {}) => ({
   ...extra,
   nodes,
   output: '@out',
+});
+
+/**
+ * The `procedural-textures` guide. Its finished textures live in
+ * `fixtures/diagrams/`, where `npm run diagrams` draws their graphs; the
+ * intermediate steps reuse those same nodes and only repoint `out`, so a step
+ * cannot drift from the texture it builds towards. No sources: every texture
+ * is made from nothing.
+ */
+const TEXTURE_DIAGRAMS = join(DOCS, 'fixtures/diagrams');
+const textureFile = (name) => `docs/fixtures/diagrams/texture-${name}.json`;
+const textureNodes = (name) =>
+  JSON.parse(readFileSync(join(TEXTURE_DIAGRAMS, `texture-${name}.json`), 'utf8')).nodes;
+const texture = (nodes, pad = 8) => ({ name: 'figure', 'tile-size': 512, pad, nodes, output: '@out' });
+/** A greyscale view of a raw generator: black at -1, white at +1. */
+const GREY = { 'low-color': '#111111', 'high-color': '#f4f4f4' };
+const noiseKind = (type) => ({
+  mode: 'tile',
+  width: 384,
+  style: texture({ out: { op: 'noise', type, 'scale-px': 48, ...GREY } }),
+});
+/** A mask field shown as black (0) to white (1). */
+const maskView = (field) => ({
+  op: 'color-ramp',
+  field,
+  stops: [
+    { value: 0, color: '#111111' },
+    { value: 1, color: '#f4f4f4' },
+  ],
 });
 
 /** The `first-tile` guide, one node at a time. */
@@ -161,6 +190,119 @@ const FIGURES = {
     ),
   },
 
+  // ── guides/procedural-textures ────────────────────────────────────────────
+  'texture-noise-white': noiseKind('white'),
+  'texture-noise-value': noiseKind('value'),
+  'texture-noise-perlin': noiseKind('perlin'),
+  'texture-noise-worley': noiseKind('worley'),
+  'texture-octaves-1': {
+    mode: 'tile',
+    width: 384,
+    style: texture({ out: { op: 'noise', type: 'perlin', 'scale-px': 256, octaves: 1, ...GREY } }),
+  },
+  'texture-octaves-6': {
+    mode: 'tile',
+    width: 384,
+    style: texture({ out: { op: 'noise', type: 'perlin', 'scale-px': 256, octaves: 6, ...GREY } }),
+  },
+  'texture-clouds': {
+    mode: 'tile',
+    width: 384,
+    style: texture({
+      fbm: { op: 'noise', kind: 'scalar', type: 'perlin', 'scale-px': 320, octaves: 6, gain: 0.55 },
+      out: {
+        op: 'color-ramp',
+        field: '@fbm',
+        space: 'lab',
+        stops: [
+          { value: -0.2, color: '#3d7cc9' },
+          { value: 0.05, color: '#8db8e8' },
+          { value: 0.35, color: '#ffffff' },
+        ],
+      },
+    }),
+  },
+  'texture-marble-bands': {
+    mode: 'tile',
+    width: 384,
+    style: texture({ ...textureNodes('marble'), out: { op: 'stack', layers: ['@bands'] } }),
+  },
+  'texture-marble-warped': {
+    mode: 'tile',
+    width: 384,
+    style: texture({ ...textureNodes('marble'), out: { op: 'stack', layers: ['@warped'] } }, 96),
+  },
+  'texture-marble': { mode: 'tile', width: 384, file: textureFile('marble') },
+  'texture-wood': { mode: 'tile', file: textureFile('wood') },
+  'texture-rust-mask': {
+    mode: 'tile',
+    width: 384,
+    style: texture({ ...textureNodes('rust'), out: maskView('@mask_f') }),
+  },
+  'texture-rust': { mode: 'tile', width: 384, file: textureFile('rust') },
+  'texture-cobblestone-cells': {
+    mode: 'tile',
+    width: 384,
+    style: texture({
+      ...textureNodes('cobblestone'),
+      paper: { op: 'solid', color: '#fbf6e6' },
+      cell_edges: { op: 'stroke', features: '@cells', color: '#5c5248', 'width-px': 1.5 },
+      stone_shapes: { op: 'fill-solid', features: '@stones', fill: '#c9bda8' },
+      seed_dots: { op: 'circles', features: '@seeds', color: '#c0392b', radius: 3 },
+      out: { op: 'stack', layers: ['@paper', '@stone_shapes', '@cell_edges', '@seed_dots'] },
+    }),
+  },
+  'texture-cobblestone-height': {
+    mode: 'tile',
+    width: 384,
+    style: texture(
+      { ...textureNodes('cobblestone'), out: { op: 'hillshade', field: '@height', mode: 'shade' } },
+      48
+    ),
+  },
+  'texture-cobblestone': { mode: 'tile', width: 384, file: textureFile('cobblestone') },
+  'texture-brick-joints': {
+    mode: 'tile',
+    width: 384,
+    style: texture({
+      ...textureNodes('brick'),
+      paper: { op: 'solid', color: '#fbf6e6' },
+      bed_line: { op: 'stroke', features: '@bed', color: '#c0392b', 'width-px': 3 },
+      head_line_a: { op: 'stroke', features: '@head_a', color: '#2471a3', 'width-px': 3 },
+      head_line_b: { op: 'stroke', features: '@head_b', color: '#239b56', 'width-px': 3 },
+      out: { op: 'stack', layers: ['@paper', '@bed_line', '@head_line_a', '@head_line_b'] },
+    }),
+  },
+  'texture-brick-flat': {
+    mode: 'tile',
+    width: 384,
+    style: texture({
+      ...textureNodes('brick'),
+      flat_clay: { op: 'solid', color: '#a4472f' },
+      out: { op: 'stack', layers: ['@flat_clay', '@mortar'] },
+    }),
+  },
+  'texture-brick': { mode: 'tile', width: 384, file: textureFile('brick') },
+  // Four tiles, so the island is seen to continue across the borders.
+  'texture-terrain': { mode: 'mosaic', file: textureFile('terrain') },
+  // The brick texture, unchanged, showing through a mask of real buildings.
+  // z17, where a block is a few bricks wide.
+  'texture-on-map': {
+    mode: 'tile',
+    tile: '17/116424/51608',
+    style: style(
+      {
+        ...BASE_NODES,
+        ...textureNodes('brick'),
+        brick: textureNodes('brick').out,
+        buildings: { op: 'features', source: 'basemap', layer: 'buildings' },
+        footprints: { op: 'fill-solid', features: '@buildings', fill: '#ffffff' },
+        out: { op: 'blend', base: '@base', over: '@brick', mask: '@footprints' },
+      },
+      { pad: 48 }
+    ),
+  },
+
   // ── gallery + landing ─────────────────────────────────────────────────────
   'gallery-watercolor': { mode: 'bbox', file: 'crates/ezu/examples/styles/watercolor.json' },
 
@@ -276,7 +418,8 @@ async function renderFigure(name, fig) {
   }
 
   const png = tmp(name);
-  await run(EZU, ['tile', '--style', path, '--tile', `${TILE.z}/${TILE.x}/${TILE.y}`, '--out', png], {
+  const tile = fig.tile ?? `${TILE.z}/${TILE.x}/${TILE.y}`;
+  await run(EZU, ['tile', '--style', path, '--tile', tile, '--out', png], {
     cwd: REPO,
     maxBuffer: 32 * 1024 * 1024,
   });

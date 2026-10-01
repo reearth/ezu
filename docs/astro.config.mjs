@@ -34,6 +34,7 @@ export default defineConfig({
             { label: 'What is ezu?', link: '/guides/what-is-ezu/' },
             { label: 'Install', link: '/guides/install/' },
             { label: 'Render your first tile', link: '/guides/first-tile/' },
+            { label: 'Textures from nothing', link: '/guides/procedural-textures/' },
             { label: 'Bounding boxes and pyramids', link: '/guides/bbox-and-pyramids/' },
             { label: 'The live editor', link: '/guides/live-editor/' },
             { label: 'From a MapLibre style', link: '/guides/from-maplibre/' },
