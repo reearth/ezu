@@ -90,7 +90,7 @@ mean is spelled out in
   `resolved-locale` expression now errors at evaluation time in the browser, as
   a `system:` font source already did; native builds are unchanged and render
   the same bytes.
-- Expressions are evaluated by `maplibre-expr` 0.5.2, a correctness pass
+- Expressions are evaluated by `maplibre-expr` 0.5.3, a correctness pass
   collated against the MapLibre style spec. Error messages are now upstream's
   word for word, so the text surfacing from a bad expression field reads
   differently; colour parsing is a real port of CSS Color 4 and is stricter
