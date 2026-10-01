@@ -48,9 +48,10 @@ impl Node for HatchNode {
         // agree at the seam.
         let extent = feats.extent as f64;
         let origin = (ctx.tile.x as f64 * extent, ctx.tile.y as f64 * extent);
+        let px = extent / ctx.canvas.tile_w.max(1) as f64;
         let opts = HatchOpts {
             angle_deg: self.angle_deg.get(ctx, inputs)?,
-            spacing: self.spacing.get(ctx, inputs)?,
+            spacing: self.spacing.get(ctx, inputs)? * px,
             phase: self.phase.get(ctx, inputs)?,
             origin,
         };

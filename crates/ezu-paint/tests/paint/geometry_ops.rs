@@ -174,3 +174,65 @@ fn triangulate_fills_the_convex_hull() {
         "centre of triangulated quad should be green-dominant: {centre:?}"
     );
 }
+
+/// `buffer`'s `distance` is in canvas pixels: a point inflated by 8 px
+/// on a 64 px tile is a disk 8 px in radius, not 8 extent units (1/8 px).
+#[test]
+fn buffer_distance_is_in_pixels() {
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 64,
+      "nodes": {
+        "bg":   { "op": "solid", "color": "#ffffff" },
+        "pt":   { "op": "literal-geometry", "points": [[2048, 2048]] },
+        "disk": { "op": "buffer", "features": "@pt", "distance": 8, "join": "round" },
+        "fill": { "op": "fill-solid", "features": "@disk", "fill": "#000000" },
+        "out":  { "op": "blend", "base": "@bg", "over": "@fill" }
+      },
+      "output": "@out"
+    }"##;
+    let r = render(json, 64, 0);
+    let inside = r.pixel(32 + 6, 32);
+    assert!(
+        inside[0] < 40,
+        "6 px from the point is inside the disk: {inside:?}"
+    );
+    let outside = r.pixel(32 + 11, 32);
+    assert!(
+        outside[0] > 215,
+        "11 px from the point is outside it: {outside:?}"
+    );
+}
+
+/// `hatch`'s `spacing` is in canvas pixels: 16 px over a 64 px tile is
+/// four lines, whatever the feature extent.
+#[test]
+fn hatch_spacing_is_in_pixels() {
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 64,
+      "nodes": {
+        "bg":    { "op": "solid", "color": "#ffffff" },
+        "area":  { "op": "tile-bounds" },
+        "lines": { "op": "hatch", "features": "@area", "spacing": 16 },
+        "draw":  { "op": "stroke", "features": "@lines", "color": "#000000", "width-px": 2 },
+        "out":   { "op": "blend", "base": "@bg", "over": "@draw" }
+      },
+      "output": "@out"
+    }"##;
+    let r = render(json, 64, 0);
+    // Count dark runs down the middle column: one per line.
+    let mut runs = 0;
+    let mut dark = false;
+    for y in 0..64 {
+        let d = r.pixel(32, y)[0] < 128;
+        if d && !dark {
+            runs += 1;
+        }
+        dark = d;
+    }
+    assert!(
+        (3..=5).contains(&runs),
+        "expected ~4 hatch lines, got {runs}"
+    );
+}

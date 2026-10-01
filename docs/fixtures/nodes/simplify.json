@@ -29,7 +29,6 @@
     },
     "base_earth_f": {
       "op": "features",
-      "source": "basemap",
       "layer": "earth"
     },
     "base_roads": {
@@ -40,7 +39,6 @@
     },
     "base_roads_f": {
       "op": "features",
-      "source": "basemap",
       "layer": "roads",
       "min-zoom-field": "min_zoom"
     },
@@ -51,7 +49,6 @@
     },
     "base_water_f": {
       "op": "features",
-      "source": "basemap",
       "layer": "water"
     },
     "bg": {
@@ -72,11 +69,10 @@
     "s": {
       "op": "simplify",
       "features": "@b",
-      "epsilon": 24
+      "epsilon": 6
     },
     "water_f": {
       "op": "features",
-      "source": "basemap",
       "layer": "water"
     }
   },

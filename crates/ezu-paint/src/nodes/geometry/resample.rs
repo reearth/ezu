@@ -30,18 +30,13 @@ enum Mode {
 }
 
 impl Mode {
-    fn apply_open(&self, pts: &[(i32, i32)]) -> Vec<(i32, i32)> {
+    /// `px` converts the mode's pixel lengths to feature-extent units, the
+    /// space the vertices live in.
+    fn apply(&self, pts: &[(i32, i32)], closed: bool, px: f64) -> Vec<(i32, i32)> {
         match *self {
-            Mode::Smooth { iterations } => smooth(pts, iterations, false),
-            Mode::Densify { target_px } => densify(pts, target_px, false),
-            Mode::Resample { spacing_px } => resample(pts, spacing_px, false),
-        }
-    }
-    fn apply_closed(&self, pts: &[(i32, i32)]) -> Vec<(i32, i32)> {
-        match *self {
-            Mode::Smooth { iterations } => smooth(pts, iterations, true),
-            Mode::Densify { target_px } => densify(pts, target_px, true),
-            Mode::Resample { spacing_px } => resample(pts, spacing_px, true),
+            Mode::Smooth { iterations } => smooth(pts, iterations, closed),
+            Mode::Densify { target_px } => densify(pts, target_px * px, closed),
+            Mode::Resample { spacing_px } => resample(pts, spacing_px * px, closed),
         }
     }
     fn tag(&self) -> &'static [u8] {
@@ -84,7 +79,7 @@ impl Node for ResampleNode {
     }
     fn eval(
         &self,
-        _ctx: &EvalCtx<'_>,
+        ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
         let feats = downcast_features(
@@ -92,18 +87,26 @@ impl Node for ResampleNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
+        let px = feats.extent as f64 / ctx.canvas.tile_w.max(1) as f64;
         // Per group: adjust polyline / polygon-ring density (points pass
         // through), carrying properties.
         let mut out_groups = Vec::with_capacity(feats.groups.len());
         for g in &feats.groups {
-            let lines: Vec<Vec<(i32, i32)>> =
-                g.lines.iter().map(|l| self.mode.apply_open(l)).collect();
+            let lines: Vec<Vec<(i32, i32)>> = g
+                .lines
+                .iter()
+                .map(|l| self.mode.apply(l, false, px))
+                .collect();
             let polygons: Vec<Polygon> = g
                 .polygons
                 .iter()
                 .map(|p| Polygon {
-                    exterior: self.mode.apply_closed(&p.exterior),
-                    holes: p.holes.iter().map(|h| self.mode.apply_closed(h)).collect(),
+                    exterior: self.mode.apply(&p.exterior, true, px),
+                    holes: p
+                        .holes
+                        .iter()
+                        .map(|h| self.mode.apply(h, true, px))
+                        .collect(),
                 })
                 .collect();
             out_groups.push(FeatureGroup {

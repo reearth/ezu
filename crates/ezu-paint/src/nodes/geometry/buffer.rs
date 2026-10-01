@@ -55,8 +55,9 @@ impl Node for BufferNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
+        let px = feats.extent as f64 / ctx.canvas.tile_w.max(1) as f64;
         let opts = BufferOpts {
-            distance: self.distance.get(ctx, inputs)?,
+            distance: self.distance.get(ctx, inputs)? * px,
             join: self.join,
         };
         // Per group: buffer each feature's geometry into polygons, carrying

@@ -98,7 +98,7 @@ fn medial_axis_of_long_rectangle_renders_a_line() {
         "rect":  { "op": "literal-geometry",
                    "polygons": [{ "exterior": [[200, 1800], [3800, 1800], [3800, 2200], [200, 2200]] }] },
         "axis":  { "op": "medial-axis", "features": "@rect",
-                   "densify-px": 100, "min-branch-px": 200 },
+                   "densify-px": 0.8, "min-branch-px": 1.6 },
         "draw":  { "op": "line", "features": "@axis",
                    "brush": "@b", "color": "#000000",
                    "radius-px": 2.0, "opacity": 1.0 },

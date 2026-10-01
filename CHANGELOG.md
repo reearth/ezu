@@ -13,6 +13,15 @@ mean is spelled out in
 
 ### Fixed
 
+- Six geometry ops read their pixel lengths as feature-extent units, so on a
+  512 px tile every one of them came out an eighth of the size it asked for:
+  `hatch` `spacing`, `buffer` `distance`, `simplify` `epsilon`, `densify`
+  `target-px`, `resample` `spacing-px`, and `medial-axis` `densify-px` /
+  `min-branch-px`. They are canvas pixels now, as documented and as `dash`,
+  `wave` and `dot-density` already were. **A style that tuned these values by
+  eye against the old behaviour renders differently**: divide them by
+  `extent / tile-size` (8, for a 512 px tile at the default extent) to keep the
+  old look. The `pencil-sketch` example's `hatch-spacing` is rescaled this way.
 - The CLI wrote its log lines to stdout, where `ezu translate`, `ezu legend` and
   `ezu graph` write the document they produce. A single warning was enough to
   corrupt a redirected recipe — `ezu translate style.json > recipe.json` left a

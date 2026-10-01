@@ -140,14 +140,14 @@ export const DEMOS = {
     note: 'Coastlines simplified with a generous tolerance, so the loss is visible.',
     nodes: {
       b: { op: 'boundary', features: '@water_f' },
-      s: { op: 'simplify', features: '@b', epsilon: 24 },
+      s: { op: 'simplify', features: '@b', epsilon: 6 },
       ...overBase('@s'),
     },
   },
   buffer: {
     note: 'Roads dilated into polygons, then filled.',
     nodes: {
-      b: { op: 'buffer', features: '@roads_f', distance: 6 },
+      b: { op: 'buffer', features: '@roads_f', distance: 2 },
       draw: { op: 'fill-solid', features: '@b', fill: INK, 'fill-alpha': 0.5 },
       out: { op: 'blend', base: '@base', over: '@draw' },
     },
@@ -155,7 +155,7 @@ export const DEMOS = {
   hatch: {
     note: 'Parallel-line hatching of the landmass polygons.',
     nodes: {
-      h: { op: 'hatch', features: '@earth_f', spacing: 20, 'angle-deg': 45 },
+      h: { op: 'hatch', features: '@earth_f', spacing: 8, 'angle-deg': 45 },
       ...overBase('@h', 1.0),
     },
   },
@@ -241,8 +241,8 @@ export const DEMOS = {
   'medial-axis': {
     note: 'The skeleton of each polygon — a river’s centreline from its bank.',
     nodes: {
-      s: { op: 'simplify', features: '@water_f', epsilon: 4 },
-      m: { op: 'medial-axis', features: '@s', 'densify-px': 8, 'min-branch-px': 12 },
+      s: { op: 'simplify', features: '@water_f', epsilon: 0.5 },
+      m: { op: 'medial-axis', features: '@s', 'densify-px': 1, 'min-branch-px': 1.5 },
       ...overBase('@m', 2),
     },
   },
