@@ -135,9 +135,9 @@ impl NodeFactory for FeatureBooleanFactory {
             "properties": {
                 "a": schema_frag::node_ref(),
                 "b": schema_frag::node_ref(),
-                "op": {
+                "mode": {
                     "type": "string",
-                    "enum": ["union", "intersection", "difference", "symmetric-difference"],
+                    "enum": ["union", "intersection", "difference", "symmetric-difference", "xor"],
                     "default": "union",
                 },
             },

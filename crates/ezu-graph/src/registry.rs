@@ -206,6 +206,13 @@ impl NodeRegistry {
                 .or_insert_with(|| json!({}))
                 .as_object_mut()
                 .expect("`properties` was just inserted as a JSON object");
+            // `op` is the discriminator. A field of the op's own by that name
+            // would be overwritten here and vanish from the schema, while the
+            // factory went on reading the field it actually parses.
+            debug_assert!(
+                !props.contains_key("op"),
+                "op `{op}` declares a field named `op`, which collides with the discriminator"
+            );
             props.insert(
                 "op".to_string(),
                 json!({ "const": op, "description": format!("Selects the `{op}` operation.") }),

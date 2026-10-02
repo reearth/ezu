@@ -22,6 +22,11 @@ mean is spelled out in
   eye against the old behaviour renders differently**: divide them by
   `extent / tile-size` (8, for a 512 px tile at the default extent) to keep the
   old look. The `pencil-sketch` example's `hatch-spacing` is rescaled this way.
+- `feature-boolean`'s schema called its operation field `op`, the name every
+  node already uses to say which op it is, so the field never reached the JSON
+  Schema or the node catalog — while the op itself reads `mode`. The schema says
+  `mode` now, `xor` included, and the registry refuses (in debug builds) any op
+  that declares a field named `op`.
 - The CLI wrote its log lines to stdout, where `ezu translate`, `ezu legend` and
   `ezu graph` write the document they produce. A single warning was enough to
   corrupt a redirected recipe — `ezu translate style.json > recipe.json` left a
