@@ -187,9 +187,9 @@ Style: [`poi-field.json`](https://github.com/reearth/ezu/blob/main/crates/ezu/ex
 Geometry ops as the whole design. `voronoi-fracture` breaks the land, water, and
 park polygons into panes around seed points — the POI layer where it has points, a
 `point-grid` where it does not — and `boundary` + `stroke` turns every pane edge
-into leading. Pane colour comes from a world-anchored `worley` field mapped through
-an HCL ramp and clipped to the panes, so neighbouring glass differs without any
-per-cell attribute to key on.
+into leading. Pane colour comes from a world-anchored `cell` noise — one random
+value per noise cell — mapped through an HCL ramp and clipped to the panes, so
+neighbouring glass differs without any per-cell attribute to key on.
 
 <figure class="page-fig">
   <img src="/ezu/figures/gallery-stained-glass.webp" alt="Central Tokyo rendered as a stained-glass window" width="768" height="768" loading="lazy" decoding="async" />

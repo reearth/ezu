@@ -22,6 +22,13 @@ mean is spelled out in
   eye against the old behaviour renders differently**: divide them by
   `extent / tile-size` (8, for a 512 px tile at the default extent) to keep the
   old look. The `pencil-sketch` example's `hatch-spacing` is rescaled this way.
+- `noise` and `warp` with `type: "worley"` drew each cell's random value,
+  clamped so that half the cells came out exactly 1.0, rather than the distance
+  field the docs described. `worley` is now that distance, `1 − 2·distance` to
+  the nearest site. **A style using `worley` renders differently**; one that
+  wanted the flat per-cell tones should switch to the new `cell` type, which now
+  spreads them over the whole of `[-1, 1]` — the `stained-glass` example has
+  moved to it.
 - `feature-boolean`'s schema called its operation field `op`, the name every
   node already uses to say which op it is, so the field never reached the JSON
   Schema or the node catalog — while the op itself reads `mode`. The schema says

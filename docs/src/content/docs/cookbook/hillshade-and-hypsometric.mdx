@@ -117,7 +117,9 @@ in the Netherlands. Two habits help:
 The same rule applies to every `ScalarField`, and it bites hardest on the
 synthetic ones, whose range is rarely what it looks like. `density` output is
 unclamped and scales with `intensity`. `noise` values land in `[-1, 1]`, but
-`worley` piles up *at* `+1` — over half a tile can be exactly 1.0.
+not every type uses that range evenly: `worley` reaches `+1` only on its sites
+and spends most of a tile well below it, and many octaves of fBm pull any
+type in towards 0.
 
 A stop placed outside where a field actually spends its time is simply never
 reached, and the failure is silent: the ramp appears to do nothing, and turning

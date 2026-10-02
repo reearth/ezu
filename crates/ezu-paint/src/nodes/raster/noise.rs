@@ -3,7 +3,7 @@
 //!
 //! Shared parameters:
 //!
-//! - `type`: `white` | `value` | `perlin` | `simplex` | `worley`
+//! - `type`: `white` | `value` | `perlin` | `simplex` | `worley` | `cell`
 //! - `scale-px`: wavelength in pixels (required). Either a single
 //!   number (isotropic) or `[x, y]` for anisotropic noise — useful for
 //!   wood grain, brick patterns, or wave streaks.
@@ -26,8 +26,7 @@
 //! value to RGBA.
 //!
 //! Scalar mode (`kind: "scalar"`) emits the **raw** fBm value as a
-//! `ScalarField` (roughly `[-1, 1]` for value/perlin/simplex,
-//! `[0, 1]`-ish for worley/white). Compose with `map-range` to
+//! `ScalarField`, within `[-1, 1]` for every type. Compose with `map-range` to
 //! normalise before feeding `hillshade` / `slope` / `color-ramp`. The
 //! field has no `geo_scale` — gradient consumers treat each pixel
 //! as one unit, so the result is stylization-only, not geographically
@@ -45,7 +44,7 @@ use xxhash_rust::xxh3::Xxh3;
 use crate::nodes::common::{
     default_field_seed, read_number_or, read_optional_string, resolve_field, Anchor,
 };
-use crate::nodes::raster::noise_field::{fbm, NoiseKind, Sampler};
+use crate::nodes::raster::noise_field::{fbm, NoiseKind, Sampler, NOISE_TYPES};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OutputKind {
@@ -238,7 +237,8 @@ impl NodeFactory for NoiseFactory {
             Some(s) => NoiseKind::parse(s).ok_or_else(|| FactoryError::BadField {
                 field: "type".into(),
                 msg: format!(
-                    "unknown noise type `{s}`, expected white/value/perlin/simplex/worley"
+                    "unknown noise type `{s}`, expected {}",
+                    NOISE_TYPES.join("/")
                 ),
             })?,
         };
@@ -314,11 +314,11 @@ impl NodeFactory for NoiseFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Procedural noise source. With `kind: raster` (default) the noise is mapped to RGBA via `low-color`/`high-color`/`opacity`. With `kind: scalar` it emits a `ScalarField` of raw fBm values — compose with `map-range` before feeding `hillshade`/`color-ramp`. Every `type` lands in [-1, 1], but they are not distributed alike: `white`/`value`/`perlin`/`simplex` sit around 0, while `worley` is `1 − 2·distance` and so piles up *at* +1 over the cell interiors — more than half a tile can be exactly 1.0. Evenly spaced ramp stops over a field like that leave most of the ramp unreachable and the render unchanged, so probe the distribution before choosing stops. `anchor=world` (default) keeps the field seamless across tile borders.",
+            "description": "Procedural noise source. With `kind: raster` (default) the noise is mapped to RGBA via `low-color`/`high-color`/`opacity`. With `kind: scalar` it emits a `ScalarField` of raw fBm values — compose with `map-range` before feeding `hillshade`/`color-ramp`. Every `type` lands in [-1, 1]. `white`/`value`/`perlin`/`simplex` sit around 0. `worley` and `cell` both divide the plane into cells around scattered sites: `worley` is `1 − 2·distance` to the nearest site, +1 on the site and falling towards the cell's edge, and `cell` is the nearest site's own random value, flat across its cell and spread evenly over [-1, 1] — one tone per cell, for stones, panes or patches. `anchor=world` (default) keeps the field seamless across tile borders.",
             "properties": {
                 "type": {
                     "type": "string",
-                    "enum": ["white", "value", "perlin", "simplex", "worley"],
+                    "enum": NOISE_TYPES,
                     "default": "perlin",
                 },
                 "kind": {

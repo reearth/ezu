@@ -194,7 +194,9 @@ const FIGURES = {
   'texture-noise-white': noiseKind('white'),
   'texture-noise-value': noiseKind('value'),
   'texture-noise-perlin': noiseKind('perlin'),
+  'texture-noise-simplex': noiseKind('simplex'),
   'texture-noise-worley': noiseKind('worley'),
+  'texture-noise-cell': noiseKind('cell'),
   'texture-octaves-1': {
     mode: 'tile',
     width: 384,
@@ -318,6 +320,7 @@ const FIGURES = {
   },
   'gallery-pencil-sketch': { mode: 'bbox', file: 'crates/ezu/examples/styles/pencil-sketch.json' },
   'gallery-photo-pop': { mode: 'bbox', file: 'crates/ezu/examples/styles/photo-pop.json' },
+  'gallery-stained-glass': { mode: 'bbox', file: 'crates/ezu/examples/styles/stained-glass.json' },
   'gallery-hillshade': {
     mode: 'bbox',
     file: 'crates/ezu/examples/styles/hillshade.json',

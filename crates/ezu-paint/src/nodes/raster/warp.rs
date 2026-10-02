@@ -23,7 +23,7 @@ use crate::nodes::common::{
     read_optional_string, sample_bilinear, unwrap_raster_or_sprite, wrap_raster_like, Anchor,
     BoundaryMode, ACCEPTS_RASTER_OR_SPRITE,
 };
-use crate::nodes::raster::noise_field::{fbm, NoiseKind, Sampler};
+use crate::nodes::raster::noise_field::{fbm, NoiseKind, Sampler, NOISE_TYPES};
 
 struct WarpNode {
     kind: NoiseKind,
@@ -178,7 +178,8 @@ impl NodeFactory for WarpFactory {
             Some(s) => NoiseKind::parse(s).ok_or_else(|| FactoryError::BadField {
                 field: "type".into(),
                 msg: format!(
-                    "unknown noise type `{s}`, expected white/value/perlin/simplex/worley"
+                    "unknown noise type `{s}`, expected {}",
+                    NOISE_TYPES.join("/")
                 ),
             })?,
         };
@@ -279,7 +280,7 @@ impl NodeFactory for WarpFactory {
                 "input": schema_frag::node_ref(),
                 "type": {
                     "type": "string",
-                    "enum": ["white", "value", "perlin", "simplex", "worley"],
+                    "enum": NOISE_TYPES,
                     "default": "perlin",
                 },
                 "scale-px": schema_frag::px_number(),

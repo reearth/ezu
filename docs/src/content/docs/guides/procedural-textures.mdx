@@ -28,17 +28,19 @@ another and the pattern carries on.
 ## The raw material: noise
 
 Almost everything below starts with one op, [`noise`](/ezu/style/nodes/raster/#noise).
-It fills the canvas with a smooth random field. Four `type`s give four
-characters:
+It fills the canvas with a random field, and its `type` sets the field's
+character:
 
-<figure class="page-fig page-fig--quad">
+<figure class="page-fig page-fig--trio">
   <div class="page-fig__images">
     <img src="/ezu/figures/texture-noise-white.webp" alt="White noise: independent random grey per pixel" width="384" height="384" loading="lazy" decoding="async" />
     <img src="/ezu/figures/texture-noise-value.webp" alt="Value noise: blurry grey blocks on a grid" width="384" height="384" loading="lazy" decoding="async" />
     <img src="/ezu/figures/texture-noise-perlin.webp" alt="Perlin noise: smooth rounded blobs with no grid" width="384" height="384" loading="lazy" decoding="async" />
-    <img src="/ezu/figures/texture-noise-worley.webp" alt="Worley noise: flat polygonal cells, one grey per cell" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/figures/texture-noise-simplex.webp" alt="Simplex noise: smooth blobs much like Perlin" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/figures/texture-noise-worley.webp" alt="Worley noise: a bright spot at each scattered site, darkening towards the cell edges" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/figures/texture-noise-cell.webp" alt="Cell noise: flat polygonal cells, one grey per cell" width="384" height="384" loading="lazy" decoding="async" />
   </div>
-  <figcaption><code>white</code>, <code>value</code>, <code>perlin</code> and <code>worley</code>, each at <code>scale-px: 48</code>.</figcaption>
+  <figcaption><code>white</code>, <code>value</code>, <code>perlin</code>; <code>simplex</code>, <code>worley</code>, <code>cell</code>. Each at <code>scale-px: 48</code>.</figcaption>
 </figure>
 
 ```json
@@ -51,8 +53,10 @@ characters:
   shows, which is sometimes what you want.
 - **`perlin`** (and `simplex`) blends random *slopes* instead, so the blobs are
   rounded and the grid disappears. This is the workhorse.
-- **`worley`** splits the plane into cells and gives each one flat value — a
-  start for anything made of pieces.
+- **`worley`** scatters sites over the plane and measures the distance to the
+  nearest one: bright on each site, darkening towards where two cells meet.
+- **`cell`** uses the same cells but gives each one a single flat random value
+  — a start for anything made of pieces.
 
 `scale-px` is the size of a feature in pixels. Give it two numbers, `[x, y]`,
 and the noise stretches: that one knob turns blobs into the grain of wood or
