@@ -17,6 +17,12 @@
 //! The gradient is the same 3×3 Horn window `slope` and `hillshade` use,
 //! scaled by the field's metres per pixel; a field without geographic
 //! scale gets pixel-space gradients, as it does there.
+//!
+//! Missing samples (NaN, or equal to the field's `nodata`) get the
+//! no-flow 50% grey, opaque like every other pixel, so `displace` and
+//! `flow-smear` leave them in place. A missing neighbour counts as the
+//! centre value, so the ground around a hole does not flow into it or
+//! out of it.
 
 use std::sync::Arc;
 
@@ -78,7 +84,9 @@ impl Node for FlowFieldNode {
             for x in 0..w {
                 // Horn's dz/dy grows southwards, the same way as the
                 // pixel rows, so the gradient is already in output axes.
-                let (dz_dx, dz_dy) = horn_gradient(field, x, y, inv_x, inv_y);
+                // A missing sample has no slope to follow, so it gets
+                // the no-flow vector, the same as flat ground.
+                let (dz_dx, dz_dy) = horn_gradient(field, x, y, inv_x, inv_y).unwrap_or((0.0, 0.0));
                 let g = (dz_dx * dz_dx + dz_dy * dz_dy).sqrt();
                 let (vx, vy) = if g > 0.0 {
                     let len = if normalize {
@@ -185,7 +193,7 @@ impl NodeFactory for FlowFieldFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Direction raster from an elevation field: which way the ground falls, rises, or runs level at each pixel. R = 0.5 + 0.5·vx and G = 0.5 + 0.5·vy in pixel axes (+x east, +y south), B = 0, opaque; flat 50% grey means no direction. This is `displace`'s encoding, so the output feeds `displace` directly, and it is what `flow-smear` reads to streak a texture along the terrain. The vector's length is the slope angle over `max-deg` (capped at 1), or 1 everywhere the ground slopes with `normalize`.",
+            "description": "Direction raster from an elevation field: which way the ground falls, rises, or runs level at each pixel. R = 0.5 + 0.5·vx and G = 0.5 + 0.5·vy in pixel axes (+x east, +y south), B = 0, opaque; flat 50% grey means no direction. This is `displace`'s encoding, so the output feeds `displace` directly, and it is what `flow-smear` reads to streak a texture along the terrain. The vector's length is the slope angle over `max-deg` (capped at 1), or 1 everywhere the ground slopes with `normalize`. Missing samples (NaN or the field's nodata value) get the opaque no-flow grey, so `displace` and `flow-smear` leave them in place; a missing neighbour counts as the centre value, so the ground around a hole does not flow into or out of it.",
             "properties": {
                 "field": schema_frag::node_ref(),
                 "direction": { "type": "string", "enum": ["downhill", "uphill", "along"], "default": "downhill",

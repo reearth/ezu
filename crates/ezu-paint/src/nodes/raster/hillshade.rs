@@ -14,6 +14,11 @@
 //!   compositing over a base map with `blend`'s `source-over` / `multiply`,
 //!   matching a shaded-relief overlay (and MapLibre's `hillshade`, whose
 //!   `hillshade-shadow-color` / `-highlight-color` map straight onto these).
+//!
+//! Missing samples (NaN, or equal to the field's `nodata`) are holes: a
+//! missing pixel is fully transparent in both modes, and a missing
+//! neighbour counts as the centre value, so the ground around a hole
+//! shades as if it were level there instead of drawing a cliff.
 
 use std::sync::Arc;
 
@@ -205,7 +210,11 @@ fn render_with(
     let flat = sample(0.0, 0.0).clamp(0.0, 1.0);
     for y in 0..h {
         for x in 0..w {
-            let (dz_dx, dz_dy) = horn_gradient(field, x, y, inv_x, inv_y);
+            // A missing sample has no ground to shade: leave the pixel
+            // transparent in either mode.
+            let Some((dz_dx, dz_dy)) = horn_gradient(field, x, y, inv_x, inv_y) else {
+                continue;
+            };
             let shade = sample(dz_dx, dz_dy).clamp(0.0, 1.0);
             let i = ((y * w + x) * 4) as usize;
             match mode {
@@ -348,7 +357,7 @@ impl NodeFactory for HillshadeFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Analytical hillshade (Horn 1981) from a ScalarField. `mode: shade` outputs grayscale; `mode: relief` outputs transparent black scaled by 1-shade for multiply-blend over a base map.",
+            "description": "Analytical hillshade (Horn 1981) from a ScalarField. `mode: shade` outputs grayscale; `mode: relief` outputs transparent black scaled by 1-shade for multiply-blend over a base map. Missing samples (NaN or the field's nodata value) are fully transparent in both modes; a missing neighbour counts as the centre value, so the edge of a hole shades as level ground instead of a cliff.",
             "properties": {
                 "field": schema_frag::node_ref(),
                 "azimuth-deg": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 315,

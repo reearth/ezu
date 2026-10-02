@@ -96,6 +96,8 @@ mod sharpen_field;
 mod stamp_position_jitter;
 #[path = "paint/stroke_gap_width.rs"]
 mod stroke_gap_width;
+#[path = "paint/terrain_holes.rs"]
+mod terrain_holes;
 #[path = "paint/text_collision.rs"]
 mod text_collision;
 #[path = "paint/text_labels.rs"]

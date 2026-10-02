@@ -13,6 +13,18 @@ mean is spelled out in
 
 ### Fixed
 
+- `hillshade`, `slope` and `flow-field` read a field's missing samples as
+  elevations. Around a DEM's `nodata` hole, `-9999` say, the 3×3 gradient saw
+  a cliff, so `hillshade` drew a shadow or highlight rim, `slope` a
+  near-vertical ring and `flow-field` large vectors into or out of the hole;
+  the hole itself was shaded too, and NaN came out as opaque black in `slope`
+  and `hillshade`'s `shade` mode. Missing samples (NaN, or equal to the
+  field's `nodata`) are now holes: a missing neighbour counts as the centre
+  value, as in `sharpen`, so the ground around a hole reads as level there,
+  and a missing pixel is fully transparent in `hillshade` (both modes) and
+  `slope`, and the opaque no-flow grey in `flow-field`, which `displace` and
+  `flow-smear` leave in place. A field with neither nodata nor NaN renders
+  exactly as before.
 - `map-range` remapped a field's missing samples along with its real ones. A
   DEM's `nodata` value, `-9999` say, came out as some ordinary-looking number,
   so everything downstream drew it as terrain instead of a gap; NaN turned into

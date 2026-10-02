@@ -1904,7 +1904,7 @@
             "type": "object"
           },
           {
-            "description": "Direction raster from an elevation field: which way the ground falls, rises, or runs level at each pixel. R = 0.5 + 0.5·vx and G = 0.5 + 0.5·vy in pixel axes (+x east, +y south), B = 0, opaque; flat 50% grey means no direction. This is `displace`'s encoding, so the output feeds `displace` directly, and it is what `flow-smear` reads to streak a texture along the terrain. The vector's length is the slope angle over `max-deg` (capped at 1), or 1 everywhere the ground slopes with `normalize`.",
+            "description": "Direction raster from an elevation field: which way the ground falls, rises, or runs level at each pixel. R = 0.5 + 0.5·vx and G = 0.5 + 0.5·vy in pixel axes (+x east, +y south), B = 0, opaque; flat 50% grey means no direction. This is `displace`'s encoding, so the output feeds `displace` directly, and it is what `flow-smear` reads to streak a texture along the terrain. The vector's length is the slope angle over `max-deg` (capped at 1), or 1 everywhere the ground slopes with `normalize`. Missing samples (NaN or the field's nodata value) get the opaque no-flow grey, so `displace` and `flow-smear` leave them in place; a missing neighbour counts as the centre value, so the ground around a hole does not flow into or out of it.",
             "properties": {
               "direction": {
                 "default": "downhill",
@@ -2580,7 +2580,7 @@
             "type": "object"
           },
           {
-            "description": "Analytical hillshade (Horn 1981) from a ScalarField. `mode: shade` outputs grayscale; `mode: relief` outputs transparent black scaled by 1-shade for multiply-blend over a base map.",
+            "description": "Analytical hillshade (Horn 1981) from a ScalarField. `mode: shade` outputs grayscale; `mode: relief` outputs transparent black scaled by 1-shade for multiply-blend over a base map. Missing samples (NaN or the field's nodata value) are fully transparent in both modes; a missing neighbour counts as the centre value, so the edge of a hole shades as level ground instead of a cliff.",
             "properties": {
               "altitude-deg": {
                 "oneOf": [
@@ -4265,7 +4265,7 @@
             "type": "object"
           },
           {
-            "description": "Slope angle as grayscale, normalised to 0..1 against `max-deg`.",
+            "description": "Slope angle as grayscale, normalised to 0..1 against `max-deg`. Missing samples (NaN or the field's nodata value) are fully transparent; a missing neighbour counts as the centre value, so the edge of a hole reads as level ground instead of a sheer drop.",
             "properties": {
               "field": {
                 "description": "Reference to another node (`@name`).",

@@ -1,6 +1,10 @@
 //! `slope` — `ScalarField -> Raster`. Per-pixel slope angle from a
 //! 3×3 Horn gradient, normalised to `0..1` against `max-deg` and
 //! rasterised as grayscale RGBA.
+//!
+//! Missing samples (NaN, or equal to the field's `nodata`) are written
+//! fully transparent. A missing neighbour counts as the centre value,
+//! so the edge of a hole reads as level ground, not a sheer drop.
 
 use std::sync::Arc;
 
@@ -49,7 +53,10 @@ impl Node for SlopeNode {
         let max_rad = max_deg.to_radians().max(1e-4);
         for y in 0..h {
             for x in 0..w {
-                let (dz_dx, dz_dy) = horn_gradient(field, x, y, inv_x, inv_y);
+                // A missing sample has no slope: leave it transparent.
+                let Some((dz_dx, dz_dy)) = horn_gradient(field, x, y, inv_x, inv_y) else {
+                    continue;
+                };
                 let slope = libm::atanf((dz_dx * dz_dx + dz_dy * dz_dy).sqrt());
                 let mut t = (slope / max_rad).clamp(0.0, 1.0);
                 if invert {
@@ -115,7 +122,7 @@ impl NodeFactory for SlopeFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Slope angle as grayscale, normalised to 0..1 against `max-deg`.",
+            "description": "Slope angle as grayscale, normalised to 0..1 against `max-deg`. Missing samples (NaN or the field's nodata value) are fully transparent; a missing neighbour counts as the centre value, so the edge of a hole reads as level ground instead of a sheer drop.",
             "properties": {
                 "field": schema_frag::node_ref(),
                 "max-deg": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 60,
