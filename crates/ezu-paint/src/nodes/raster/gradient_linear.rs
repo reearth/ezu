@@ -61,11 +61,11 @@ impl Node for GradientLinearNode {
         let start = self.start;
         // Resolved here, so a `$param` stop costs one lookup per eval
         // rather than one per pixel.
-        let stops = &resolve_stops(&self.stops, ctx, inputs)?;
+        let stops = &resolve_stops(&self.stops, self.space, ctx, inputs)?;
         let space = self.space;
         let sample = |ux: f32, uy: f32| -> [f32; 4] {
             if len2 < 1e-12 {
-                return stops.first().map(|s| s.1).unwrap_or([0.0; 4]);
+                return stops.first().map(|s| s.rgba).unwrap_or([0.0; 4]);
             }
             let t = ((ux - start[0]) * dx + (uy - start[1]) * dy) / len2;
             sample_stops(stops, t, space)

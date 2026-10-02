@@ -56,19 +56,33 @@ impl Node for LevelsNode {
         let inv_gamma = if gamma.abs() < 1e-6 { 1.0 } else { 1.0 / gamma };
         let out_lo = out_black;
         let out_span = out_white - out_black;
+        let curve = |p: f32, a: f32| -> u8 {
+            let t = ((p - in_black) * inv_in).clamp(0.0, 1.0);
+            let y = (libm::powf(t, inv_gamma) * out_span + out_lo).clamp(0.0, 1.0);
+            (y * a * 255.0).round() as u8
+        };
+        // An opaque pixel's channel is the curve of `c / 255` alone, so the
+        // 256 answers are worked out once — by the same expression, so the
+        // bytes match the per-pixel path exactly — rather than a `powf`
+        // per channel per pixel.
+        let opaque: [u8; 256] = std::array::from_fn(|c| curve(c as f32 / 255.0, 1.0));
         let mut out = RasterBuf::new(src.width, src.height);
         for i in (0..src.pixels.len()).step_by(4) {
-            let a = src.pixels[i + 3] as f32 / 255.0;
-            if a <= 0.0 {
+            let alpha = src.pixels[i + 3];
+            if alpha == 0 {
                 continue;
             }
-            for c in 0..3 {
-                let p = (src.pixels[i + c] as f32 / 255.0) / a;
-                let t = ((p - in_black) * inv_in).clamp(0.0, 1.0);
-                let y = (libm::powf(t, inv_gamma) * out_span + out_lo).clamp(0.0, 1.0);
-                out.pixels[i + c] = (y * a * 255.0).round() as u8;
+            if alpha == 255 {
+                for c in 0..3 {
+                    out.pixels[i + c] = opaque[src.pixels[i + c] as usize];
+                }
+            } else {
+                let a = alpha as f32 / 255.0;
+                for c in 0..3 {
+                    out.pixels[i + c] = curve((src.pixels[i + c] as f32 / 255.0) / a, a);
+                }
             }
-            out.pixels[i + 3] = src.pixels[i + 3];
+            out.pixels[i + 3] = alpha;
         }
         Ok(wrap_raster_like(Arc::new(out), kind))
     }

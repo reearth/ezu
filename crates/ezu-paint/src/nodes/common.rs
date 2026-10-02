@@ -454,18 +454,33 @@ pub(super) fn read_stops(
     Ok(out)
 }
 
+/// One resolved gradient stop.
+pub(super) struct GradientStop {
+    t: f32,
+    pub(super) rgba: [f32; 4],
+    /// `rgba` in the interpolation space, converted once per eval so a pixel
+    /// pays only for the interpolation itself.
+    converted: [f32; 4],
+}
+
 /// Resolve a stop table for one eval and sort it by `t`, which
 /// [`sample_stops`] requires. Call once per eval, never per pixel.
 pub(super) fn resolve_stops(
     stops: &StopsIn,
+    space: crate::color_interp::InterpSpace,
     ctx: &EvalCtx<'_>,
     inputs: &[Option<PortValue>],
-) -> Result<Vec<(f32, [f32; 4])>, EvalError> {
+) -> Result<Vec<GradientStop>, EvalError> {
     let mut out = Vec::with_capacity(stops.len());
     for (t, c) in stops {
-        out.push((t.get(ctx, inputs)? as f32, c.get(ctx, inputs)?));
+        let rgba = c.get(ctx, inputs)?;
+        out.push(GradientStop {
+            t: t.get(ctx, inputs)? as f32,
+            rgba,
+            converted: crate::color_interp::to_space(rgba, space),
+        });
     }
-    out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    out.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap_or(std::cmp::Ordering::Equal));
     Ok(out)
 }
 
@@ -502,31 +517,36 @@ pub(super) fn read_space(
 /// Stops must be non-empty and sorted by ascending `t`. Out-of-range `t`
 /// clamps to the endpoint colors.
 pub(super) fn sample_stops(
-    stops: &[(f32, [f32; 4])],
+    stops: &[GradientStop],
     t: f32,
     space: crate::color_interp::InterpSpace,
 ) -> [f32; 4] {
     if stops.is_empty() {
         return [0.0; 4];
     }
-    if t <= stops[0].0 {
-        return stops[0].1;
+    if t <= stops[0].t {
+        return stops[0].rgba;
     }
     let last = stops.last().expect("stops is non-empty (guarded above)");
-    if t >= last.0 {
-        return last.1;
+    if t >= last.t {
+        return last.rgba;
     }
     for w in stops.windows(2) {
-        if t >= w[0].0 && t <= w[1].0 {
-            let d = w[1].0 - w[0].0;
+        if t >= w[0].t && t <= w[1].t {
+            let d = w[1].t - w[0].t;
             if d < 1e-6 {
-                return w[1].1;
+                return w[1].rgba;
             }
-            let f = (t - w[0].0) / d;
-            return crate::color_interp::interpolate(w[0].1, w[1].1, f, space);
+            let f = (t - w[0].t) / d;
+            return crate::color_interp::interpolate_converted(
+                w[0].converted,
+                w[1].converted,
+                f,
+                space,
+            );
         }
     }
-    last.1
+    last.rgba
 }
 
 pub(super) fn read_optional_string(

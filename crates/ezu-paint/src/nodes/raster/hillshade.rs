@@ -152,13 +152,10 @@ fn render_single(
     mode: OutputMode,
     relief: ReliefStyle,
 ) -> RasterBuf {
-    let azimuth_rad = (450.0 - azimuth_deg).to_radians();
-    let altitude_rad = altitude_deg.to_radians();
-    let cos_zenith = libm::cosf(std::f32::consts::FRAC_PI_2 - altitude_rad);
-    let sin_zenith = libm::sinf(std::f32::consts::FRAC_PI_2 - altitude_rad);
+    let light = Light::new(altitude_deg, (450.0 - azimuth_deg).to_radians());
     let scale = z_factor * exaggeration;
     render_with(field, mode, relief, |dx, dy| {
-        shade_sample(dx, dy, scale, cos_zenith, sin_zenith, azimuth_rad)
+        shade_sample(dx, dy, scale, &light)
     })
 }
 
@@ -172,20 +169,20 @@ fn render_multidirectional(
 ) -> RasterBuf {
     // ESRI-style weighted sum over four light directions
     // (225°, 270°, 315°, 360°). Weights from the published recipe.
-    let altitudes_rad = altitude_deg.to_radians();
-    let cos_zenith = libm::cosf(std::f32::consts::FRAC_PI_2 - altitudes_rad);
-    let sin_zenith = libm::sinf(std::f32::consts::FRAC_PI_2 - altitudes_rad);
     let scale = z_factor * exaggeration;
     let dirs = [(225.0f32, 1.0), (270.0, 2.0), (315.0, 2.0), (360.0, 1.0)];
     let weight_sum: f32 = dirs.iter().map(|(_, w)| *w).sum();
-    let azimuths: Vec<(f32, f32)> = dirs
+    let lights: Vec<(Light, f32)> = dirs
         .iter()
-        .map(|(az, w)| ((450.0 - az).to_radians(), w / weight_sum))
+        .map(|(az, w)| {
+            let light = Light::new(altitude_deg, (450.0 - az).to_radians());
+            (light, w / weight_sum)
+        })
         .collect();
     render_with(field, mode, relief, |dx, dy| {
-        azimuths
+        lights
             .iter()
-            .map(|(az, w)| w * shade_sample(dx, dy, scale, cos_zenith, sin_zenith, *az))
+            .map(|(light, w)| w * shade_sample(dx, dy, scale, light))
             .sum()
     })
 }
@@ -255,24 +252,39 @@ fn render_with(
     out
 }
 
-#[inline]
-fn shade_sample(
-    dz_dx: f32,
-    dz_dy: f32,
-    scale: f32,
+/// The light direction, as the caller's azimuth (after the 450° shift into
+/// mathematical convention) reduced to its cosine and sine once.
+#[derive(Clone, Copy)]
+struct Light {
     cos_zenith: f32,
     sin_zenith: f32,
-    azimuth_rad: f32,
-) -> f32 {
+    cos_azimuth: f32,
+    sin_azimuth: f32,
+}
+
+impl Light {
+    fn new(altitude_deg: f32, azimuth_rad: f32) -> Self {
+        let zenith = std::f32::consts::FRAC_PI_2 - altitude_deg.to_radians();
+        Self {
+            cos_zenith: libm::cosf(zenith),
+            sin_zenith: libm::sinf(zenith),
+            cos_azimuth: libm::cosf(azimuth_rad),
+            sin_azimuth: libm::sinf(azimuth_rad),
+        }
+    }
+}
+
+/// Horn's shading, `cos z · cos s + sin z · sin s · cos(az − aspect)`, with
+/// the slope `s = atan g` and the aspect `atan2(dy, −dx)` never formed as
+/// angles. `cos s = 1/√(1 + g²)`, `sin s = g/√(1 + g²)`, and the aspect's
+/// cosine and sine are `−dx/g` and `dy/g`, so the `g` cancels and a pixel
+/// costs one square root instead of five trigonometric calls.
+#[inline]
+fn shade_sample(dz_dx: f32, dz_dy: f32, scale: f32, light: &Light) -> f32 {
     let dx = dz_dx * scale;
     let dy = dz_dy * scale;
-    let slope = libm::atanf((dx * dx + dy * dy).sqrt());
-    // Aspect: angle the slope faces, measured clockwise from east in
-    // mathematical convention (matches `azimuth_rad` after the 450°
-    // shift applied by the caller).
-    let aspect = libm::atan2f(dy, -dx);
-    cos_zenith * libm::cosf(slope)
-        + sin_zenith * libm::sinf(slope) * libm::cosf(azimuth_rad - aspect)
+    let facing = -dx * light.cos_azimuth + dy * light.sin_azimuth;
+    (light.cos_zenith + light.sin_zenith * facing) / (1.0 + dx * dx + dy * dy).sqrt()
 }
 
 pub(super) struct HillshadeFactory;

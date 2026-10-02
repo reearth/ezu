@@ -58,24 +58,33 @@ impl InterpSpace {
 /// Hue-based spaces take the shortest path around the wheel and treat an
 /// achromatic endpoint (undefined hue) as sharing the other endpoint's hue.
 pub fn interpolate(from: [f32; 4], to: [f32; 4], t: f32, space: InterpSpace) -> [f32; 4] {
+    interpolate_converted(to_space(from, space), to_space(to, space), t, space)
+}
+
+/// A non-premultiplied RGBA colour in `space`'s own coordinates — the first
+/// half of [`interpolate`]. A caller interpolating between the same
+/// endpoints many times (a ramp's stops, sampled per pixel) converts them
+/// once and calls [`interpolate_converted`]; the result is bit-identical to
+/// [`interpolate`].
+pub fn to_space(rgb: [f32; 4], space: InterpSpace) -> [f32; 4] {
     match space {
-        InterpSpace::Rgb => lerp4(from, to, t),
-        InterpSpace::Lab => {
-            let a = rgb_to_lab(from);
-            let b = rgb_to_lab(to);
-            lab_to_rgb(lerp4(a, b, t))
-        }
-        InterpSpace::Hcl => interp_hcl(from, to, t),
-        InterpSpace::Hsl => {
-            let a = rgb_to_hsl(from);
-            let b = rgb_to_hsl(to);
-            hsl_to_rgb(interp_cylindrical(a, b, t))
-        }
-        InterpSpace::Hsv => {
-            let a = rgb_to_hsv(from);
-            let b = rgb_to_hsv(to);
-            hsv_to_rgb(interp_cylindrical(a, b, t))
-        }
+        InterpSpace::Rgb => rgb,
+        InterpSpace::Lab => rgb_to_lab(rgb),
+        InterpSpace::Hcl => rgb_to_hcl(rgb),
+        InterpSpace::Hsl => rgb_to_hsl(rgb),
+        InterpSpace::Hsv => rgb_to_hsv(rgb),
+    }
+}
+
+/// Interpolate two colours already in `space`'s coordinates (see
+/// [`to_space`]) at `t`, and return the result as RGBA.
+pub fn interpolate_converted(a: [f32; 4], b: [f32; 4], t: f32, space: InterpSpace) -> [f32; 4] {
+    match space {
+        InterpSpace::Rgb => lerp4(a, b, t),
+        InterpSpace::Lab => lab_to_rgb(lerp4(a, b, t)),
+        InterpSpace::Hcl => interp_hcl(a, b, t),
+        InterpSpace::Hsl => hsl_to_rgb(interp_cylindrical(a, b, t)),
+        InterpSpace::Hsv => hsv_to_rgb(interp_cylindrical(a, b, t)),
     }
 }
 
@@ -210,11 +219,27 @@ const DEG2RAD: f32 = std::f32::consts::PI / 180.0;
 const RAD2DEG: f32 = 180.0 / std::f32::consts::PI;
 
 fn rgb2xyz(x: f32) -> f32 {
+    // Most inputs are an 8-bit channel over 255. Those 256 values are worked
+    // out once, by the same expression, so a lookup returns exactly what the
+    // `powf` would; anything else is computed.
+    let k = (x * 255.0).round();
+    if (0.0..=255.0).contains(&k) && k / 255.0 == x {
+        return srgb_decode_table()[k as usize];
+    }
+    srgb_decode(x)
+}
+
+fn srgb_decode(x: f32) -> f32 {
     if x <= 0.04045 {
         x / 12.92
     } else {
         libm::powf((x + 0.055) / 1.055, 2.4)
     }
+}
+
+fn srgb_decode_table() -> &'static [f32; 256] {
+    static TABLE: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| std::array::from_fn(|k| srgb_decode(k as f32 / 255.0)))
 }
 
 fn xyz2lab(t: f32) -> f32 {
@@ -316,8 +341,8 @@ fn hcl_to_rgb([h, c, l, alpha]: [f32; 4]) -> [f32; 4] {
 /// colours, and "fixing" the white arm would move every one that touches
 /// white. Verified against maplibre-gl 5.1.1.
 fn interp_hcl(from: [f32; 4], to: [f32; 4], t: f32) -> [f32; 4] {
-    let [h0, c0, l0, a0] = rgb_to_hcl(from);
-    let [h1, c1, l1, a1] = rgb_to_hcl(to);
+    let [h0, c0, l0, a0] = from;
+    let [h1, c1, l1, a1] = to;
     let mut chroma_override: Option<f32> = None;
     let hue = if !h0.is_nan() && !h1.is_nan() {
         interp_hue(h0, h1, t)

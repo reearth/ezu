@@ -130,6 +130,15 @@ mean is spelled out in
   code guarantees rather than something the inputs happened to allow, and
   `clippy.toml` now refuses the standard methods so it stays that way. Output
   that goes through these functions can move by a level against before.
+
+  `libm` is slower than a tuned platform libm, so the hot spots no longer call
+  it per pixel: `hillshade` shades from the gradient with square roots alone
+  (2–6× faster than before), `levels` and the sRGB decode look up the 256
+  values an 8-bit channel can take, and `color-ramp` and the gradients convert
+  their stops into the interpolation space once per tile rather than per pixel
+  (a `hcl` ramp is now faster than before). `mix` in `lab`/`hcl` and
+  `gradient-conic`, which still need a transcendental per pixel, run about 1.4×
+  slower than they did.
 - The npm package's wasm module is a quarter smaller — 6,103,052 → 4,665,571
   bytes, gzipped 2,215,214 → 1,751,120 — by keeping out of the wasm build two
   dependencies that cannot run there: ICU's collation tables, which

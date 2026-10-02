@@ -57,7 +57,7 @@ impl Node for GradientConicNode {
         let center = self.center;
         // Resolved here, so a `$param` stop costs one lookup per eval
         // rather than one per pixel.
-        let stops = &resolve_stops(&self.stops, ctx, inputs)?;
+        let stops = &resolve_stops(&self.stops, self.space, ctx, inputs)?;
         let space = self.space;
         let sample = |ux: f32, uy: f32| -> [f32; 4] {
             let dx = ux - center[0];

@@ -28,13 +28,16 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::color_interp::{interpolate, InterpSpace};
+use crate::color_interp::{interpolate_converted, to_space, InterpSpace};
 use crate::nodes::common::read_space;
 
 #[derive(Debug, Clone, Copy)]
 struct Stop {
     value: f32,
     rgba: [u8; 4],
+    /// `rgba` in the ramp's interpolation space, converted once per eval
+    /// rather than for every pixel that lands between this stop and the next.
+    converted: [f32; 4],
 }
 
 /// One declared stop. Either half may be a `$param`, so a stop table is
@@ -85,7 +88,7 @@ impl Node for ColorRampNode {
         let lut = self.ramp_expr.as_ref().map(|e| build_lut(e, ctx.tile.z));
         let stops = match &lut {
             Some(_) => Vec::new(),
-            None => resolve_stops(&self.stops, ctx, inputs)?,
+            None => resolve_stops(&self.stops, self.space, ctx, inputs)?,
         };
         let sample = |v: f32| -> [u8; 4] {
             match &lut {
@@ -197,14 +200,17 @@ fn sample_lut(lut: &[[f32; 4]], v: f32) -> [u8; 4] {
 /// known now, and `sample_stops` needs the table ordered.
 fn resolve_stops(
     stops: &[StopIn],
+    space: InterpSpace,
     ctx: &EvalCtx<'_>,
     inputs: &[Option<PortValue>],
 ) -> Result<Vec<Stop>, EvalError> {
     let mut out = Vec::with_capacity(stops.len());
     for s in stops {
+        let rgba = to_u8(s.color.get(ctx, inputs)?);
         out.push(Stop {
             value: s.value.get(ctx, inputs)? as f32,
-            rgba: to_u8(s.color.get(ctx, inputs)?),
+            rgba,
+            converted: to_space(to_f32(rgba), space),
         });
     }
     out.sort_by(|a, b| {
@@ -232,7 +238,7 @@ fn sample_stops(stops: &[Stop], v: f32, space: InterpSpace) -> [u8; 4] {
         }
     }
     let t = ((v - lo.value) / (hi.value - lo.value)).clamp(0.0, 1.0);
-    to_u8(interpolate(to_f32(lo.rgba), to_f32(hi.rgba), t, space))
+    to_u8(interpolate_converted(lo.converted, hi.converted, t, space))
 }
 
 fn to_f32(c: [u8; 4]) -> [f32; 4] {
