@@ -48,6 +48,18 @@ mean is spelled out in
 
 ### Added
 
+- `flow-smear`, which streaks a texture along a direction raster such as
+  `flow-field`'s. Each pixel becomes the average of the input along the
+  streamline through it (line integral convolution), and the walk re-reads the
+  field at every step, so strokes bend with the terrain instead of fanning out
+  in straight lines the way a chain of `displace` and `blend` does. A pixel's
+  walk is `length-px` times the field's length there, so flat ground stays sharp
+  and steep ground streaks fully; `sides: "forward"` smears one way only, for a
+  trail behind each speck, and `taper: "smooth"` fades the stroke ends.
+  Smearing a world-anchored `noise` along `dem → flow-field` and thresholding it
+  gives hachures down the fall line, or strokes along the contours, seamless
+  across tile borders. The upstream pad grows by `length-px` + 1, so an `@node`
+  length needs `length-px-max`.
 - `flow-field`, which turns an elevation field into a direction raster: which
   way the ground falls at each pixel (`downhill`), rises (`uphill`), or runs
   level along the contours (`along`, with downhill on its right-hand side). The

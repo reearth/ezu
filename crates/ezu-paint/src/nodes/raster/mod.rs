@@ -16,6 +16,7 @@ mod displace;
 mod dither;
 mod edge_detect;
 mod flow_field;
+mod flow_smear;
 mod generator_kind;
 mod gradient_common;
 mod gradient_conic;

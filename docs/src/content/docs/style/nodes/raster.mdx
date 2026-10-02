@@ -9,7 +9,7 @@ sidebar:
 
 Image-processing ops over `Raster` (and, where noted, `Sprite`): generators, composition, colour, warp, morphology, dither, terrain.
 
-38 ops: `blend`, `blur`, `brightness-contrast`, `channel-shuffle`, `circle`, `color-ramp`, `color-to-alpha`, `density`, `dilate`, `displace`, `dither`, `edge-detect`, `erode`, `flow-field`, `gradient-conic`, `gradient-diamond`, `gradient-linear`, `gradient-radial`, `hillshade`, `hsl`, `invert`, `levels`, `map-range`, `mix`, `mosaic`, `noise`, `place`, `posterize`, `quantize`, `saturate`, `sharpen`, `slope`, `solid`, `stack`, `threshold`, `tiling`, `vibrance`, `warp`.
+39 ops: `blend`, `blur`, `brightness-contrast`, `channel-shuffle`, `circle`, `color-ramp`, `color-to-alpha`, `density`, `dilate`, `displace`, `dither`, `edge-detect`, `erode`, `flow-field`, `flow-smear`, `gradient-conic`, `gradient-diamond`, `gradient-linear`, `gradient-radial`, `hillshade`, `hsl`, `invert`, `levels`, `map-range`, `mix`, `mosaic`, `noise`, `place`, `posterize`, `quantize`, `saturate`, `sharpen`, `slope`, `solid`, `stack`, `threshold`, `tiling`, `vibrance`, `warp`.
 
 
 ### `blend`
@@ -258,6 +258,19 @@ Direction raster from an elevation field: which way the ground falls, rises, or 
 | `field` | `@node` | yes | Reference to another node (`@name`). |
 | `max-deg` | number \| `$param` \| `@node` | no | Slope angle (degrees) at which the vector reaches full length. Ignored with `normalize`. |
 | `normalize` | boolean \| `$param` \| `@node` | no | If true, every sloping pixel gets a vector of length 1; only perfectly flat ground stays at zero. |
+
+### `flow-smear`
+
+Smears `input` along the streamlines of a direction `field` (line integral convolution): each pixel becomes the average of `input` sampled along the curve through it, re-reading the field at every step so strokes bend with it. The field is `flow-field`'s encoding — R/G = 0.5 + 0.5·v in pixel axes, flat grey meaning no direction — and a pixel's walk is `length-px` times the field's length there, so flat ground stays sharp. For hachures or contour strokes, smear a world-anchored `noise` along `dem → flow-field`, then `threshold` or `color-ramp` the result. Seamless across tile borders when `input` is world-anchored; grows the upstream pad by `length-px` + 1.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `field` | `@node` | yes | Reference to another node (`@name`). |
+| `input` | `@node` | yes | Reference to another node (`@name`). |
+| `length-px` | number (0…∞) \| `$param` \| `@node` | no | Walk length in px each way, at full field length. |
+| `length-px-max` | number (0…∞) | no | Upper bound on `length-px` for padding, required when `length-px` is an `@node` port. Values above it are clamped. |
+| `sides` | `both` \| `forward` | no | `both` smears each way along the field, so a speck becomes a stroke centred on it; `forward` smears only the way the field points, so a speck trails a comet tail downstream. |
+| `taper` | `flat` \| `smooth` | no | `flat` weights every sample alike; `smooth` fades them towards the ends of the walk (a Hann window), softening the stroke ends. |
 
 ### `gradient-conic`
 

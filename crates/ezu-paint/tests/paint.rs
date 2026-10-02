@@ -44,6 +44,8 @@ mod feature_stitch;
 mod fill_dabs_seam;
 #[path = "paint/flow_field.rs"]
 mod flow_field;
+#[path = "paint/flow_smear.rs"]
+mod flow_smear;
 #[path = "paint/functions.rs"]
 mod functions;
 #[path = "paint/generator_kinds.rs"]

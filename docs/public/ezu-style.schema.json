@@ -1902,6 +1902,70 @@
             "type": "object"
           },
           {
+            "description": "Smears `input` along the streamlines of a direction `field` (line integral convolution): each pixel becomes the average of `input` sampled along the curve through it, re-reading the field at every step so strokes bend with it. The field is `flow-field`'s encoding — R/G = 0.5 + 0.5·v in pixel axes, flat grey meaning no direction — and a pixel's walk is `length-px` times the field's length there, so flat ground stays sharp. For hachures or contour strokes, smear a world-anchored `noise` along `dem → flow-field`, then `threshold` or `color-ramp` the result. Seamless across tile borders when `input` is world-anchored; grows the upstream pad by `length-px` + 1.",
+            "properties": {
+              "field": {
+                "description": "Reference to another node (`@name`).",
+                "pattern": "^@?[A-Za-z_][A-Za-z0-9_-]*$",
+                "type": "string"
+              },
+              "input": {
+                "description": "Reference to another node (`@name`).",
+                "pattern": "^@?[A-Za-z_][A-Za-z0-9_-]*$",
+                "type": "string"
+              },
+              "length-px": {
+                "oneOf": [
+                  {
+                    "default": 12,
+                    "description": "Walk length in px each way, at full field length.",
+                    "minimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "length-px-max": {
+                "description": "Upper bound on `length-px` for padding, required when `length-px` is an `@node` port. Values above it are clamped.",
+                "minimum": 0.0,
+                "type": "number"
+              },
+              "op": {
+                "const": "flow-smear",
+                "description": "Selects the `flow-smear` operation."
+              },
+              "sides": {
+                "default": "both",
+                "description": "`both` smears each way along the field, so a speck becomes a stroke centred on it; `forward` smears only the way the field points, so a speck trails a comet tail downstream.",
+                "enum": [
+                  "both",
+                  "forward"
+                ],
+                "type": "string"
+              },
+              "taper": {
+                "default": "flat",
+                "description": "`flat` weights every sample alike; `smooth` fades them towards the ends of the walk (a Hann window), softening the stroke ends.",
+                "enum": [
+                  "flat",
+                  "smooth"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "op",
+              "input",
+              "field"
+            ],
+            "title": "op: flow-smear",
+            "type": "object"
+          },
+          {
             "description": "Conic (sweep) gradient around `center`. Gradient parameter is the clockwise angle from `start-angle` (degrees) normalized to [0, 1). 0° points along +x. `kind: sprite` switches to sprite-local [0, 1] coords.",
             "properties": {
               "anchor": {
