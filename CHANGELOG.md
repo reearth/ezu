@@ -48,6 +48,10 @@ mean is spelled out in
 
 ### Added
 
+- `cover: "canvas"` on `tile-bounds`, which grows the rectangle over the padded
+  canvas. Shapes cut from the bare tile — Voronoi cells, hatch lines — stopped
+  at its edge, so a procedural texture showed a seam at every tile border; cut
+  from the padded area, both neighbours build the same shape where they meet.
 - A Go package, `github.com/reearth/ezu/go`, which embeds the renderer as a
   wasm module and runs it on [wazero](https://wazero.io): pure Go, no cgo, and
   no Rust toolchain to install — the module is committed. It offers the same

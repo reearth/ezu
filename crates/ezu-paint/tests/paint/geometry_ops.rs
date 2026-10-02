@@ -236,3 +236,29 @@ fn hatch_spacing_is_in_pixels() {
         "expected ~4 hatch lines, got {runs}"
     );
 }
+
+/// `tile-bounds` is the visible tile by default; `cover: "canvas"` takes in
+/// the padding too, so shapes cut from it carry on past the tile's edge.
+#[test]
+fn tile_bounds_cover_canvas_reaches_into_the_padding() {
+    let doc = |cover: &str| {
+        format!(
+            r##"{{
+      "name": "demo",
+      "tile-size": 32,
+      "nodes": {{
+        "area": {{ "op": "tile-bounds", "cover": "{cover}" }},
+        "out":  {{ "op": "fill-solid", "features": "@area", "fill": "#000000" }}
+      }},
+      "output": "@out"
+    }}"##
+        )
+    };
+    // The canvas is 32 px plus 8 px of padding a side; (4, 24) is in the
+    // left margin, (24, 24) the middle of the tile.
+    let tile = render(&doc("tile"), 32, 8);
+    assert_eq!(tile.pixel(24, 24)[3], 255, "the tile itself is filled");
+    assert_eq!(tile.pixel(4, 24)[3], 0, "`tile` stops at the tile's edge");
+    let canvas = render(&doc("canvas"), 32, 8);
+    assert_eq!(canvas.pixel(4, 24)[3], 255, "`canvas` fills the margin too");
+}

@@ -3,8 +3,7 @@
   "tile-size": 512,
   "pad": 48,
   "nodes": {
-    "tile": { "op": "tile-bounds" },
-    "area": { "op": "buffer", "features": "@tile", "distance": 48 },
+    "area": { "op": "tile-bounds", "cover": "canvas" },
     "seeds": { "op": "point-scatter", "spacing": 320 },
     "cells": { "op": "voronoi-fracture", "features": "@area", "seeds": "@seeds" },
     "shrunk": { "op": "buffer", "features": "@cells", "distance": -3, "join": "round" },

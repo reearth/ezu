@@ -130,7 +130,7 @@ Sample a host-bound RGBA tile pyramid (satellite imagery, pre-rendered basemaps)
 
 ### `tile-bounds`
 
-Tile-filling rectangle polygon source.
+Tile-filling rectangle polygon source. `cover: canvas` grows it over the padded canvas, so geometry built from it — Voronoi cells, hatch lines — reaches past the tile's edge and neighbouring tiles build the same shapes along their shared border.
 
 <figure class="op-demo">
   <div class="op-demo__images">
@@ -141,5 +141,6 @@ Tile-filling rectangle polygon source.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
+| `cover` | `tile` \| `canvas` | no | `tile` is the visible tile exactly; `canvas` adds the canvas padding on every side. |
 | `extent` | integer (1…∞) | no | — |
 

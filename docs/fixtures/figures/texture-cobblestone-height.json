@@ -3,13 +3,9 @@
   "tile-size": 512,
   "pad": 48,
   "nodes": {
-    "tile": {
-      "op": "tile-bounds"
-    },
     "area": {
-      "op": "buffer",
-      "features": "@tile",
-      "distance": 48
+      "op": "tile-bounds",
+      "cover": "canvas"
     },
     "seeds": {
       "op": "point-scatter",

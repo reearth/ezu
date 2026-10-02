@@ -211,7 +211,7 @@ nothing as well, and they are better at anything with crisp, countable pieces.
 </figure>
 
 <figure class="diagram diagram--narrow">
-  <img src="/ezu/diagrams/texture-cobblestone.svg" alt="The cobblestone graph: point-scatter and tile-bounds, grown by buffer, feed voronoi-fracture, then buffer and smooth make the stones; the stones are filled, blurred and turned into a height field for hillshade; noise layers tone the stone, and the result is stacked over a dark joint colour" loading="lazy" decoding="async" />
+  <img src="/ezu/diagrams/texture-cobblestone.svg" alt="The cobblestone graph: point-scatter and tile-bounds, covering the padded canvas, feed voronoi-fracture, then buffer and smooth make the stones; the stones are filled, blurred and turned into a height field for hillshade; noise layers tone the stone, and the result is stacked over a dark joint colour" loading="lazy" decoding="async" />
   <figcaption>The trunk builds the shapes; the left branch turns them into light, the right one gives them a surface.</figcaption>
 </figure>
 
@@ -224,19 +224,18 @@ open the joints, and [`smooth`](/ezu/style/nodes/geometry/#smooth) rounds the
 corners off.
 
 ```json
-"tile":   { "op": "tile-bounds" },
-"area":   { "op": "buffer", "features": "@tile", "distance": 48 },
+"area":   { "op": "tile-bounds", "cover": "canvas" },
 "seeds":  { "op": "point-scatter", "spacing": 320 },
 "cells":  { "op": "voronoi-fracture", "features": "@area", "seeds": "@seeds" },
 "shrunk": { "op": "buffer", "features": "@cells", "distance": -3, "join": "round" },
 "stones": { "op": "smooth", "features": "@shrunk", "iterations": 3 }
 ```
 
-The area is the tile grown by 48 px, not the tile itself.
-[`tile-bounds`](/ezu/style/nodes/source/#tile-bounds) is exactly the visible
-square, and stones cut against it would stop dead at the tile's edge. The
-seeds already cover the margin around the tile, so once the area does too,
-a stone on the border is cut from the same seeds by both tiles that show it.
+The area is [`tile-bounds`](/ezu/style/nodes/source/#tile-bounds) with
+`cover: "canvas"`: the tile plus the padding around it. Plain `tile-bounds` is
+exactly the visible square, and stones cut against it would stop dead at the
+tile's edge. The seeds already cover the padding, so once the area does too, a
+stone on the border is cut from the same seeds by both tiles that show it.
 
 `point-scatter` measures its `spacing` in feature-extent units, 4096 to a tile,
 so 320 is about 40 px on a 512 px tile. Every other length here is in pixels.
@@ -298,11 +297,13 @@ first set skipped.
 "head_b":      { "op": "dash", "features": "@verticals_b", "dash-px": 32, "gap-px": 32, "phase-px": 32 }
 ```
 
-The area is grown past the tile here too, so the joints run into the margin
-and the warp below has mortar to pull in from beyond the edge. It grows by
-64 px, two courses, for a reason: `dash` counts its pattern from where each
-line starts, and a line that starts a whole number of courses above the tile
-keeps its dashes on the courses.
+The area reaches past the tile here too, so the joints run into the margin and
+the warp below has mortar to pull in from beyond the edge. But it is the tile
+grown by exactly 64 px with `buffer`, not `cover: "canvas"`, for a reason:
+`dash` counts its pattern from where each line starts, and only a line that
+starts a whole number of courses — here two — above the tile keeps its dashes
+on the courses. The canvas padding is whatever the graph needs, not a multiple
+of anything.
 
 Stroke all three in the mortar colour, put them over a flat red, and you have
 the middle image — correct, and obviously fake.

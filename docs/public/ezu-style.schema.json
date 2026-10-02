@@ -5302,8 +5302,17 @@
             "type": "object"
           },
           {
-            "description": "Tile-filling rectangle polygon source.",
+            "description": "Tile-filling rectangle polygon source. `cover: canvas` grows it over the padded canvas, so geometry built from it — Voronoi cells, hatch lines — reaches past the tile's edge and neighbouring tiles build the same shapes along their shared border.",
             "properties": {
+              "cover": {
+                "default": "tile",
+                "description": "`tile` is the visible tile exactly; `canvas` adds the canvas padding on every side.",
+                "enum": [
+                  "tile",
+                  "canvas"
+                ],
+                "type": "string"
+              },
               "extent": {
                 "default": 4096,
                 "minimum": 1,
