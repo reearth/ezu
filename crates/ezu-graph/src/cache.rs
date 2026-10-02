@@ -31,7 +31,8 @@ pub type Hash128 = u128;
 /// - the canvas (both tile axes + pad), so cached buffers always match
 ///   shape — a buffer cached for one shape must never be handed to a
 ///   render of another
-/// - the tile id (or omitted for world-anchored nodes)
+/// - the tile id (the evaluator always passes one: even a world-anchored
+///   node's output is a per-tile window onto its field)
 /// - the node's own param hash
 /// - each input's cache hash (Merkle-style chain)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

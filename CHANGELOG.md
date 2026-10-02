@@ -13,6 +13,16 @@ mean is spelled out in
 
 ### Fixed
 
+- A host rendering several tiles against one cache, `ezu bbox` and
+  `ezu tiles` among them, could hand a tile the raster its neighbour had cached
+  for a world-anchored generator: `noise`, `warp`, `tiling`, `mosaic` and the
+  gradients with `anchor: "world"`. Those nodes left the tile out of their cache
+  key so adjacent tiles could share them, but each tile's raster is its own
+  window onto the field, so a borrowed one was a whole tile out of place. It
+  showed as seams, or whole tiles of the wrong texture, wherever the generator
+  fed a filter, and changed from run to run because it depended on which tile
+  got to the cache first. Every node is keyed by its tile now. A tile rendered
+  on its own was never affected.
 - Six geometry ops read their pixel lengths as feature-extent units, so on a
   512 px tile every one of them came out an eighth of the size it asked for:
   `hatch` `spacing`, `buffer` `distance`, `simplify` `epsilon`, `densify`

@@ -431,7 +431,7 @@ impl Node for LabelPlacementNode {
     }
     fn coord_space(&self) -> CoordSpace {
         // Every candidate is world-anchored, so adjacent tiles reach the same
-        // decisions and may share this node's cache entry.
+        // decisions.
         CoordSpace::World
     }
     fn eval(

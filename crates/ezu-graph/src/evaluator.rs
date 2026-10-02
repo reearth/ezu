@@ -9,7 +9,6 @@ use crate::buf::RasterBuf;
 use crate::cache::{Cache, CacheKey, Hash128};
 use crate::eval::{AssetLoader, CanvasInfo, EvalCtx, EvalError, ParamValues, TileId};
 use crate::graph::{Graph, NodeIx};
-use crate::port::CoordSpace;
 use crate::value::PortValue;
 
 /// Entry point: evaluate a `Graph` for one tile.
@@ -343,13 +342,11 @@ impl<'a> Evaluator<'a> {
             }
         }
 
-        // World-anchored nodes drop the tile id from their key so
-        // adjacent tiles can share intermediates.
-        let tile_for_key = match node.coord_space() {
-            CoordSpace::World => None,
-            _ => Some(ctx.tile),
-        };
-        let key = CacheKey::build(ctx.canvas, tile_for_key, params_hash, &input_hashes);
+        // Every node is keyed by its tile, world-anchored ones included.
+        // A world-anchored node computes one field over the whole map, but
+        // its output is this tile's window onto that field, so two tiles
+        // sharing an entry would hand one of them the other's pixels.
+        let key = CacheKey::build(ctx.canvas, Some(ctx.tile), params_hash, &input_hashes);
 
         if let Some(v) = self.cache.get(key) {
             tracing::debug!(

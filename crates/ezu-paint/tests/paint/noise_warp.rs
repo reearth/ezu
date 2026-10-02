@@ -292,3 +292,40 @@ fn world_anchored_warp_is_continuous_across_a_tile_border() {
         "warped seam should match local variation: seam {seam:.2}, local {local:.2}"
     );
 }
+
+/// A host renders many tiles against one cache. A world-anchored field is
+/// one function over the map, but each tile's raster is a different window
+/// onto it, so a tile must never be handed the raster its neighbour cached.
+#[test]
+fn world_anchored_noise_is_not_shared_between_tiles_through_the_cache() {
+    use ezu_graph::{build_graph, Cache, CanvasInfo, Evaluator, NoAssets, ParamValues, PortValue};
+    use ezu_paint::nodes::default_registry;
+    use ezu_style::Document;
+
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 32,
+      "nodes": { "out": { "op": "noise", "scale-px": 8, "anchor": "world" } },
+      "output": "@out"
+    }"##;
+    let graph = build_graph(&Document::from_json(json).unwrap(), &default_registry()).unwrap();
+    let render = |cache: &Cache, tile: TileId| {
+        let out = Evaluator::new(&graph, cache, &NoAssets)
+            .render(tile, CanvasInfo::square(32, 0), &ParamValues::new(), 0)
+            .expect("render");
+        match out {
+            PortValue::Raster(r) => r,
+            other => panic!("expected raster output, got {:?}", other.kind()),
+        }
+    };
+    let left = TileId { z: 4, x: 5, y: 7 };
+    let right = TileId { z: 4, x: 6, y: 7 };
+    let alone = render(&Cache::new(), right);
+    let shared = Cache::new();
+    render(&shared, left);
+    let after = render(&shared, right);
+    assert_eq!(
+        after.pixels, alone.pixels,
+        "a tile rendered after its neighbour must not pick up the neighbour's noise"
+    );
+}
