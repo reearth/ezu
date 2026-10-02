@@ -3,6 +3,13 @@
 //! results into the output range. Useful for normalising a DEM or
 //! distance field into `[0, 1]` before feeding `color-ramp`, or for
 //! amplifying / inverting a scalar signal before another scalar op.
+//!
+//! Missing samples (NaN, or equal to the field's `nodata`) are not
+//! remapped: they stay missing. The output keeps the field's `nodata`
+//! and `geo_scale`, and writes missing pixels as that `nodata`, or NaN
+//! when it has none. As in `field-math`, a valid sample whose remapped
+//! value lands on the `nodata` value is written as it is, and reads as
+//! missing downstream.
 
 use std::sync::Arc;
 
@@ -13,6 +20,8 @@ use ezu_graph::{
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
+
+use crate::nodes::common::field_fill;
 
 struct MapRangeNode {
     in_min: In<f64>,
@@ -54,8 +63,13 @@ impl Node for MapRangeNode {
         // special-case it.
         let inv_span = if span.abs() < 1e-9 { 0.0 } else { 1.0 / span };
         let mid = 0.5 * (out_min + out_max);
+        let fill = field_fill(field);
         let mut out: Vec<f32> = Vec::with_capacity(field.values.len());
         for &v in field.values.iter() {
+            if v.is_nan() || field.nodata == Some(v) {
+                out.push(fill);
+                continue;
+            }
             let t = (v - in_min) * inv_span;
             let mut y = out_min + t * (out_max - out_min);
             if inv_span == 0.0 {
@@ -143,7 +157,7 @@ impl NodeFactory for MapRangeFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Linearly remap scalar field values from [in-min, in-max] to [out-min, out-max]. With `clamp: true`, results outside the output range are pinned to the range bounds. Useful for normalising elevation or distance fields before a `color-ramp`.",
+            "description": "Linearly remap scalar field values from [in-min, in-max] to [out-min, out-max]. With `clamp: true`, results outside the output range are pinned to the range bounds. Missing samples (NaN or the field's nodata value) stay missing: the output keeps the field's nodata value and geographic scale, and writes missing pixels as that nodata, or NaN. Useful for normalising elevation or distance fields before a `color-ramp`.",
             "properties": {
                 "field": schema_frag::node_ref(),
                 "in-min": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 0.0 })),

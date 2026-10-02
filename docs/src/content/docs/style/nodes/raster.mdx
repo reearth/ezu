@@ -446,7 +446,7 @@ Photoshop-style levels: remap input range [in-black, in-white] through `gamma` o
 
 ### `map-range`
 
-Linearly remap scalar field values from [in-min, in-max] to [out-min, out-max]. With `clamp: true`, results outside the output range are pinned to the range bounds. Useful for normalising elevation or distance fields before a `color-ramp`.
+Linearly remap scalar field values from [in-min, in-max] to [out-min, out-max]. With `clamp: true`, results outside the output range are pinned to the range bounds. Missing samples (NaN or the field's nodata value) stay missing: the output keeps the field's nodata value and geographic scale, and writes missing pixels as that nodata, or NaN. Useful for normalising elevation or distance fields before a `color-ramp`.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |

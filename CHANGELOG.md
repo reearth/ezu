@@ -13,6 +13,14 @@ mean is spelled out in
 
 ### Fixed
 
+- `map-range` remapped a field's missing samples along with its real ones. A
+  DEM's `nodata` value, `-9999` say, came out as some ordinary-looking number,
+  so everything downstream drew it as terrain instead of a gap; NaN turned into
+  the output midpoint when `in-min` equalled `in-max`. Missing samples (NaN, or
+  equal to the field's `nodata`) now stay missing: the output keeps the field's
+  `nodata` and writes them as that value, or NaN when it has none, as `blur`,
+  `warp` and `field-math` already do. A field with neither nodata nor NaN
+  renders exactly as before.
 - A host rendering several tiles against one cache, `ezu bbox` and
   `ezu tiles` among them, could hand a tile the raster its neighbour had cached
   for a world-anchored generator: `noise`, `warp`, `tiling`, `mosaic` and the
