@@ -106,3 +106,5 @@ mod utility_ops;
 mod vector_paint;
 #[path = "paint/voronoi_ops.rs"]
 mod voronoi_ops;
+#[path = "paint/warp_field.rs"]
+mod warp_field;

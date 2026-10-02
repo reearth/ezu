@@ -24,10 +24,9 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{raster_or_sprite_output, unwrap_raster_or_sprite, wrap_raster_like};
-
-/// An image of either kind, or a field.
-const ACCEPTS: &[PortKind] = &[PortKind::Raster, PortKind::Sprite, PortKind::ScalarField];
+use crate::nodes::common::{
+    image_or_field_output, unwrap_raster_or_sprite, wrap_raster_like, ACCEPTS_IMAGE_OR_FIELD,
+};
 
 struct BlurNode {
     sigma: PaddingIn,
@@ -43,10 +42,7 @@ impl Node for BlurNode {
         &self.ports
     }
     fn output(&self, input_kinds: &[Option<PortKind>]) -> PortKind {
-        match input_kinds.first().and_then(|k| *k) {
-            Some(PortKind::ScalarField) => PortKind::ScalarField,
-            _ => raster_or_sprite_output(input_kinds),
-        }
+        image_or_field_output(input_kinds)
     }
     fn required_pad(&self, downstream: u32) -> u32 {
         downstream + (3.0 * self.sigma.bound() as f32).ceil() as u32
@@ -121,7 +117,7 @@ impl NodeFactory for BlurFactory {
 
         let mut ports = vec![PortSpec {
             name: "input",
-            accepts: ACCEPTS,
+            accepts: ACCEPTS_IMAGE_OR_FIELD,
             optional: false,
         }];
         ports.extend(parts.ports);

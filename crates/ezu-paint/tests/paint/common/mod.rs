@@ -168,6 +168,62 @@ pub fn render_with_scalar_fields(
     }
 }
 
+/// Render as [`render_with_scalar_fields`] does and return the
+/// `ScalarField` that node `node` produced on the way. A document's
+/// output has to be a raster, so the field is caught as it passes
+/// rather than returned.
+#[allow(dead_code)]
+pub fn field_of_node(
+    json: &str,
+    tile_size: u32,
+    pad: u32,
+    tile: TileId,
+    fields: &[(&str, ezu_graph::ScalarField)],
+    node: &str,
+) -> std::sync::Arc<ezu_graph::ScalarField> {
+    use ezu_graph::{NodeIx, NodeObserver, ScalarField};
+    use ezu_paint::host::TileLoader;
+    use std::sync::{Arc, Mutex};
+
+    struct Catch {
+        ix: NodeIx,
+        field: Mutex<Option<Arc<ScalarField>>>,
+    }
+    impl NodeObserver for Catch {
+        fn on_node(&self, ix: NodeIx, value: &PortValue, _cache_hit: bool, _us: u128) {
+            if ix == self.ix {
+                let field = value.as_scalar_field().expect("a scalar field").clone();
+                *self.field.lock().unwrap_or_else(|p| p.into_inner()) = Some(field);
+            }
+        }
+    }
+
+    let doc = Document::from_json(json).expect("parse");
+    let registry = default_registry();
+    let graph = build_graph(&doc, &registry).expect("build");
+    let catch = Catch {
+        ix: graph.index_of(node).expect("node"),
+        field: Mutex::new(None),
+    };
+    let cache = Cache::new();
+    let base = NoAssets;
+    let mut loader = TileLoader::new(&base, tile);
+    for (name, field) in fields {
+        loader.bind_scalar_field(name.to_string(), field.clone());
+    }
+    Evaluator::new(&graph, &cache, &loader)
+        .with_observer(&catch)
+        .render(
+            tile,
+            CanvasInfo::square(tile_size, pad),
+            &ParamValues::new(),
+            0,
+        )
+        .expect("render");
+    let field = catch.field.into_inner().unwrap_or_else(|p| p.into_inner());
+    field.expect("the node ran")
+}
+
 /// Render with tile-scoped feature-layer bindings, the way a host binds
 /// per-tile MVT layers via `TileLoader::bind_features`. `features` maps a
 /// bare `<source>.<layer>` name to the layer a `features` node resolves.

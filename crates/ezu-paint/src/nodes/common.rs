@@ -7,6 +7,7 @@ use std::sync::Arc;
 use ezu_core::TileId as CoreTileId;
 use ezu_graph::{
     Asset, EvalCtx, EvalError, FactoryCtx, FactoryError, PortKind, PortValue, RasterBuf,
+    ScalarField,
 };
 use ezu_style as spec;
 use hokusai::Brush;
@@ -893,6 +894,62 @@ pub(super) fn raster_or_sprite_output(input_kinds: &[Option<PortKind>]) -> PortK
         Some(PortKind::Sprite) => PortKind::Sprite,
         _ => PortKind::Raster,
     }
+}
+
+/// Accepts list for filter ops that also take a `ScalarField` (`blur`,
+/// `warp`, …), giving back the same kind they were given.
+pub(super) const ACCEPTS_IMAGE_OR_FIELD: &[PortKind] =
+    &[PortKind::Raster, PortKind::Sprite, PortKind::ScalarField];
+
+/// [`raster_or_sprite_output`], extended to a `ScalarField` input for the
+/// ops that accept [`ACCEPTS_IMAGE_OR_FIELD`].
+pub(super) fn image_or_field_output(input_kinds: &[Option<PortKind>]) -> PortKind {
+    match input_kinds.first().and_then(|k| *k) {
+        Some(PortKind::ScalarField) => PortKind::ScalarField,
+        _ => raster_or_sprite_output(input_kinds),
+    }
+}
+
+/// The value a field op writes where it has no valid sample to give:
+/// the field's `nodata`, or NaN when it has none.
+pub(super) fn field_fill(field: &ScalarField) -> f32 {
+    field.nodata.unwrap_or(f32::NAN)
+}
+
+/// Resample a field at a per-pixel offset, for `warp` and `displace`:
+/// output pixel `(x, y)` reads the field at `(x, y) + offset(x, y)`,
+/// bilinearly, clamped at the field's edge. Missing samples (`nodata`
+/// or NaN) are left out of the blend rather than averaged in, and a
+/// read with nothing valid around it writes [`field_fill`]. The result
+/// keeps the field's size, `nodata` and `geo_scale`.
+pub(super) fn resample_field(
+    field: &ScalarField,
+    offset: impl Fn(u32, u32) -> (f64, f64),
+) -> PortValue {
+    let (w, h) = (field.width, field.height);
+    if w == 0 || h == 0 {
+        return PortValue::ScalarField(Arc::new(field.clone()));
+    }
+    let fill = field_fill(field);
+    let mut values = Vec::with_capacity(field.values.len());
+    for y in 0..h {
+        for x in 0..w {
+            let (dx, dy) = offset(x, y);
+            let v = crate::imaging::sample_field(
+                &field.values,
+                w as usize,
+                h as usize,
+                (i64::from(x), i64::from(y)),
+                (dx as f32, dy as f32),
+                field.nodata,
+            );
+            values.push(v.unwrap_or(fill));
+        }
+    }
+    PortValue::ScalarField(Arc::new(ScalarField {
+        values: values.into(),
+        ..*field
+    }))
 }
 
 pub(super) fn downcast_features(v: &PortValue) -> Result<Arc<FilteredFeatures>, EvalError> {

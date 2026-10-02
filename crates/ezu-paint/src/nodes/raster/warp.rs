@@ -1,12 +1,19 @@
-//! `warp` — domain warp over `Raster|Sprite` (pass-through) using an
-//! internal noise field. Same noise dial as the `noise` op (`type`, `scale-px`,
-//! `octaves`, `lacunarity`, `gain`, `seed`, `anchor`), plus `amp-px`
-//! for displacement magnitude and a boundary mode.
+//! `warp` — domain warp over `Raster|Sprite|ScalarField` (pass-through:
+//! the output kind mirrors the input) using an internal noise field.
+//! Same noise dial as the `noise` op (`type`, `scale-px`, `octaves`,
+//! `lacunarity`, `gain`, `seed`, `anchor`), plus `amp-px` for
+//! displacement magnitude and a boundary mode.
 //!
 //! With `anchor: world` (default) the noise field is sampled in global
 //! pixel coordinates so adjacent tiles agree on the displacement at
 //! the shared border. The upstream pad grows by `amp-px` to keep
 //! samples inside the available raster.
+//!
+//! A `ScalarField` is resampled in `f32` and keeps its `nodata` and
+//! `geo_scale`. Warping an elevation field before `contour` makes the
+//! isolines wobble together, never crossing, since they are still
+//! level sets of one field. Nodata samples are left out of the blend;
+//! a field always clamps at its edge, and `boundary` applies to images.
 
 use std::sync::Arc;
 
@@ -19,9 +26,9 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    default_field_seed, raster_or_sprite_output, read_boundary, read_number_or,
-    read_optional_string, sample_bilinear, unwrap_raster_or_sprite, wrap_raster_like, Anchor,
-    BoundaryMode, ACCEPTS_RASTER_OR_SPRITE,
+    default_field_seed, image_or_field_output, read_boundary, read_number_or, read_optional_string,
+    resample_field, sample_bilinear, unwrap_raster_or_sprite, wrap_raster_like, Anchor,
+    BoundaryMode, ACCEPTS_IMAGE_OR_FIELD,
 };
 use crate::nodes::raster::noise_field::{fbm, NoiseKind, Sampler, NOISE_TYPES};
 
@@ -48,7 +55,7 @@ impl Node for WarpNode {
         &self.ports
     }
     fn output(&self, input_kinds: &[Option<PortKind>]) -> PortKind {
-        raster_or_sprite_output(input_kinds)
+        image_or_field_output(input_kinds)
     }
     fn coord_space(&self) -> CoordSpace {
         match self.anchor {
@@ -73,9 +80,6 @@ impl Node for WarpNode {
         let input = inputs[0]
             .as_ref()
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
-        let (src, kind) = unwrap_raster_or_sprite(input, "input")?;
-        let (w, h) = (src.width, src.height);
-        let mut out = RasterBuf::new(w, h);
 
         let scale_px = self.scale_px.get(ctx, inputs)?;
         let lacunarity = self.lacunarity.get(ctx, inputs)?;
@@ -99,29 +103,41 @@ impl Node for WarpNode {
         };
         let inv_scale = if scale_px > 0.0 { 1.0 / scale_px } else { 0.0 };
 
-        for y in 0..h {
-            // `py` is the world-pixel coord at the current zoom (or tile-
-            // local if anchor=tile); subtract pad so the visible tile area
-            // sits at (0..tile_size, 0..tile_size) in the noise input.
+        // The displacement at canvas pixel `(x, y)`. `px`/`py` are the
+        // world-pixel coord at the current zoom (or tile-local if
+        // anchor=tile), less pad so the visible tile area sits at
+        // (0..tile_size, 0..tile_size) in the noise input.
+        let offset = |x: u32, y: u32| {
+            let px = origin_x + (x as f64) - pad;
             let py = origin_y + (y as f64) - pad;
+            let dx = fbm(
+                &nx,
+                px * inv_scale,
+                py * inv_scale,
+                self.octaves,
+                lacunarity,
+                gain,
+            ) * amp_x;
+            let dy = fbm(
+                &ny,
+                px * inv_scale,
+                py * inv_scale,
+                self.octaves,
+                lacunarity,
+                gain,
+            ) * amp_y;
+            (dx, dy)
+        };
+
+        if let Some(field) = input.as_scalar_field() {
+            return Ok(resample_field(field, offset));
+        }
+        let (src, kind) = unwrap_raster_or_sprite(input, "input")?;
+        let (w, h) = (src.width, src.height);
+        let mut out = RasterBuf::new(w, h);
+        for y in 0..h {
             for x in 0..w {
-                let px = origin_x + (x as f64) - pad;
-                let dx = fbm(
-                    &nx,
-                    px * inv_scale,
-                    py * inv_scale,
-                    self.octaves,
-                    lacunarity,
-                    gain,
-                ) * amp_x;
-                let dy = fbm(
-                    &ny,
-                    px * inv_scale,
-                    py * inv_scale,
-                    self.octaves,
-                    lacunarity,
-                    gain,
-                ) * amp_y;
+                let (dx, dy) = offset(x, y);
                 let sx = x as f64 + dx;
                 let sy = y as f64 + dy;
                 let pxv = sample_bilinear(&src, sx, sy, self.boundary);
@@ -245,7 +261,7 @@ impl NodeFactory for WarpFactory {
 
         let mut ports = vec![PortSpec {
             name: "input",
-            accepts: ACCEPTS_RASTER_OR_SPRITE,
+            accepts: ACCEPTS_IMAGE_OR_FIELD,
             optional: false,
         }];
         ports.extend(parts.ports);
@@ -275,7 +291,7 @@ impl NodeFactory for WarpFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Domain warp via an internal noise field. With `anchor: world` (default) the warp is seamless across tile borders; the upstream pad grows by `amp-px` to keep samples inside the available raster.",
+            "description": "Domain warp via an internal noise field, on a raster, sprite or scalar field; the output is the same kind as the input. With `anchor: world` (default) the warp is seamless across tile borders; the upstream pad grows by `amp-px` to keep samples inside the available raster. Warping an elevation field (`dem`) before `contour` makes the contour lines wobble together without ever crossing, since they stay level lines of one surface; warping a `noise` field with `kind: scalar` gives a swirled field to threshold or ramp. A field keeps its nodata value and geographic scale; nodata samples are left out of the interpolation, and a read with only nodata around it stays nodata. A field always clamps at its edge; `boundary` applies to images.",
             "properties": {
                 "input": schema_frag::node_ref(),
                 "type": {

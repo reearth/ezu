@@ -58,6 +58,51 @@ impl Bilinear {
     }
 }
 
+/// Bilinear sample of a `width × height` row-major field at pixel `base`
+/// plus `offset`, leaving out missing samples.
+///
+/// A sample equal to `nodata`, or NaN, is missing. When all four taps
+/// are present this is [`Bilinear::lerp`]. Otherwise the missing taps
+/// are dropped and the weights of the rest renormalised, so a hole does
+/// not drag the value towards the nodata value; `None` when no present
+/// tap carries any weight — all four missing, or the position sitting
+/// exactly on missing ones.
+///
+/// The result is the same on every host: a fixed sequence of IEEE 754
+/// multiplies, adds and one division, which Rust never fuses.
+#[inline]
+pub fn sample_field(
+    values: &[f32],
+    width: usize,
+    height: usize,
+    base: (i64, i64),
+    offset: (f32, f32),
+    nodata: Option<f32>,
+) -> Option<f32> {
+    let b = Bilinear::new(width, height, base, offset);
+    let v = [
+        values[b.y0 * width + b.x0],
+        values[b.y0 * width + b.x1],
+        values[b.y1 * width + b.x0],
+        values[b.y1 * width + b.x1],
+    ];
+    let present = |v: f32| !v.is_nan() && nodata != Some(v);
+    if v.iter().all(|&s| present(s)) {
+        return Some(b.lerp(v[0], v[1], v[2], v[3]));
+    }
+    let (sx, sy) = (1.0 - b.tx, 1.0 - b.ty);
+    let weights = [sx * sy, b.tx * sy, sx * b.ty, b.tx * b.ty];
+    let mut sum = 0.0f32;
+    let mut weight = 0.0f32;
+    for (&s, &w) in v.iter().zip(&weights) {
+        if present(s) {
+            sum += w * s;
+            weight += w;
+        }
+    }
+    (weight > 0.0).then(|| sum / weight)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,5 +133,42 @@ mod tests {
         assert_eq!(at(0.5, 0.0), 0.5);
         assert_eq!(at(0.0, 0.5), 1.0);
         assert_eq!(at(0.5, 0.5), 1.5);
+    }
+
+    #[test]
+    fn a_full_field_sample_is_the_plain_blend() {
+        let values = [0.0, 1.0, 2.0, 3.0];
+        let b = Bilinear::new(2, 2, (0, 0), (0.25, 0.75));
+        assert_eq!(
+            sample_field(&values, 2, 2, (0, 0), (0.25, 0.75), Some(-1.0)),
+            Some(b.lerp(0.0, 1.0, 2.0, 3.0))
+        );
+    }
+
+    #[test]
+    fn a_missing_tap_is_left_out_and_the_rest_renormalised() {
+        let nodata = -9999.0;
+        let values = [10.0, nodata, 10.0, 10.0];
+        let v = sample_field(&values, 2, 2, (0, 0), (0.5, 0.5), Some(nodata)).unwrap();
+        assert!((v - 10.0).abs() < 1e-5, "{v}");
+        let values = [10.0, f32::NAN, 10.0, 10.0];
+        let v = sample_field(&values, 2, 2, (0, 0), (0.5, 0.5), None).unwrap();
+        assert!((v - 10.0).abs() < 1e-5, "{v}");
+    }
+
+    #[test]
+    fn no_present_weight_is_missing() {
+        let nodata = -1.0;
+        assert_eq!(
+            sample_field(&[nodata; 4], 2, 2, (0, 0), (0.5, 0.5), Some(nodata)),
+            None
+        );
+        // Sitting exactly on the one missing tap: the others have no
+        // weight, so there is nothing to renormalise.
+        let values = [nodata, 5.0, 5.0, 5.0];
+        assert_eq!(
+            sample_field(&values, 2, 2, (0, 0), (0.0, 0.0), Some(nodata)),
+            None
+        );
     }
 }

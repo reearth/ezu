@@ -58,6 +58,15 @@ mean is spelled out in
 
 ### Added
 
+- `warp` and `displace` take a scalar field as their `input`, and give back a
+  field; `displace`'s `displacement` map stays a raster. Warping an elevation
+  field before `contour` makes the contour lines wobble together: they bend as
+  one, and never cross, because they are still level lines of a single surface.
+  Warping each contour's line afterwards could promise neither. The same works
+  on `noise` with `kind: "scalar"`, for a swirled field to threshold or ramp.
+  The field keeps its nodata value and geographic scale, nodata samples are left
+  out of the interpolation rather than pulling their neighbours towards it, and
+  a world-anchored warp stays seamless across tiles.
 - `blur` takes a scalar field as well as a raster or sprite, and gives back a
   field. Blurring an elevation field before `hillshade`, `slope` or
   `flow-field` generalises the terrain: small gullies drop out and the major

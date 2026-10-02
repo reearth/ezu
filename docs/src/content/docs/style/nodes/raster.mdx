@@ -173,7 +173,7 @@ Per-channel morphological max over a square kernel. Grows bright / opaque region
 
 ### `displace`
 
-Photoshop-style displacement map. Output pixel reads `input` at a position offset by the `displacement` raster's R/G channels (0.5 means no offset). Grows upstream pad by `amp-px` so warped samples stay seamless across tile borders, provided the displacement source is itself seamless (e.g. `noise` with `anchor: world`).
+Photoshop-style displacement map. Output pixel reads `input` at a position offset by the `displacement` raster's R/G channels (0.5 means no offset). `input` may be a raster, sprite or scalar field, and the output is the same kind. Displacing an elevation field (`dem`) bends it before `contour` or `hillshade`, the same way the map bends the imagery drawn over it, and the contour lines stay level lines of one surface, so they never cross. A field keeps its nodata value and geographic scale; nodata samples are left out of the interpolation, a read with only nodata around it stays nodata, and the field always clamps at its edge. Grows upstream pad by `amp-px` so warped samples stay seamless across tile borders, provided the displacement source is itself seamless (e.g. `noise` with `anchor: world`).
 
 <figure class="op-demo op-demo--pair">
   <div class="op-demo__images">
@@ -683,7 +683,7 @@ Adaptively boost CIELAB chroma — low-chroma pixels rise more than already-vivi
 
 ### `warp`
 
-Domain warp via an internal noise field. With `anchor: world` (default) the warp is seamless across tile borders; the upstream pad grows by `amp-px` to keep samples inside the available raster.
+Domain warp via an internal noise field, on a raster, sprite or scalar field; the output is the same kind as the input. With `anchor: world` (default) the warp is seamless across tile borders; the upstream pad grows by `amp-px` to keep samples inside the available raster. Warping an elevation field (`dem`) before `contour` makes the contour lines wobble together without ever crossing, since they stay level lines of one surface; warping a `noise` field with `kind: scalar` gives a swirled field to threshold or ramp. A field keeps its nodata value and geographic scale; nodata samples are left out of the interpolation, and a read with only nodata around it stays nodata. A field always clamps at its edge; `boundary` applies to images.
 
 <figure class="op-demo op-demo--pair">
   <div class="op-demo__images">

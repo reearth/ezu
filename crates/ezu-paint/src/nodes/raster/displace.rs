@@ -1,8 +1,14 @@
-//! `displace` — Photoshop-style displacement map over `Raster|Sprite`
-//! (the main `input` is pass-through; the `displacement` map is also
-//! polymorphic but its kind doesn't influence the output kind).
-//! Each output pixel reads from `input` at a position offset by the
-//! displacement raster's R/G channels.
+//! `displace` — Photoshop-style displacement map over
+//! `Raster|Sprite|ScalarField` (the main `input` is pass-through; the
+//! `displacement` map is a raster or sprite, and its kind doesn't
+//! influence the output kind). Each output pixel reads from `input` at
+//! a position offset by the displacement raster's R/G channels.
+//!
+//! A `ScalarField` input is resampled in `f32` and keeps its `nodata`
+//! and `geo_scale`, so one displacement map can bend an elevation field
+//! before `contour` or `hillshade` the same way it bends the imagery
+//! drawn over it. Nodata samples are left out of the blend; a field
+//! always clamps at its edge.
 //!
 //! Displacement encoding: R = dx, G = dy, each treated as `[0, 1]`
 //! with `0.5` meaning "no offset". The final pixel offset is
@@ -24,8 +30,8 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    raster_or_sprite_output, read_boundary, sample_bilinear, unwrap_raster_or_sprite,
-    wrap_raster_like, BoundaryMode, ACCEPTS_RASTER_OR_SPRITE,
+    image_or_field_output, read_boundary, resample_field, sample_bilinear, unwrap_raster_or_sprite,
+    wrap_raster_like, BoundaryMode, ACCEPTS_IMAGE_OR_FIELD, ACCEPTS_RASTER_OR_SPRITE,
 };
 
 struct DisplaceNode {
@@ -46,7 +52,7 @@ impl Node for DisplaceNode {
     fn output(&self, input_kinds: &[Option<PortKind>]) -> PortKind {
         // Output mirrors the main `input`'s kind; the displacement
         // map's kind is independent.
-        raster_or_sprite_output(input_kinds)
+        image_or_field_output(input_kinds)
     }
     fn required_pad(&self, downstream: u32) -> u32 {
         let bump = self
@@ -65,36 +71,42 @@ impl Node for DisplaceNode {
         let input = inputs[0]
             .as_ref()
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
-        let (src, kind) = unwrap_raster_or_sprite(input, "input")?;
         let disp_input = inputs[1]
             .as_ref()
             .ok_or_else(|| EvalError::MissingInput("displacement".into()))?;
         let (disp, _) = unwrap_raster_or_sprite(disp_input, "displacement")?;
         let amp_x = self.amp_x.get(ctx, inputs)?;
         let amp_y = self.amp_y.get(ctx, inputs)?;
-        // Output is the same size as the input. Displacement must
-        // cover at least that area; if smaller, treat the missing
-        // region according to the boundary mode.
+        // The offset at pixel `(x, y)`, read from the matching pixel of
+        // the displacement raster. Output is the same size as the input;
+        // where the displacement raster is smaller, the missing region
+        // follows the boundary mode.
+        let offset = |x: u32, y: u32| {
+            let dpix = if x < disp.width && y < disp.height {
+                disp.pixel(x, y)
+            } else {
+                match self.boundary {
+                    BoundaryMode::Clamp => disp.pixel(
+                        x.min(disp.width.saturating_sub(1)),
+                        y.min(disp.height.saturating_sub(1)),
+                    ),
+                    BoundaryMode::Transparent | BoundaryMode::Mirror => [128, 128, 0, 255],
+                }
+            };
+            let dx = ((dpix[0] as f64) / 255.0 - 0.5) * 2.0 * amp_x;
+            let dy = ((dpix[1] as f64) / 255.0 - 0.5) * 2.0 * amp_y;
+            (dx, dy)
+        };
+
+        if let Some(field) = input.as_scalar_field() {
+            return Ok(resample_field(field, offset));
+        }
+        let (src, kind) = unwrap_raster_or_sprite(input, "input")?;
         let (w, h) = (src.width, src.height);
         let mut out = RasterBuf::new(w, h);
         for y in 0..h {
             for x in 0..w {
-                // Read displacement from the matching pixel of the
-                // displacement raster (with boundary fallback if it
-                // happens to be smaller than `input`).
-                let dpix = if x < disp.width && y < disp.height {
-                    disp.pixel(x, y)
-                } else {
-                    match self.boundary {
-                        BoundaryMode::Clamp => disp.pixel(
-                            x.min(disp.width.saturating_sub(1)),
-                            y.min(disp.height.saturating_sub(1)),
-                        ),
-                        BoundaryMode::Transparent | BoundaryMode::Mirror => [128, 128, 0, 255],
-                    }
-                };
-                let dx = ((dpix[0] as f64) / 255.0 - 0.5) * 2.0 * amp_x;
-                let dy = ((dpix[1] as f64) / 255.0 - 0.5) * 2.0 * amp_y;
+                let (dx, dy) = offset(x, y);
                 let sx = x as f64 + dx;
                 let sy = y as f64 + dy;
                 let px = sample_bilinear(&src, sx, sy, self.boundary);
@@ -157,7 +169,7 @@ impl NodeFactory for DisplaceFactory {
         let mut ports = vec![
             PortSpec {
                 name: "input",
-                accepts: ACCEPTS_RASTER_OR_SPRITE,
+                accepts: ACCEPTS_IMAGE_OR_FIELD,
                 optional: false,
             },
             PortSpec {
@@ -192,7 +204,7 @@ impl NodeFactory for DisplaceFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Photoshop-style displacement map. Output pixel reads `input` at a position offset by the `displacement` raster's R/G channels (0.5 means no offset). Grows upstream pad by `amp-px` so warped samples stay seamless across tile borders, provided the displacement source is itself seamless (e.g. `noise` with `anchor: world`).",
+            "description": "Photoshop-style displacement map. Output pixel reads `input` at a position offset by the `displacement` raster's R/G channels (0.5 means no offset). `input` may be a raster, sprite or scalar field, and the output is the same kind. Displacing an elevation field (`dem`) bends it before `contour` or `hillshade`, the same way the map bends the imagery drawn over it, and the contour lines stay level lines of one surface, so they never cross. A field keeps its nodata value and geographic scale; nodata samples are left out of the interpolation, a read with only nodata around it stays nodata, and the field always clamps at its edge. Grows upstream pad by `amp-px` so warped samples stay seamless across tile borders, provided the displacement source is itself seamless (e.g. `noise` with `anchor: world`).",
             "properties": {
                 "input": schema_frag::node_ref(),
                 "displacement": schema_frag::node_ref(),
