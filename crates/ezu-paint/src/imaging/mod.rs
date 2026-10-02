@@ -2,7 +2,8 @@
 //!
 //! The nodes under `crate::nodes` read fields, declare ports and padding,
 //! and hand pixels to the functions here; this module knows nothing of
-//! graphs, ports or tiles. It works on plain RGBA8 buffers.
+//! graphs, ports or tiles. It works on plain RGBA8 buffers and `f32`
+//! fields.
 //!
 //! **Every function here produces the same bytes on every host.** A style
 //! is meant to render identically natively and in the browser, and the Go
@@ -26,4 +27,4 @@
 
 mod blur;
 
-pub use blur::{gaussian_blur_premultiplied, gaussian_blur_straight};
+pub use blur::{gaussian_blur_field, gaussian_blur_premultiplied, gaussian_blur_straight};

@@ -240,7 +240,7 @@
             "type": "object"
           },
           {
-            "description": "Gaussian blur on a raster, in fixed point so it renders the same bytes on every host. Grows upstream pad by 3σ, so `sigma` needs an upper bound the build can see: a literal, a `$param` with `max`, or `sigma-max` alongside an `@node` port (the port's value is then clamped to it).",
+            "description": "Gaussian blur on a raster, sprite or scalar field; the output is the same kind as the input. Rasters are blurred in fixed point and fields in a fixed order of float operations, so both render the same bytes on every host. Blurring an elevation field (`dem`) before `hillshade`, `slope` or `flow-field` generalises the terrain: small gullies drop out and the major ridges stay, so the shading follows the ridge crests. A field keeps its nodata value and geographic scale; nodata samples are left out of the average, and a pixel with nothing but nodata in reach stays nodata. Grows upstream pad by 3σ, so `sigma` needs an upper bound the build can see: a literal, a `$param` with `max`, or `sigma-max` alongside an `@node` port (the port's value is then clamped to it).",
             "properties": {
               "input": {
                 "description": "Reference to another node (`@name`).",

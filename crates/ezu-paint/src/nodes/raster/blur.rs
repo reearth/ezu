@@ -1,7 +1,13 @@
-//! `blur` — Gaussian blur (separable, fixed point). Pass-through
-//! over `Raster` and `Sprite`: the output port kind mirrors the input.
-//! Grows upstream pad by 3σ (only meaningful for `Raster` inputs;
-//! `Sprite` producers ignore pad).
+//! `blur` — Gaussian blur (separable). Pass-through over `Raster`,
+//! `Sprite` and `ScalarField`: the output port kind mirrors the input.
+//! Grows upstream pad by 3σ (meaningful for canvas-sized `Raster` and
+//! `ScalarField` inputs; `Sprite` producers ignore pad).
+//!
+//! Images are blurred in fixed point. A `ScalarField` is blurred in
+//! `f32`, leaving out `nodata` samples, and keeps its `nodata` and
+//! `geo_scale`: blurring an elevation field before `hillshade`, `slope`
+//! or `flow-field` generalises the terrain, dropping small gullies and
+//! keeping the major ridges, which blurring their output cannot do.
 //!
 //! `sigma` is an `In<f64>` field, but pad is computed at build time —
 //! so it must carry a static upper bound: a literal, or a `$param`
@@ -13,13 +19,15 @@ use std::sync::Arc;
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
     FactoryError, InReader, Node, NodeFactory, PaddingIn, PortKind, PortSpec, PortValue, RasterBuf,
+    ScalarField,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{
-    raster_or_sprite_output, unwrap_raster_or_sprite, wrap_raster_like, ACCEPTS_RASTER_OR_SPRITE,
-};
+use crate::nodes::common::{raster_or_sprite_output, unwrap_raster_or_sprite, wrap_raster_like};
+
+/// An image of either kind, or a field.
+const ACCEPTS: &[PortKind] = &[PortKind::Raster, PortKind::Sprite, PortKind::ScalarField];
 
 struct BlurNode {
     sigma: PaddingIn,
@@ -35,7 +43,10 @@ impl Node for BlurNode {
         &self.ports
     }
     fn output(&self, input_kinds: &[Option<PortKind>]) -> PortKind {
-        raster_or_sprite_output(input_kinds)
+        match input_kinds.first().and_then(|k| *k) {
+            Some(PortKind::ScalarField) => PortKind::ScalarField,
+            _ => raster_or_sprite_output(input_kinds),
+        }
     }
     fn required_pad(&self, downstream: u32) -> u32 {
         downstream + (3.0 * self.sigma.bound() as f32).ceil() as u32
@@ -48,8 +59,26 @@ impl Node for BlurNode {
         let input = inputs[0]
             .as_ref()
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
-        let (src, kind) = unwrap_raster_or_sprite(input, "input")?;
         let sigma = self.sigma.get(ctx, inputs)? as f32;
+        if let Some(field) = input.as_scalar_field() {
+            if sigma <= 0.0 {
+                return Ok(input.clone());
+            }
+            let mut values = vec![0f32; field.values.len()];
+            crate::imaging::gaussian_blur_field(
+                &field.values,
+                &mut values,
+                field.width as usize,
+                field.height as usize,
+                sigma,
+                field.nodata,
+            );
+            return Ok(PortValue::ScalarField(Arc::new(ScalarField {
+                values: values.into(),
+                ..**field
+            })));
+        }
+        let (src, kind) = unwrap_raster_or_sprite(input, "input")?;
         if sigma <= 0.0 {
             return Ok(wrap_raster_like(src, kind));
         }
@@ -92,7 +121,7 @@ impl NodeFactory for BlurFactory {
 
         let mut ports = vec![PortSpec {
             name: "input",
-            accepts: ACCEPTS_RASTER_OR_SPRITE,
+            accepts: ACCEPTS,
             optional: false,
         }];
         ports.extend(parts.ports);
@@ -113,7 +142,7 @@ impl NodeFactory for BlurFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Gaussian blur on a raster, in fixed point so it renders the same bytes on every host. Grows upstream pad by 3σ, so `sigma` needs an upper bound the build can see: a literal, a `$param` with `max`, or `sigma-max` alongside an `@node` port (the port's value is then clamped to it).",
+            "description": "Gaussian blur on a raster, sprite or scalar field; the output is the same kind as the input. Rasters are blurred in fixed point and fields in a fixed order of float operations, so both render the same bytes on every host. Blurring an elevation field (`dem`) before `hillshade`, `slope` or `flow-field` generalises the terrain: small gullies drop out and the major ridges stay, so the shading follows the ridge crests. A field keeps its nodata value and geographic scale; nodata samples are left out of the average, and a pixel with nothing but nodata in reach stays nodata. Grows upstream pad by 3σ, so `sigma` needs an upper bound the build can see: a literal, a `$param` with `max`, or `sigma-max` alongside an `@node` port (the port's value is then clamped to it).",
             "properties": {
                 "input": schema_frag::node_ref(),
                 "sigma": schema_frag::px_number(),

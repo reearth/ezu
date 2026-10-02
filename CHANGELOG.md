@@ -58,6 +58,14 @@ mean is spelled out in
 
 ### Added
 
+- `blur` takes a scalar field as well as a raster or sprite, and gives back a
+  field. Blurring an elevation field before `hillshade`, `slope` or
+  `flow-field` generalises the terrain: small gullies drop out and the major
+  ridges stay, so the light and dark sides of a hillshade split along the ridge
+  crests. Blurring the shaded image afterwards could not do this; it only
+  smeared the shading. The field keeps its nodata value and geographic scale,
+  nodata samples are left out of the average rather than pulling their
+  neighbours towards it, and the result is the same on every host.
 - `flow-smear`, which streaks a texture along a direction raster such as
   `flow-field`'s. Each pixel becomes the average of the input along the
   streamline through it (line integral convolution), and the walk re-reads the

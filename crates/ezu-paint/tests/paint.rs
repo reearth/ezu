@@ -14,6 +14,8 @@
 #[path = "paint/common/mod.rs"]
 mod common;
 
+#[path = "paint/blur_field.rs"]
+mod blur_field;
 #[path = "paint/color.rs"]
 mod color;
 #[path = "paint/color_ramp.rs"]
