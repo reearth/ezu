@@ -48,6 +48,18 @@ mean is spelled out in
 
 ### Added
 
+- `clip-edges: "drop"` on `boundary`, which leaves out the edges a vector tile
+  adds where it clips a polygon at the tile buffer. Those straight edges sit
+  just outside the tile, and `boundary` outlined them like a real coastline, so
+  a stroke wider than the buffer — a coastal band, say — reached into the tile
+  from them and showed as a band along every tile seam. With `drop`, every
+  segment that lies entirely past one side of the tile and runs within 15° of
+  that side is removed, and a ring is split into open polylines where those
+  segments were. The tolerance is what lets the option work after a `buffer`,
+  which can bend the clip line slightly where something sits near it. A real
+  shoreline outside the tile running nearly parallel to its edge is dropped
+  too; nothing inside the tile is removed, and a rectangle exactly on the tile
+  border is kept. The default, `keep`, outlines every edge as before.
 - Per-cell randomness. Every cell `voronoi-fracture` makes is now its own
   feature carrying `random`, a value in `[0, 1)` drawn from its seed's world
   position, so `["get", "random"]` in a `fill-expr` gives each cell its own

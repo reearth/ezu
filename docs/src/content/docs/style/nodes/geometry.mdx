@@ -41,6 +41,7 @@ Convert each polygon to its boundary rings (exterior + holes) as polylines. Exis
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
+| `clip-edges` | `keep` \| `drop` | no | What to do with the straight edges a vector tile adds where it clips a polygon at the tile buffer, just outside the tile. `keep` outlines them like any other edge; `drop` leaves them out, splitting a ring into open polylines where they were. Use `drop` when a wide stroke on the outline (a coastal band, say) shows a band along every tile seam: the stroke on those edges reaches into the tile. `drop` removes every segment that lies entirely past one side of the tile and runs within 15° of that side; the tolerance is what lets it work after a `buffer`, which can bend the clip line slightly. A real shoreline outside the tile running nearly parallel to its edge is dropped too, but nothing inside the tile goes missing, and a rectangle exactly on the tile border is kept. |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
 
 ### `buffer`
