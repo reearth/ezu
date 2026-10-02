@@ -264,3 +264,98 @@ fn expr_node_drives_opacity_as_a_zoom_curve() {
     let faded = render_tile(json, 8, 0, TileId { z: 4, x: 0, y: 0 });
     assert_eq!(faded.pixel(4, 4), [0x00, 0x00, 0x00, 0x00]);
 }
+
+// --- missing samples -------------------------------------------------------
+
+/// An 8 × 8 field rising `20` per column from `-10`, with column 3
+/// written as `missing` when it is given.
+fn rising_field(nodata: Option<f32>, missing: Option<f32>) -> ezu_graph::ScalarField {
+    let mut values = Vec::with_capacity(64);
+    for _ in 0..8 {
+        for x in 0..8u32 {
+            values.push(match missing {
+                Some(m) if x == 3 => m,
+                _ => x as f32 * 20.0 - 10.0,
+            });
+        }
+    }
+    ezu_graph::ScalarField {
+        width: 8,
+        height: 8,
+        values: values.into(),
+        nodata,
+        geo_scale: None,
+    }
+}
+
+/// `dem → color-ramp`, with `ramp` (the `stops` or `ramp-expr` and
+/// any other fields) spliced into the ramp.
+fn ramp_over(ramp: &str, field: ezu_graph::ScalarField) -> std::sync::Arc<ezu_graph::RasterBuf> {
+    use crate::common::render_with_scalar_fields;
+    let json = format!(
+        r##"{{
+          "name": "ramp-missing",
+          "tile-size": 8,
+          "sources": {{
+            "terrain": {{ "type": "dem",
+                          "url": "http://example.invalid/{{z}}/{{x}}/{{y}}.webp",
+                          "encoding": "terrarium" }}
+          }},
+          "nodes": {{
+            "dem": {{ "op": "dem" }},
+            "out": {{ "op": "color-ramp", "field": "@dem", {ramp} }}
+          }},
+          "output": "@out"
+        }}"##
+    );
+    render_with_scalar_fields(
+        &json,
+        8,
+        0,
+        ezu_graph::TileId { z: 0, x: 0, y: 0 },
+        &[("terrain", field)],
+    )
+}
+
+/// Render `ramp` over the rising field with column 3 missing, and check
+/// that column against transparency and every other pixel against the
+/// unbroken field.
+fn check_missing_is_transparent(ramp: &str) {
+    let whole = ramp_over(ramp, rising_field(None, None));
+    let nodata = -9999.0;
+    let holed = [
+        (
+            "nodata",
+            ramp_over(ramp, rising_field(Some(nodata), Some(nodata))),
+        ),
+        ("NaN", ramp_over(ramp, rising_field(None, Some(f32::NAN)))),
+        (
+            "NaN with nodata",
+            ramp_over(ramp, rising_field(Some(nodata), Some(f32::NAN))),
+        ),
+    ];
+    for (kind, r) in holed {
+        for y in 0..8 {
+            for x in 0..8 {
+                let want = if x == 3 { [0; 4] } else { whole.pixel(x, y) };
+                assert_eq!(r.pixel(x, y), want, "{ramp}, {kind}, ({x}, {y})");
+            }
+        }
+    }
+}
+
+#[test]
+fn missing_samples_are_transparent_not_the_first_stop() {
+    // -9999 is far below the first stop, so as a value it would clamp to
+    // the first stop's red.
+    let stops = r##""stops": [ { "value": 0,   "color": "#ff0000" },
+                               { "value": 100, "color": "#0000ff80" } ]"##;
+    check_missing_is_transparent(stops);
+    for space in ["hsl", "hsv", "hcl", "lab"] {
+        check_missing_is_transparent(&format!(r#"{stops}, "space": "{space}""#));
+    }
+    check_missing_is_transparent(&format!(r#"{stops}, "opacity": 0.5"#));
+    check_missing_is_transparent(
+        r##""ramp-expr": ["interpolate", ["linear"], ["heatmap-density"], 0, "#00ff00", 1, "#ff00ff"]"##,
+    );
+}

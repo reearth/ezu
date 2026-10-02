@@ -13,6 +13,14 @@ mean is spelled out in
 
 ### Fixed
 
+- `color-ramp` painted a field's `nodata` samples through the ramp. A DEM's
+  `-9999` sat below the first stop, so a hole in a hypsometric tint came out
+  as the lowest stop's colour, deep sea say, instead of a gap. Missing samples
+  (NaN, or equal to the field's `nodata`) are now written fully transparent,
+  so a hole shows what lies beneath it. NaN was already transparent, but only
+  by way of a NaN-to-byte conversion; it now takes the same explicit path. A
+  `Raster` input (the luminance gradient map) and a field with neither nodata
+  nor NaN render exactly as before.
 - `threshold` binarised a field's missing samples along with its real ones. A
   DEM's `nodata` value, `-9999` say, came out as `low`, and NaN as `high` with
   a hard step or NaN with `softness`, while the output still carried the

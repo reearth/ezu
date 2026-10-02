@@ -112,7 +112,7 @@ Centred disk source. `kind: raster` (default) renders at canvas size with radius
 
 ### `color-ramp`
 
-Map a `ScalarField` (or a `Raster`, by its luminance — a gradient map) to colour through a stop table, interpolating between stops in `space`. Samples outside `[stops[0].value, stops[-1].value]` clamp to the end colours. Canonical use case is hypsometric tinting over a DEM (`stops[i].value` = elevation in metres). Give `ramp-expr` instead of `stops` to drive the ramp from a MapLibre color expression over `heatmap-density`.
+Map a `ScalarField` (or a `Raster`, by its luminance — a gradient map) to colour through a stop table, interpolating between stops in `space`. Samples outside `[stops[0].value, stops[-1].value]` clamp to the end colours. A field's missing samples (NaN or its nodata value) are fully transparent. Canonical use case is hypsometric tinting over a DEM (`stops[i].value` = elevation in metres). Give `ramp-expr` instead of `stops` to drive the ramp from a MapLibre color expression over `heatmap-density`.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |

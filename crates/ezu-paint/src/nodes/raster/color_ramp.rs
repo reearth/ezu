@@ -4,6 +4,10 @@
 //! to the end colours. A `Raster` input is recoloured by its luminance
 //! (Rec. 601) — a **gradient map** — preserving source coverage.
 //!
+//! A field's missing samples (NaN, or equal to its `nodata`) are written
+//! fully transparent rather than through the ramp, so a hole shows what
+//! lies beneath instead of the first stop's colour.
+//!
 //! The canonical cartographic use case is **hypsometric tinting** —
 //! map an elevation `ScalarField` (from `dem`) to a green→brown→white
 //! ramp. The same op works on any scalar field: a `distance_field`
@@ -100,6 +104,10 @@ impl Node for ColorRampNode {
         if let Some(field) = input.as_scalar_field() {
             let mut out = RasterBuf::new(field.width, field.height);
             for (i, &v) in field.values.iter().enumerate() {
+                // A missing sample has no colour: leave it transparent.
+                if v.is_nan() || field.nodata == Some(v) {
+                    continue;
+                }
                 let rgba = sample(v);
                 let off = i * 4;
                 // Premultiply alpha to match the rest of the pipeline.
@@ -327,7 +335,7 @@ impl NodeFactory for ColorRampFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Map a `ScalarField` (or a `Raster`, by its luminance — a gradient map) to colour through a stop table, interpolating between stops in `space`. Samples outside `[stops[0].value, stops[-1].value]` clamp to the end colours. Canonical use case is hypsometric tinting over a DEM (`stops[i].value` = elevation in metres). Give `ramp-expr` instead of `stops` to drive the ramp from a MapLibre color expression over `heatmap-density`.",
+            "description": "Map a `ScalarField` (or a `Raster`, by its luminance — a gradient map) to colour through a stop table, interpolating between stops in `space`. Samples outside `[stops[0].value, stops[-1].value]` clamp to the end colours. A field's missing samples (NaN or its nodata value) are fully transparent. Canonical use case is hypsometric tinting over a DEM (`stops[i].value` = elevation in metres). Give `ramp-expr` instead of `stops` to drive the ramp from a MapLibre color expression over `heatmap-density`.",
             "properties": {
                 "field": schema_frag::node_ref(),
                 "ramp-expr": {
