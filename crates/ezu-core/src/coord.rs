@@ -134,7 +134,7 @@ pub fn lat_to_world_y(lat_deg: f64) -> f64 {
     let lat = lat_deg
         .clamp(-MERCATOR_MAX_LAT, MERCATOR_MAX_LAT)
         .to_radians();
-    (1.0 - lat.tan().asinh() / std::f64::consts::PI) / 2.0
+    (1.0 - libm::asinh(libm::tan(lat)) / std::f64::consts::PI) / 2.0
 }
 
 /// Longitude in degrees of a world x. Inverse of [`lon_to_world_x`].
@@ -146,10 +146,7 @@ pub fn world_x_to_lon(wx: f64) -> f64 {
 /// Latitude in degrees of a world y. Inverse of [`lat_to_world_y`].
 #[inline]
 pub fn world_y_to_lat(wy: f64) -> f64 {
-    (std::f64::consts::PI * (1.0 - 2.0 * wy))
-        .sinh()
-        .atan()
-        .to_degrees()
+    libm::atan(libm::sinh(std::f64::consts::PI * (1.0 - 2.0 * wy))).to_degrees()
 }
 
 /// Ground metres per world unit at world y `wy`.
@@ -164,7 +161,7 @@ pub fn metres_per_world_unit(wy: f64) -> f64 {
     // lat = atan(sinh(pi (1 - 2 wy))), and cos(atan(sinh(u))) = 1/cosh(u),
     // so the cosine falls out without the round trip through a latitude.
     let u = std::f64::consts::PI * (1.0 - 2.0 * wy);
-    EARTH_CIRCUMFERENCE_M / u.cosh()
+    EARTH_CIRCUMFERENCE_M / libm::cosh(u)
 }
 
 #[cfg(test)]
@@ -250,7 +247,8 @@ mod tests {
         // The equator is the unscaled reference.
         assert!((metres_per_world_unit(0.5) - EARTH_CIRCUMFERENCE_M).abs() < 1.0);
         // 60°N sits at wy where cos(lat) = 1/2, so the scale halves.
-        let wy_60n = (1.0 - 60f64.to_radians().tan().asinh() / std::f64::consts::PI) / 2.0;
+        let wy_60n =
+            (1.0 - libm::asinh(libm::tan(60f64.to_radians())) / std::f64::consts::PI) / 2.0;
         let ratio = metres_per_world_unit(wy_60n) / EARTH_CIRCUMFERENCE_M;
         assert!((ratio - 0.5).abs() < 1e-9, "ratio {ratio}");
         // Symmetric about the equator.

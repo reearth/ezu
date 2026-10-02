@@ -154,8 +154,8 @@ fn render_single(
 ) -> RasterBuf {
     let azimuth_rad = (450.0 - azimuth_deg).to_radians();
     let altitude_rad = altitude_deg.to_radians();
-    let cos_zenith = (std::f32::consts::FRAC_PI_2 - altitude_rad).cos();
-    let sin_zenith = (std::f32::consts::FRAC_PI_2 - altitude_rad).sin();
+    let cos_zenith = libm::cosf(std::f32::consts::FRAC_PI_2 - altitude_rad);
+    let sin_zenith = libm::sinf(std::f32::consts::FRAC_PI_2 - altitude_rad);
     let scale = z_factor * exaggeration;
     render_with(field, mode, relief, |dx, dy| {
         shade_sample(dx, dy, scale, cos_zenith, sin_zenith, azimuth_rad)
@@ -173,8 +173,8 @@ fn render_multidirectional(
     // ESRI-style weighted sum over four light directions
     // (225°, 270°, 315°, 360°). Weights from the published recipe.
     let altitudes_rad = altitude_deg.to_radians();
-    let cos_zenith = (std::f32::consts::FRAC_PI_2 - altitudes_rad).cos();
-    let sin_zenith = (std::f32::consts::FRAC_PI_2 - altitudes_rad).sin();
+    let cos_zenith = libm::cosf(std::f32::consts::FRAC_PI_2 - altitudes_rad);
+    let sin_zenith = libm::sinf(std::f32::consts::FRAC_PI_2 - altitudes_rad);
     let scale = z_factor * exaggeration;
     let dirs = [(225.0f32, 1.0), (270.0, 2.0), (315.0, 2.0), (360.0, 1.0)];
     let weight_sum: f32 = dirs.iter().map(|(_, w)| *w).sum();
@@ -266,12 +266,13 @@ fn shade_sample(
 ) -> f32 {
     let dx = dz_dx * scale;
     let dy = dz_dy * scale;
-    let slope = (dx * dx + dy * dy).sqrt().atan();
+    let slope = libm::atanf((dx * dx + dy * dy).sqrt());
     // Aspect: angle the slope faces, measured clockwise from east in
     // mathematical convention (matches `azimuth_rad` after the 450°
     // shift applied by the caller).
-    let aspect = dy.atan2(-dx);
-    cos_zenith * slope.cos() + sin_zenith * slope.sin() * (azimuth_rad - aspect).cos()
+    let aspect = libm::atan2f(dy, -dx);
+    cos_zenith * libm::cosf(slope)
+        + sin_zenith * libm::sinf(slope) * libm::cosf(azimuth_rad - aspect)
 }
 
 pub(super) struct HillshadeFactory;

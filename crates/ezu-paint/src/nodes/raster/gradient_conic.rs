@@ -62,7 +62,7 @@ impl Node for GradientConicNode {
         let sample = |ux: f32, uy: f32| -> [f32; 4] {
             let dx = ux - center[0];
             let dy = uy - center[1];
-            let ang = dy.atan2(dx) - start_rad;
+            let ang = libm::atan2f(dy, dx) - start_rad;
             let t = ang.rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU;
             sample_stops(stops, t, space)
         };

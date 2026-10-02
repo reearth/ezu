@@ -99,7 +99,7 @@ fn tangent_at(poly: &[(f32, f32)], cum: &[f32], s: f32) -> f32 {
     for i in 0..poly.len() - 1 {
         if s <= cum[i + 1] || i + 2 == poly.len() {
             let (dx, dy) = (poly[i + 1].0 - poly[i].0, poly[i + 1].1 - poly[i].1);
-            return dy.atan2(dx);
+            return libm::atan2f(dy, dx);
         }
     }
     0.0
@@ -132,11 +132,11 @@ fn max_angle_ok(
         }
         let a0 = {
             let (dx, dy) = (poly[i].0 - poly[i - 1].0, poly[i].1 - poly[i - 1].1);
-            dy.atan2(dx)
+            libm::atan2f(dy, dx)
         };
         let a1 = {
             let (dx, dy) = (poly[i + 1].0 - poly[i].0, poly[i + 1].1 - poly[i].1);
-            dy.atan2(dx)
+            libm::atan2f(dy, dx)
         };
         let mut d = (a1 - a0).abs();
         if d > std::f32::consts::PI {
@@ -452,7 +452,7 @@ mod tests {
         let arc: Vec<(f32, f32)> = (0..=9)
             .map(|i| {
                 let t = (i as f32) * 10.0f32.to_radians();
-                (100.0 * t.sin(), 100.0 * (1.0 - t.cos()))
+                (100.0 * libm::sinf(t), 100.0 * (1.0 - libm::cosf(t)))
             })
             .collect();
         let mut p = params(LinePlacement::LineCenter, 100.0, 250.0, 45.0);

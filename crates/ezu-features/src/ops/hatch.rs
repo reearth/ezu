@@ -55,7 +55,7 @@ pub fn hatch_polygons(polys: &[Polygon], opts: &HatchOpts) -> Vec<Vec<(i32, i32)
         return Vec::new();
     }
     let theta = opts.angle_deg.to_radians();
-    let (sin, cos) = theta.sin_cos();
+    let (sin, cos) = libm::sincos(theta);
     // Project the world origin onto the hatch normal — `v` in world
     // space is `v_local + v_origin`, so aligning v0 to a world grid
     // means picking `v0_local = ceil((v_min + v_origin)/spacing) *

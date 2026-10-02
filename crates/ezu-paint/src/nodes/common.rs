@@ -613,7 +613,7 @@ pub(super) fn srgb_to_linear_rgba(c: [f32; 4]) -> [f32; 4] {
         if v <= 0.04045 {
             v / 12.92
         } else {
-            ((v + 0.055) / 1.055).powf(2.4)
+            libm::powf((v + 0.055) / 1.055, 2.4)
         }
     }
     [ch(c[0]), ch(c[1]), ch(c[2]), c[3]]

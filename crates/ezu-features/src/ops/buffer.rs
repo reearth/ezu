@@ -128,8 +128,8 @@ pub fn buffer_points(points: &[(i32, i32)], opts: &BufferOpts) -> Vec<Polygon> {
         let mut ring = Vec::with_capacity(seg + 1);
         for i in 0..seg {
             let t = (i as f64) / (seg as f64) * 2.0 * PI;
-            let x = cx as f64 + radius * t.cos();
-            let y = cy as f64 + radius * t.sin();
+            let x = cx as f64 + radius * libm::cos(t);
+            let y = cy as f64 + radius * libm::sin(t);
             ring.push((x.round() as i32, y.round() as i32));
         }
         ring.push(ring[0]);

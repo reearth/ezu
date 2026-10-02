@@ -121,6 +121,15 @@ mean is spelled out in
   wasm runs, so a blurred tile could come out a level apart between the two.
   Blurred output moves by at most one level against before; the speed is
   close to libblur's SIMD path, and libblur is no longer a dependency.
+- Every transcendental function on the render path — hillshade and slope, lab
+  and hcl colour, sRGB transfer, conic gradients, levels' gamma, density
+  kernels, Mercator projection, rotations, brush radii — now comes from the
+  `libm` crate rather than `f64::sin` and its kin, which defer to the
+  platform's own libm natively and could disagree with wasm in the last bit.
+  No disagreement had turned up, so this makes host-independence something the
+  code guarantees rather than something the inputs happened to allow, and
+  `clippy.toml` now refuses the standard methods so it stays that way. Output
+  that goes through these functions can move by a level against before.
 - The npm package's wasm module is a quarter smaller — 6,103,052 → 4,665,571
   bytes, gzipped 2,215,214 → 1,751,120 — by keeping out of the wasm build two
   dependencies that cannot run there: ICU's collation tables, which

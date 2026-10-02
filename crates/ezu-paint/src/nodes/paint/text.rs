@@ -1551,7 +1551,7 @@ impl TextNode {
                         let mut boxes = Vec::with_capacity(placed.len());
                         for (g, gp) in block.glyphs.iter().zip(&placed) {
                             let hw = 0.5 * g.advance * size;
-                            let (c, s) = (gp.angle.cos().abs(), gp.angle.sin().abs());
+                            let (c, s) = (libm::cosf(gp.angle).abs(), libm::sinf(gp.angle).abs());
                             let ex = hw * c + half_h * s;
                             let ey = hw * s + half_h * c;
                             boxes.push(

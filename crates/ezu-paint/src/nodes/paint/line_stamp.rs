@@ -134,7 +134,7 @@ impl Node for LineStampNode {
                 if seg < 1e-6 {
                     continue;
                 }
-                let angle = dy.atan2(dx).to_degrees();
+                let angle = libm::atan2f(dy, dx).to_degrees();
                 while next <= seg {
                     let f = next / seg;
                     let px = x0 + dx * f;

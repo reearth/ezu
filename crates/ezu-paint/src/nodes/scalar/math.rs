@@ -114,7 +114,7 @@ impl MathFn {
             Self::Mod => a.rem_euclid(b),
             Self::Min => a.min(b),
             Self::Max => a.max(b),
-            Self::Pow => a.powf(b),
+            Self::Pow => libm::pow(a, b),
             Self::Clamp => a.clamp(b.min(c), c.max(b)),
             Self::Lerp => a + (b - a) * c,
         }

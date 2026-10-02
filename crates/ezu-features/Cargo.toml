@@ -15,6 +15,7 @@ categories = ["graphics", "rendering", "science::geo", "parser-implementations"]
 [dependencies]
 ezu-core = { workspace = true }
 geozero = { workspace = true }
+libm = { workspace = true }
 geojson = { workspace = true }
 geo = { workspace = true }
 i_overlay = { workspace = true }

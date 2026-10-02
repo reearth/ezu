@@ -62,8 +62,8 @@ pub fn decode_projected(
         let lon = pos.first().copied().unwrap_or(0.0);
         let lat = pos.get(1).copied().unwrap_or(0.0);
         let mx = (lon + 180.0) / 360.0;
-        let s = lat.to_radians().sin().clamp(-0.999_999, 0.999_999);
-        let my = 0.5 - ((1.0 + s) / (1.0 - s)).ln() / (4.0 * std::f64::consts::PI);
+        let s = libm::sin(lat.to_radians()).clamp(-0.999_999, 0.999_999);
+        let my = 0.5 - libm::log((1.0 + s) / (1.0 - s)) / (4.0 * std::f64::consts::PI);
         (
             ((mx * n - x as f64) * e).round() as i32,
             ((my * n - y as f64) * e).round() as i32,

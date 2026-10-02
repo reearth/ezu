@@ -11,8 +11,6 @@
 //! pads every canvas by the blur radius, so in a render the clamped
 //! samples land in padding that is cropped away.
 
-use super::exp_neg;
-
 /// Fixed-point one: kernel weights sum to exactly this.
 const ONE_BITS: u32 = 16;
 const ONE: u32 = 1 << ONE_BITS;
@@ -28,7 +26,7 @@ fn kernel(sigma: f32) -> Vec<u32> {
     let raw: Vec<f64> = (0..=2 * radius)
         .map(|i| {
             let d = i as f64 - radius as f64;
-            exp_neg(-(d * d) / two_sigma_sq)
+            libm::exp(-(d * d) / two_sigma_sq)
         })
         .collect();
     let sum: f64 = raw.iter().sum();

@@ -178,6 +178,9 @@ fn ink_profiles(op: &str, extra: &str, tile: TileId) -> (Vec<f64>, Vec<f64>) {
 /// signal), with the mean removed so the DC term does not leak in. One
 /// frequency at a time is all this needs, and that is a few lines — cheaper
 /// than taking on an FFT dependency.
+// A statistic over the render, not part of it: host-dependent rounding
+// here cannot reach a pixel.
+#[allow(clippy::disallowed_methods)]
 fn dft_magnitude(signal: &[f64], k: f64) -> f64 {
     let n = signal.len() as f64;
     let mean = signal.iter().sum::<f64>() / n;

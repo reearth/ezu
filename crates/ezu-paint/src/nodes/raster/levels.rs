@@ -65,7 +65,7 @@ impl Node for LevelsNode {
             for c in 0..3 {
                 let p = (src.pixels[i + c] as f32 / 255.0) / a;
                 let t = ((p - in_black) * inv_in).clamp(0.0, 1.0);
-                let y = (t.powf(inv_gamma) * out_span + out_lo).clamp(0.0, 1.0);
+                let y = (libm::powf(t, inv_gamma) * out_span + out_lo).clamp(0.0, 1.0);
                 out.pixels[i + c] = (y * a * 255.0).round() as u8;
             }
             out.pixels[i + 3] = src.pixels[i + 3];

@@ -46,6 +46,10 @@ unicode-bidi = "0.3"
 unicode-script = "0.5"
 fontdb = "0.23"
 noise = { version = "0.9", default-features = false }
+# Transcendental float functions for the render path: the same Rust code on
+# every host, where `f64::sin` and friends defer to the platform's libm
+# (see clippy.toml).
+libm = "0.2"
 image = { version = "0.25", default-features = false, features = ["png", "webp", "jpeg"] }
 
 # Geo

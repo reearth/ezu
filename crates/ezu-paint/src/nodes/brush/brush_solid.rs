@@ -37,7 +37,7 @@ impl Node for BrushSolidNode {
         // its width alone — as long as that width has a ceiling.
         let radius_px = (self.width_px.static_bound()? * 0.5).max(0.2) as f32;
         let mut b = Brush::new();
-        b.get_mut(BrushSetting::Radius).base_value = radius_px.ln();
+        b.get_mut(BrushSetting::Radius).base_value = libm::logf(radius_px);
         Some(InkReach {
             reach_px: crate::strokes::max_dab_reach_px(&b) as f64,
             radius_px: radius_px as f64,
@@ -63,7 +63,7 @@ impl Node for BrushSolidNode {
 
         let mut b = Brush::new();
         let radius_px = (width_px * 0.5).max(0.2);
-        b.get_mut(BrushSetting::Radius).base_value = radius_px.ln();
+        b.get_mut(BrushSetting::Radius).base_value = libm::logf(radius_px);
         b.get_mut(BrushSetting::Opaque).base_value = 1.0;
         b.get_mut(BrushSetting::Hardness).base_value = hardness;
         b.get_mut(BrushSetting::AntiAliasing).base_value = aa;
@@ -163,6 +163,6 @@ fn linear_to_srgb(c: f32) -> f32 {
     if c <= 0.0031308 {
         12.92 * c
     } else {
-        1.055 * c.powf(1.0 / 2.4) - 0.055
+        1.055 * libm::powf(c, 1.0 / 2.4) - 0.055
     }
 }

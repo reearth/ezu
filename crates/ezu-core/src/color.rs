@@ -213,13 +213,13 @@ fn rgb2xyz(x: f32) -> f32 {
     if x <= 0.04045 {
         x / 12.92
     } else {
-        ((x + 0.055) / 1.055).powf(2.4)
+        libm::powf((x + 0.055) / 1.055, 2.4)
     }
 }
 
 fn xyz2lab(t: f32) -> f32 {
     if t > T3 {
-        t.cbrt()
+        libm::cbrtf(t)
     } else {
         t / T2 + T0
     }
@@ -237,7 +237,7 @@ fn xyz2rgb(x: f32) -> f32 {
     let x = if x <= 0.00304 {
         12.92 * x
     } else {
-        1.055 * x.powf(1.0 / 2.4) - 0.055
+        1.055 * libm::powf(x, 1.0 / 2.4) - 0.055
     };
     x.clamp(0.0, 1.0)
 }
@@ -288,7 +288,7 @@ fn rgb_to_hcl(rgb: [f32; 4]) -> [f32; 4] {
     let [l, a, b, alpha] = rgb_to_lab(rgb);
     let c = (a * a + b * b).sqrt();
     let h = if (c * 10000.0).round() != 0.0 {
-        (b.atan2(a) * RAD2DEG).rem_euclid(360.0)
+        (libm::atan2f(b, a) * RAD2DEG).rem_euclid(360.0)
     } else {
         f32::NAN
     };
@@ -297,7 +297,7 @@ fn rgb_to_hcl(rgb: [f32; 4]) -> [f32; 4] {
 
 fn hcl_to_rgb([h, c, l, alpha]: [f32; 4]) -> [f32; 4] {
     let h = if h.is_nan() { 0.0 } else { h * DEG2RAD };
-    lab_to_rgb([l, h.cos() * c, h.sin() * c, alpha])
+    lab_to_rgb([l, libm::cosf(h) * c, libm::sinf(h) * c, alpha])
 }
 
 /// HCL interpolation, faithful to `Color.interpolate('hcl')` — including the

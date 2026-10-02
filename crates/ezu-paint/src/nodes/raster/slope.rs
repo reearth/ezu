@@ -50,7 +50,7 @@ impl Node for SlopeNode {
         for y in 0..h {
             for x in 0..w {
                 let (dz_dx, dz_dy) = horn_gradient(field, x, y, inv_x, inv_y);
-                let slope = (dz_dx * dz_dx + dz_dy * dz_dy).sqrt().atan();
+                let slope = libm::atanf((dz_dx * dz_dx + dz_dy * dz_dy).sqrt());
                 let mut t = (slope / max_rad).clamp(0.0, 1.0);
                 if invert {
                     t = 1.0 - t;

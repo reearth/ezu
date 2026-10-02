@@ -69,7 +69,7 @@ impl Node for LineNode {
             let Some(lift) = curve_max_y(curve) else {
                 return InfluenceCtx::UNBOUNDED;
             };
-            reach *= lift.max(0.0).exp();
+            reach *= libm::exp(lift.max(0.0));
         }
         ctx.plus(reach)
     }
@@ -105,7 +105,7 @@ impl Node for LineNode {
         let mut brush: Brush = (*brush_arc).clone();
         if let Some(r) = &self.radius_px {
             let r = r.get(ctx, inputs)? as f32;
-            brush.get_mut(hokusai::BrushSetting::Radius).base_value = r.max(0.05).ln();
+            brush.get_mut(hokusai::BrushSetting::Radius).base_value = libm::logf(r.max(0.05));
         }
         if let Some(o) = &self.opacity {
             let o = o.get(ctx, inputs)? as f32;

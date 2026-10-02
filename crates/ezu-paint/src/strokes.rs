@@ -185,9 +185,7 @@ pub fn paint_lines_parallel(
 /// The radius, in canvas pixels, that [`max_dab_reach_px`] measured
 /// against — the brush's own radius before any per-op override.
 pub(crate) fn brush_radius_px(brush: &Brush) -> f32 {
-    setting_ceiling(brush.get(BrushSetting::Radius))
-        .exp()
-        .clamp(0.2, 1000.0)
+    libm::expf(setting_ceiling(brush.get(BrushSetting::Radius))).clamp(0.2, 1000.0)
 }
 
 /// `hokusai`'s gaussian is a sum of four uniforms, so a draw lands in
@@ -219,9 +217,7 @@ pub(crate) fn max_dab_reach_px(brush: &Brush) -> f32 {
     let radius_jitter = setting_ceiling(brush.get(BrushSetting::RadiusByRandom)).max(0.0);
     // `radius_by_random` perturbs the radius in log space, and the dab is
     // clamped to the same ceiling the brush engine uses.
-    let radius = (radius_log + GAUSS_MAX * radius_jitter)
-        .exp()
-        .clamp(0.2, 1000.0);
+    let radius = libm::expf(radius_log + GAUSS_MAX * radius_jitter).clamp(0.2, 1000.0);
     // An elliptical dab is `ratio` times wider along its major axis.
     let ratio = setting_ceiling(brush.get(BrushSetting::EllipticalDabRatio)).max(1.0);
     // Both centre jitters are expressed as multiples of the dab radius.
@@ -460,7 +456,7 @@ fn apply_stroke_curves(brush: &mut Brush, line_len_px: f32, style: &LineStrokeSt
     // ln(line_len_px) makes the total advance ~1.0 over the polyline.
     brush
         .get_mut(BrushSetting::StrokeDurationLogarithmic)
-        .base_value = line_len_px.max(1.0).ln();
+        .base_value = libm::logf(line_len_px.max(1.0));
 
     if let Some(pts) = &style.radius_stroke_curve {
         set_stroke_input(brush, BrushSetting::Radius, pts);
@@ -525,7 +521,7 @@ fn linear_to_srgb(c: f32) -> f32 {
     if c <= 0.003_130_8 {
         12.92 * c
     } else {
-        1.055 * c.powf(1.0 / 2.4) - 0.055
+        1.055 * libm::powf(c, 1.0 / 2.4) - 0.055
     }
 }
 

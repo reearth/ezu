@@ -258,7 +258,7 @@ fn offset_at(
     world_y: f64,
 ) -> f64 {
     let sine = if amp != 0.0 && inv_wavelen != 0.0 {
-        amp * (inv_wavelen * (s + phase)).sin()
+        amp * libm::sin(inv_wavelen * (s + phase))
     } else {
         0.0
     };

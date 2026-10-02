@@ -18,7 +18,7 @@ fn apply(
     let y = p.1 as f64 - pivot.1;
     let sx = x * scale.0;
     let sy = y * scale.1;
-    let (sin_t, cos_t) = rot.sin_cos();
+    let (sin_t, cos_t) = libm::sincos(rot);
     let rx = sx * cos_t - sy * sin_t;
     let ry = sx * sin_t + sy * cos_t;
     let fx = rx + pivot.0 + tx.0;

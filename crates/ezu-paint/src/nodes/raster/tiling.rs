@@ -89,7 +89,7 @@ impl Node for TilingNode {
         // visually clockwise corresponds to sampling counterclockwise.
         let rotation_deg = self.rotation_deg.get(ctx, inputs)?;
         let theta = -rotation_deg.to_radians();
-        let (sin_t, cos_t) = theta.sin_cos();
+        let (sin_t, cos_t) = libm::sincos(theta);
         let needs_rotation = rotation_deg.abs() > 1e-9;
 
         let sw = src.width as f64;

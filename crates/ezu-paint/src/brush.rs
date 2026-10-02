@@ -25,7 +25,7 @@ pub struct BrushDefaults {
 impl BrushDefaults {
     pub fn from_brush(brush: &Brush) -> Self {
         let radius_log = brush.get(BrushSetting::Radius).base_value;
-        let radius_px = radius_log.exp().clamp(0.2, 1000.0);
+        let radius_px = libm::expf(radius_log).clamp(0.2, 1000.0);
         let opacity = brush.get(BrushSetting::Opaque).base_value.clamp(0.0, 1.0);
         let hardness = brush.get(BrushSetting::Hardness).base_value.clamp(0.0, 1.0);
         let h = brush.get(BrushSetting::ColorH).base_value.rem_euclid(1.0);
@@ -89,6 +89,6 @@ fn srgb_to_linear(c: f32) -> f32 {
     if c <= 0.04045 {
         c / 12.92
     } else {
-        ((c + 0.055) / 1.055).powf(2.4)
+        libm::powf((c + 0.055) / 1.055, 2.4)
     }
 }

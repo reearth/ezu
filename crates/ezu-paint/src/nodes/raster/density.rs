@@ -214,7 +214,7 @@ fn splat(values: &mut [f32], w: u32, h: u32, px: f32, py: f32, radius: f32, ampl
             if d2 >= 1.0 {
                 continue;
             }
-            values[(y * w + x) as usize] += amplitude * GAUSS_COEF * (-0.5 * 9.0 * d2).exp();
+            values[(y * w + x) as usize] += amplitude * GAUSS_COEF * libm::expf(-0.5 * 9.0 * d2);
         }
     }
 }

@@ -13,6 +13,7 @@ keywords = ["map", "cartography", "tile", "ezu", "rendering"]
 categories = ["graphics", "rendering", "science::geo"]
 
 [dependencies]
+libm = { workspace = true }
 xxhash-rust = { workspace = true }
 ttf-parser = { workspace = true, optional = true }
 rustybuzz = { workspace = true, optional = true }

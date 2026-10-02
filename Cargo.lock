@@ -758,6 +758,7 @@ dependencies = [
 name = "ezu-core"
 version = "0.10.0"
 dependencies = [
+ "libm",
  "lru",
  "rustybuzz",
  "thiserror",
@@ -779,6 +780,7 @@ dependencies = [
  "geojson",
  "geozero",
  "i_overlay 6.0.1",
+ "libm",
  "serde_json",
  "thiserror",
  "voronoice",
@@ -812,6 +814,7 @@ dependencies = [
  "fontdb",
  "hokusai",
  "image",
+ "libm",
  "maplibre-expr",
  "noise",
  "pmtiles",
