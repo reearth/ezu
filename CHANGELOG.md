@@ -48,6 +48,14 @@ mean is spelled out in
 
 ### Added
 
+- Per-cell randomness. Every cell `voronoi-fracture` makes is now its own
+  feature carrying `random`, a value in `[0, 1)` drawn from its seed's world
+  position, so `["get", "random"]` in a `fill-expr` gives each cell its own
+  tone and a cell on a tile border the same tone in both tiles. There was no
+  way to do this before: generated geometry had no attribute to key a colour on.
+  Two companions make regular cells possible: `aspect` on `voronoi-fracture`
+  weights vertical distance (`> 1` stretches cells along X), and `stagger` on
+  `point-grid` shifts every other row — together, the bricks of a running bond.
 - `cover: "canvas"` on `tile-bounds`, which grows the rectangle over the padded
   canvas. Shapes cut from the bare tile — Voronoi cells, hatch lines — stopped
   at its edge, so a procedural texture showed a seam at every tile border; cut

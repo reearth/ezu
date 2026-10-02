@@ -127,13 +127,54 @@
       "octaves": 2,
       "boundary": "transparent"
     },
-    "clay": {
+    "centres": {
+      "op": "point-grid",
+      "anchor": "world",
+      "spacing": 576,
+      "spacing-y": 256,
+      "offset-x": 288,
+      "offset-y": 128,
+      "stagger": 0.5
+    },
+    "bricks": {
+      "op": "voronoi-fracture",
+      "features": "@area",
+      "seeds": "@centres",
+      "aspect": 8
+    },
+    "fired": {
+      "op": "fill-solid",
+      "features": "@bricks",
+      "fill": "#a4472f",
+      "fill-expr": [
+        "interpolate",
+        [
+          "linear"
+        ],
+        [
+          "get",
+          "random"
+        ],
+        0,
+        "#86361f",
+        1,
+        "#bb6040"
+      ]
+    },
+    "mottle": {
       "op": "noise",
       "type": "perlin",
       "scale-px": 140,
       "octaves": 3,
-      "low-color": "#8c3a24",
-      "high-color": "#b65a38"
+      "low-color": "#000000",
+      "high-color": "#ffffff"
+    },
+    "clay": {
+      "op": "blend",
+      "base": "@fired",
+      "over": "@mottle",
+      "mode": "soft-light",
+      "opacity": 0.5
     },
     "grain": {
       "op": "noise",

@@ -35,6 +35,7 @@ struct PointGridNode {
     spacing_y: In<f64>,
     offset_x: In<f64>,
     offset_y: In<f64>,
+    stagger: In<f64>,
     anchor: Anchor,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
@@ -63,6 +64,7 @@ impl Node for PointGridNode {
         let spacing_y = self.spacing_y.get(ctx, inputs)?;
         let offset_x = self.offset_x.get(ctx, inputs)?;
         let offset_y = self.offset_y.get(ctx, inputs)?;
+        let stagger = self.stagger.get(ctx, inputs)?;
         // A non-positive spacing has no lattice; emit nothing rather
         // than diverge.
         if spacing_x <= 0.0 || spacing_y <= 0.0 {
@@ -87,8 +89,6 @@ impl Node for PointGridNode {
         let margin_x = (ctx.canvas.pad as f64 * e / ctx.canvas.tile_w.max(1) as f64).ceil();
         let margin_y = (ctx.canvas.pad as f64 * e / ctx.canvas.tile_h.max(1) as f64).ceil();
         // Find the first grid index that lands inside the padded area.
-        let i0 = ((-margin_x - ox) / spacing_x).ceil() as i64;
-        let i1 = ((e + margin_x - ox) / spacing_x).floor() as i64;
         let j0 = ((-margin_y - oy) / spacing_y).ceil() as i64;
         let j1 = ((e + margin_y - oy) / spacing_y).floor() as i64;
 
@@ -97,9 +97,18 @@ impl Node for PointGridNode {
         while j <= j1 {
             let y = oy + (j as f64) * spacing_y;
             let yi = y.round() as i32;
+            // Odd rows shift sideways. `j` counts from the anchor's origin,
+            // so under `world` neighbouring tiles agree on which rows are odd.
+            let row_x = if j.rem_euclid(2) == 1 {
+                ox + stagger * spacing_x
+            } else {
+                ox
+            };
+            let i0 = ((-margin_x - row_x) / spacing_x).ceil() as i64;
+            let i1 = ((e + margin_x - row_x) / spacing_x).floor() as i64;
             let mut i = i0;
             while i <= i1 {
-                let x = ox + (i as f64) * spacing_x;
+                let x = row_x + (i as f64) * spacing_x;
                 points.push((x.round() as i32, yi));
                 i += 1;
             }
@@ -117,6 +126,7 @@ impl Node for PointGridNode {
         self.spacing_y.param_hash(h);
         self.offset_x.param_hash(h);
         self.offset_y.param_hash(h);
+        self.stagger.param_hash(h);
         h.update(match self.anchor {
             Anchor::Tile => &[0u8],
             Anchor::World => &[1u8],
@@ -161,6 +171,7 @@ impl NodeFactory for PointGridFactory {
         let spacing_y = r.number_or("spacing-y", spacing)?;
         let offset_x = r.number_or("offset-x", 0.0)?;
         let offset_y = r.number_or("offset-y", 0.0)?;
+        let stagger = r.number_or("stagger", 0.0)?;
         let parts = r.finish();
 
         // Spacing must be > 0; check the static bounds (literal, or a
@@ -184,6 +195,7 @@ impl NodeFactory for PointGridFactory {
                 spacing_y,
                 offset_x,
                 offset_y,
+                stagger,
                 anchor,
                 ports: parts.ports,
                 param_refs: parts.param_refs,
@@ -204,6 +216,10 @@ impl NodeFactory for PointGridFactory {
                 "spacing-y": schema_frag::px_number(),
                 "offset-x": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 0.0 })),
                 "offset-y": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 0.0 })),
+                "stagger": schema_frag::in_number(serde_json::json!({
+                    "type": "number", "default": 0.0,
+                    "description": "Shift every other row sideways by this fraction of `spacing-x`. `0.5` puts each row's points halfway between the row above's — the centres of a running brick bond, or a triangular lattice."
+                })),
                 "anchor": { "type": "string", "enum": ["tile", "world"], "default": "tile" },
             },
             "required": ["spacing"],

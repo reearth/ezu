@@ -53,13 +53,24 @@
       "field": "@height",
       "mode": "relief"
     },
-    "tone": {
-      "op": "noise",
-      "type": "perlin",
-      "scale-px": 34,
-      "octaves": 2,
-      "low-color": "#6e655b",
-      "high-color": "#c4b8a4"
+    "toned": {
+      "op": "fill-solid",
+      "features": "@stones",
+      "fill": "#9a8f80",
+      "fill-expr": [
+        "interpolate",
+        [
+          "linear"
+        ],
+        [
+          "get",
+          "random"
+        ],
+        0,
+        "#6e655b",
+        1,
+        "#c4b8a4"
+      ]
     },
     "grain": {
       "op": "noise",
@@ -68,12 +79,6 @@
       "octaves": 3,
       "low-color": "#00000050",
       "high-color": "#ffffff40"
-    },
-    "toned": {
-      "op": "blend",
-      "base": "@silhouette",
-      "over": "@tone",
-      "clip": true
     },
     "grained": {
       "op": "blend",

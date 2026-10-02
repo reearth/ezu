@@ -257,9 +257,21 @@ which was written for real terrain, lights it:
 `sigma` decides how rounded the stones are, and `out-max` how tall. Any mask can
 be turned into relief this way: lettering, field boundaries, a coastline.
 
-**The surface.** Two noises — a broad one for tone, a fine one for grain — are
-blended with `clip: true`, which keeps them inside the stones, and the relief is
-multiplied over them.
+**The surface.** Real stones are not all the same grey, and here each one gets
+its own. `voronoi-fracture` gives every cell a property, `random`: a number in
+[0, 1) drawn from its seed's position in the world. It survives `buffer` and
+`smooth`, so the stones still carry it, and a `fill-expr` turns it into a tone:
+
+```json
+"toned": { "op": "fill-solid", "features": "@stones", "fill": "#9a8f80",
+           "fill-expr": ["interpolate", ["linear"], ["get", "random"],
+                         0, "#6e655b", 1, "#c4b8a4"] }
+```
+
+Because the value comes from the seed's world position, a stone on a tile border
+is the same grey in both tiles. A fine noise blended with `overlay` and
+`clip: true` adds grain inside the stones, and the relief is multiplied over
+them.
 
 ## Brick: regularity is a recipe too
 
@@ -269,15 +281,15 @@ from nothing; the pattern is just made of lines instead of fields.
 <figure class="page-fig page-fig--trio">
   <div class="page-fig__images">
     <img src="/ezu/figures/texture-brick-joints.webp" alt="Red horizontal lines every course, with blue and green vertical dashes alternating between courses" width="384" height="384" loading="lazy" decoding="async" />
-    <img src="/ezu/figures/texture-brick-flat.webp" alt="Flat red brick with pale mortar: a clean running bond" width="384" height="384" loading="lazy" decoding="async" />
+    <img src="/ezu/figures/texture-brick-flat.webp" alt="A clean running bond with pale mortar, each brick a slightly different red" width="384" height="384" loading="lazy" decoding="async" />
     <img src="/ezu/figures/texture-brick.webp" alt="Weathered brick: mottled clay, gritty surface, slightly wavy mortar and dark soot" width="384" height="384" loading="lazy" decoding="async" />
   </div>
-  <figcaption>The joints as geometry, stroked flat, then weathered.</figcaption>
+  <figcaption>The joints as geometry; stroked, with a red of its own for every brick; then weathered.</figcaption>
 </figure>
 
 <figure class="diagram">
-  <img src="/ezu/diagrams/texture-brick.svg" alt="The brick graph: tile-bounds, grown by buffer, feeds three hatch nodes; two are cut by dash into alternating head joints; all three are stroked and stacked into mortar, which is warped; separately clay and grain noise, a blurred shadow line and soot noise are blended into the final image" loading="lazy" decoding="async" />
-  <figcaption>The right side lays the bricks; the left side makes them look old.</figcaption>
+  <img src="/ezu/diagrams/texture-brick.svg" alt="The brick graph: tile-bounds, grown by buffer, feeds three hatch nodes; two are cut by dash into alternating head joints; all three are stroked and stacked into mortar, which is warped. The same area is fractured around a staggered point-grid into one cell per brick, filled by its random value; grain noise, a blurred shadow line and soot noise are blended over it" loading="lazy" decoding="async" />
+  <figcaption>The joints are drawn as lines; the bricks behind them are cells, one per brick; the rest makes them look old.</figcaption>
 </figure>
 
 **Laying the bond.** [`hatch`](/ezu/style/nodes/geometry/#hatch) fills a
@@ -305,13 +317,34 @@ starts a whole number of courses — here two — above the tile keeps its dashe
 on the courses. The canvas padding is whatever the graph needs, not a multiple
 of anything.
 
-Stroke all three in the mortar colour, put them over a flat red, and you have
-the middle image — correct, and obviously fake.
+**A colour for every brick.** Fired bricks never match: each one comes out of
+the kiln its own shade. That needs one shape per brick to colour, and the
+cobblestones already showed how to get one shape per seed. Put a seed at the
+centre of every brick — a [`point-grid`](/ezu/style/nodes/source/#point-grid)
+one brick by one course apart, with every other row shifted half a brick by
+`stagger` — and fracture around them:
+
+```json
+"centres": { "op": "point-grid", "anchor": "world", "spacing": 576, "spacing-y": 256,
+             "offset-x": 288, "offset-y": 128, "stagger": 0.5 },
+"bricks":  { "op": "voronoi-fracture", "features": "@area", "seeds": "@centres", "aspect": 8 },
+"fired":   { "op": "fill-solid", "features": "@bricks", "fill": "#a4472f",
+             "fill-expr": ["interpolate", ["linear"], ["get", "random"],
+                           0, "#86361f", 1, "#bb6040"] }
+```
+
+Like `point-scatter`, `point-grid` counts in extent units, so 576 × 256 is
+72 × 32 px, and the offsets put the first seed in the middle of a brick. The
+plain Voronoi cells of a staggered grid are hexagons, which would cut across the
+courses. `aspect: 8` counts vertical distance eight times over when deciding
+which seed is nearest, and that squashes each hexagon into the rectangle of its
+brick. Stroke the joints over the result, and you have the middle image —
+correct, and obviously fake.
 
 **Making it believable.** Nothing in the real world is that clean, and the
 weathering is all noise again:
 
-- the clay is a broad noise between two reds instead of one flat colour;
+- a broad noise blended with `soft-light` mottles the clay across bricks;
 - a very fine noise (`scale-px: 3`) blended with `overlay` gives the fired grit;
 - the bed joints are stroked a second time in black, wide, and blurred, and
   that soft line is multiplied in as the shadow under each course;

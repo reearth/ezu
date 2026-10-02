@@ -280,8 +280,7 @@ const FIGURES = {
     width: 384,
     style: texture({
       ...textureNodes('brick'),
-      flat_clay: { op: 'solid', color: '#a4472f' },
-      out: { op: 'stack', layers: ['@flat_clay', '@mortar'] },
+      out: { op: 'stack', layers: ['@fired', '@mortar'] },
     }),
   },
   'texture-brick': { mode: 'tile', width: 384, file: textureFile('brick') },

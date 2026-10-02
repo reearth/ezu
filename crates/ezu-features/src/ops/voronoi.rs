@@ -159,33 +159,85 @@ pub fn voronoi_edges(points: &[(i32, i32)], bbox: Option<VoronoiBBox>) -> Vec<Ve
     out
 }
 
+/// One piece of a fractured polygon, with the seed whose cell it is.
+#[derive(Debug, Clone)]
+pub struct FracturedCell {
+    /// The Voronoi site this piece belongs to, as it was given.
+    pub site: (i32, i32),
+    pub polygon: Polygon,
+}
+
 /// Fracture `polygon` into sub-polygons using `seeds` as Voronoi
 /// sites. Each Voronoi cell is intersected against `polygon`, so the
-/// output never escapes the input polygon's extent.
-pub fn voronoi_fracture(polygon: &Polygon, seeds: &[(i32, i32)]) -> Vec<Polygon> {
-    if seeds.len() < 2 || polygon.exterior.len() < 3 {
+/// output never escapes the input polygon's extent; a cell the polygon
+/// cuts in two yields two pieces with the same `site`.
+///
+/// `aspect` weights vertical distance by that factor when deciding which
+/// site is nearest, so `aspect > 1` stretches cells along X (`1` is the
+/// ordinary Euclidean diagram). It is done by scaling Y up before the
+/// diagram is built and back down after.
+pub fn voronoi_fracture(
+    polygon: &Polygon,
+    seeds: &[(i32, i32)],
+    aspect: f64,
+) -> Vec<FracturedCell> {
+    // `aspect` must be positive; NaN fails the comparison too.
+    if seeds.len() < 2 || polygon.exterior.len() < 3 || aspect.is_nan() || aspect <= 0.0 {
         return Vec::new();
     }
+    let up = |(x, y): (i32, i32)| (x, (y as f64 * aspect).round() as i32);
+    let down = |(x, y): (i32, i32)| (x, (y as f64 / aspect).round() as i32);
+    let ring_up = |ring: &Vec<(i32, i32)>| ring.iter().map(|&p| up(p)).collect::<Vec<_>>();
+    let stretched = Polygon {
+        exterior: ring_up(&polygon.exterior),
+        holes: polygon.holes.iter().map(ring_up).collect(),
+    };
+    // Remember which seed each stretched site came from, so a piece
+    // reports the seed exactly rather than a rounded round trip.
+    let mut origin: HashMap<(i32, i32), (i32, i32)> = HashMap::with_capacity(seeds.len());
+    let sites: Vec<(i32, i32)> = seeds
+        .iter()
+        .map(|&s| {
+            let p = up(s);
+            origin.entry(p).or_insert(s);
+            p
+        })
+        .collect();
+
     let Some(bbox) =
-        VoronoiBBox::from_points(polygon.exterior.iter().copied()).map(|b| b.expand(2.0))
+        VoronoiBBox::from_points(stretched.exterior.iter().copied()).map(|b| b.expand(2.0))
     else {
         return Vec::new();
     };
-    let Some(v) = build_voronoi(seeds, bbox) else {
+    let Some(v) = build_voronoi(&sites, bbox) else {
         return Vec::new();
     };
-    let subj = polygon_to_f(polygon);
+    let subj = polygon_to_f(&stretched);
     let mut out = Vec::new();
     for cell in v.iter_cells() {
         let cell_pts: Vec<[f64; 2]> = cell.iter_vertices().map(|p| [p.x, p.y]).collect();
         if cell_pts.len() < 3 {
             continue;
         }
+        let at = cell.site_position();
+        let site = origin
+            .get(&pt_to_i([at.x, at.y]))
+            .copied()
+            .unwrap_or_else(|| down(pt_to_i([at.x, at.y])));
         // i_overlay's intersect: the cell is the clip path; the input
         // polygon is the subject. Either way works for intersection.
         let clip = vec![cell_pts];
         let result = subj.overlay(&clip, OverlayRule::Intersect, FillRule::EvenOdd);
-        out.extend(polygons_from_shapes(&result));
+        for piece in polygons_from_shapes(&result) {
+            let ring_down = |ring: &Vec<(i32, i32)>| ring.iter().map(|&p| down(p)).collect();
+            out.push(FracturedCell {
+                site,
+                polygon: Polygon {
+                    exterior: ring_down(&piece.exterior),
+                    holes: piece.holes.iter().map(ring_down).collect(),
+                },
+            });
+        }
     }
     out
 }
@@ -452,11 +504,53 @@ mod tests {
     fn voronoi_fracture_produces_one_piece_per_seed() {
         let poly = square(0, 100);
         let seeds = vec![(25, 50), (75, 50), (50, 25)];
-        let pieces = voronoi_fracture(&poly, &seeds);
+        let pieces = voronoi_fracture(&poly, &seeds, 1.0);
         assert_eq!(
             pieces.len(),
             3,
             "three seeds → three pieces, got {pieces:?}"
+        );
+        let mut sites: Vec<_> = pieces.iter().map(|c| c.site).collect();
+        sites.sort_unstable();
+        assert_eq!(sites, vec![(25, 50), (50, 25), (75, 50)]);
+    }
+
+    /// Seeds at the centres of a running bond: 72 × 32 bricks, each course
+    /// shifted half a brick. The plain diagram gives hexagons that bite
+    /// into the courses above and below; weighting vertical distance turns
+    /// the cells into the bricks.
+    #[test]
+    fn voronoi_fracture_aspect_stretches_cells_along_x() {
+        let poly = Polygon {
+            exterior: vec![(0, 0), (288, 0), (288, 128), (0, 128)],
+            holes: vec![],
+        };
+        let mut seeds = Vec::new();
+        for row in 0..4 {
+            let y = 16 + 32 * row;
+            let shift = if row % 2 == 0 { 36 } else { 0 };
+            for col in -1..5 {
+                seeds.push((shift + 72 * col, y));
+            }
+        }
+        let brick = |aspect: f64| {
+            let cells = voronoi_fracture(&poly, &seeds, aspect);
+            let cell = cells
+                .iter()
+                .find(|c| c.site == (108, 48 + 32))
+                .expect("the brick at (108, 80) has a cell");
+            let ys = cell.polygon.exterior.iter().map(|p| p.1);
+            (ys.clone().min().unwrap(), ys.max().unwrap())
+        };
+        let (top, bottom) = brick(8.0);
+        assert!(
+            (63..=65).contains(&top) && (95..=97).contains(&bottom),
+            "{top}..{bottom}"
+        );
+        let (top, bottom) = brick(1.0);
+        assert!(
+            top < 60 && bottom > 100,
+            "a plain cell spills over: {top}..{bottom}"
         );
     }
 

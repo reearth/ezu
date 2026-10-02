@@ -122,3 +122,58 @@ fn medial_axis_of_long_rectangle_renders_a_line() {
         "medial axis should produce at least one dark pixel on the rectangle's centre line"
     );
 }
+
+/// A brick bond as Voronoi cells: staggered seeds, stretched cells, and
+/// each cell's `random` driving its grey. The tile is 32 px over the
+/// default 4096 extent, so seeds every 1024 × 512 units are 8 × 4 px apart.
+fn brick_cells_json() -> String {
+    r##"{
+      "name": "demo",
+      "tile-size": 32,
+      "nodes": {
+        "area":  { "op": "tile-bounds", "cover": "canvas" },
+        "seeds": { "op": "point-grid", "anchor": "world", "spacing": 1024,
+                   "spacing-y": 512, "stagger": 0.5 },
+        "cells": { "op": "voronoi-fracture", "features": "@area", "seeds": "@seeds",
+                   "aspect": 8 },
+        "out":   { "op": "fill-solid", "features": "@cells", "fill": "#000000",
+                   "fill-expr": ["interpolate", ["linear"], ["get", "random"],
+                                 0, "#000000", 1, "#ffffff"] }
+      },
+      "output": "@out"
+    }"##
+    .to_string()
+}
+
+/// Every cell gets its own `random`, so the cells come out in many tones.
+#[test]
+fn voronoi_fracture_gives_each_cell_a_random_value() {
+    let r = render(&brick_cells_json(), 32, 8);
+    let mut greys: Vec<u8> = (8..40)
+        .flat_map(|y| (8..40).map(move |x| (x, y)))
+        .map(|(x, y)| r.pixel(x, y)[0])
+        .collect();
+    greys.sort_unstable();
+    greys.dedup();
+    assert!(greys.len() >= 8, "only {} tones: {greys:?}", greys.len());
+}
+
+/// A cell is seeded from its site's world position, so two tiles that
+/// both draw a cell along their shared border draw it in the same tone.
+#[test]
+fn voronoi_fracture_random_agrees_across_tiles() {
+    use ezu_graph::TileId;
+    let json = brick_cells_json();
+    let left = crate::common::render_tile(&json, 32, 8, TileId { z: 1, x: 0, y: 0 });
+    let right = crate::common::render_tile(&json, 32, 8, TileId { z: 1, x: 1, y: 0 });
+    // The canvas is 8 px of padding, the 32 px tile, then 8 more. Four
+    // pixels past the left tile's right edge is four pixels into the right
+    // tile.
+    for y in [10, 17, 23, 30, 37] {
+        assert_eq!(
+            left.pixel(8 + 32 + 4, y),
+            right.pixel(8 + 4, y),
+            "row {y} differs across the border"
+        );
+    }
+}

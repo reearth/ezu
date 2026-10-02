@@ -3730,6 +3730,20 @@
                     "type": "string"
                   }
                 ]
+              },
+              "stagger": {
+                "oneOf": [
+                  {
+                    "default": 0.0,
+                    "description": "Shift every other row sideways by this fraction of `spacing-x`. `0.5` puts each row's points halfway between the row above's — the centres of a running brick bond, or a triangular lattice.",
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               }
             },
             "required": [
@@ -5593,8 +5607,23 @@
             "type": "object"
           },
           {
-            "description": "Fracture each polygon in `features` into Voronoi sub-cells using the points in `seeds` as Voronoi sites. Cells are clipped against the source polygon. Lines/points on `features` and lines/polygons on `seeds` are ignored.",
+            "description": "Fracture each polygon in `features` into Voronoi sub-cells using the points in `seeds` as Voronoi sites. Cells are clipped against the source polygon. Each cell is its own feature, carrying the source polygon's properties plus `random`: a value in [0, 1) drawn from its seed's world position, the same in every tile, for per-cell colour through a `fill-expr` such as `[\"interpolate\", [\"linear\"], [\"get\", \"random\"], 0, \"#8c3a24\", 1, \"#b65a38\"]`. Lines/points on `features` and lines/polygons on `seeds` are ignored.",
             "properties": {
+              "aspect": {
+                "oneOf": [
+                  {
+                    "default": 1.0,
+                    "description": "Weight on vertical distance when choosing each point's nearest seed. `> 1` stretches cells along X, `< 1` along Y — seeds on a staggered `point-grid` with `aspect` well above 1 give the rectangles of a brick bond rather than hexagons.",
+                    "exclusiveMinimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
               "features": {
                 "description": "Reference to another node (`@name`).",
                 "pattern": "^@?[A-Za-z_][A-Za-z0-9_-]*$",

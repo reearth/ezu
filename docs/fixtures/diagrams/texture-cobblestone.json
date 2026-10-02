@@ -15,13 +15,11 @@
     "height": { "op": "map-range", "field": "@coverage", "out-min": 0, "out-max": 6 },
     "relief": { "op": "hillshade", "field": "@height", "mode": "relief" },
 
-    "tone": {
-      "op": "noise",
-      "type": "perlin",
-      "scale-px": 34,
-      "octaves": 2,
-      "low-color": "#6e655b",
-      "high-color": "#c4b8a4"
+    "toned": {
+      "op": "fill-solid",
+      "features": "@stones",
+      "fill": "#9a8f80",
+      "fill-expr": ["interpolate", ["linear"], ["get", "random"], 0, "#6e655b", 1, "#c4b8a4"]
     },
     "grain": {
       "op": "noise",
@@ -31,7 +29,6 @@
       "low-color": "#00000050",
       "high-color": "#ffffff40"
     },
-    "toned": { "op": "blend", "base": "@silhouette", "over": "@tone", "clip": true },
     "grained": { "op": "blend", "base": "@toned", "over": "@grain", "mode": "overlay", "clip": true },
     "stones_lit": { "op": "blend", "base": "@grained", "over": "@relief", "mode": "multiply", "clip": true },
     "joints": { "op": "solid", "color": "#3a3128" },

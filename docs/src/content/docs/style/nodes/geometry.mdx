@@ -295,7 +295,7 @@ Voronoi diagram of the input's point set. Output is a Features value carrying th
 
 ### `voronoi-fracture`
 
-Fracture each polygon in `features` into Voronoi sub-cells using the points in `seeds` as Voronoi sites. Cells are clipped against the source polygon. Lines/points on `features` and lines/polygons on `seeds` are ignored.
+Fracture each polygon in `features` into Voronoi sub-cells using the points in `seeds` as Voronoi sites. Cells are clipped against the source polygon. Each cell is its own feature, carrying the source polygon's properties plus `random`: a value in [0, 1) drawn from its seed's world position, the same in every tile, for per-cell colour through a `fill-expr` such as `["interpolate", ["linear"], ["get", "random"], 0, "#8c3a24", 1, "#b65a38"]`. Lines/points on `features` and lines/polygons on `seeds` are ignored.
 
 <figure class="op-demo">
   <div class="op-demo__images">
@@ -306,6 +306,7 @@ Fracture each polygon in `features` into Voronoi sub-cells using the points in `
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
+| `aspect` | number \| `$param` \| `@node` | no | Weight on vertical distance when choosing each point's nearest seed. `> 1` stretches cells along X, `< 1` along Y — seeds on a staggered `point-grid` with `aspect` well above 1 give the rectangles of a brick bond rather than hexagons. |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
 | `seeds` | `@node` | yes | Reference to another node (`@name`). |
 

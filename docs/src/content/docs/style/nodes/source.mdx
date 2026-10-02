@@ -106,6 +106,7 @@ Regular lattice of points covering the tile.
 | `spacing` | number (0…∞) \| `$param` \| `@node` | yes | Grid pitch in *extent* units, not pixels — `extent` below is the coordinate space (4096 by default), so a 512 px tile fits 8 points at `spacing: 512`. Paint ops downstream take pixels, so the two do not match. |
 | `spacing-x` | number (0…∞) \| `$param` \| `@node` | no | — |
 | `spacing-y` | number (0…∞) \| `$param` \| `@node` | no | — |
+| `stagger` | number \| `$param` \| `@node` | no | Shift every other row sideways by this fraction of `spacing-x`. `0.5` puts each row's points halfway between the row above's — the centres of a running brick bond, or a triangular lattice. |
 
 ### `point-scatter`
 
