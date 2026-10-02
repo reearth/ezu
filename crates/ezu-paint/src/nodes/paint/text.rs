@@ -53,10 +53,9 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    downcast_features, read_bool_or, read_number_or, read_optional_string, read_optional_zoom,
-    read_string_or, read_xy, FeatureGroup,
+    downcast_features, neighbor_feature_groups, read_bool_or, read_number_or, read_optional_string,
+    read_optional_zoom, read_string_or, read_xy, FeatureGroup,
 };
-use crate::render::{collect_groups, SharedLayer};
 use ezu_core::text::{
     clip_line,
     collide::{self, Aabb, LabelCandidate, PlaceRank},
@@ -1111,45 +1110,30 @@ impl TextNode {
         })
     }
 
-    /// Gather the 8 neighbour tiles' feature groups for cross-tile collision:
-    /// each bound `<source>.<layer>@dx,dy` layer, filtered exactly like this
-    /// tile's own features, paired with its `(dx, dy)` offset. Empty when
-    /// collision is off, no upstream source is set, or nothing is bound;
-    /// extent-mismatched layers (which would break the shared world frame) are
-    /// skipped. Decoded once and reused by the reach pre-scan and the build.
+    /// Gather the 8 neighbour tiles' feature groups for cross-tile collision
+    /// (see [`neighbor_feature_groups`]). Empty when collision is off, no
+    /// upstream source is set, or nothing is bound. Decoded once and reused
+    /// by the reach pre-scan and the build.
     fn neighbor_groups(
         &self,
         ctx: &EvalCtx<'_>,
         z: u8,
         extent_i: i64,
     ) -> Vec<(Vec<FeatureGroup>, i64, i64)> {
-        let mut out = Vec::new();
         if !self.collide {
-            return out;
+            return Vec::new();
         }
         let Some(base) = &self.neighbor_base else {
-            return out;
+            return Vec::new();
         };
-        for dy in -1i32..=1 {
-            for dx in -1i32..=1 {
-                if dx == 0 && dy == 0 {
-                    continue;
-                }
-                let name = ezu_graph::neighbor_binding(base, dx, dy);
-                let shared = match ctx.assets.load(&name) {
-                    Ok(Asset::Features(opq)) => opq.downcast::<SharedLayer>().ok(),
-                    _ => None,
-                };
-                let Some(shared) = shared else { continue };
-                if shared.layer.extent.max(1) as i64 != extent_i {
-                    continue;
-                }
-                let groups =
-                    collect_groups(&shared, self.filter_expr.as_ref(), &self.min_zoom_field, z);
-                out.push((groups, dx as i64, dy as i64));
-            }
-        }
-        out
+        neighbor_feature_groups(
+            ctx,
+            base,
+            extent_i,
+            self.filter_expr.as_ref(),
+            &self.min_zoom_field,
+            z,
+        )
     }
 
     /// Layout params for line placement: a single un-wrapped line,

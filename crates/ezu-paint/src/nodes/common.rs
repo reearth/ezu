@@ -5,11 +5,14 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use ezu_core::TileId as CoreTileId;
-use ezu_graph::{EvalCtx, EvalError, FactoryCtx, FactoryError, PortKind, PortValue, RasterBuf};
+use ezu_graph::{
+    Asset, EvalCtx, EvalError, FactoryCtx, FactoryError, PortKind, PortValue, RasterBuf,
+};
 use ezu_style as spec;
 use hokusai::Brush;
 use serde_json::Value;
 
+use crate::render::{collect_groups, SharedLayer};
 use crate::Canvas;
 
 // ---------------------------------------------------------------------------
@@ -613,6 +616,51 @@ pub(super) fn resolve_source(
             msg: format!("multiple {kinds} sources in document; pass `source` explicitly"),
         }),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Neighbour tiles
+
+/// Load the 8 neighbour tiles' copies of a feature layer, filtered exactly
+/// like the centre tile's: each bound `<base>@dx,dy` binding (see
+/// [`ezu_graph::neighbor_binding`]) is run through [`collect_groups`] with
+/// the same `filter_expr` / `min_zoom_field` at zoom `z`, and paired with
+/// its `(dx, dy)` offset in tiles. Rows run `dy = -1..=1`, then
+/// `dx = -1..=1`, skipping the centre.
+///
+/// A neighbour that is not bound, or whose payload is not a feature layer,
+/// is left out. So is one whose extent differs from the centre's `extent`:
+/// callers place a neighbour's features at `(dx, dy) * extent` from the
+/// centre's origin, and that shared world frame only holds when every tile
+/// counts the same units across.
+pub(super) fn neighbor_feature_groups(
+    ctx: &EvalCtx<'_>,
+    base: &str,
+    extent: i64,
+    filter_expr: Option<&maplibre_expr::Expr>,
+    min_zoom_field: &Option<String>,
+    z: u8,
+) -> Vec<(Vec<FeatureGroup>, i64, i64)> {
+    let mut out = Vec::new();
+    for dy in -1i32..=1 {
+        for dx in -1i32..=1 {
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+            let name = ezu_graph::neighbor_binding(base, dx, dy);
+            let shared = match ctx.assets.load(&name) {
+                Ok(Asset::Features(opq)) => opq.downcast::<SharedLayer>().ok(),
+                _ => None,
+            };
+            let Some(shared) = shared else { continue };
+            if shared.layer.extent.max(1) as i64 != extent {
+                continue;
+            }
+            let groups = collect_groups(&shared, filter_expr, min_zoom_field, z);
+            out.push((groups, dx as i64, dy as i64));
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
