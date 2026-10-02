@@ -1,4 +1,4 @@
-//! `blur` — Gaussian blur (libblur, separable exact). Pass-through
+//! `blur` — Gaussian blur (separable, fixed point). Pass-through
 //! over `Raster` and `Sprite`: the output port kind mirrors the input.
 //! Grows upstream pad by 3σ (only meaningful for `Raster` inputs;
 //! `Sprite` producers ignore pad).
@@ -57,25 +57,12 @@ impl Node for BlurNode {
         // RasterBuf is premultiplied RGBA8; blurring premultiplied data
         // directly is the mathematically correct path (avoids halos at
         // transparent edges).
-        let src_view = libblur::BlurImage::borrow(
+        crate::imaging::gaussian_blur_premultiplied(
             &src.pixels,
-            src.width,
-            src.height,
-            libblur::FastBlurChannels::Channels4,
-        );
-        let mut dst_view = libblur::BlurImageMut::borrow(
             &mut out.pixels,
-            src.width,
-            src.height,
-            libblur::FastBlurChannels::Channels4,
-        );
-        let _ = libblur::gaussian_blur(
-            &src_view,
-            &mut dst_view,
-            libblur::GaussianBlurParams::new_from_sigma(sigma as f64),
-            libblur::EdgeMode2D::new(libblur::EdgeMode::Clamp),
-            libblur::ThreadingPolicy::Single,
-            libblur::ConvolutionMode::Exact,
+            src.width as usize,
+            src.height as usize,
+            sigma,
         );
         Ok(wrap_raster_like(Arc::new(out), kind))
     }
@@ -126,7 +113,7 @@ impl NodeFactory for BlurFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Gaussian blur on a raster (libblur, exact). Grows upstream pad by 3σ, so `sigma` needs an upper bound the build can see: a literal, a `$param` with `max`, or `sigma-max` alongside an `@node` port (the port's value is then clamped to it).",
+            "description": "Gaussian blur on a raster, in fixed point so it renders the same bytes on every host. Grows upstream pad by 3σ, so `sigma` needs an upper bound the build can see: a literal, a `$param` with `max`, or `sigma-max` alongside an `@node` port (the port's value is then clamped to it).",
             "properties": {
                 "input": schema_frag::node_ref(),
                 "sigma": schema_frag::px_number(),

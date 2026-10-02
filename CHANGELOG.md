@@ -115,6 +115,12 @@ mean is spelled out in
 
 ### Changed
 
+- Gaussian blur — the `blur` op and `fill-solid`'s `blur-sigma` — is ezu's
+  own, in fixed point, and renders the same bytes natively and in the
+  browser. libblur's native SIMD path rounded differently from the scalar one
+  wasm runs, so a blurred tile could come out a level apart between the two.
+  Blurred output moves by at most one level against before; the speed is
+  close to libblur's SIMD path, and libblur is no longer a dependency.
 - The npm package's wasm module is a quarter smaller — 6,103,052 → 4,665,571
   bytes, gzipped 2,215,214 → 1,751,120 — by keeping out of the wasm build two
   dependencies that cannot run there: ICU's collation tables, which

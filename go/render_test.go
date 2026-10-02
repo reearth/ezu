@@ -27,22 +27,14 @@ import (
 // them the same way if a deliberate change to the renderer moves the output
 // — and if one moves without a deliberate change, that is the finding.
 //
-// PNG is identical between the two for risograph. **stained-glass is not,
-// and the cause is `blur`.** Its input is byte-identical in both hosts, but
-// 2 of the 1,048,576 samples coming out of it differ by one level. libblur
-// builds the Gaussian kernel with `f32::exp`, served by the platform's libm
-// natively and by Rust's own on wasm, and its native convolution runs on
-// NEON with fused multiply-add where wasm has none; either can move a
-// rounding by the last bit, and whether that crosses a level depends on the
-// pixels. It did not on this tile until the pane colours changed. So the
-// stained-glass PNG row below is the **module's** output, like the WebP rows,
-// until blur is made to round the same way on every host.
+// PNG is identical between the two, on both tiles. stained-glass blurs its
+// glass, so this is also the check that the blur rounds the same on every
+// host — see crates/ezu-paint/src/imaging for why that takes care.
 //
-// **WebP differs too, and that difference is in the container rather than
-// the picture.** On an earlier render of stained-glass, decoding the CLI's
-// and the module's files — different bytes, the same size — gave
-// byte-identical RGBA. So the encoder reached a different but equally sized
-// encoding of the same pixels.
+// **WebP is not, and the difference is in the container rather than the
+// picture.** Decoding the CLI's and the module's stained-glass files —
+// different bytes, the same size — gives byte-identical RGBA. So the
+// encoder reached a different but equally sized encoding of the same pixels.
 //
 // It is not the SIMD build — a module compiled without `+simd128` produces
 // the same bytes as the one with it, for both formats. The likely cause is
@@ -69,8 +61,8 @@ var goldens = []struct {
 		style:   stainedGlassStyle,
 		tileMVT: "testdata/basemap-14-14554-6454.mvt",
 		tile:    Tile{Z: 14, X: 14554, Y: 6454},
-		png:     "3d47802773b39341db76ab0c099372050c462dfe9cb9cb233b5851ec2ee95b80",
-		webp:    "3a384b0f3fd696ff33a2910cb48d25fc25a273ef233a3fda64e229f4d1a8f040",
+		png:     "8b622e0d70187147ce2fadff42deb8158c39e4c13d64c76ba1e3ea4ad3763c7b",
+		webp:    "6f2010c29b9653d92a471d215b04b6a8a2bb149bb1fa5356ba36d5a5efd3f80e",
 	},
 	{
 		name:    "risograph",

@@ -3,7 +3,7 @@
 //! Three painting primitives are exposed:
 //!
 //! - [`paint_polygons`] — `tiny-skia` solid fill + optional outline +
-//!   `libblur` gaussian blur. Fast path for large patches.
+//!   gaussian blur. Fast path for large patches.
 //! - [`paint_polygons_dabs`] — `hokusai` scatter-dab fill with
 //!   world-deterministic jitter (seamless across tile boundaries).
 //! - [`paint_lines`] — `hokusai::Brush::stroke_to` along polylines.
@@ -24,6 +24,7 @@ pub mod brush;
 /// paint nodes and the MapLibre converter share one implementation).
 pub use ezu_core::color as color_interp;
 pub mod fill_dabs;
+mod imaging;
 pub mod render;
 pub mod strokes;
 
@@ -427,41 +428,17 @@ fn push_ring(
     Some(())
 }
 
-/// In-place gaussian blur on a tiny-skia `Pixmap` using `libblur`.
+/// In-place gaussian blur on a tiny-skia `Pixmap`, on demultiplied colour.
 fn blur_pixmap(pixmap: &mut Pixmap, sigma: f32) {
     let w = pixmap.width() as usize;
     let h = pixmap.height() as usize;
-    let mut rgba: Vec<u8> = Vec::with_capacity(w * h * 4);
+    let mut src: Vec<u8> = Vec::with_capacity(w * h * 4);
     for px in pixmap.pixels() {
         let p = px.demultiply();
-        rgba.extend_from_slice(&[p.red(), p.green(), p.blue(), p.alpha()]);
+        src.extend_from_slice(&[p.red(), p.green(), p.blue(), p.alpha()]);
     }
-
-    let src_buf = rgba.clone();
-    let src = libblur::BlurImage::borrow(
-        &src_buf,
-        w as u32,
-        h as u32,
-        libblur::FastBlurChannels::Channels4,
-    );
-    let mut dst = libblur::BlurImageMut::borrow(
-        &mut rgba,
-        w as u32,
-        h as u32,
-        libblur::FastBlurChannels::Channels4,
-    );
-    if libblur::gaussian_blur(
-        &src,
-        &mut dst,
-        libblur::GaussianBlurParams::new_from_sigma(sigma as f64),
-        libblur::EdgeMode2D::new(libblur::EdgeMode::Clamp),
-        libblur::ThreadingPolicy::Single,
-        libblur::ConvolutionMode::Exact,
-    )
-    .is_err()
-    {
-        return;
-    }
+    let mut rgba = vec![0u8; src.len()];
+    imaging::gaussian_blur_straight(&src, &mut rgba, w, h, sigma);
 
     let out = pixmap.pixels_mut();
     for (i, dst) in out.iter_mut().enumerate() {
