@@ -1831,6 +1831,77 @@
             "type": "object"
           },
           {
+            "description": "Direction raster from an elevation field: which way the ground falls, rises, or runs level at each pixel. R = 0.5 + 0.5·vx and G = 0.5 + 0.5·vy in pixel axes (+x east, +y south), B = 0, opaque; flat 50% grey means no direction. This is `displace`'s encoding, so the output feeds `displace` directly, and it is what `flow-smear` reads to streak a texture along the terrain. The vector's length is the slope angle over `max-deg` (capped at 1), or 1 everywhere the ground slopes with `normalize`.",
+            "properties": {
+              "direction": {
+                "default": "downhill",
+                "description": "`downhill` follows the fall line, `uphill` points the other way, and `along` follows the contour lines with downhill on its right-hand side (counter-clockwise around a summit on a north-up map).",
+                "enum": [
+                  "downhill",
+                  "uphill",
+                  "along"
+                ],
+                "type": "string"
+              },
+              "exaggeration": {
+                "oneOf": [
+                  {
+                    "default": 1.0,
+                    "description": "Multiplier on the gradient before the slope angle is taken, as in `hillshade`.",
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "field": {
+                "description": "Reference to another node (`@name`).",
+                "pattern": "^@?[A-Za-z_][A-Za-z0-9_-]*$",
+                "type": "string"
+              },
+              "max-deg": {
+                "oneOf": [
+                  {
+                    "default": 45,
+                    "description": "Slope angle (degrees) at which the vector reaches full length. Ignored with `normalize`.",
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "normalize": {
+                "default": false,
+                "description": "If true, every sloping pixel gets a vector of length 1; only perfectly flat ground stays at zero.",
+                "oneOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "pattern": "^[$@].+",
+                    "type": "string"
+                  }
+                ]
+              },
+              "op": {
+                "const": "flow-field",
+                "description": "Selects the `flow-field` operation."
+              }
+            },
+            "required": [
+              "op",
+              "field"
+            ],
+            "title": "op: flow-field",
+            "type": "object"
+          },
+          {
             "description": "Conic (sweep) gradient around `center`. Gradient parameter is the clockwise angle from `start-angle` (degrees) normalized to [0, 1). 0° points along +x. `kind: sprite` switches to sprite-local [0, 1] coords.",
             "properties": {
               "anchor": {

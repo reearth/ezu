@@ -48,6 +48,14 @@ mean is spelled out in
 
 ### Added
 
+- `flow-field`, which turns an elevation field into a direction raster: which
+  way the ground falls at each pixel (`downhill`), rises (`uphill`), or runs
+  level along the contours (`along`, with downhill on its right-hand side). The
+  vector grows with the slope up to `max-deg` (45° by default), or is full
+  length on any slope with `normalize`, and is written in `displace`'s
+  encoding — R and G centred on 0.5, flat grey meaning no direction — so it
+  drives `displace` as it stands. It takes the same 3×3 Horn gradient as
+  `slope` and `hillshade`, `exaggeration` included.
 - `stitch` on `features`, which joins a layer to its eight neighbouring tiles
   so its geometry runs on past the tile's edge. A vector tile carries only a
   thin buffer beyond that edge — 16 px on a 512 px protomaps tile — so any

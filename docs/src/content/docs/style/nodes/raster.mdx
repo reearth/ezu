@@ -9,7 +9,7 @@ sidebar:
 
 Image-processing ops over `Raster` (and, where noted, `Sprite`): generators, composition, colour, warp, morphology, dither, terrain.
 
-37 ops: `blend`, `blur`, `brightness-contrast`, `channel-shuffle`, `circle`, `color-ramp`, `color-to-alpha`, `density`, `dilate`, `displace`, `dither`, `edge-detect`, `erode`, `gradient-conic`, `gradient-diamond`, `gradient-linear`, `gradient-radial`, `hillshade`, `hsl`, `invert`, `levels`, `map-range`, `mix`, `mosaic`, `noise`, `place`, `posterize`, `quantize`, `saturate`, `sharpen`, `slope`, `solid`, `stack`, `threshold`, `tiling`, `vibrance`, `warp`.
+38 ops: `blend`, `blur`, `brightness-contrast`, `channel-shuffle`, `circle`, `color-ramp`, `color-to-alpha`, `density`, `dilate`, `displace`, `dither`, `edge-detect`, `erode`, `flow-field`, `gradient-conic`, `gradient-diamond`, `gradient-linear`, `gradient-radial`, `hillshade`, `hsl`, `invert`, `levels`, `map-range`, `mix`, `mosaic`, `noise`, `place`, `posterize`, `quantize`, `saturate`, `sharpen`, `slope`, `solid`, `stack`, `threshold`, `tiling`, `vibrance`, `warp`.
 
 
 ### `blend`
@@ -246,6 +246,18 @@ Per-channel morphological min over a square kernel. Shrinks bright / opaque regi
 | `input` | `@node` | yes | Reference to another node (`@name`). |
 | `radius-px` | integer (0…256) \| `$param` \| `@node` | yes | — |
 | `radius-px-max` | number (0…∞) | no | Upper bound on `radius-px` for padding, required when `radius-px` is an `@node` port. Values above it are clamped. |
+
+### `flow-field`
+
+Direction raster from an elevation field: which way the ground falls, rises, or runs level at each pixel. R = 0.5 + 0.5·vx and G = 0.5 + 0.5·vy in pixel axes (+x east, +y south), B = 0, opaque; flat 50% grey means no direction. This is `displace`'s encoding, so the output feeds `displace` directly, and it is what `flow-smear` reads to streak a texture along the terrain. The vector's length is the slope angle over `max-deg` (capped at 1), or 1 everywhere the ground slopes with `normalize`.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `direction` | `downhill` \| `uphill` \| `along` | no | `downhill` follows the fall line, `uphill` points the other way, and `along` follows the contour lines with downhill on its right-hand side (counter-clockwise around a summit on a north-up map). |
+| `exaggeration` | number \| `$param` \| `@node` | no | Multiplier on the gradient before the slope angle is taken, as in `hillshade`. |
+| `field` | `@node` | yes | Reference to another node (`@name`). |
+| `max-deg` | number \| `$param` \| `@node` | no | Slope angle (degrees) at which the vector reaches full length. Ignored with `normalize`. |
+| `normalize` | boolean \| `$param` \| `@node` | no | If true, every sloping pixel gets a vector of length 1; only perfectly flat ground stays at zero. |
 
 ### `gradient-conic`
 
