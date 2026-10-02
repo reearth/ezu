@@ -6,5 +6,7 @@
 //! - [`zoom`] — the tile's zoom level as a number
 
 mod expr;
-mod math;
+// `field-math` applies the same functions per pixel, so it reads them
+// from here rather than keeping a second copy that could drift.
+pub(super) mod math;
 mod zoom;

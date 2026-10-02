@@ -15,6 +15,7 @@ mod density;
 mod displace;
 mod dither;
 mod edge_detect;
+mod field_math;
 mod flow_field;
 mod flow_smear;
 mod generator_kind;

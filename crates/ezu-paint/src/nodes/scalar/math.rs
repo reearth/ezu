@@ -16,8 +16,10 @@ use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::read_string_or;
 
+/// One of `math`'s functions. `field-math` applies the same set per
+/// pixel, so its arity and semantics live here once.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MathFn {
+pub(in crate::nodes) enum MathFn {
     // unary (a)
     Abs,
     Neg,
@@ -40,6 +42,27 @@ enum MathFn {
 }
 
 impl MathFn {
+    /// Every function name, in the order the schema lists them.
+    pub(in crate::nodes) const NAMES: [&'static str; 16] = [
+        "abs", "neg", "floor", "ceil", "round", "sqrt", "add", "sub", "mul", "div", "mod", "min",
+        "max", "pow", "clamp", "lerp",
+    ];
+
+    /// Read the node's `fn` field.
+    pub(in crate::nodes) fn read(
+        fields: &serde_json::Map<String, Value>,
+        ctx: &FactoryCtx<'_>,
+    ) -> Result<Self, FactoryError> {
+        let fn_name = read_string_or(fields, "fn", ctx, "")?;
+        Self::parse(&fn_name).ok_or_else(|| FactoryError::BadField {
+            field: "fn".into(),
+            msg: format!(
+                "unknown fn `{fn_name}` (expected {})",
+                Self::NAMES.join("/")
+            ),
+        })
+    }
+
     fn parse(s: &str) -> Option<Self> {
         Some(match s {
             "abs" => Self::Abs,
@@ -63,7 +86,7 @@ impl MathFn {
     }
 
     /// Number of operands (1 = `a`, 2 = `a b`, 3 = `a b c`).
-    fn arity(self) -> usize {
+    pub(in crate::nodes) fn arity(self) -> usize {
         match self {
             Self::Abs | Self::Neg | Self::Floor | Self::Ceil | Self::Round | Self::Sqrt => 1,
             Self::Add
@@ -78,7 +101,7 @@ impl MathFn {
         }
     }
 
-    fn tag(self) -> &'static str {
+    pub(in crate::nodes) fn tag(self) -> &'static str {
         match self {
             Self::Abs => "abs",
             Self::Neg => "neg",
@@ -99,7 +122,10 @@ impl MathFn {
         }
     }
 
-    fn apply(self, a: f64, b: f64, c: f64) -> f64 {
+    /// Operands past the function's arity are ignored. A result that is
+    /// not finite (`div` or `mod` by zero, `sqrt` of a negative, …) is
+    /// returned as is; each caller decides what that means for it.
+    pub(in crate::nodes) fn apply(self, a: f64, b: f64, c: f64) -> f64 {
         match self {
             Self::Abs => a.abs(),
             Self::Neg => -a,
@@ -189,13 +215,7 @@ impl NodeFactory for MathFactory {
         fields: &serde_json::Map<String, Value>,
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
-        let fn_name = read_string_or(fields, "fn", ctx, "")?;
-        let func = MathFn::parse(&fn_name).ok_or_else(|| FactoryError::BadField {
-            field: "fn".into(),
-            msg: format!(
-                "unknown fn `{fn_name}` (expected abs/neg/floor/ceil/round/sqrt/add/sub/mul/div/mod/min/max/pow/clamp/lerp)"
-            ),
-        })?;
+        let func = MathFn::read(fields, ctx)?;
 
         let mut r = InReader::new(fields, ctx, 0);
         let a = r.number("a")?;
@@ -227,11 +247,7 @@ impl NodeFactory for MathFactory {
         serde_json::json!({
             "description": "Arithmetic over scalar numbers. Operands accept literals, `$param` references, and `@node` scalar ports. Unary fns use `a`; binary `a b`; `clamp(a, b=lo, c=hi)`, `lerp(a, b, c=t)`.",
             "properties": {
-                "fn": { "type": "string", "enum": [
-                    "abs", "neg", "floor", "ceil", "round", "sqrt",
-                    "add", "sub", "mul", "div", "mod", "min", "max", "pow",
-                    "clamp", "lerp"
-                ] },
+                "fn": { "type": "string", "enum": MathFn::NAMES },
                 "a": ezu_graph::schema_frag::number(),
                 "b": ezu_graph::schema_frag::number(),
                 "c": ezu_graph::schema_frag::number(),

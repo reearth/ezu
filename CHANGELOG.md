@@ -58,6 +58,16 @@ mean is spelled out in
 
 ### Added
 
+- `field-math`, the functions of `math` applied to scalar fields one pixel at a
+  time: add a little scaled noise to an elevation field to roughen it before
+  `hillshade`, mix two fields by a third with `lerp`, clamp a field, or scale
+  it by a `$param`. Each of `a`, `b` and `c` is either a field or a number — a
+  literal, a `$param`, or a node that outputs a number — and a number applies
+  to every pixel. At least one operand has to be a field, and every field has
+  to be the same size. A pixel is missing in the result wherever any field is
+  missing there, or the result is not a finite number (`sqrt` of a negative,
+  `div` by zero), and the result keeps the nodata value and geographic scale
+  of the first field.
 - `sharpen` takes a scalar field as well as a raster or sprite, and gives back a
   field. Sharpening an elevation field before `hillshade` or `slope` steepens
   the flanks of ridges and valleys, so the shading draws crisper crests where

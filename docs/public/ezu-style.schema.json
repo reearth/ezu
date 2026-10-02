@@ -1596,6 +1596,79 @@
             "type": "object"
           },
           {
+            "description": "Per-pixel arithmetic over scalar fields, with the same functions as `math`: unary fns use `a`; binary `a b`; `clamp(a, b=lo, c=hi)`, `lerp(a, b, c=t)`. Each operand is a field (`@node` outputting a ScalarField) or a number (literal, `$param`, or `@node` scalar port) applied to every pixel; at least one must be a field, and all fields must be the same size. Add a little noise to a DEM to roughen it, mix two fields by a third with `lerp`, or scale a field by a `$param`. A pixel is missing in the output where any field operand is missing (NaN or its nodata value), or where the result is not a finite number (`sqrt` of a negative, `div` by zero). The output keeps the nodata value and geographic scale of the first field operand, and writes missing pixels as that nodata, or NaN.",
+            "properties": {
+              "a": {
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference, or `@node` that outputs a ScalarField or a Scalar.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "b": {
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference, or `@node` that outputs a ScalarField or a Scalar.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "c": {
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference, or `@node` that outputs a ScalarField or a Scalar.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "fn": {
+                "enum": [
+                  "abs",
+                  "neg",
+                  "floor",
+                  "ceil",
+                  "round",
+                  "sqrt",
+                  "add",
+                  "sub",
+                  "mul",
+                  "div",
+                  "mod",
+                  "min",
+                  "max",
+                  "pow",
+                  "clamp",
+                  "lerp"
+                ],
+                "type": "string"
+              },
+              "op": {
+                "const": "field-math",
+                "description": "Selects the `field-math` operation."
+              }
+            },
+            "required": [
+              "op",
+              "fn",
+              "a"
+            ],
+            "title": "op: field-math",
+            "type": "object"
+          },
+          {
             "description": "Watercolor scatter-dab fill with world-deterministic jitter (seamless across tiles).",
             "properties": {
               "color": {

@@ -42,6 +42,8 @@ mod dot_density;
 mod feature_sources;
 #[path = "paint/feature_stitch.rs"]
 mod feature_stitch;
+#[path = "paint/field_math.rs"]
+mod field_math;
 #[path = "paint/fill_dabs_seam.rs"]
 mod fill_dabs_seam;
 #[path = "paint/flow_field.rs"]

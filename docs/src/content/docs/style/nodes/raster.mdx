@@ -9,7 +9,7 @@ sidebar:
 
 Image-processing ops over `Raster` (and, where noted, `Sprite`): generators, composition, colour, warp, morphology, dither, terrain.
 
-39 ops: `blend`, `blur`, `brightness-contrast`, `channel-shuffle`, `circle`, `color-ramp`, `color-to-alpha`, `density`, `dilate`, `displace`, `dither`, `edge-detect`, `erode`, `flow-field`, `flow-smear`, `gradient-conic`, `gradient-diamond`, `gradient-linear`, `gradient-radial`, `hillshade`, `hsl`, `invert`, `levels`, `map-range`, `mix`, `mosaic`, `noise`, `place`, `posterize`, `quantize`, `saturate`, `sharpen`, `slope`, `solid`, `stack`, `threshold`, `tiling`, `vibrance`, `warp`.
+40 ops: `blend`, `blur`, `brightness-contrast`, `channel-shuffle`, `circle`, `color-ramp`, `color-to-alpha`, `density`, `dilate`, `displace`, `dither`, `edge-detect`, `erode`, `field-math`, `flow-field`, `flow-smear`, `gradient-conic`, `gradient-diamond`, `gradient-linear`, `gradient-radial`, `hillshade`, `hsl`, `invert`, `levels`, `map-range`, `mix`, `mosaic`, `noise`, `place`, `posterize`, `quantize`, `saturate`, `sharpen`, `slope`, `solid`, `stack`, `threshold`, `tiling`, `vibrance`, `warp`.
 
 
 ### `blend`
@@ -246,6 +246,17 @@ Per-channel morphological min over a square kernel, on a raster, sprite or scala
 | `input` | `@node` | yes | Reference to another node (`@name`). |
 | `radius-px` | integer (0…256) \| `$param` \| `@node` | yes | — |
 | `radius-px-max` | number (0…∞) | no | Upper bound on `radius-px` for padding, required when `radius-px` is an `@node` port. Values above it are clamped. |
+
+### `field-math`
+
+Per-pixel arithmetic over scalar fields, with the same functions as `math`: unary fns use `a`; binary `a b`; `clamp(a, b=lo, c=hi)`, `lerp(a, b, c=t)`. Each operand is a field (`@node` outputting a ScalarField) or a number (literal, `$param`, or `@node` scalar port) applied to every pixel; at least one must be a field, and all fields must be the same size. Add a little noise to a DEM to roughen it, mix two fields by a third with `lerp`, or scale a field by a `$param`. A pixel is missing in the output where any field operand is missing (NaN or its nodata value), or where the result is not a finite number (`sqrt` of a negative, `div` by zero). The output keeps the nodata value and geographic scale of the first field operand, and writes missing pixels as that nodata, or NaN.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `a` | number \| `$param` \| `@node` | yes | `$param` reference, or `@node` that outputs a ScalarField or a Scalar. |
+| `b` | number \| `$param` \| `@node` | no | `$param` reference, or `@node` that outputs a ScalarField or a Scalar. |
+| `c` | number \| `$param` \| `@node` | no | `$param` reference, or `@node` that outputs a ScalarField or a Scalar. |
+| `fn` | `abs` \| `neg` \| `floor` \| `ceil` \| `round` \| `sqrt` \| `add` \| `sub` \| `mul` \| `div` \| `mod` \| `min` \| `max` \| `pow` \| `clamp` \| `lerp` | yes | — |
 
 ### `flow-field`
 
