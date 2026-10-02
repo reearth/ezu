@@ -138,14 +138,16 @@ mean is spelled out in
   `resolved-locale` expression now errors at evaluation time in the browser, as
   a `system:` font source already did; native builds are unchanged and render
   the same bytes.
-- Expressions are evaluated by `maplibre-expr` 0.5.3, a correctness pass
+- Expressions are evaluated by `maplibre-expr` 0.5.4, a correctness pass
   collated against the MapLibre style spec. Error messages are now upstream's
   word for word, so the text surfacing from a bad expression field reads
   differently; colour parsing is a real port of CSS Color 4 and is stricter
   about malformed input; and `to-number`, `to-string` and `number-format` follow
   JavaScript more closely. Five ways to crash on ordinary input are fixed,
   including one reachable from `--migrate` on any style carrying an empty
-  filter.
+  filter. Its maths goes through `libm` as ezu's own now does, so `sin`, `^`,
+  `exponential` curves and `interpolate-hcl` give the same result natively and
+  in the browser.
 
 ## 0.10.0 — 2026-09-16
 

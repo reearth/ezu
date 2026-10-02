@@ -75,7 +75,7 @@ base64 = "0.22"
 # ~1.2 MB of them. Every consumer turns it back on for non-wasm targets;
 # on wasm the `collator` / `resolved-locale` expressions error at
 # runtime, the same bargain `fontdb` strikes for `system:` fonts.
-maplibre-expr = { version = "0.5.3", default-features = false }
+maplibre-expr = { version = "0.5.4", default-features = false }
 schemars = "1"
 thiserror = "2"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
