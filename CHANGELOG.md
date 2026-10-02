@@ -48,6 +48,19 @@ mean is spelled out in
 
 ### Added
 
+- `stitch` on `features`, which joins a layer to its eight neighbouring tiles
+  so its geometry runs on past the tile's edge. A vector tile carries only a
+  thin buffer beyond that edge — 16 px on a 512 px protomaps tile — so any
+  effect reaching further, such as a wide stroke along a coastline, a large
+  `buffer` or a closing, saw the data stop short, or missed a coast lying just
+  past the buffer altogether. With `stitch` set, the host fetches the
+  neighbours of that layer only, and each tile contributes just the area it
+  owns, so nothing where the buffers overlap is drawn twice. `"merge"` unions
+  polygons with identical properties, leaving no edge where the tiles met;
+  `"pieces"` keeps every piece as its tile cut it, which is cheaper and looks
+  the same when the layer is only filled. A neighbour the host cannot provide
+  falls back to the tile's own buffer data. The cost is fetching and decoding
+  up to eight more tiles for that layer; without `stitch` nothing changes.
 - `clip-edges: "drop"` on `boundary`, which leaves out the edges a vector tile
   adds where it clips a polygon at the tile buffer. Those straight edges sit
   just outside the tile, and `boundary` outlined them like a real coastline, so

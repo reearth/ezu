@@ -1578,6 +1578,14 @@
               "source": {
                 "description": "Name of an `mvt`, `pmtiles`, or `geojson` entry in the document's `sources`. Omitting it resolves to the only such source and warns at build time.",
                 "type": "string"
+              },
+              "stitch": {
+                "description": "Join the layer to its 8 neighbouring tiles, for effects that reach further than the tile's thin buffer: wide strokes along outlines, large buffers, closings. Each tile contributes only the area it owns, so nothing is drawn twice. `merge` unions polygons with identical properties so no edge remains where tiles meet; `pieces` keeps every piece as its tile cut it (cheaper, and identical when the layer is only filled). Costs fetching and decoding up to 8 more tiles for this layer only; a neighbour the host cannot provide falls back to this tile's own buffer data. Omit to read this tile alone.",
+                "enum": [
+                  "merge",
+                  "pieces"
+                ],
+                "type": "string"
               }
             },
             "required": [

@@ -40,6 +40,7 @@ Sample features from a host-bound feature layer. `source` names an `mvt`/`pmtile
 | `min-zoom` | integer (0…24) | no | Style-level minimum zoom. Below this zoom the node emits an empty layer (the asset is not even loaded). |
 | `min-zoom-field` | string | no | Per-feature property name carrying its data-side `min_zoom`. Features with `<field> > z` are dropped. |
 | `source` | string | no | Name of an `mvt`, `pmtiles`, or `geojson` entry in the document's `sources`. Omitting it resolves to the only such source and warns at build time. |
+| `stitch` | `merge` \| `pieces` | no | Join the layer to its 8 neighbouring tiles, for effects that reach further than the tile's thin buffer: wide strokes along outlines, large buffers, closings. Each tile contributes only the area it owns, so nothing is drawn twice. `merge` unions polygons with identical properties so no edge remains where tiles meet; `pieces` keeps every piece as its tile cut it (cheaper, and identical when the layer is only filled). Costs fetching and decoding up to 8 more tiles for this layer only; a neighbour the host cannot provide falls back to this tile's own buffer data. Omit to read this tile alone. |
 
 ### `graticule`
 

@@ -775,11 +775,21 @@ pub(super) fn features_value_culled(
     extent: u32,
     groups: Vec<FeatureGroup>,
 ) -> PortValue {
+    features_value(extent, cull_groups(ctx, extent, groups))
+}
+
+/// The culling step of [`features_value_culled`] on its own, for a caller
+/// that wants the cheap drop before some costlier work of its own.
+pub(super) fn cull_groups(
+    ctx: &EvalCtx<'_>,
+    extent: u32,
+    groups: Vec<FeatureGroup>,
+) -> Vec<FeatureGroup> {
     let Some(rect) = ctx.cull_rect() else {
-        return features_value(extent, groups);
+        return groups;
     };
     if extent == 0 {
-        return features_value(extent, groups);
+        return groups;
     }
     // MVT tile-local units to padded-canvas pixels, as the paint ops
     // resolve them.
@@ -788,7 +798,7 @@ pub(super) fn features_value_culled(
     let pad = ctx.canvas.pad as f64;
     let keep = |pts: &[(i32, i32)]| -> bool { ring_touches(pts, sx, sy, pad, rect) };
 
-    let groups = groups
+    groups
         .into_iter()
         .filter_map(|g| {
             let polygons: Vec<_> = g
@@ -810,8 +820,7 @@ pub(super) fn features_value_culled(
                 points,
             })
         })
-        .collect();
-    features_value(extent, groups)
+        .collect()
 }
 
 /// Whether a ring's bounding box, in padded-canvas pixels, meets `rect`.

@@ -15,6 +15,7 @@ pub mod boolean;
 pub mod boundary;
 pub mod buffer;
 pub mod centroid;
+pub mod clip;
 pub mod contains;
 pub mod convert;
 pub mod convex_hull;
