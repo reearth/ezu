@@ -58,6 +58,14 @@ mean is spelled out in
 
 ### Added
 
+- `erode` and `dilate` take a scalar field as well as a raster or sprite, and
+  give back a field: each sample becomes the lowest, or highest, value within
+  `radius-px`. On an elevation field this generalises the terrain by shape
+  rather than by averaging. `erode` narrows peaks and ridges and widens
+  valleys, `dilate` does the reverse, and `dilate` then `erode` fills pits and
+  gullies narrower than the window while leaving broad slopes as they were. The
+  field keeps its nodata value and geographic scale, and nodata samples are left
+  out rather than spreading across the window.
 - `warp` and `displace` take a scalar field as their `input`, and give back a
   field; `displace`'s `displacement` map stays a raster. Warping an elevation
   field before `contour` makes the contour lines wobble together: they bend as

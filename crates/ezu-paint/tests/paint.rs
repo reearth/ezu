@@ -66,6 +66,8 @@ mod label_placement;
 mod legend_swatch;
 #[path = "paint/morphology.rs"]
 mod morphology;
+#[path = "paint/morphology_field.rs"]
+mod morphology_field;
 #[path = "paint/noise_warp.rs"]
 mod noise_warp;
 #[path = "paint/params.rs"]

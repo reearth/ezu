@@ -26,7 +26,9 @@
 //! one level apart natively and on wasm.
 
 mod blur;
+mod morphology;
 mod sample;
 
 pub use blur::{gaussian_blur_field, gaussian_blur_premultiplied, gaussian_blur_straight};
+pub use morphology::{extremum_filter_field, Extremum};
 pub use sample::{sample_field, Bilinear};

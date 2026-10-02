@@ -1,25 +1,35 @@
 //! `erode` / `dilate` — morphological min / max box filter over a
-//! `Raster|Sprite` (pass-through). `radius-px` controls the half-size
-//! of the square neighbourhood; the op grows the upstream pad by the
-//! same amount so the filter stays seamless at tile borders.
+//! `Raster|Sprite|ScalarField` (pass-through: the output kind mirrors
+//! the input). `radius-px` controls the half-size of the square
+//! neighbourhood; the op grows the upstream pad by the same amount so
+//! the filter stays seamless at tile borders.
 //!
 //! Operates per-channel on premultiplied RGBA8. The classic use is
 //! cleaning up a mask after `color-to-alpha`: `erode` shrinks the
 //! covered region, `dilate` grows it. For a circular kernel, run the
 //! op twice with smaller radii — the separable box is fast and good
 //! enough for most map stylization needs.
+//!
+//! A `ScalarField` takes the min / max of its values, leaving out
+//! `nodata` samples, and keeps its `nodata` and `geo_scale`. On an
+//! elevation field that generalises the terrain by shape: `erode`
+//! narrows peaks and ridges and widens valleys, `dilate` the reverse,
+//! and `dilate` then `erode` (a closing) fills pits and gullies
+//! narrower than the window while leaving broad slopes alone.
 
 use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
     FactoryError, InReader, Node, NodeFactory, PaddingIn, PortKind, PortSpec, PortValue, RasterBuf,
+    ScalarField,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
+use crate::imaging::Extremum;
 use crate::nodes::common::{
-    raster_or_sprite_output, unwrap_raster_or_sprite, wrap_raster_like, ACCEPTS_RASTER_OR_SPRITE,
+    image_or_field_output, unwrap_raster_or_sprite, wrap_raster_like, ACCEPTS_IMAGE_OR_FIELD,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -47,6 +57,12 @@ impl Op {
             Op::Dilate => 0,
         }
     }
+    fn extremum(self) -> Extremum {
+        match self {
+            Op::Erode => Extremum::Min,
+            Op::Dilate => Extremum::Max,
+        }
+    }
 }
 
 struct MorphNode {
@@ -67,7 +83,7 @@ impl Node for MorphNode {
         &self.ports
     }
     fn output(&self, input_kinds: &[Option<PortKind>]) -> PortKind {
-        raster_or_sprite_output(input_kinds)
+        image_or_field_output(input_kinds)
     }
     fn required_pad(&self, downstream: u32) -> u32 {
         downstream + self.radius.bound().round() as u32
@@ -80,8 +96,27 @@ impl Node for MorphNode {
         let input = inputs[0]
             .as_ref()
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
-        let (src, kind) = unwrap_raster_or_sprite(input, "input")?;
         let radius = (self.radius.get(ctx, inputs)?.round().clamp(0.0, 256.0)) as u32;
+        if let Some(field) = input.as_scalar_field() {
+            if radius == 0 {
+                return Ok(input.clone());
+            }
+            let mut values = vec![0f32; field.values.len()];
+            crate::imaging::extremum_filter_field(
+                &field.values,
+                &mut values,
+                field.width as usize,
+                field.height as usize,
+                radius as usize,
+                self.op.extremum(),
+                field.nodata,
+            );
+            return Ok(PortValue::ScalarField(Arc::new(ScalarField {
+                values: values.into(),
+                ..**field
+            })));
+        }
+        let (src, kind) = unwrap_raster_or_sprite(input, "input")?;
         if radius == 0 {
             return Ok(wrap_raster_like(src, kind));
         }
@@ -161,7 +196,7 @@ impl NodeFactory for ErodeFactory {
         build_morph(fields, ctx, Op::Erode)
     }
     fn schema(&self) -> Value {
-        morph_schema("Per-channel morphological min over a square kernel. Shrinks bright / opaque regions; classic mask cleanup after `color-to-alpha`. Removes anything thinner than the kernel outright, so `erode` then `dilate` (an opening) keeps only features wider than `radius-px` — a way to select by size when the source carries no size attribute. Detail finer than the radius does not survive either op: add grain *after* morphology, never before. Separable box implementation; grows upstream pad by `radius-px`.")
+        morph_schema("Per-channel morphological min over a square kernel, on a raster, sprite or scalar field; the output is the same kind as the input. Shrinks bright / opaque regions; classic mask cleanup after `color-to-alpha`. Removes anything thinner than the kernel outright, so `erode` then `dilate` (an opening) keeps only features wider than `radius-px` — a way to select by size when the source carries no size attribute. Detail finer than the radius does not survive either op: add grain *after* morphology, never before. On an elevation field (`dem`) it lowers each sample to the lowest in reach, narrowing peaks and ridges and widening valleys; an opening shaves off spikes and ridges narrower than the kernel. A field keeps its nodata value and geographic scale; nodata samples are left out, and a pixel with nothing but nodata in reach stays nodata. Separable box implementation; grows upstream pad by `radius-px`.")
     }
 }
 
@@ -178,7 +213,7 @@ impl NodeFactory for DilateFactory {
         build_morph(fields, ctx, Op::Dilate)
     }
     fn schema(&self) -> Value {
-        morph_schema("Per-channel morphological max over a square kernel. Grows bright / opaque regions; pair with `erode` to clean up speckle noise (open / close). Being a max, it also flattens detail finer than the kernel — a few px of `radius-px` is enough to erase grain, so add grain *after* morphology, never before. Separable box implementation; grows upstream pad by `radius-px`.")
+        morph_schema("Per-channel morphological max over a square kernel, on a raster, sprite or scalar field; the output is the same kind as the input. Grows bright / opaque regions; pair with `erode` to clean up speckle noise (open / close). Being a max, it also flattens detail finer than the kernel — a few px of `radius-px` is enough to erase grain, so add grain *after* morphology, never before. On an elevation field (`dem`) it raises each sample to the highest in reach, widening peaks and ridges and narrowing valleys; `dilate` then `erode` (a closing) fills pits and gullies narrower than the kernel while leaving broad slopes alone. A field keeps its nodata value and geographic scale; nodata samples are left out, and a pixel with nothing but nodata in reach stays nodata. Separable box implementation; grows upstream pad by `radius-px`.")
     }
 }
 
@@ -201,7 +236,7 @@ fn build_morph(
 
     let mut ports = vec![PortSpec {
         name: "input",
-        accepts: ACCEPTS_RASTER_OR_SPRITE,
+        accepts: ACCEPTS_IMAGE_OR_FIELD,
         optional: false,
     }];
     ports.extend(parts.ports);
