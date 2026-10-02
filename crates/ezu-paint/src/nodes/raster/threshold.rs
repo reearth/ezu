@@ -2,6 +2,12 @@
 //! against `value`: outputs `low` (default `0.0`) for samples ≤
 //! `value`, `high` (default `1.0`) otherwise. Optional `softness`
 //! gives a linear ramp around the threshold instead of a hard step.
+//!
+//! Missing samples (NaN, or equal to the field's `nodata`) are not
+//! binarised: they stay missing. The output keeps the field's `nodata`
+//! and `geo_scale`, and writes missing pixels as that `nodata`, or NaN
+//! when it has none. As in `map-range`, a `low` or `high` equal to the
+//! `nodata` value is written as it is, and reads as missing downstream.
 
 use std::sync::Arc;
 
@@ -11,6 +17,8 @@ use ezu_graph::{
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
+
+use crate::nodes::common::field_fill;
 
 struct ThresholdNode {
     value: In<f64>,
@@ -47,8 +55,13 @@ impl Node for ThresholdNode {
         let half = softness * 0.5;
         let lo = value - half;
         let hi = value + half;
+        let fill = field_fill(field);
         let mut out: Vec<f32> = Vec::with_capacity(field.values.len());
         for &v in field.values.iter() {
+            if v.is_nan() || field.nodata == Some(v) {
+                out.push(fill);
+                continue;
+            }
             let t = if softness <= 0.0 {
                 if v <= value {
                     0.0
@@ -128,7 +141,7 @@ impl NodeFactory for ThresholdFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Binarise a scalar field: emit `low` for samples ≤ `value`, `high` otherwise. With `softness > 0` the transition is a linear ramp of width `softness` centred on `value`.",
+            "description": "Binarise a scalar field: emit `low` for samples ≤ `value`, `high` otherwise. With `softness > 0` the transition is a linear ramp of width `softness` centred on `value`. Missing samples (NaN or the field's nodata value) stay missing: the output keeps the field's nodata value and geographic scale, and writes missing pixels as that nodata, or NaN.",
             "properties": {
                 "field": schema_frag::node_ref(),
                 "value": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 0.5 })),

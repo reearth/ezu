@@ -13,6 +13,15 @@ mean is spelled out in
 
 ### Fixed
 
+- `threshold` binarised a field's missing samples along with its real ones. A
+  DEM's `nodata` value, `-9999` say, came out as `low`, and NaN as `high` with
+  a hard step or NaN with `softness`, while the output still carried the
+  field's `nodata`, so a hole turned into ordinary-looking land or sea. Missing
+  samples (NaN, or equal to the field's `nodata`) now stay missing: the output
+  writes them as the field's `nodata`, or NaN when it has none, as `map-range`
+  does. A `low` or `high` equal to the `nodata` value is still written as it
+  is, and reads as missing downstream. A field with neither nodata nor NaN
+  renders exactly as before.
 - `hillshade`, `slope` and `flow-field` read a field's missing samples as
   elevations. Around a DEM's `nodata` hole, `-9999` say, the 3×3 gradient saw
   a cliff, so `hillshade` drew a shadow or highlight rim, `slope` a

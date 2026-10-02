@@ -652,7 +652,7 @@ Composite an ordered list of raster `layers` bottom-to-top with plain source-ove
 
 ### `threshold`
 
-Binarise a scalar field: emit `low` for samples ≤ `value`, `high` otherwise. With `softness > 0` the transition is a linear ramp of width `softness` centred on `value`.
+Binarise a scalar field: emit `low` for samples ≤ `value`, `high` otherwise. With `softness > 0` the transition is a linear ramp of width `softness` centred on `value`. Missing samples (NaN or the field's nodata value) stay missing: the output keeps the field's nodata value and geographic scale, and writes missing pixels as that nodata, or NaN.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |

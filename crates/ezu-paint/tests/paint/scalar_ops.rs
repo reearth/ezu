@@ -1,7 +1,7 @@
 //! Smoke tests for the `ScalarField` math ops: `map-range`,
 //! `threshold`. The smoke tests pipe through `color-ramp` and assert on
-//! rendered pixel colour; the `map-range` missing-sample tests read the
-//! field the node produced.
+//! rendered pixel colour; the missing-sample tests read the field the
+//! node produced.
 
 use crate::common::{field_of_node, render};
 use ezu_graph::{GeoScale, ScalarField, TileId};
@@ -210,6 +210,131 @@ fn map_range_without_missing_samples_is_unchanged() {
                     "v = {v}, range = {range:?}, clamp = {clamp}"
                 );
             }
+        }
+    }
+}
+
+/// The field `threshold` produces from `dem` with the given fields
+/// (`"value": 0, …`) spliced in.
+fn threshold(params: &str, dem: ScalarField) -> std::sync::Arc<ScalarField> {
+    let json = format!(
+        r##"{{
+          "name": "threshold-test",
+          "tile-size": {SIZE},
+          "sources": {{
+            "p": {{ "type": "dem", "url": "http://example.invalid/p/{{z}}/{{x}}/{{y}}.webp",
+                    "encoding": "terrarium" }}
+          }},
+          "nodes": {{
+            "p": {{ "op": "dem", "source": "p" }},
+            "th": {{ "op": "threshold", "field": "@p", {params} }},
+            "out": {{ "op": "color-ramp", "field": "@th",
+                      "stops": [ {{ "value": 0, "color": "#000000" }},
+                                 {{ "value": 1, "color": "#ffffff" }} ] }}
+          }},
+          "output": "@out"
+        }}"##
+    );
+    field_of_node(&json, SIZE, 0, TILE, &[("p", dem)], "th")
+}
+
+/// The threshold as it was before missing samples were kept.
+fn threshold_before(v: f32, value: f32, softness: f32, low: f32, high: f32) -> f32 {
+    let half = softness * 0.5;
+    let (lo, hi) = (value - half, value + half);
+    let t = if softness <= 0.0 {
+        if v <= value {
+            0.0
+        } else {
+            1.0
+        }
+    } else if v <= lo {
+        0.0
+    } else if v >= hi {
+        1.0
+    } else {
+        (v - lo) / softness
+    };
+    low + t * (high - low)
+}
+
+#[test]
+fn threshold_keeps_nodata_samples_missing() {
+    let nodata = -9999.0;
+    let dem = field(Some(nodata), |x, _| if x == 3 { nodata } else { x as f32 });
+    for softness in [0.0, 4.0] {
+        let out = threshold(
+            &format!(r#""value": 3.5, "softness": {softness}, "low": 0.25, "high": 0.75"#),
+            dem.clone(),
+        );
+        assert_eq!(out.nodata, Some(nodata));
+        assert_eq!(out.geo_scale.unwrap().metres_per_pixel_x, 12.5);
+        for (i, &v) in out.values.iter().enumerate() {
+            let x = i as u32 % N;
+            let want = if x == 3 {
+                nodata
+            } else {
+                threshold_before(x as f32, 3.5, softness, 0.25, 0.75)
+            };
+            assert_eq!(v, want, "x = {x}, softness = {softness}");
+        }
+    }
+}
+
+#[test]
+fn threshold_keeps_nan_samples_missing() {
+    // NaN is missing whether or not the field has a nodata value; the
+    // output writes it as that nodata, or NaN. A hard step would
+    // otherwise send it to `high`, a soft one to NaN.
+    let dem = |nodata| field(nodata, |x, _| if x == 5 { f32::NAN } else { x as f32 });
+    for softness in [0.0, 4.0] {
+        let params = format!(r#""value": 3.5, "softness": {softness}"#);
+        let out = threshold(&params, dem(None));
+        assert_eq!(out.nodata, None);
+        for (i, &v) in out.values.iter().enumerate() {
+            let x = i as u32 % N;
+            if x == 5 {
+                assert!(v.is_nan(), "x = {x}, softness = {softness}");
+            } else {
+                assert_eq!(v, threshold_before(x as f32, 3.5, softness, 0.0, 1.0));
+            }
+        }
+        let out = threshold(&params, dem(Some(-32768.0)));
+        for (i, &v) in out.values.iter().enumerate() {
+            let x = i as u32 % N;
+            let want = if x == 5 {
+                -32768.0
+            } else {
+                threshold_before(x as f32, 3.5, softness, 0.0, 1.0)
+            };
+            assert_eq!(v, want, "x = {x}, softness = {softness}");
+        }
+    }
+}
+
+#[test]
+fn threshold_without_missing_samples_is_unchanged() {
+    // Fields with neither nodata nor NaN must match the threshold as it
+    // was before, bit for bit.
+    let dem = field(None, |x, y| x as f32 * 137.3 - y as f32 * 211.7 - 300.0);
+    let cases = [
+        [-300.0, 0.0, 0.0, 1.0],
+        [100.0, 500.0, 0.0, 1.0],
+        [-0.3, 1200.0, 0.9, -0.4],
+        [250.0, 0.0, -2.0, 7.5],
+    ];
+    for [value, softness, low, high] in cases {
+        let out = threshold(
+            &format!(r#""value": {value}, "softness": {softness}, "low": {low}, "high": {high}"#),
+            dem.clone(),
+        );
+        assert_eq!(out.nodata, None);
+        for (&v, &got) in dem.values.iter().zip(out.values.iter()) {
+            assert_eq!(
+                got.to_bits(),
+                threshold_before(v, value, softness, low, high).to_bits(),
+                "v = {v}, value = {value}, softness = {softness}"
+            );
         }
     }
 }
