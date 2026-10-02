@@ -72,7 +72,7 @@ const maskView = (field) => ({
 
 /** The `first-tile` guide, one node at a time. */
 const STEP_BG = { bg: { op: 'solid', color: '#fbf6e6' } };
-const STEP_WATER = { water_f: { op: 'features', layer: 'water' } };
+const STEP_WATER = { water_f: { op: 'features', source: 'basemap', layer: 'water' } };
 
 const FIGURES = {
   // ── guides/first-tile ─────────────────────────────────────────────────────
@@ -148,7 +148,7 @@ const FIGURES = {
     style: style(
       {
         ...BASE_NODES,
-        places_f: { op: 'features', layer: 'places' },
+        places_f: { op: 'features', source: 'basemap', layer: 'places' },
         labels: {
           op: 'text',
           features: '@places_f',
@@ -172,7 +172,7 @@ const FIGURES = {
     style: style(
       {
         ...BASE_NODES,
-        places_f: { op: 'features', layer: 'places' },
+        places_f: { op: 'features', source: 'basemap', layer: 'places' },
         labels: {
           op: 'text',
           features: '@places_f',

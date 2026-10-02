@@ -15,6 +15,7 @@
     },
     "base_earth_f": {
       "op": "features",
+      "source": "basemap",
       "layer": "earth"
     },
     "base_earth": {
@@ -24,6 +25,7 @@
     },
     "base_water_f": {
       "op": "features",
+      "source": "basemap",
       "layer": "water"
     },
     "base_water": {
@@ -33,6 +35,7 @@
     },
     "base_roads_f": {
       "op": "features",
+      "source": "basemap",
       "layer": "roads",
       "min-zoom-field": "min_zoom"
     },

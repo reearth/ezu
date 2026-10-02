@@ -27,11 +27,11 @@ export const BASEMAP_SOURCE = {
  */
 export const BASE_NODES = {
   bg: { op: 'solid', color: '#faf6ec' },
-  base_earth_f: { op: 'features', layer: 'earth' },
+  base_earth_f: { op: 'features', source: 'basemap', layer: 'earth' },
   base_earth: { op: 'fill-solid', features: '@base_earth_f', fill: '#ece1c6' },
-  base_water_f: { op: 'features', layer: 'water' },
+  base_water_f: { op: 'features', source: 'basemap', layer: 'water' },
   base_water: { op: 'fill-solid', features: '@base_water_f', fill: '#8fb4d9' },
-  base_roads_f: { op: 'features', layer: 'roads', 'min-zoom-field': 'min_zoom' },
+  base_roads_f: { op: 'features', source: 'basemap', layer: 'roads', 'min-zoom-field': 'min_zoom' },
   base_roads: {
     op: 'stroke',
     features: '@base_roads_f',
@@ -43,12 +43,12 @@ export const BASE_NODES = {
 
 /** Feature-source nodes demos reuse, spliced in on reference. */
 export const FEATURE_NODES = {
-  water_f: { op: 'features', layer: 'water' },
-  earth_f: { op: 'features', layer: 'earth' },
-  roads_f: { op: 'features', layer: 'roads', 'min-zoom-field': 'min_zoom' },
-  landuse_f: { op: 'features', layer: 'landuse' },
-  places_f: { op: 'features', layer: 'places' },
-  buildings_f: { op: 'features', layer: 'buildings' },
+  water_f: { op: 'features', source: 'basemap', layer: 'water' },
+  earth_f: { op: 'features', source: 'basemap', layer: 'earth' },
+  roads_f: { op: 'features', source: 'basemap', layer: 'roads', 'min-zoom-field': 'min_zoom' },
+  landuse_f: { op: 'features', source: 'basemap', layer: 'landuse' },
+  places_f: { op: 'features', source: 'basemap', layer: 'places' },
+  buildings_f: { op: 'features', source: 'basemap', layer: 'buildings' },
 };
 
 /** Ink used whenever a demo draws geometry over the base. */
@@ -65,7 +65,7 @@ export const DEMOS = {
   features: {
     note: 'Water polygons selected from the vector tile and filled flat.',
     nodes: {
-      water_f: { op: 'features', layer: 'water' },
+      water_f: { op: 'features', source: 'basemap', layer: 'water' },
       draw: { op: 'fill-solid', features: '@water_f', fill: INK },
       out: { op: 'blend', base: '@base', over: '@draw' },
     },
