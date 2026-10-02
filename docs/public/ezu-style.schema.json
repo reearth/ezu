@@ -240,7 +240,7 @@
             "type": "object"
           },
           {
-            "description": "Gaussian blur on a raster (libblur, exact). Grows upstream pad by 3σ, so `sigma` needs an upper bound the build can see: a literal, a `$param` with `max`, or `sigma-max` alongside an `@node` port (the port's value is then clamped to it).",
+            "description": "Gaussian blur on a raster, in fixed point so it renders the same bytes on every host. Grows upstream pad by 3σ, so `sigma` needs an upper bound the build can see: a literal, a `$param` with `max`, or `sigma-max` alongside an `@node` port (the port's value is then clamped to it).",
             "properties": {
               "input": {
                 "description": "Reference to another node (`@name`).",
