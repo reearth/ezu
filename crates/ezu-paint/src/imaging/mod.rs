@@ -28,7 +28,9 @@
 mod blur;
 mod morphology;
 mod sample;
+mod sharpen;
 
 pub use blur::{gaussian_blur_field, gaussian_blur_premultiplied, gaussian_blur_straight};
 pub use morphology::{extremum_filter_field, Extremum};
 pub use sample::{sample_field, Bilinear};
+pub use sharpen::laplacian_sharpen_field;

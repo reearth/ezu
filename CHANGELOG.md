@@ -58,6 +58,13 @@ mean is spelled out in
 
 ### Added
 
+- `sharpen` takes a scalar field as well as a raster or sprite, and gives back a
+  field. Sharpening an elevation field before `hillshade` or `slope` steepens
+  the flanks of ridges and valleys, so the shading draws crisper crests where
+  sharpening the shaded image would only add a halo. The field is not clamped,
+  so a sharp step can overshoot its neighbours. It keeps its nodata value and
+  geographic scale; a nodata neighbour counts as the centre value, so a hole
+  leaves its rim as it was, and nodata samples stay nodata.
 - `erode` and `dilate` take a scalar field as well as a raster or sprite, and
   give back a field: each sample becomes the lowest, or highest, value within
   `radius-px`. On an elevation field this generalises the terrain by shape
