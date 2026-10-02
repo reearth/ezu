@@ -37,6 +37,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
+use crate::imaging::Bilinear;
 use crate::nodes::common::{
     raster_or_sprite_output, read_string_or, unwrap_raster_or_sprite, wrap_raster_like,
     ACCEPTS_RASTER_OR_SPRITE,
@@ -225,36 +226,16 @@ fn read_field(field: &RasterBuf, bx: i64, by: i64, ox: f32, oy: f32) -> (f32, f3
 
 /// Bilinear sample of a premultiplied RGBA8 raster at pixel `(bx, by)`
 /// plus a sub-pixel offset, clamped to the raster's edge and left
-/// unrounded for averaging. Splitting the offset into whole and
-/// fractional parts here, rather than adding it to the pixel's canvas
-/// coordinate first, keeps the weights independent of where the pixel
-/// is.
+/// unrounded for averaging. [`Bilinear`] splits the offset on its own,
+/// so the weights do not depend on where the pixel is.
 #[inline]
 fn sample(src: &RasterBuf, bx: i64, by: i64, ox: f32, oy: f32) -> [f32; 4] {
-    let fx = ox.floor();
-    let fy = oy.floor();
-    let tx = ox - fx;
-    let ty = oy - fy;
-    let ix = bx + fx as i64;
-    let iy = by + fy as i64;
-    let max_x = src.width as i64 - 1;
-    let max_y = src.height as i64 - 1;
-    let x0 = ix.clamp(0, max_x) as u32;
-    let x1 = (ix + 1).clamp(0, max_x) as u32;
-    let y0 = iy.clamp(0, max_y) as u32;
-    let y1 = (iy + 1).clamp(0, max_y) as u32;
-    let p00 = src.pixel(x0, y0);
-    let p10 = src.pixel(x1, y0);
-    let p01 = src.pixel(x0, y1);
-    let p11 = src.pixel(x1, y1);
-    let mut out = [0.0f32; 4];
-    for c in 0..4 {
-        let (a00, a10, a01, a11) = (p00[c] as f32, p10[c] as f32, p01[c] as f32, p11[c] as f32);
-        let a = a00 + (a10 - a00) * tx;
-        let b = a01 + (a11 - a01) * tx;
-        out[c] = a + (b - a) * ty;
-    }
-    out
+    let b = Bilinear::new(src.width as usize, src.height as usize, (bx, by), (ox, oy));
+    let p00 = src.pixel(b.x0 as u32, b.y0 as u32);
+    let p10 = src.pixel(b.x1 as u32, b.y0 as u32);
+    let p01 = src.pixel(b.x0 as u32, b.y1 as u32);
+    let p11 = src.pixel(b.x1 as u32, b.y1 as u32);
+    std::array::from_fn(|c| b.lerp(p00[c] as f32, p10[c] as f32, p01[c] as f32, p11[c] as f32))
 }
 
 /// The Hann window `0.5·(1 + cos(π·t))` over `t ∈ [0, 1]`, tabulated

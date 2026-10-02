@@ -26,5 +26,7 @@
 //! one level apart natively and on wasm.
 
 mod blur;
+mod sample;
 
 pub use blur::{gaussian_blur_field, gaussian_blur_premultiplied, gaussian_blur_straight};
+pub use sample::Bilinear;
