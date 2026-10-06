@@ -29,6 +29,11 @@ mean is spelled out in
   wanted the flat per-cell tones should switch to the new `cell` type, which now
   spreads them over the whole of `[-1, 1]` — the `stained-glass` example has
   moved to it.
+- In the browser, a `collator` or `resolved-locale` expression now fails when
+  it is evaluated, where it used to work: the npm package no longer carries
+  ICU's collation tables. A style that compares strings with a `collator`
+  still loads, then errors at render time. Native builds are unchanged. See
+  the wasm module size entry under Changed.
 
 ### Fixed
 
