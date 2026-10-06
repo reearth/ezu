@@ -9,7 +9,31 @@ ezu is pre-1.0, so a minor bump may carry a breaking change. What the numbers
 mean is spelled out in
 [versioning](https://reearth.github.io/ezu/reference/changelog/).
 
-## Unreleased
+## 0.11.0 — 2026-10-06
+
+### Breaking
+
+- Six geometry ops read their pixel lengths as feature-extent units, so on a
+  512 px tile every one of them came out an eighth of the size it asked for:
+  `hatch` `spacing`, `buffer` `distance`, `simplify` `epsilon`, `densify`
+  `target-px`, `resample` `spacing-px`, and `medial-axis` `densify-px` /
+  `min-branch-px`. They are canvas pixels now, as documented and as `dash`,
+  `wave` and `dot-density` already were. **A style that tuned these values by
+  eye against the old behaviour renders differently**: divide them by
+  `extent / tile-size` (8, for a 512 px tile at the default extent) to keep the
+  old look. The `pencil-sketch` example's `hatch-spacing` is rescaled this way.
+- `noise` and `warp` with `type: "worley"` drew each cell's random value,
+  clamped so that half the cells came out exactly 1.0, rather than the distance
+  field the docs described. `worley` is now that distance, `1 − 2·distance` to
+  the nearest site. **A style using `worley` renders differently**; one that
+  wanted the flat per-cell tones should switch to the new `cell` type, which now
+  spreads them over the whole of `[-1, 1]` — the `stained-glass` example has
+  moved to it.
+- In the browser, a `collator` or `resolved-locale` expression now fails when
+  it is evaluated, where it used to work: the npm package no longer carries
+  ICU's collation tables. A style that compares strings with a `collator`
+  still loads, then errors at render time. Native builds are unchanged. See
+  the wasm module size entry under Changed.
 
 ### Fixed
 
@@ -60,22 +84,6 @@ mean is spelled out in
   fed a filter, and changed from run to run because it depended on which tile
   got to the cache first. Every node is keyed by its tile now. A tile rendered
   on its own was never affected.
-- Six geometry ops read their pixel lengths as feature-extent units, so on a
-  512 px tile every one of them came out an eighth of the size it asked for:
-  `hatch` `spacing`, `buffer` `distance`, `simplify` `epsilon`, `densify`
-  `target-px`, `resample` `spacing-px`, and `medial-axis` `densify-px` /
-  `min-branch-px`. They are canvas pixels now, as documented and as `dash`,
-  `wave` and `dot-density` already were. **A style that tuned these values by
-  eye against the old behaviour renders differently**: divide them by
-  `extent / tile-size` (8, for a 512 px tile at the default extent) to keep the
-  old look. The `pencil-sketch` example's `hatch-spacing` is rescaled this way.
-- `noise` and `warp` with `type: "worley"` drew each cell's random value,
-  clamped so that half the cells came out exactly 1.0, rather than the distance
-  field the docs described. `worley` is now that distance, `1 − 2·distance` to
-  the nearest site. **A style using `worley` renders differently**; one that
-  wanted the flat per-cell tones should switch to the new `cell` type, which now
-  spreads them over the whole of `[-1, 1]` — the `stained-glass` example has
-  moved to it.
 - `feature-boolean`'s schema called its operation field `op`, the name every
   node already uses to say which op it is, so the field never reached the JSON
   Schema or the node catalog — while the op itself reads `mode`. The schema says
