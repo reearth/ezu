@@ -12,26 +12,39 @@ use std::collections::BinaryHeap;
 
 use crate::Polygon;
 
+/// A ring in `f64`, relative to its polygon's first exterior vertex.
+type Ring = Vec<(f64, f64)>;
+
 /// The pole of inaccessibility of `p`, found to within `precision` (in the
 /// polygon's own units), rounded to the nearest integer coordinate.
+///
+/// The search runs relative to the polygon's first vertex, so a polygon
+/// moved by whole units finds the same point moved by the same amount.
+/// Neighbouring tiles that hold the same polygon, each in its own frame,
+/// therefore agree exactly on where its label goes.
 ///
 /// A polygon whose exterior ring has no width or no height returns the
 /// corner of its bounding box, as MapLibre does; one without an exterior
 /// ring returns `None`.
 pub fn pole_of_inaccessibility(p: &Polygon, precision: f64) -> Option<(i32, i32)> {
-    let rings: Vec<&[(i32, i32)]> = std::iter::once(p.exterior.as_slice())
-        .chain(p.holes.iter().map(Vec::as_slice))
+    let &(ox, oy) = p.exterior.first()?;
+    let rings: Vec<Ring> = std::iter::once(&p.exterior)
+        .chain(&p.holes)
+        .map(|ring| local_ring(ring, (ox, oy)))
         .collect();
-    let (&first, rest) = p.exterior.split_first()?;
-    let (mut min_x, mut min_y) = (f64::from(first.0), f64::from(first.1));
-    let (mut max_x, mut max_y) = (min_x, min_y);
-    for &(x, y) in rest {
-        let (x, y) = (f64::from(x), f64::from(y));
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    for &(x, y) in &rings[0] {
         min_x = min_x.min(x);
         min_y = min_y.min(y);
         max_x = max_x.max(x);
         max_y = max_y.max(y);
     }
+    let round = |x: f64, y: f64| {
+        (
+            (x + f64::from(ox)).round() as i32,
+            (y + f64::from(oy)).round() as i32,
+        )
+    };
     let cell_size = (max_x - min_x).min(max_y - min_y);
     if cell_size == 0.0 {
         return Some(round(min_x, min_y));
@@ -68,8 +81,17 @@ pub fn pole_of_inaccessibility(p: &Polygon, precision: f64) -> Option<(i32, i32)
     Some(round(best.x, best.y))
 }
 
-fn round(x: f64, y: f64) -> (i32, i32) {
-    (x.round() as i32, y.round() as i32)
+/// `ring` relative to `origin`, in `f64` (exact: every difference of two
+/// `i32`s fits).
+fn local_ring(ring: &[(i32, i32)], origin: (i32, i32)) -> Ring {
+    ring.iter()
+        .map(|&(x, y)| {
+            (
+                (i64::from(x) - i64::from(origin.0)) as f64,
+                (i64::from(y) - i64::from(origin.1)) as f64,
+            )
+        })
+        .collect()
 }
 
 /// A square cell: its centre, half its side, the signed distance from the
@@ -85,7 +107,7 @@ struct Cell {
 }
 
 impl Cell {
-    fn new(x: f64, y: f64, h: f64, rings: &[&[(i32, i32)]]) -> Self {
+    fn new(x: f64, y: f64, h: f64, rings: &[Ring]) -> Self {
         let d = signed_distance(x, y, rings);
         Self {
             x,
@@ -116,13 +138,12 @@ impl PartialEq for Cell {
 impl Eq for Cell {}
 
 /// The exterior ring's area centroid, as the first guess.
-fn centroid_cell(rings: &[&[(i32, i32)]]) -> Cell {
-    let ring = rings[0];
+fn centroid_cell(rings: &[Ring]) -> Cell {
+    let ring = &rings[0];
     let (mut area, mut cx, mut cy) = (0.0, 0.0, 0.0);
     let mut j = ring.len() - 1;
     for (i, &(ax, ay)) in ring.iter().enumerate() {
-        let (ax, ay) = (f64::from(ax), f64::from(ay));
-        let (bx, by) = (f64::from(ring[j].0), f64::from(ring[j].1));
+        let (bx, by) = ring[j];
         let f = ax * by - bx * ay;
         cx += (ax + bx) * f;
         cy += (ay + by) * f;
@@ -135,7 +156,7 @@ fn centroid_cell(rings: &[&[(i32, i32)]]) -> Cell {
 /// Distance from `(px, py)` to the nearest ring edge, positive inside the
 /// polygon (even-odd over every ring) and negative outside. Rings may be
 /// open or closed: the edge back to the start is always included.
-fn signed_distance(px: f64, py: f64, rings: &[&[(i32, i32)]]) -> f64 {
+fn signed_distance(px: f64, py: f64, rings: &[Ring]) -> f64 {
     let mut inside = false;
     let mut min_sq = f64::INFINITY;
     for ring in rings {
@@ -144,8 +165,7 @@ fn signed_distance(px: f64, py: f64, rings: &[&[(i32, i32)]]) -> f64 {
         }
         let mut j = ring.len() - 1;
         for (i, &(ax, ay)) in ring.iter().enumerate() {
-            let (ax, ay) = (f64::from(ax), f64::from(ay));
-            let (bx, by) = (f64::from(ring[j].0), f64::from(ring[j].1));
+            let (bx, by) = ring[j];
             if (ay > py) != (by > py) && px < (bx - ax) * (py - ay) / (by - ay) + ax {
                 inside = !inside;
             }
@@ -211,8 +231,9 @@ mod tests {
             &[],
         );
         let (x, y) = pole_of_inaccessibility(&p, 1.0).unwrap();
+        let rings = [local_ring(&p.exterior, (0, 0))];
         assert!(
-            signed_distance(f64::from(x), f64::from(y), &[&p.exterior]) > 90.0,
+            signed_distance(f64::from(x), f64::from(y), &rings) > 90.0,
             "({x}, {y}) is not well inside the L"
         );
     }
@@ -224,8 +245,25 @@ mod tests {
             &[&[(300, 300), (300, 700), (700, 700), (700, 300)]],
         );
         let (x, y) = pole_of_inaccessibility(&p, 1.0).unwrap();
-        let rings: Vec<&[(i32, i32)]> = vec![&p.exterior, &p.holes[0]];
+        let rings = [
+            local_ring(&p.exterior, (0, 0)),
+            local_ring(&p.holes[0], (0, 0)),
+        ];
         assert!(signed_distance(f64::from(x), f64::from(y), &rings) > 100.0);
+    }
+
+    #[test]
+    fn a_moved_polygon_finds_the_same_point_moved() {
+        // A city block, as tiles at the same zoom see it in their own frames.
+        let block = [(3878, 539), (3941, 590), (3796, 784), (3723, 719)];
+        let (x, y) = pole_of_inaccessibility(&poly(&block, &[]), 8.0).unwrap();
+        for (dx, dy) in [(-4096, 0), (4096, -4096), (-131072, 262144)] {
+            let moved: Vec<_> = block.iter().map(|&(x, y)| (x + dx, y + dy)).collect();
+            assert_eq!(
+                pole_of_inaccessibility(&poly(&moved, &[]), 8.0),
+                Some((x + dx, y + dy))
+            );
+        }
     }
 
     #[test]
