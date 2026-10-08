@@ -569,6 +569,66 @@ fn point_placement_labels_a_polygon_at_its_pole_of_inaccessibility() {
     assert_eq!(opaque_in(&r, 0, 64), 0);
 }
 
+/// The mean column and row of a raster's opaque pixels.
+fn ink_centre(r: &ezu_graph::RasterBuf) -> (f64, f64) {
+    let (mut sx, mut sy, mut n) = (0.0, 0.0, 0.0);
+    for y in 0..r.height {
+        for x in 0..r.width {
+            if r.pixel(x, y)[3] > 100 {
+                sx += f64::from(x);
+                sy += f64::from(y);
+                n += 1.0;
+            }
+        }
+    }
+    assert!(n > 0.0, "no ink");
+    (sx / n, sy / n)
+}
+
+#[test]
+fn polygon_anchor_centroid_labels_an_l_at_its_balance_point() {
+    let recipe = |anchor: &str| {
+        format!(
+            r##"{{
+          "name": "text-polygon-anchor",
+          "tile-size": 64,
+          "sources": {{
+            "src":  {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
+            "body": {{ "type": "font", "url": "{font}" }}
+          }},
+          "nodes": {{
+            "feats": {{ "op": "features", "source": "src", "layer": "pts" }},
+            "out":   {{ "op": "text", "features": "@feats", "font": ["body"],
+                        "text": "W", "size": 10 {anchor} }}
+          }},
+          "output": "@out"
+        }}"##,
+            font = font_url()
+        )
+    };
+    // Three quadrants of the tile, the north-east one missing. The
+    // centroid is (1707, 2389) of 4096, about (26.7, 37.3) px; the pole
+    // where the L is roomiest, about (18.7, 45.3) px.
+    let l = || {
+        layer(vec![polygon_feature(&[
+            (0, 0),
+            (2048, 0),
+            (2048, 2048),
+            (4096, 2048),
+            (4096, 4096),
+            (0, 4096),
+        ])])
+    };
+    let (px, py) = ink_centre(&render(&recipe(""), l()));
+    let (qx, qy) = ink_centre(&render(&recipe(r#", "polygon-anchor": "pole""#), l()));
+    assert_eq!((px, py), (qx, qy), "pole is the default");
+    let (cx, cy) = ink_centre(&render(&recipe(r#", "polygon-anchor": "centroid""#), l()));
+    assert!(
+        cx - px > 5.0 && py - cy > 5.0,
+        "the centroid label sits north-east of the pole's: pole ({px}, {py}), centroid ({cx}, {cy})"
+    );
+}
+
 /// Render `tile` with the polygon layer `src.pts` overzoomed from `parent`:
 /// this tile's piece and both horizontal neighbours', each cut from the
 /// ancestor the way a host binds a source past its `max-zoom`.

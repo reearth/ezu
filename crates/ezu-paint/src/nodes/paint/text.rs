@@ -24,8 +24,9 @@
 //! justify, wrapping, spacing) are build-time constants.
 //!
 //! Point placement labels each point and each polygon, at the polygon's
-//! pole of inaccessibility as MapLibre does, and ignores lines; line
-//! placement ignores points/polygons. Drawing is a pure function of world position (no
+//! pole of inaccessibility as MapLibre does or at its centroid
+//! (`polygon-anchor`), and ignores lines; line placement ignores
+//! points/polygons. Drawing is a pure function of world position (no
 //! jitter), so labels match across tile borders. Collision (default on)
 //! is likewise world-space deterministic: candidates are gathered from
 //! this tile plus its 8 neighbour tiles (host-bound under
@@ -47,6 +48,8 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use ezu_features::ops::centroid::polygon_area_centroid;
+use ezu_features::ops::contains::point_in_polygon;
 use ezu_features::ops::polylabel::pole_of_inaccessibility;
 use ezu_graph::{
     schema_frag, take_input_ref, Asset, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError,
@@ -471,13 +474,12 @@ struct GroupPrep<'g> {
 }
 
 /// Where point placement puts a group's symbols: each of its points, then
-/// one anchor per polygon at the polygon's pole of inaccessibility — the
-/// spot inside it farthest from its outline.
+/// one anchor per polygon, chosen by `mode` (see [`PolygonAnchor`]).
 ///
 /// This is MapLibre's point placement on a polygon feature, and like
 /// MapLibre it works on the polygon as its source tile cut it and keeps the
 /// anchor only when it falls inside this tile. A polygon spanning several
-/// tiles is then labelled by whichever tiles find a pole in their own
+/// tiles is then labelled by whichever tiles find an anchor in their own
 /// square, each the same way from every tile that gathers it as a
 /// neighbour.
 ///
@@ -485,9 +487,15 @@ struct GroupPrep<'g> {
 /// precision MapLibre asks for, measured on the tile the geometry was
 /// encoded for. An overzoomed tile holds its ancestor's whole polygon
 /// scaled up by `2^overzoom`, so it searches that much more coarsely and
-/// lands on the ancestor's own pole: every zoom past the source's agrees,
-/// as MapLibre's, which places the anchor once on the source tile.
-fn point_anchors(group: &FeatureGroup, extent: i64, overzoom: u8) -> Cow<'_, [(i32, i32)]> {
+/// lands on the ancestor's own pole. Every zoom past the source's then
+/// agrees with it, as in MapLibre, which places the anchor once on the
+/// source tile.
+fn point_anchors(
+    group: &FeatureGroup,
+    extent: i64,
+    overzoom: u8,
+    mode: PolygonAnchor,
+) -> Cow<'_, [(i32, i32)]> {
     if group.polygons.is_empty() {
         return Cow::Borrowed(&group.points);
     }
@@ -497,12 +505,50 @@ fn point_anchors(group: &FeatureGroup, extent: i64, overzoom: u8) -> Cow<'_, [(i
         group
             .polygons
             .iter()
-            .filter_map(|p| pole_of_inaccessibility(p, precision))
+            .filter_map(|p| polygon_anchor(p, mode, precision))
             .filter(|&(x, y)| {
                 (0..extent).contains(&i64::from(x)) && (0..extent).contains(&i64::from(y))
             }),
     );
     Cow::Owned(anchors)
+}
+
+/// Where point placement labels a polygon feature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PolygonAnchor {
+    /// The pole of inaccessibility: the spot inside farthest from the
+    /// outline, where the label has the most room (MapLibre's choice).
+    Pole,
+    /// The area-weighted centroid, the polygon's balance point; the pole
+    /// when the centroid falls outside the polygon (a C or an L shape).
+    Centroid,
+}
+
+impl PolygonAnchor {
+    fn parse(s: &str) -> Option<PolygonAnchor> {
+        Some(match s {
+            "pole" => PolygonAnchor::Pole,
+            "centroid" => PolygonAnchor::Centroid,
+            _ => return None,
+        })
+    }
+}
+
+/// One polygon's label anchor under `mode`, with the pole searched to
+/// `precision`.
+fn polygon_anchor(
+    p: &ezu_features::Polygon,
+    mode: PolygonAnchor,
+    precision: f64,
+) -> Option<(i32, i32)> {
+    if mode == PolygonAnchor::Centroid {
+        if let Some((x, y)) = polygon_area_centroid(p) {
+            if point_in_polygon(p, x, y) {
+                return Some((x.round() as i32, y.round() as i32));
+            }
+        }
+    }
+    pole_of_inaccessibility(p, precision)
 }
 
 /// Resolve an evaluated `text` value into label sections, or `None` to skip
@@ -913,6 +959,8 @@ struct TextNode {
     /// MapLibre `symbol-placement`. Point placement uses each group's
     /// points; line / line-center placement walks its polylines.
     placement: Placement,
+    /// Where point placement labels a polygon. Point placement only.
+    polygon_anchor: PolygonAnchor,
     /// MapLibre `symbol-spacing`: gap (px) between successive line
     /// anchors. Line placement only.
     spacing_px: f32,
@@ -1752,7 +1800,7 @@ impl TextNode {
         let mut preps: Vec<GroupPrep> = Vec::new();
         let mut reach_max = 0.0f32;
         for (fi, group) in feats.groups.iter().enumerate() {
-            let anchors = point_anchors(group, extent_i, feats.overzoom);
+            let anchors = point_anchors(group, extent_i, feats.overzoom, self.polygon_anchor);
             if anchors.is_empty() {
                 continue;
             }
@@ -1779,7 +1827,7 @@ impl TextNode {
         }
         for n in &nbr_groups {
             for (fi, group) in n.groups.iter().enumerate() {
-                let anchors = point_anchors(group, extent_i, n.overzoom);
+                let anchors = point_anchors(group, extent_i, n.overzoom, self.polygon_anchor);
                 if anchors.is_empty() {
                     continue;
                 }
@@ -2327,6 +2375,7 @@ impl Node for TextNode {
             self.justify as u8,
             self.transform as u8,
             self.placement as u8,
+            self.polygon_anchor as u8,
             self.keep_upright as u8,
         ]);
         h.update(b"anchorvariants");
@@ -2742,6 +2791,12 @@ fn build_text_node(
         field: "placement".into(),
         msg: format!("unknown placement `{placement_s}` (point|line|line-center)"),
     })?;
+    let polygon_anchor_s = read_string_or(fields, "polygon-anchor", ctx, "pole")?;
+    let polygon_anchor =
+        PolygonAnchor::parse(&polygon_anchor_s).ok_or_else(|| FactoryError::BadField {
+            field: "polygon-anchor".into(),
+            msg: format!("unknown polygon-anchor `{polygon_anchor_s}` (pole|centroid)"),
+        })?;
     let spacing_px = read_number_or(fields, "spacing-px", ctx, 250.0)? as f32;
     let max_angle_deg = read_number_or(fields, "max-angle-deg", ctx, 45.0)? as f32;
     let keep_upright = read_bool_or(fields, "keep-upright", ctx, true)?;
@@ -2890,6 +2945,7 @@ fn build_text_node(
             icon,
             text_optional,
             placement,
+            polygon_anchor,
             spacing_px,
             max_angle_deg,
             keep_upright,
@@ -2974,7 +3030,9 @@ fn text_schema(stage: Stage) -> Value {
                 "strikethrough-width": { "type": "number", "minimum": 0.0,
                                          "description": "Strikethrough bar thickness in px, rounded to whole pixels. Default 0.07 em of the label's size, at least 1 px." },
                 "placement": { "type": "string", "enum": ["point", "line", "line-center"],
-                               "description": "MapLibre `symbol-placement`. `point` (default) labels each feature point, and each polygon once at its pole of inaccessibility (the interior spot farthest from its outline, as MapLibre places it). `line` repeats labels along each polyline every `spacing-px`; `line-center` places one at each line's arc-length midpoint. Line placement ignores wrapping (`max-width-em`) and lays out a single line along the path." },
+                               "description": "MapLibre `symbol-placement`. `point` (default) labels each feature point, and each polygon once at its `polygon-anchor`. `line` repeats labels along each polyline every `spacing-px`; `line-center` places one at each line's arc-length midpoint. Line placement ignores wrapping (`max-width-em`) and lays out a single line along the path." },
+                "polygon-anchor": { "type": "string", "enum": ["pole", "centroid"],
+                                    "description": "Where point placement labels a polygon. `pole` (default) is its pole of inaccessibility, the interior spot farthest from its outline, where MapLibre places it. `centroid` is its area-weighted centroid with any holes cut out, the polygon's balance point, for a label that belongs in the middle of an area such as a block number; where the centroid falls outside the polygon (a C or U shape) the pole is used instead. Past a source's `max-zoom` the anchor is found on the polygon as the source tile holds it, so every deeper zoom labels it in the same place. At its own zoom each tile finds the anchor on the polygon as that tile was cut, so a polygon reaching further past a tile edge than the tile's buffer gets a separate anchor in each tile it crosses, as in MapLibre. Point placement only." },
                 "spacing-px": { "type": "number", "minimum": 1.0,
                                 "description": "Gap in px between successive line anchors (MapLibre `symbol-spacing`). Line placement only. Default 250." },
                 "max-angle-deg": { "type": "number", "minimum": 0.0,
@@ -3140,7 +3198,7 @@ mod tests {
 
     /// Every anchor the tiles at zoom `14 + dz` keep for the block, in the
     /// z14 tile's units.
-    fn kept_anchors(dz: u8) -> Vec<(f64, f64)> {
+    fn kept_anchors(dz: u8, mode: PolygonAnchor) -> Vec<(f64, f64)> {
         use ezu_core::TileId as T;
         let parent = T::new(14, 14552, 6452);
         let tile = block_tile();
@@ -3160,7 +3218,7 @@ mod tests {
                 for f in &t.layers[0].features {
                     let group =
                         FeatureGroup::synthetic(f.geometry.polygons.clone(), vec![], vec![]);
-                    for &(ax, ay) in point_anchors(&group, 4096, t.overzoom).iter() {
+                    for &(ax, ay) in point_anchors(&group, 4096, t.overzoom, mode).iter() {
                         let s = f64::from(n);
                         kept.push((
                             (f64::from((x - parent.x * n) * 4096) + f64::from(ax)) / s,
@@ -3175,17 +3233,71 @@ mod tests {
 
     #[test]
     fn an_overzoomed_polygon_is_anchored_once_where_its_source_tile_anchors_it() {
-        let source = kept_anchors(0);
-        assert_eq!(source.len(), 1);
-        let (sx, sy) = source[0];
-        for dz in 1..=5 {
-            let kept = kept_anchors(dz);
-            assert_eq!(kept.len(), 1, "z+{dz}: {kept:?}");
-            let (x, y) = kept[0];
-            assert!(
-                (x - sx).abs() <= 0.5 && (y - sy).abs() <= 0.5,
-                "z+{dz} anchors at ({x}, {y}), the source tile at ({sx}, {sy})"
-            );
+        for mode in [PolygonAnchor::Pole, PolygonAnchor::Centroid] {
+            let source = kept_anchors(0, mode);
+            assert_eq!(source.len(), 1);
+            let (sx, sy) = source[0];
+            for dz in 1..=5 {
+                let kept = kept_anchors(dz, mode);
+                assert_eq!(kept.len(), 1, "{mode:?} z+{dz}: {kept:?}");
+                let (x, y) = kept[0];
+                assert!(
+                    (x - sx).abs() <= 0.5 && (y - sy).abs() <= 0.5,
+                    "{mode:?}: z+{dz} anchors at ({x}, {y}), the source tile at ({sx}, {sy})"
+                );
+            }
         }
+    }
+
+    fn polygon(exterior: &[(i32, i32)]) -> ezu_features::Polygon {
+        ezu_features::Polygon {
+            exterior: exterior.to_vec(),
+            holes: vec![],
+        }
+    }
+
+    #[test]
+    fn a_centroid_anchor_sits_at_the_balance_point_not_the_roomiest_spot() {
+        // Three quadrants of a square, the north-east one missing. Their
+        // centres average to (5120, 7168) / 3, inside the west column; the
+        // pole sits where the L is widest, towards its south-west corner.
+        let l = polygon(&[
+            (0, 0),
+            (2048, 0),
+            (2048, 2048),
+            (4096, 2048),
+            (4096, 4096),
+            (0, 4096),
+        ]);
+        assert_eq!(
+            polygon_anchor(&l, PolygonAnchor::Centroid, 8.0),
+            Some((1707, 2389))
+        );
+        let (px, py) = polygon_anchor(&l, PolygonAnchor::Pole, 8.0).unwrap();
+        assert!(
+            (px - 1707).abs() + (py - 2389).abs() > 300,
+            "pole ({px}, {py}) should not be the centroid"
+        );
+    }
+
+    #[test]
+    fn a_centroid_outside_its_polygon_falls_back_to_the_pole() {
+        // A U opening north: its centroid lies in the gap between the arms.
+        let u = polygon(&[
+            (0, 0),
+            (1000, 0),
+            (1000, 3000),
+            (3000, 3000),
+            (3000, 0),
+            (4000, 0),
+            (4000, 4000),
+            (0, 4000),
+        ]);
+        let (cx, cy) = polygon_area_centroid(&u).unwrap();
+        assert!(!point_in_polygon(&u, cx, cy));
+        assert_eq!(
+            polygon_anchor(&u, PolygonAnchor::Centroid, 8.0),
+            polygon_anchor(&u, PolygonAnchor::Pole, 8.0)
+        );
     }
 }
