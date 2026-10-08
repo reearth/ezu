@@ -102,6 +102,40 @@ part of the block on the point; `anchor-variants` is MapLibre's
 `radial-offset` pushing each variant away from the point in its own direction.
 That is much better behaved in dense areas than a single fixed anchor.
 
+## Labelling areas
+
+Point placement gives each polygon one label. By default it sits at the polygon's
+pole of inaccessibility, the spot inside farthest from the outline, as in MapLibre.
+That is the roomiest spot, so on a long block that widens towards one end the label
+goes to that end. A label that names the area, such as a block number on an address
+map, usually belongs in the middle: `polygon-anchor: "centroid"` puts it at the
+area-weighted centroid, and uses the pole instead when the centroid falls outside
+the shape (an L or a U).
+
+```json
+"block_number": {
+  "op": "text", "features": "@blocks", "font": ["sans"],
+  "text": ["get", "block_number"],
+  "polygon-anchor": "centroid",
+  "source": "city", "layer": "blocks"
+}
+```
+
+Past the source's `max-zoom`, each tile is cut from an ancestor that holds the
+whole polygon, and the anchor is found on that polygon as the ancestor tile holds
+it. Every deeper zoom, and every tile a label straddles, then agrees on one spot.
+
+At the zooms the source serves, a polygon that crosses a tile edge arrives cut: each tile
+holds its own part plus the tile's buffer, and anchors that part. A large polygon
+can then get its label off-centre, or one label in each tile it crosses. MapLibre
+behaves the same way. `stitch` on the `features` node does not fix this: the merged
+polygon gets one anchor, but the neighbour candidates the label node gathers are
+still each tile's own part, so the two halves of a label on a seam stop matching.
+What works is data that keeps each labelled polygon whole in every tile it touches.
+Generate the tiles with a buffer wider than the largest polygon you label, or serve
+the layer from a lower `max-zoom`, where fewer polygons cross a tile edge, and let
+the deeper zooms overzoom from there.
+
 ## Pairing an icon with its label
 
 An icon and its text place as **one unit** against the same collision index, so a
