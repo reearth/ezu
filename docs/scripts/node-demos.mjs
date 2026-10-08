@@ -167,6 +167,23 @@ export const DEMOS = {
       ...overBase('@d', 1.6),
     },
   },
+  junctions: {
+    note: 'Coastlines cut into 40 px sections, with a tick stamped across each section boundary at its `axis-deg`.',
+    nodes: {
+      b: { op: 'boundary', features: '@water_f' },
+      d: { op: 'dash', features: '@b', 'dash-px': 40, 'gap-px': 0.01 },
+      j: { op: 'junctions', features: '@d' },
+      bar: { op: 'solid', kind: 'sprite', color: INK, 'width-px': 11, 'height-px': 2 },
+      ticks: {
+        op: 'stamp',
+        features: '@j',
+        image: '@bar',
+        'rotation-deg-expr': ['get', 'axis-deg'],
+      },
+      draw: { op: 'stroke', features: '@d', color: INK, 'width-px': 1.2 },
+      out: { op: 'stack', layers: ['@base', '@draw', '@ticks'] },
+    },
+  },
   'dot-density': {
     note: 'Dots spread over the landmass at 12,000 people per km², one dot per 100 people. A real dot density map reads the density from each feature with `density-expr` instead of stating one constant.',
     nodes: {

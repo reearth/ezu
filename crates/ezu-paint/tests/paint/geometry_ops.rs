@@ -1,6 +1,6 @@
 //! Integration tests for `Features → Features` geometry ops:
 //! `bbox`, `transform`, `smooth`, `densify`, `resample`,
-//! `feature-boolean`, `triangulate`. All driven through
+//! `feature-boolean`, `triangulate`, `junctions`. All driven through
 //! `literal-geometry` to stay hermetic.
 
 use crate::common::render;
@@ -261,4 +261,41 @@ fn tile_bounds_cover_canvas_reaches_into_the_padding() {
     assert_eq!(tile.pixel(4, 24)[3], 0, "`tile` stops at the tile's edge");
     let canvas = render(&doc("canvas"), 32, 8);
     assert_eq!(canvas.pixel(4, 24)[3], 255, "`canvas` fills the margin too");
+}
+
+/// `junctions` feeds `stamp` directly: a horizontal bar rotated by each
+/// junction's `axis-deg` crosses the line it marks. Two sections meeting
+/// in the middle of a horizontal line get a vertical tick there, and the
+/// corner of an L gets a diagonal one.
+#[test]
+fn junction_ticks_cross_the_lines_they_mark() {
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 64,
+      "nodes": {
+        "bg":    { "op": "solid", "color": "#ffffff" },
+        "lines": { "op": "literal-geometry",
+                   "lines": [[[512, 1024], [2048, 1024]], [[2048, 1024], [3584, 1024]],
+                             [[1024, 2048], [1024, 3584]], [[1024, 3584], [3072, 3584]]] },
+        "j":     { "op": "junctions", "features": "@lines" },
+        "bar":   { "op": "solid", "kind": "sprite", "color": "#000000",
+                   "width-px": 13, "height-px": 3 },
+        "ticks": { "op": "stamp", "features": "@j", "image": "@bar",
+                   "rotation-deg-expr": ["get", "axis-deg"] },
+        "out":   { "op": "blend", "base": "@bg", "over": "@ticks" }
+      },
+      "output": "@out"
+    }"##;
+    let r = render(json, 64, 0);
+    let dark = |x: u32, y: u32| r.pixel(x, y)[0] < 128;
+    // The straight continuation at (32, 16): a vertical tick.
+    assert!(dark(32, 11) && dark(32, 21), "vertical tick at (32, 16)");
+    assert!(!dark(27, 16) && !dark(37, 16), "not a horizontal one");
+    // The L's corner at (16, 56), arms up and right: the tick runs along
+    // the bisector, up-right to down-left.
+    assert!(dark(20, 52) && dark(12, 60), "diagonal tick at (16, 56)");
+    assert!(
+        !dark(12, 52) && !dark(20, 60),
+        "on the bisector, not across it"
+    );
 }

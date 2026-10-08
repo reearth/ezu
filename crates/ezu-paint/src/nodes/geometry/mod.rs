@@ -12,6 +12,7 @@ mod dash;
 mod dot_density;
 mod feature_boolean;
 mod hatch;
+mod junctions;
 mod medial_axis;
 mod resample;
 mod simplify;

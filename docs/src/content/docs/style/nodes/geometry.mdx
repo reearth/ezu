@@ -9,7 +9,7 @@ sidebar:
 
 `Features -> Features` transforms. They rewrite geometry before anything is painted, so downstream paint ops stay simple.
 
-20 ops: `bbox`, `boundary`, `buffer`, `centroid`, `contour`, `convex-hull`, `dash`, `densify`, `dot-density`, `feature-boolean`, `hatch`, `medial-axis`, `resample`, `simplify`, `smooth`, `transform`, `triangulate`, `voronoi`, `voronoi-fracture`, `wave`.
+21 ops: `bbox`, `boundary`, `buffer`, `centroid`, `contour`, `convex-hull`, `dash`, `densify`, `dot-density`, `feature-boolean`, `hatch`, `junctions`, `medial-axis`, `resample`, `simplify`, `smooth`, `transform`, `triangulate`, `voronoi`, `voronoi-fracture`, `wave`.
 
 Ops with no demo image below produce no visible result on their own — they feed other nodes rather than paint.
 
@@ -181,6 +181,22 @@ Parallel-line hatching of input polygons.
 | `features` | `@node` | yes | Reference to another node (`@name`). |
 | `phase` | number \| `$param` \| `@node` | no | Per-line offset in spacing units (0..1 cycles through one period). |
 | `spacing` | number (0…∞) \| `$param` \| `@node` | yes | Perpendicular spacing between consecutive lines, in tile pixels. |
+
+### `junctions`
+
+One point wherever polylines end or meet, for marking a line network split into sections (a block perimeter cut into frontages, a route cut into stages) with a cross tick at each section boundary. Both ends of every polyline count; polygons and points are ignored. Each junction is its own feature carrying `axis-deg` and `arms` and none of the source properties, since it may join several features. `axis-deg` is the tick's axis in degrees clockwise from the x axis, in [0, 180), so `stamp` with a horizontal bar sprite and `"rotation-deg-expr": ["get", "axis-deg"]` draws the tick: across the line at a loose end or where the line runs straight on, along the bisector at a corner, and through the middle of the widest gap between arms where the bisector would lie on or near an arm (a T-junction) or the corner is sharper than 40°. `arms` counts the line ends meeting there (1 for a loose end), for filtering. Loose ends a vector tile makes by cutting a line at its buffer are dropped: an end outside the tile, as far out as any geometry on that side, whose line runs back inward. A junction near a tile border comes out the same, with the same axis, from the tiles on either side. Feed it unstitched features: `stitch` cuts lines at the tile border, and the cut ends would meet as junctions there.
+
+<figure class="op-demo">
+  <div class="op-demo__images">
+    <img src="/ezu/nodes/junctions.webp" alt="A tile rendered with junctions" width="384" height="384" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Coastlines cut into 40 px sections, with a tick stamped across each section boundary at its `axis-deg`. <a href="https://github.com/reearth/ezu/blob/main/docs/fixtures/nodes/junctions.json">style</a></figcaption>
+</figure>
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `features` | `@node` | yes | Reference to another node (`@name`). |
+| `snap-px` | number (0…∞) \| `$param` \| `@node` | no | Line ends closer than this, in tile pixels, merge into one junction (chained: ends each within reach of a third merge too). Adjacent sections' shared ends do not always coincide exactly: separate digitising, or rounding before the data reached the tile, can leave them a fraction of a pixel apart. 1 px merges those without joining ends a reader would see apart. Raise it for data digitised less carefully. |
 
 ### `medial-axis`
 

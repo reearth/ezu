@@ -20,6 +20,7 @@ pub mod contains;
 pub mod convert;
 pub mod convex_hull;
 pub mod hatch;
+pub mod junctions;
 pub mod polylabel;
 pub mod resample;
 pub mod scatter;

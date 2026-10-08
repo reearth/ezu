@@ -76,6 +76,7 @@ graph layer required:
 | `simplify` | Douglas–Peucker polyline / ring simplification |
 | `buffer` | Offset / Minkowski-style buffering via `i_overlay` |
 | `hatch` | Parallel hatch lines clipped to polygons |
+| `junctions` | Where polylines end or meet, each with the axis of a cross tick |
 | `resample` | Chaikin `smooth`, uniform `densify`, arc-length `resample` |
 | `bbox` | Axis-aligned bounding box / envelope polygon |
 | `transform` | Affine translate + rotate + scale around a pivot |
