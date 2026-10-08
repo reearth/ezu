@@ -6654,6 +6654,175 @@
               "url"
             ],
             "type": "object"
+          },
+          {
+            "properties": {
+              "attribution": {
+                "type": "string"
+              },
+              "data": {
+                "description": "The GeoJSON document inline: a FeatureCollection, Feature, or Geometry in WGS84 lon/lat.",
+                "type": [
+                  "object",
+                  "array"
+                ]
+              },
+              "type": {
+                "const": "geojson"
+              },
+              "url": {
+                "description": "Where to read the document instead: `http(s)://`, `file:`, or `data:`.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "attribution": {
+                "type": "string"
+              },
+              "image": {
+                "description": "The atlas image. Also the sheet's asset key.",
+                "type": "string"
+              },
+              "index": {
+                "description": "The name → rect index: a URL/path to a sprite `.json`, or the same map inline.",
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "additionalProperties": {
+                      "properties": {
+                        "content": {
+                          "items": {
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "maxItems": 4,
+                          "minItems": 4,
+                          "type": "array"
+                        },
+                        "height": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "pixelRatio": {
+                          "default": 1,
+                          "type": "number"
+                        },
+                        "stretchX": {
+                          "items": {
+                            "items": {
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "maxItems": 2,
+                            "minItems": 2,
+                            "type": "array"
+                          },
+                          "type": "array"
+                        },
+                        "stretchY": {
+                          "items": {
+                            "items": {
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "maxItems": 2,
+                            "minItems": 2,
+                            "type": "array"
+                          },
+                          "type": "array"
+                        },
+                        "width": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "x": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "y": {
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "x",
+                        "y",
+                        "width",
+                        "height"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "object"
+                  }
+                ]
+              },
+              "type": {
+                "const": "sprite"
+              }
+            },
+            "required": [
+              "type",
+              "image",
+              "index"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "attribution": {
+                "type": "string"
+              },
+              "index": {
+                "default": 0,
+                "description": "Face index within a `.ttc` collection.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": {
+                "const": "font"
+              },
+              "url": {
+                "description": "A TTF/OTF/TTC file (`http(s)://`, `file:`, `data:`), or `system:<family>[?weight=…&style=…]` for an installed face.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "url"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "attribution": {
+                "type": "string"
+              },
+              "fontstack": {
+                "description": "The fontstack requested from the endpoint.",
+                "type": "string"
+              },
+              "type": {
+                "const": "glyphs"
+              },
+              "url": {
+                "description": "Glyph-PBF URL template with `{fontstack}` and `{range}` placeholders.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "url",
+              "fontstack"
+            ],
+            "type": "object"
           }
         ]
       },

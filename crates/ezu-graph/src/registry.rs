@@ -321,6 +321,44 @@ impl NodeRegistry {
                 }
             }
         });
+        // One entry of a sprite index, in MapLibre's sprite-JSON shape.
+        let band = json!({
+            "type": "array", "minItems": 2, "maxItems": 2,
+            "items": { "type": "integer", "minimum": 0 }
+        });
+        let sprite_rect = json!({
+            "type": "object",
+            "required": ["x", "y", "width", "height"],
+            "properties": {
+                "x": { "type": "integer", "minimum": 0 },
+                "y": { "type": "integer", "minimum": 0 },
+                "width": { "type": "integer", "minimum": 0 },
+                "height": { "type": "integer", "minimum": 0 },
+                "pixelRatio": { "type": "number", "default": 1 },
+                "stretchX": { "type": "array", "items": band.clone() },
+                "stretchY": { "type": "array", "items": band },
+                "content": {
+                    "type": "array", "minItems": 4, "maxItems": 4,
+                    "items": { "type": "integer", "minimum": 0 }
+                }
+            }
+        });
+        let sprite_source = json!({
+            "type": "object",
+            "required": ["type", "image", "index"],
+            "properties": {
+                "type": { "const": "sprite" },
+                "image": { "type": "string", "description": "The atlas image. Also the sheet's asset key." },
+                "index": {
+                    "description": "The name → rect index: a URL/path to a sprite `.json`, or the same map inline.",
+                    "oneOf": [
+                        { "type": "string" },
+                        { "type": "object", "additionalProperties": sprite_rect }
+                    ]
+                },
+                "attribution": { "type": "string" }
+            }
+        });
 
         json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -459,6 +497,37 @@ impl NodeRegistry {
                                     "max-zoom": { "type": "integer", "minimum": 0, "description": "Deepest zoom the source serves. Past it, tiles are upsampled from the covering ancestor." },
                                     "neighbor-fetch": { "type": "boolean", "default": true, "description": "Fetch the 8 neighbouring tiles too and stitch them, so the pad region holds real pixels." },
                                     "on-missing": { "enum": ["empty", "upsample", "error"], "default": "empty", "description": "404 within zoom range: transparent pixels, upsample a parent, or fail the tile." },
+                                    "attribution": { "type": "string" }
+                                }
+                            },
+                            {
+                                "type": "object",
+                                "required": ["type"],
+                                "properties": {
+                                    "type": { "const": "geojson" },
+                                    "data": { "type": ["object", "array"], "description": "The GeoJSON document inline: a FeatureCollection, Feature, or Geometry in WGS84 lon/lat." },
+                                    "url": { "type": "string", "description": "Where to read the document instead: `http(s)://`, `file:`, or `data:`." },
+                                    "attribution": { "type": "string" }
+                                }
+                            },
+                            sprite_source,
+                            {
+                                "type": "object",
+                                "required": ["type", "url"],
+                                "properties": {
+                                    "type": { "const": "font" },
+                                    "url": { "type": "string", "description": "A TTF/OTF/TTC file (`http(s)://`, `file:`, `data:`), or `system:<family>[?weight=…&style=…]` for an installed face." },
+                                    "index": { "type": "integer", "minimum": 0, "default": 0, "description": "Face index within a `.ttc` collection." },
+                                    "attribution": { "type": "string" }
+                                }
+                            },
+                            {
+                                "type": "object",
+                                "required": ["type", "url", "fontstack"],
+                                "properties": {
+                                    "type": { "const": "glyphs" },
+                                    "url": { "type": "string", "description": "Glyph-PBF URL template with `{fontstack}` and `{range}` placeholders." },
+                                    "fontstack": { "type": "string", "description": "The fontstack requested from the endpoint." },
                                     "attribution": { "type": "string" }
                                 }
                             }

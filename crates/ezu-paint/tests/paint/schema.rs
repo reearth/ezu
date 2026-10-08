@@ -47,3 +47,30 @@ fn registry_emits_document_schema_with_all_ops() {
     assert!(s.contains("\"nodes\""));
     assert!(s.contains("\"output\""));
 }
+
+#[test]
+fn document_schema_describes_every_source_type() {
+    let schema = ezu_paint::nodes::default_registry().document_schema();
+    let variants = schema["properties"]["sources"]["additionalProperties"]["oneOf"]
+        .as_array()
+        .expect("sources oneOf");
+    let types: Vec<&str> = variants
+        .iter()
+        .flat_map(|v| {
+            let t = &v["properties"]["type"];
+            match t["enum"].as_array() {
+                Some(a) => a.iter().filter_map(|x| x.as_str()).collect(),
+                None => t["const"].as_str().into_iter().collect::<Vec<_>>(),
+            }
+        })
+        .collect();
+    // Every `type` a style's `sources` entry may declare.
+    for ty in [
+        "brush", "image", "mvt", "pmtiles", "dem", "raster", "geojson", "sprite", "font", "glyphs",
+    ] {
+        assert!(
+            types.contains(&ty),
+            "source type `{ty}` missing from schema: {types:?}"
+        );
+    }
+}
