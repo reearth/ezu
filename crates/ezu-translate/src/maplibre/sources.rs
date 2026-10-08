@@ -144,12 +144,13 @@ pub(crate) fn convert_sources(
                         .get("encoding")
                         .and_then(Value::as_str)
                         .unwrap_or("mapbox");
-                    let tile_size = decl.get("tileSize").and_then(Value::as_u64).unwrap_or(512);
                     // `neighbor-fetch` stitches the 3×3 tile neighbourhood so
-                    // hillshade slopes stay correct up to the tile edge.
+                    // hillshade slopes stay correct up to the tile edge. No
+                    // `tileSize` carries over: ezu reads each tile's edge from
+                    // the decoded image.
                     let mut dem = serde_json::json!({
                         "type": "dem", "url": url, "encoding": enc,
-                        "tile-size": tile_size, "neighbor-fetch": true
+                        "neighbor-fetch": true
                     });
                     if let Some(mz) = decl.get("maxzoom").and_then(Value::as_u64) {
                         dem["max-zoom"] = Value::from(mz);

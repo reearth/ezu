@@ -6567,6 +6567,8 @@
                 "type": "string"
               },
               "elevation-offset": {
+                "default": 0,
+                "description": "Metres subtracted from every decoded sample, to rebase a geoid-relative dataset.",
                 "type": "number"
               },
               "encoding": {
@@ -6582,6 +6584,7 @@
               },
               "neighbor-fetch": {
                 "default": true,
+                "description": "Fetch the 8 neighbouring tiles too and stitch them, so the pad region holds real elevations and slopes stay seamless across tile edges.",
                 "type": "boolean"
               },
               "on-missing": {
@@ -6594,8 +6597,8 @@
                 ]
               },
               "tile-size": {
-                "default": 256,
-                "description": "Edge of the source's own tiles in px — not the document's canvas, and defaulting to 256 rather than 512. Terrarium pyramids are usually 256, Mapbox-RGB ones often 512.",
+                "deprecated": true,
+                "description": "Ignored. Each tile's edge is read from its decoded image, which may be any square size; the field is still accepted so older styles load.",
                 "minimum": 1,
                 "type": "integer"
               },
@@ -6620,10 +6623,13 @@
                 "type": "string"
               },
               "max-zoom": {
+                "description": "Deepest zoom the source serves. Past it, tiles are upsampled from the covering ancestor.",
                 "minimum": 0,
                 "type": "integer"
               },
               "neighbor-fetch": {
+                "default": true,
+                "description": "Fetch the 8 neighbouring tiles too and stitch them, so the pad region holds real pixels.",
                 "type": "boolean"
               },
               "on-missing": {

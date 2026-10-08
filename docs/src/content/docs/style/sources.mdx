@@ -7,14 +7,15 @@ sidebar:
 
 `sources` is the single home for everything external: document-scoped files
 (brushes, images, fonts) sit next to tile-scoped pyramids (MVT, PMTiles, DEM,
-raster imagery). Each entry's `type` selects the variant; document-scoped
-variants carry a `src` URI, tile-scoped variants a `url` template.
+raster imagery). Each entry's `type` selects the variant. `brush` and `image`
+name their file with `src`, `sprite` with `image` and `index`, and every other
+variant with `url` (`geojson` may carry its document inline as `data` instead).
 
 ```json
 "sources": {
   "glazing": { "type": "brush", "src": "file:brushes/watercolor_glazing.myb" },
   "basemap": { "type": "mvt",   "url": "https://papers.reearth.land/protomaps/tilejson.json" },
-  "terrain": { "type": "dem",   "encoding": "terrarium", "tile-size": 512,
+  "terrain": { "type": "dem",   "encoding": "terrarium",
                "max-zoom": 14, "on-missing": "upsample",
                "url": "https://terrain.reearth.land/…/{z}/{x}/{y}.webp" }
 }
@@ -24,7 +25,9 @@ Nothing is bundled into the library — see
 [sources and assets](/ezu/concepts/sources-and-assets/) for why, and for how the
 host binds the bytes.
 
-## `src` schemes (document-scoped)
+## URI schemes (document-scoped)
+
+A `brush` or `image` `src`, a `sprite`'s `image`, and a `font`'s `url` take:
 
 | Scheme | Resolves to |
 | --- | --- |
@@ -108,9 +111,16 @@ For `raster` and `dem`:
 
 | Field | Meaning |
 | --- | --- |
-| `tile-size` | source tile edge in px |
 | `max-zoom` | deepest zoom the source has. Deeper requests always upsample from this ancestor |
+| `neighbor-fetch` | fetch the 8 neighbouring tiles too and stitch them, so the pad region holds real pixels (and, for `dem`, slopes stay seamless across tile edges). Default `true` |
 | `on-missing` | in-range 404 policy: `empty` (default — transparent / zero elevation), `upsample` (walk up parents and upsample the covered sub-region), or `error` (fail the render, so a server can answer 404) |
+| `elevation-offset` | `dem` only: metres subtracted from every decoded sample, to rebase a geoid-relative dataset. Default `0` |
+
+A pyramid's tile size is not declared, unlike MapLibre's `tileSize`: each tile's
+edge is read from its decoded image, which may be any square size, and the tile
+is resampled onto the canvas, so a 256 px and a 512 px pyramid render the same
+ground. `dem` still accepts a `tile-size` from
+older styles and ignores it.
 
 ## Attribution
 

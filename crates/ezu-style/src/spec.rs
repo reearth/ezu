@@ -897,6 +897,9 @@ pub struct DemSource {
     /// hosts inherit its `attribution` field.
     #[serde(default)]
     pub attribution: Option<String>,
+    /// Ignored, and kept only so styles that declare it still load: each
+    /// tile's edge is read from its decoded image, which may be any
+    /// square size.
     #[serde(default = "default_dem_tile_size")]
     pub tile_size: u32,
     /// Highest zoom available from the source. Requests above this zoom

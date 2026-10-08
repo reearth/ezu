@@ -17,15 +17,16 @@ wasm sandbox where fetching is someone else's job.
 "sources": {
   "glazing": { "type": "brush", "src": "file:brushes/watercolor_glazing.myb" },
   "basemap": { "type": "mvt",   "url": "https://papers.reearth.land/protomaps/tilejson.json" },
-  "terrain": { "type": "dem",   "encoding": "terrarium", "tile-size": 512, "max-zoom": 14,
+  "terrain": { "type": "dem",   "encoding": "terrarium", "max-zoom": 14,
                "url": "https://terrain.reearth.land/…/{z}/{x}/{y}.webp" }
 }
 ```
 
 ## Two scopes
 
-**Document-scoped** entries carry a `src` URI and are loaded once for the life of
-the style: `brush`, `image`, `sprite`, `font`, `glyphs`.
+**Document-scoped** entries name a file and are loaded once for the life of the
+style: `brush` and `image` by `src`, `sprite` by `image` and `index`, `font` and
+`glyphs` by `url`.
 
 **Tile-scoped** entries carry a `url` template and are fetched per tile: `mvt`,
 `pmtiles`, `dem`, `raster`, `geojson`.

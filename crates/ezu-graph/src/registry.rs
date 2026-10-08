@@ -441,11 +441,11 @@ impl NodeRegistry {
                                     "type": { "const": "dem" },
                                     "url": { "type": "string", "description": "XYZ template or TileJSON URL." },
                                     "encoding": { "enum": ["terrarium", "mapbox-rgb"] },
-                                    "tile-size": { "type": "integer", "minimum": 1, "default": 256,
-                                                   "description": "Edge of the source's own tiles in px — not the document's canvas, and defaulting to 256 rather than 512. Terrarium pyramids are usually 256, Mapbox-RGB ones often 512." },
+                                    "tile-size": { "type": "integer", "minimum": 1, "deprecated": true,
+                                                   "description": "Ignored. Each tile's edge is read from its decoded image, which may be any square size; the field is still accepted so older styles load." },
                                     "max-zoom": { "type": "integer", "minimum": 0, "description": "Deepest zoom the source serves. Past it, tiles are overzoomed from the covering ancestor." },
-                                    "neighbor-fetch": { "type": "boolean", "default": true },
-                                    "elevation-offset": { "type": "number" },
+                                    "neighbor-fetch": { "type": "boolean", "default": true, "description": "Fetch the 8 neighbouring tiles too and stitch them, so the pad region holds real elevations and slopes stay seamless across tile edges." },
+                                    "elevation-offset": { "type": "number", "default": 0, "description": "Metres subtracted from every decoded sample, to rebase a geoid-relative dataset." },
                                     "on-missing": { "enum": ["empty", "upsample", "error"], "default": "empty", "description": "404 within zoom range: zero elevation, upsample a parent, or fail the tile." },
                                     "attribution": { "type": "string" }
                                 }
@@ -456,8 +456,8 @@ impl NodeRegistry {
                                 "properties": {
                                     "type": { "const": "raster" },
                                     "url": { "type": "string", "description": "XYZ template, TileJSON URL, or PMTiles archive (`.pmtiles`). PNG/WebP/JPEG tiles." },
-                                    "max-zoom": { "type": "integer", "minimum": 0 },
-                                    "neighbor-fetch": { "type": "boolean" },
+                                    "max-zoom": { "type": "integer", "minimum": 0, "description": "Deepest zoom the source serves. Past it, tiles are upsampled from the covering ancestor." },
+                                    "neighbor-fetch": { "type": "boolean", "default": true, "description": "Fetch the 8 neighbouring tiles too and stitch them, so the pad region holds real pixels." },
                                     "on-missing": { "enum": ["empty", "upsample", "error"], "default": "empty", "description": "404 within zoom range: transparent pixels, upsample a parent, or fail the tile." },
                                     "attribution": { "type": "string" }
                                 }

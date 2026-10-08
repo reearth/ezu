@@ -6,7 +6,6 @@
       "type": "dem",
       "url": "https://terrain.reearth.land/mapterhorn-egm08/terrarium/ellipsoid/{z}/{x}/{y}.webp",
       "encoding": "terrarium",
-      "tile-size": 512,
       "max-zoom": 14,
       "neighbor-fetch": true
     }
