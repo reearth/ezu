@@ -2,20 +2,39 @@
 //! as separate `LineString`s. Output is suitable for stroking polygons
 //! as outlines or feeding into line-only paint nodes.
 
+use std::borrow::Cow;
+
 use crate::Polygon;
 
-/// Returns one polyline per ring (exterior first, then holes).
+/// Returns one polyline per ring (exterior first, then holes), each ending
+/// on the vertex it starts from.
+///
+/// A ring decoded from a vector tile leaves its closing vertex implicit,
+/// while a GeoJSON ring repeats it; both come out closed, so the outline
+/// has the edge back to the start either way.
 pub fn polygon_boundary(p: &Polygon) -> Vec<Vec<(i32, i32)>> {
     let mut out = Vec::with_capacity(1 + p.holes.len());
     if !p.exterior.is_empty() {
-        out.push(p.exterior.clone());
+        out.push(closed(&p.exterior).into_owned());
     }
     for h in &p.holes {
         if !h.is_empty() {
-            out.push(h.clone());
+            out.push(closed(h).into_owned());
         }
     }
     out
+}
+
+/// `ring` with its first vertex repeated at the end, unless it already is.
+fn closed(ring: &[(i32, i32)]) -> Cow<'_, [(i32, i32)]> {
+    match (ring.first(), ring.last()) {
+        (Some(first), Some(last)) if ring.len() > 1 && first != last => {
+            let mut v = ring.to_vec();
+            v.push(*first);
+            Cow::Owned(v)
+        }
+        _ => Cow::Borrowed(ring),
+    }
 }
 
 /// Like [`polygon_boundary`], but without the edges a tile encoder adds
@@ -32,8 +51,9 @@ pub fn polygon_boundary(p: &Polygon) -> Vec<Vec<(i32, i32)>> {
 /// border itself is kept.
 ///
 /// Each ring is split into the runs of segments between dropped ones, one
-/// polyline per run; on a closed ring a run crossing the start point comes
-/// out whole. A ring with nothing dropped is returned as it is.
+/// polyline per run; a run crossing the start point comes out whole. A ring
+/// with nothing dropped is returned closed, as [`polygon_boundary`] returns
+/// it.
 pub fn polygon_boundary_without_clip_edges(p: &Polygon, extent: u32) -> Vec<Vec<(i32, i32)>> {
     let clip = ClipTest {
         extent: i64::from(extent),
@@ -79,15 +99,15 @@ fn push_ring_runs(ring: &[(i32, i32)], clip: &ClipTest, out: &mut Vec<Vec<(i32, 
     if ring.is_empty() {
         return;
     }
+    let ring = &*closed(ring);
     let segs = ring.len() - 1;
     let Some(first_drop) = (0..segs).find(|&i| clip.is_clip_edge(ring[i], ring[i + 1])) else {
         out.push(ring.to_vec());
         return;
     };
-    // Starting a closed ring's walk just past a dropped segment means no
-    // run can straddle the walk's ends.
-    let closed = ring[0] == ring[segs];
-    let start = if closed { first_drop + 1 } else { 0 };
+    // Starting the ring's walk just past a dropped segment means no run can
+    // straddle the walk's ends.
+    let start = first_drop + 1;
     let mut run: Vec<(i32, i32)> = Vec::new();
     for k in 0..segs {
         let i = (start + k) % segs;
@@ -126,6 +146,46 @@ mod tests {
         assert_eq!(rings.len(), 2);
         assert_eq!(rings[0].len(), 5);
         assert_eq!(rings[1].len(), 5);
+    }
+
+    #[test]
+    fn an_implicitly_closed_ring_gets_its_closing_edge() {
+        // A vector tile's ring, without the repeated start vertex.
+        let p = Polygon {
+            exterior: vec![(0, 0), (10, 0), (10, 10), (0, 10)],
+            holes: vec![vec![(2, 2), (2, 4), (4, 4), (4, 2)]],
+        };
+        assert_eq!(
+            polygon_boundary(&p),
+            vec![
+                vec![(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)],
+                vec![(2, 2), (2, 4), (4, 4), (4, 2), (2, 2)],
+            ]
+        );
+        assert_eq!(
+            polygon_boundary_without_clip_edges(&p, EXTENT),
+            polygon_boundary(&p)
+        );
+    }
+
+    #[test]
+    fn clip_edges_of_an_implicitly_closed_ring_are_dropped() {
+        // The coast polygon below as a vector tile encodes it: the last
+        // edge, back up the western clip line, is implicit.
+        let p = Polygon {
+            exterior: vec![
+                (-128, -128),
+                (4224, -128),
+                (4224, 1000),
+                (2000, 2000),
+                (-128, 3000),
+            ],
+            holes: vec![],
+        };
+        assert_eq!(
+            polygon_boundary_without_clip_edges(&p, EXTENT),
+            vec![COAST.to_vec()]
+        );
     }
 
     const EXTENT: u32 = 4096;
