@@ -162,6 +162,29 @@ fn build_rejects_a_legend_entry_naming_a_non_raster() {
     }
 }
 
+/// Stand-in features place their own geometry, so an entry giving both
+/// them and `geometry` is contradicting itself — refused where the rest
+/// of the legend is checked, so `ezu check` reports it.
+#[test]
+fn build_rejects_a_legend_entry_with_geometry_and_features() {
+    let json = r##"{
+      "name": "demo",
+      "legend": { "entries": [ { "label": "house number", "from": "@src", "geometry": "point",
+        "features": [ { "geometry": { "type": "Point", "coordinates": [0.5, 0.5] } } ] } ] },
+      "nodes": { "src": { "op": "image", "src": "x.png" } },
+      "output": "@src"
+    }"##;
+    let doc = ezu_style::Document::from_json(json).unwrap();
+    match build_graph(&doc, &test_registry()) {
+        Err(e @ BuildGraphError::LegendFeatures { .. }) => {
+            let msg = e.to_string();
+            assert!(msg.contains("house number"), "{msg}");
+            assert!(msg.contains("both `geometry` and `features`"), "{msg}");
+        }
+        other => panic!("expected LegendFeatures, got {other:?}"),
+    }
+}
+
 #[test]
 fn build_unknown_op_errors() {
     let json = r##"{

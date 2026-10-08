@@ -22,6 +22,7 @@ fn entry(from: &str, props: &[(&str, serde_json::Value)]) -> LegendEntry {
         min_zoom: None,
         max_zoom: None,
         geometry: None,
+        features: None,
     }
 }
 
@@ -253,5 +254,247 @@ fn an_entry_naming_no_node_is_an_error() {
     assert!(
         err.to_string().contains("nope"),
         "error should name the node: {err}"
+    );
+}
+
+/// Absolute `file:` URL of the ezu-core digits test font — a house
+/// number is all digits — forward-slashed so it embeds into JSON
+/// verbatim on every platform.
+fn font_url() -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../ezu-core/tests/fonts/NotoSans-Regular.digits.ttf");
+    format!("file:{}", path.display()).replace('\\', "/")
+}
+
+/// Swatch size for the composite symbol: wide enough for its parts to
+/// sit apart, tall enough for a label over a point.
+const CW: u32 = 96;
+const CH: u32 = 48;
+
+/// Draw a `CW`×`CH` swatch with a loader that reads `file:` fonts, and
+/// return the cropped pixels row by row.
+fn composite_swatch(json: &str, e: &LegendEntry, cache: &Cache) -> Vec<[u8; 4]> {
+    let doc = Document::from_json(json).expect("parse");
+    // The legend is checked with the graph, as `ezu check` checks it.
+    ezu_graph::build_graph(&doc, &default_registry()).expect("build");
+    let o = SwatchOptions {
+        width: CW,
+        height: CH,
+        ..opts()
+    };
+    let assets = ezu_paint::host::BrushBankLoader::new();
+    let (buf, canvas) = render_swatch(
+        &doc,
+        e,
+        &default_registry(),
+        &assets,
+        &ParamValues::new(),
+        cache,
+        &o,
+    )
+    .expect("swatch");
+    let mut out = Vec::with_capacity((CW * CH) as usize);
+    for y in 0..CH {
+        for x in 0..CW {
+            out.push(pixel(&buf, x + canvas.pad, y + canvas.pad));
+        }
+    }
+    out
+}
+
+/// How many pixels in `[x0, x1) × [y0, y1)` are the label's blue.
+fn blue_in(px: &[[u8; 4]], x0: u32, x1: u32, y0: u32, y1: u32) -> usize {
+    (y0..y1)
+        .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+        .filter(|&(x, y)| {
+            let p = px[(y * CW + x) as usize];
+            p[2] > 120 && p[0] < 80 && p[1] < 80 && p[3] > 120
+        })
+        .count()
+}
+
+/// A composite symbol: a building square, a dot at its representative
+/// point, a dashed connector to an entrance dot, and the house number
+/// over the representative point. Each part is its own `features` node
+/// filtering one layer, as a map's layers would. `rep` is where the
+/// representative point and its label sit.
+fn composite_style(rep: [f64; 2]) -> String {
+    format!(
+        r##"{{
+      "name": "ledger",
+      "sources": {{
+        "src":  {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
+        "body": {{ "type": "font", "url": "{font}" }}
+      }},
+      "nodes": {{
+        "bldg":  {{ "op": "features", "source": "src", "layer": "buildings",
+                    "filter-expr": ["==", ["geometry-type"], "Polygon"] }},
+        "conn":  {{ "op": "features", "source": "src", "layer": "addresses",
+                    "filter-expr": ["==", ["get", "part"], "connector"] }},
+        "pts":   {{ "op": "features", "source": "src", "layer": "addresses",
+                    "filter-expr": ["==", ["geometry-type"], "Point"] }},
+        "rep":   {{ "op": "features", "source": "src", "layer": "addresses",
+                    "filter-expr": ["==", ["get", "part"], "rep"] }},
+        "fill":  {{ "op": "fill-solid", "features": "@bldg", "fill": "#c0c0c0" }},
+        "line":  {{ "op": "stroke", "features": "@conn", "width-px": 2, "color": "#00a000",
+                    "dasharray": [2, 1] }},
+        "dots":  {{ "op": "circles", "features": "@pts", "radius": 3, "color": "#ff0000" }},
+        "num":   {{ "op": "text", "features": "@rep", "font": ["body"], "size": 14,
+                    "text": ["get", "no"], "color": "#0000ff", "anchor": "bottom",
+                    "source": "src", "layer": "addresses",
+                    "filter-expr": ["==", ["get", "part"], "rep"] }},
+        "addr":  {{ "op": "stack", "layers": ["@fill", "@line", "@dots", "@num"] }}
+      }},
+      "legend": {{ "entries": [{{ "label": "assigned house number", "from": "@addr",
+        "properties": {{ "no": "12" }},
+        "features": [
+          {{ "geometry": {{ "type": "Polygon",
+                           "coordinates": [[[0.06, 0.5], [0.42, 0.5], [0.42, 0.95], [0.06, 0.95]]] }} }},
+          {{ "geometry": {{ "type": "Point", "coordinates": [{rx}, {ry}] }},
+             "properties": {{ "part": "rep" }} }},
+          {{ "geometry": {{ "type": "LineString", "coordinates": [[0.24, 0.72], [0.88, 0.72]] }},
+             "properties": {{ "part": "connector" }} }},
+          {{ "geometry": {{ "type": "Point", "coordinates": [0.88, 0.72] }},
+             "properties": {{ "part": "entrance" }} }}
+        ] }}] }},
+      "output": "@addr"
+    }}"##,
+        font = font_url(),
+        rx = rep[0],
+        ry = rep[1],
+    )
+}
+
+fn composite_entry(json: &str) -> LegendEntry {
+    Document::from_json(json)
+        .unwrap()
+        .legend
+        .unwrap()
+        .entries
+        .remove(0)
+}
+
+/// The stand-ins reach each `features` node of the stack together, and
+/// each filter picks out its own part: the fill finds the polygon, the
+/// stroke the connector, the circles both points, the text the
+/// representative point — with the number it carries from the entry.
+#[test]
+fn declared_stand_ins_draw_a_composite_symbol() {
+    let json = composite_style([0.24, 0.72]);
+    let px = composite_swatch(&json, &composite_entry(&json), &Cache::new());
+    let at = |fx: f32, fy: f32| {
+        let (x, y) = ((fx * CW as f32) as u32, (fy * CH as f32) as u32);
+        px[(y * CW + x) as usize]
+    };
+
+    let building = at(0.1, 0.9);
+    assert!(
+        building[3] > 200 && building[0].abs_diff(192) < 16 && building[2].abs_diff(192) < 16,
+        "the building square should be grey: {building:?}"
+    );
+    for (fx, name) in [(0.24, "representative point"), (0.88, "entrance")] {
+        let p = at(fx, 0.72);
+        assert!(
+            p[0] > 200 && p[1] < 80 && p[2] < 80,
+            "the {name} dot should be red: {p:?}"
+        );
+    }
+    let row = (0.72 * CH as f32) as u32;
+    let green = (CW / 2..CW * 4 / 5)
+        .filter(|&x| {
+            let p = px[(row * CW + x) as usize];
+            p[1] > 100 && p[0] < 60 && p[2] < 60
+        })
+        .count();
+    assert!(
+        green > 4,
+        "the connector should cross to the entrance: {green} px"
+    );
+
+    // The number: drawn, above its point, and nowhere over the
+    // connector's half of the swatch.
+    let label = blue_in(&px, 0, CW / 2, 0, row);
+    assert!(label > 20, "the house number should be drawn: {label} px");
+    assert_eq!(
+        blue_in(&px, CW / 2, CW, 0, CH),
+        0,
+        "the label strayed right"
+    );
+    assert_eq!(
+        blue_in(&px, 0, CW, row + 2, CH),
+        0,
+        "the label should sit above its point"
+    );
+}
+
+/// A swatch has no neighbours. The renderer asks for the eight around a
+/// tile to collide and to draw labels across seams; answered with copies
+/// of the stand-in, a label cut by one edge would come back in through
+/// the opposite one.
+#[test]
+fn a_label_cut_by_the_edge_does_not_come_back_from_the_opposite_edge() {
+    let json = composite_style([0.97, 0.6]);
+    let px = composite_swatch(&json, &composite_entry(&json), &Cache::new());
+    assert!(
+        blue_in(&px, CW * 3 / 4, CW, 0, CH) > 0,
+        "the label's own half should be drawn"
+    );
+    assert_eq!(
+        blue_in(&px, 0, CW / 4, 0, CH),
+        0,
+        "a neighbour's copy of the label was drawn"
+    );
+}
+
+/// Where the stand-ins sit is part of a swatch's identity: two entries
+/// naming the same node with the same properties but placing their
+/// features differently must not share a cached buffer.
+#[test]
+fn entries_differing_only_in_stand_ins_get_different_swatches() {
+    let json = composite_style([0.24, 0.72]);
+    let cache = Cache::new();
+    let first = composite_entry(&json);
+    let mut second = first.clone();
+    if let Some(features) = second.features.as_mut() {
+        features[3].geometry = ezu_style::LegendFeatureGeometry::Point {
+            coordinates: [0.6, 0.72],
+        };
+    }
+    let a = composite_swatch(&json, &first, &cache);
+    let b = composite_swatch(&json, &second, &cache);
+    assert_ne!(a, b, "the moved entrance should draw a different swatch");
+}
+
+/// The stand-ins are fractions of the swatch, so one entry fits any
+/// swatch size: drawn twice as large, the entrance dot is still at the
+/// same fraction of the way across.
+#[test]
+fn stand_ins_scale_with_the_swatch() {
+    let json = composite_style([0.24, 0.72]);
+    let e = composite_entry(&json);
+    let doc = Document::from_json(&json).unwrap();
+    let o = SwatchOptions {
+        width: CW * 2,
+        height: CH * 2,
+        ..opts()
+    };
+    let (buf, canvas) = render_swatch(
+        &doc,
+        &e,
+        &default_registry(),
+        &ezu_paint::host::BrushBankLoader::new(),
+        &ParamValues::new(),
+        &Cache::new(),
+        &o,
+    )
+    .expect("swatch");
+    let p = pixel(
+        &buf,
+        (0.88 * (CW * 2) as f32) as u32 + canvas.pad,
+        (0.72 * (CH * 2) as f32) as u32 + canvas.pad,
+    );
+    assert!(
+        p[0] > 200 && p[1] < 80,
+        "the entrance dot should scale along: {p:?}"
     );
 }

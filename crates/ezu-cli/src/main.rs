@@ -909,6 +909,7 @@ async fn run_legend(args: LegendCmd) -> Result<(), Box<dyn std::error::Error>> {
                 min_zoom: e.min_zoom,
                 max_zoom: e.max_zoom,
                 geometry: e.geometry,
+                features: e.features.as_deref(),
                 swatch: swatch.as_deref(),
             })
             .collect(),
@@ -960,6 +961,10 @@ struct EntryOut<'a> {
     max_zoom: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     geometry: Option<ezu::style::LegendGeometry>,
+    /// Passed through as declared, so a host drawing its own swatches
+    /// stands in the same features `--swatch-dir` does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    features: Option<&'a [ezu::style::LegendFeature]>,
     /// Path of the PNG this entry's symbol was drawn to, when
     /// `--swatch-dir` asked for one.
     #[serde(skip_serializing_if = "Option::is_none")]

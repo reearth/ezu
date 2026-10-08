@@ -253,6 +253,46 @@ impl NodeRegistry {
             "scalar",
             "scalar-field"
         ]);
+        // A legend stand-in's `[x, y]`, as fractions of the swatch.
+        let swatch_position = json!({
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": { "type": "number", "minimum": 0, "maximum": 1 }
+        });
+        let stand_in_geometry = |ty: &str, coordinates: serde_json::Value| {
+            json!({
+                "type": "object",
+                "required": ["type", "coordinates"],
+                "additionalProperties": false,
+                "properties": { "type": { "const": ty }, "coordinates": coordinates }
+            })
+        };
+        let legend_features = json!({
+            "type": "array",
+            "minItems": 1,
+            "description": "Stand-in features to draw the swatch from, in place of the fixed polygon, line and point. Coordinates are [x, y] fractions of the swatch (0–1, origin top-left); each feature's properties are laid over the entry's.",
+            "items": {
+                "type": "object",
+                "required": ["geometry"],
+                "additionalProperties": false,
+                "properties": {
+                    "geometry": {
+                        "oneOf": [
+                            stand_in_geometry("Point", swatch_position.clone()),
+                            stand_in_geometry("LineString", json!({
+                                "type": "array", "minItems": 2, "items": swatch_position
+                            })),
+                            stand_in_geometry("Polygon", json!({
+                                "type": "array", "minItems": 1,
+                                "items": { "type": "array", "minItems": 3, "items": swatch_position }
+                            }))
+                        ]
+                    },
+                    "properties": { "type": "object", "description": "Laid over the entry's `properties` for this feature alone." }
+                }
+            }
+        });
 
         json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -304,9 +344,11 @@ impl NodeRegistry {
                                     "max-zoom": { "type": "integer", "minimum": 0 },
                                     "geometry": {
                                         "enum": ["all", "polygon", "line", "point"],
-                                        "description": "Geometry the swatch's stand-in feature carries. Defaults to all three; name one when a geometry op between the source and this node would otherwise make the node draw twice."
-                                    }
-                                }
+                                        "description": "Geometry the swatch's stand-in feature carries. Defaults to all three; name one when a geometry op between the source and this node would otherwise make the node draw twice. Not allowed with `features`."
+                                    },
+                                    "features": legend_features
+                                },
+                                "not": { "required": ["geometry", "features"] }
                             }
                         }
                     }

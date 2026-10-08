@@ -15,10 +15,10 @@
 //!   their own, whose output *is* that node ([`Document::subgraph`]), so
 //!   an ordinary `build_graph` + `render` draws just the symbol, with no
 //!   basemap under it and no unrelated source to fetch
-//! - the features the graph asks for are answered with one synthetic
-//!   feature carrying the entry's declared properties, so whatever the
-//!   node would draw for a real feature of that description is what the
-//!   swatch shows
+//! - the features the graph asks for are answered with synthetic ones
+//!   carrying the entry's declared properties — one filling the swatch,
+//!   or the arrangement the entry declares — so whatever the node would
+//!   draw for real features of that description is what the swatch shows
 //!
 //! The canvas need not be square, which is why [`CanvasInfo`] has two
 //! sides: a swatch is as wide and as tall as the legend has room for.
@@ -29,10 +29,11 @@ use std::sync::Arc;
 
 use ezu_features::{Feature, FeatureLayer, Geometry, Polygon, Value as FeatureValue};
 use ezu_graph::{
-    build_graph, Asset, AssetError, AssetLoader, BuildGraphError, Cache, CanvasInfo, Evaluator,
-    NodeRegistry, OpaqueValue, ParamValues, PortValue, RasterBuf, RenderError, TileId,
+    build_graph, parse_neighbor_binding, Asset, AssetError, AssetLoader, BuildGraphError, Cache,
+    CanvasInfo, Evaluator, NodeRegistry, OpaqueValue, ParamValues, PortValue, RasterBuf,
+    RenderError, TileId,
 };
-use ezu_style::{Document, LegendEntry, LegendGeometry};
+use ezu_style::{Document, LegendEntry, LegendFeatureGeometry, LegendGeometry};
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::host::looks_like_asset_src;
@@ -88,6 +89,8 @@ pub enum SwatchError {
         #[source]
         source: Box<RenderError>,
     },
+    #[error("legend entry `{label}` {reason}")]
+    Features { label: String, reason: String },
     #[error("legend entry `{label}` names `@{src}`, which produced {got} rather than a raster")]
     NotRaster {
         label: String,
@@ -130,10 +133,20 @@ pub fn render_swatch(
         source: Box::new(e),
     })?;
 
+    // The subgraph leaves the legend behind, so `build_graph` above did
+    // not check the entry's stand-ins; a host may hand over an entry it
+    // made itself, too.
+    entry
+        .check_features()
+        .map_err(|reason| SwatchError::Features {
+            label: entry.label.clone(),
+            reason,
+        })?;
+
     // The entry's own choice wins; the option is the default for the
     // entries that do not make one.
     let geometry = entry.geometry.unwrap_or(opts.geometry);
-    let loader = SwatchLoader::new(assets, stand_in_layer(entry, geometry), entry);
+    let loader = SwatchLoader::new(assets, stand_in_layer(entry, geometry), entry, geometry);
     let ev = Evaluator::new(&graph, cache, &loader);
     let required = graph.required_pad().unwrap_or(0);
     let canvas = CanvasInfo {
@@ -177,12 +190,99 @@ pub fn render_swatch(
 /// grew, because the hop grew with it.
 const LINE_VERTICES: usize = 64;
 
-/// The stand-in feature a swatch is drawn from: one feature filling the
-/// swatch, carrying the entry's declared properties.
+/// The stand-in features a swatch is drawn from.
+///
+/// An entry declaring `features` gets exactly those, scaled from swatch
+/// fractions to the layer's extent — which the canvas then maps onto the
+/// swatch's width and height, so the arrangement holds at any size. Each
+/// carries the entry's properties with its own laid over them, so a
+/// stack's separate `features` nodes can filter out the part each draws.
+/// `geometry` is not consulted for such an entry: the style refuses the
+/// two together.
+///
+/// Otherwise the stand-in is one feature filling the swatch, carrying
+/// the entry's declared properties and the geometry `geometry` selects.
 ///
 /// Public because a host drawing its own swatches needs the same
 /// stand-in to get the same answer as `ezu legend` does.
 pub fn stand_in_layer(entry: &LegendEntry, geometry: LegendGeometry) -> FeatureLayer {
+    let features = match &entry.features {
+        Some(declared) => declared
+            .iter()
+            .map(|f| Feature {
+                id: None,
+                geometry: declared_geometry(&f.geometry),
+                properties: feature_values(entry.properties.iter().chain(&f.properties)),
+            })
+            .collect(),
+        None => vec![Feature {
+            id: None,
+            geometry: filling_geometry(geometry),
+            properties: feature_values(&entry.properties),
+        }],
+    };
+    FeatureLayer {
+        name: "legend".to_string(),
+        extent: EXTENT,
+        features,
+    }
+}
+
+/// A declared stand-in geometry in the layer's extent.
+///
+/// Lines are resampled to about the density of the fixed stand-in line,
+/// for the reason [`LINE_VERTICES`] gives: a connector declared as its
+/// two ends would otherwise be one hop a brush paints almost nothing
+/// along.
+fn declared_geometry(g: &LegendFeatureGeometry) -> Geometry {
+    let at = |p: &[f64; 2]| -> (i32, i32) {
+        let e = EXTENT as f64;
+        ((p[0] * e).round() as i32, (p[1] * e).round() as i32)
+    };
+    let mut out = Geometry::default();
+    match g {
+        LegendFeatureGeometry::Point { coordinates } => out.points.push(at(coordinates)),
+        // An empty line or polygon is refused by the style check; one
+        // reaching here anyway contributes nothing rather than panicking.
+        LegendFeatureGeometry::LineString { coordinates } if !coordinates.is_empty() => {
+            let step = EXTENT as f64 / (LINE_VERTICES - 1) as f64;
+            let mut line = vec![at(&coordinates[0])];
+            for w in coordinates.windows(2) {
+                let (a, b) = (at(&w[0]), at(&w[1]));
+                let (dx, dy) = ((b.0 - a.0) as f64, (b.1 - a.1) as f64);
+                let len = (dx * dx + dy * dy).sqrt();
+                let n = ((len / step).ceil() as i64).max(1);
+                for i in 1..=n {
+                    let t = |u: i32, v: i32| u + ((v - u) as i64 * i / n) as i32;
+                    line.push((t(a.0, b.0), t(a.1, b.1)));
+                }
+            }
+            out.lines.push(line);
+        }
+        LegendFeatureGeometry::Polygon { coordinates } if !coordinates.is_empty() => {
+            let ring = |r: &Vec<[f64; 2]>| -> Vec<(i32, i32)> {
+                let mut pts: Vec<(i32, i32)> = r.iter().map(at).collect();
+                if let (Some(&first), Some(&last)) = (pts.first(), pts.last()) {
+                    if first != last {
+                        pts.push(first);
+                    }
+                }
+                pts
+            };
+            out.polygons.push(Polygon {
+                exterior: ring(&coordinates[0]),
+                holes: coordinates[1..].iter().map(ring).collect(),
+            });
+        }
+        LegendFeatureGeometry::LineString { .. } | LegendFeatureGeometry::Polygon { .. } => {}
+    }
+    out
+}
+
+/// The fixed stand-in: a polygon filling the swatch, a line across the
+/// middle and a point at the centre, or whichever of them `geometry`
+/// names.
+fn filling_geometry(geometry: LegendGeometry) -> Geometry {
     let e = EXTENT as i32;
     let mid = e / 2;
     let mut g = Geometry::default();
@@ -203,24 +303,19 @@ pub fn stand_in_layer(entry: &LegendEntry, geometry: LegendGeometry) -> FeatureL
     if matches!(geometry, LegendGeometry::All | LegendGeometry::Point) {
         g.points.push((mid, mid));
     }
-    FeatureLayer {
-        name: "legend".to_string(),
-        extent: EXTENT,
-        features: vec![Feature {
-            id: None,
-            geometry: g,
-            properties: properties_of(entry),
-        }],
-    }
+    g
 }
 
-/// The entry's declared properties as feature values. Numbers keep their
-/// integer-ness where they have it, since `["get", …]` comparisons can
-/// see the difference. Arrays and objects are dropped: a feature
-/// property is a scalar.
-fn properties_of(entry: &LegendEntry) -> HashMap<String, FeatureValue> {
+/// Declared properties as feature values, later keys winning — which is
+/// how a stand-in feature's own properties are laid over the entry's.
+/// Numbers keep their integer-ness where they have it, since
+/// `["get", …]` comparisons can see the difference. Arrays and objects
+/// are dropped: a feature property is a scalar.
+fn feature_values<'a>(
+    props: impl IntoIterator<Item = (&'a String, &'a serde_json::Value)>,
+) -> HashMap<String, FeatureValue> {
     let mut out = HashMap::new();
-    for (k, v) in &entry.properties {
+    for (k, v) in props {
         let value = match v {
             serde_json::Value::String(s) => FeatureValue::String(s.clone()),
             serde_json::Value::Bool(b) => FeatureValue::Bool(*b),
@@ -229,7 +324,10 @@ fn properties_of(entry: &LegendEntry) -> HashMap<String, FeatureValue> {
                 Some(i) => FeatureValue::Int(i),
                 None => FeatureValue::Double(n.as_f64().unwrap_or(0.0)),
             },
-            _ => continue,
+            _ => {
+                out.remove(k);
+                continue;
+            }
         };
         out.insert(k.clone(), value);
     }
@@ -243,6 +341,13 @@ fn properties_of(entry: &LegendEntry) -> HashMap<String, FeatureValue> {
 /// makes: a tile-scoped binding never carries a `scheme:`, and an asset
 /// src always does — a bare relative path is refused as "missing a
 /// scheme" — so anything without one is a feature layer to stand in for.
+///
+/// Except a neighbour tile's copy of a layer (`<source>.<layer>@dx,dy`),
+/// which is answered with nothing. A swatch has no neighbours, and
+/// handing the stand-in to all eight would surround it with copies of
+/// itself: labels anchored next door drawn across the swatch's edge, and
+/// cross-tile collision free to give the place to a copy rather than to
+/// the swatch's own label.
 struct SwatchLoader<'a> {
     base: &'a dyn AssetLoader,
     features: OpaqueValue,
@@ -254,14 +359,28 @@ struct SwatchLoader<'a> {
 }
 
 impl<'a> SwatchLoader<'a> {
-    fn new(base: &'a dyn AssetLoader, layer: FeatureLayer, entry: &LegendEntry) -> Self {
+    fn new(
+        base: &'a dyn AssetLoader,
+        layer: FeatureLayer,
+        entry: &LegendEntry,
+        geometry: LegendGeometry,
+    ) -> Self {
         let mut h = Xxh3::new();
         h.update(entry.from.as_str().as_bytes());
         // Properties come from a `serde_json::Map`, which orders its keys,
-        // so this is stable across runs.
+        // so this is stable across runs; the stand-in's shape is part of
+        // the entry's identity as much as they are.
         for (k, v) in &entry.properties {
             h.update(k.as_bytes());
             h.update(v.to_string().as_bytes());
+        }
+        h.update(&[geometry as u8]);
+        if let Some(features) = &entry.features {
+            h.update(
+                serde_json::to_string(features)
+                    .unwrap_or_default()
+                    .as_bytes(),
+            );
         }
         Self {
             base,
@@ -276,14 +395,25 @@ impl AssetLoader for SwatchLoader<'_> {
         if looks_like_asset_src(name) {
             return self.base.load(name);
         }
+        if is_neighbour(name) {
+            return Err(AssetError::NotFound(name.to_string()));
+        }
         Ok(Asset::Features(self.features.clone()))
     }
     fn hash(&self, name: &str) -> u128 {
         if looks_like_asset_src(name) {
             return self.base.hash(name);
         }
+        if is_neighbour(name) {
+            return 0;
+        }
         self.hash
     }
+}
+
+fn is_neighbour(name: &str) -> bool {
+    let (_, dx, dy) = parse_neighbor_binding(name);
+    (dx, dy) != (0, 0)
 }
 
 #[cfg(test)]
@@ -304,6 +434,7 @@ mod tests {
             min_zoom: None,
             max_zoom: None,
             geometry: None,
+            features: None,
         }
     }
 
@@ -342,6 +473,53 @@ mod tests {
                 "{geometry:?}"
             );
         }
+    }
+
+    /// Declared stand-ins come through one feature each, scaled from
+    /// swatch fractions to the extent, with their own properties laid
+    /// over the entry's.
+    #[test]
+    fn declared_features_are_scaled_and_carry_merged_properties() {
+        let mut e = entry(&[("no", "12".into()), ("part", "any".into())]);
+        e.features = Some(
+            serde_json::from_value(serde_json::json!([
+                { "geometry": { "type": "Polygon",
+                                "coordinates": [[[0.0, 0.5], [0.5, 0.5], [0.5, 1.0], [0.0, 1.0]]] } },
+                { "geometry": { "type": "Point", "coordinates": [0.25, 0.75] },
+                  "properties": { "part": "rep" } },
+                { "geometry": { "type": "LineString", "coordinates": [[0.25, 0.75], [1.0, 0.75]] },
+                  "properties": { "part": "connector" } }
+            ]))
+            .unwrap(),
+        );
+        // `geometry` is not consulted for an entry that places its own.
+        let layer = stand_in_layer(&e, LegendGeometry::Point);
+        assert_eq!(layer.features.len(), 3);
+        let [poly, point, line] = &layer.features[..] else {
+            unreachable!()
+        };
+
+        let ring = &poly.geometry.polygons[0].exterior;
+        assert_eq!(ring.first(), Some(&(0, 2048)));
+        assert_eq!(ring.first(), ring.last(), "the ring is closed");
+        assert_eq!(ring.len(), 5);
+        assert!(poly.geometry.lines.is_empty() && poly.geometry.points.is_empty());
+        assert!(matches!(poly.properties.get("part"), Some(FeatureValue::String(s)) if s == "any"));
+
+        assert_eq!(point.geometry.points, vec![(1024, 3072)]);
+        assert!(
+            matches!(point.properties.get("part"), Some(FeatureValue::String(s)) if s == "rep")
+        );
+        assert!(matches!(point.properties.get("no"), Some(FeatureValue::String(s)) if s == "12"));
+
+        // Two declared ends, resampled densely enough for a brush.
+        let l = &line.geometry.lines[0];
+        assert_eq!(
+            (l.first(), l.last()),
+            (Some(&(1024, 3072)), Some(&(4096, 3072)))
+        );
+        assert!(l.len() >= 32, "got {} vertices", l.len());
+        assert!(l.windows(2).all(|w| w[0].0 < w[1].0 && w[0].1 == 3072));
     }
 
     /// Numbers keep their integer-ness, because `["get", …]` comparisons

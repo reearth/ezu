@@ -51,6 +51,7 @@ And on an entry:
 | `note` | string | prose for this entry alone |
 | `min-zoom` / `max-zoom` | integer | zooms this entry applies to; absent means all |
 | `geometry` | `all` \| `polygon` \| `line` \| `point` | which geometry the swatch's stand-in feature carries; see below |
+| `features` | array | stand-in features placed by hand, for a symbol made of parts; replaces `geometry`, see below |
 
 ## Why an entry names a node
 
@@ -123,6 +124,57 @@ draws *as well as* the line. Name the geometry on the entry to stop it:
 ```json
 { "label": "coastline", "from": "@coast", "geometry": "line" }
 ```
+
+### Placing the stand-ins yourself
+
+Some symbols are an arrangement of parts, and the fixed stand-in cannot
+arrange anything. A ledger map's "assigned house number" is a building square,
+a dot at its representative point, a dotted connector out to an entrance dot,
+and the number over the representative point — a `stack` of a fill, circles,
+a dashed stroke and a `text` node, each fed by its own `features` node.
+
+`features` lists the stand-ins to draw instead:
+
+```json
+{
+  "label": "assigned house number", "from": "@addr",
+  "properties": { "no": "12" },
+  "features": [
+    { "geometry": { "type": "Polygon",
+                    "coordinates": [[[0.06, 0.45], [0.42, 0.45], [0.42, 0.92], [0.06, 0.92]]] } },
+    { "geometry": { "type": "Point", "coordinates": [0.24, 0.68] },
+      "properties": { "part": "rep" } },
+    { "geometry": { "type": "LineString", "coordinates": [[0.24, 0.68], [0.88, 0.68]] },
+      "properties": { "part": "connector" } },
+    { "geometry": { "type": "Point", "coordinates": [0.88, 0.68] },
+      "properties": { "part": "entrance" } }
+  ]
+}
+```
+
+Each geometry is GeoJSON-shaped — `Point`, `LineString` or `Polygon` — but
+its coordinates are `[x, y]` fractions of the swatch, from `0` to `1`, with
+the origin at the top-left. They are scaled to `--swatch-size` when drawn, so
+one entry serves every size; what does not scale is anything the nodes measure
+in pixels, so a circle's radius and a label's size stay as the map has them.
+The fractions apply to each axis separately, which means a square drawn as
+`0.36 × 0.47` of a 96×48 swatch comes out about 35×23 pixels: write the
+coordinates for the shape your legend uses.
+
+All the stand-ins go to every `features` node the entry's graph reads, as the
+fixed one does, and each node's `filter-expr` picks out its part — by
+`["geometry-type"]`, or by a property only that part carries, like `part`
+above. A feature's own `properties` are laid over the entry's, so what every
+part shares (here the number the label reads) is said once.
+
+`features` and `geometry` cannot both be given, since the features already say
+what geometry there is; `ezu check` refuses that, an empty list, a line of
+fewer than two positions, a ring of fewer than three, and a position outside
+`0`–`1`.
+
+Labels in a swatch are placed with the same collision as on the map, against
+the swatch's own labels only: a swatch has no neighbouring tiles, so a label
+cut by one edge stays cut rather than reappearing from the other side.
 
 Because the whole node runs, a swatch shows what that node draws for one
 feature — not a curated illustration of it. A `dot-density` layer's swatch is a
@@ -214,7 +266,9 @@ And the JSON, with `swatch` paths added:
 
 `from` comes back without its `@`: it is an id to look up, not a reference to
 resolve. Absent fields stay absent rather than coming through as nulls, so a
-host can test for them.
+host can test for them. An entry's `features` come back as declared, so a host
+that draws its own swatches can stand in the same features `--swatch-dir`
+does.
 
 ## The whole command
 

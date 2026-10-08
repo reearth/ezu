@@ -53,6 +53,9 @@ pub enum BuildGraphError {
         got: PortKind,
     },
 
+    #[error("legend entry `{label}` {reason}")]
+    LegendFeatures { label: String, reason: String },
+
     #[error(transparent)]
     Graph(#[from] BuildError),
 }
@@ -177,6 +180,12 @@ pub fn build_graph(
                     got,
                 });
             }
+            entry
+                .check_features()
+                .map_err(|reason| BuildGraphError::LegendFeatures {
+                    label: entry.label.clone(),
+                    reason,
+                })?;
         }
     }
     Ok(graph)

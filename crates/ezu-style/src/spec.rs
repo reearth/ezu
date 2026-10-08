@@ -263,8 +263,105 @@ pub struct LegendEntry {
     pub max_zoom: Option<u8>,
     /// Which geometry the swatch's stand-in feature carries. Absent
     /// leaves it to whoever draws the swatch, which offers all three.
+    /// Not allowed together with `features`, which places its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geometry: Option<LegendGeometry>,
+    /// Stand-in features drawn in place of the fixed polygon, line and
+    /// point, for a symbol whose parts sit in a particular arrangement —
+    /// a building square with its entrance dot off to one side, joined
+    /// by a connector, labelled above. Coordinates are fractions of the
+    /// swatch, so the same entry draws at any swatch size. See
+    /// [`LegendFeature`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub features: Option<Vec<LegendFeature>>,
+}
+
+/// One stand-in feature of a legend swatch.
+///
+/// The geometry is GeoJSON-shaped, but its coordinates are not
+/// longitude and latitude: they are `[x, y]` fractions of the swatch,
+/// `0` to `1` on each axis, from the top-left corner. Its properties are
+/// laid over the entry's own, so what every part shares is said once on
+/// the entry and only what tells the parts apart is said here.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct LegendFeature {
+    pub geometry: LegendFeatureGeometry,
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub properties: serde_json::Map<String, serde_json::Value>,
+}
+
+/// A stand-in feature's geometry, in swatch fractions (see
+/// [`LegendFeature`]). A polygon's first ring is its exterior and the
+/// rest are holes; a ring need not repeat its first position at the end.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "type", deny_unknown_fields)]
+pub enum LegendFeatureGeometry {
+    Point { coordinates: [f64; 2] },
+    LineString { coordinates: Vec<[f64; 2]> },
+    Polygon { coordinates: Vec<Vec<[f64; 2]>> },
+}
+
+impl LegendEntry {
+    /// Whether the entry's stand-in features are ones a swatch can draw:
+    /// `features` alongside `geometry`, an empty list, a line of fewer
+    /// than two positions, a ring of fewer than three, or a position
+    /// outside the swatch are refused with the reason.
+    pub fn check_features(&self) -> Result<(), String> {
+        let Some(features) = &self.features else {
+            return Ok(());
+        };
+        if self.geometry.is_some() {
+            return Err("gives both `geometry` and `features`; `features` places \
+                        its own geometry, so drop `geometry`"
+                .to_string());
+        }
+        if features.is_empty() {
+            return Err("`features` is empty, so the swatch would draw nothing".to_string());
+        }
+        for (i, f) in features.iter().enumerate() {
+            let positions: Vec<&[f64; 2]> = match &f.geometry {
+                LegendFeatureGeometry::Point { coordinates } => vec![coordinates],
+                LegendFeatureGeometry::LineString { coordinates } => {
+                    if coordinates.len() < 2 {
+                        return Err(format!(
+                            "`features[{i}]`: a LineString needs at least two positions"
+                        ));
+                    }
+                    coordinates.iter().collect()
+                }
+                LegendFeatureGeometry::Polygon { coordinates } => {
+                    if coordinates.is_empty() {
+                        return Err(format!("`features[{i}]`: a Polygon needs a ring"));
+                    }
+                    for ring in coordinates {
+                        let distinct = if ring.len() > 1 && ring.first() == ring.last() {
+                            ring.len() - 1
+                        } else {
+                            ring.len()
+                        };
+                        if distinct < 3 {
+                            return Err(format!(
+                                "`features[{i}]`: a Polygon ring needs at least three positions"
+                            ));
+                        }
+                    }
+                    coordinates.iter().flatten().collect()
+                }
+            };
+            if let Some(p) = positions
+                .iter()
+                .find(|p| !p.iter().all(|c| (0.0..=1.0).contains(c)))
+            {
+                return Err(format!(
+                    "`features[{i}]`: position [{}, {}] is outside the swatch — \
+                     coordinates are fractions of it, from 0 to 1",
+                    p[0], p[1]
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// The geometry a legend swatch's stand-in feature is given.
@@ -1187,5 +1284,95 @@ mod tests {
             FieldRef::classify("plain"),
             FieldRef::Literal("plain")
         ));
+    }
+
+    fn legend_entry(entry: &str) -> LegendEntry {
+        let json = format!(
+            r#"{{ "name": "l", "nodes": {{}}, "output": "@x",
+                  "legend": {{ "entries": [{entry}] }} }}"#
+        );
+        let doc = Document::from_json(&json).expect("parse");
+        doc.legend.unwrap().entries.remove(0)
+    }
+
+    #[test]
+    fn a_legend_entry_parses_stand_in_features() {
+        let e = legend_entry(
+            r#"{ "label": "house number", "from": "@n", "properties": { "kind": "addr" },
+                 "features": [
+                   { "geometry": { "type": "Polygon",
+                                   "coordinates": [[[0.1, 0.3], [0.4, 0.3], [0.4, 0.9], [0.1, 0.9]]] },
+                     "properties": { "part": "building" } },
+                   { "geometry": { "type": "LineString", "coordinates": [[0.25, 0.6], [0.9, 0.6]] } },
+                   { "geometry": { "type": "Point", "coordinates": [0.25, 0.6] } }
+                 ] }"#,
+        );
+        let features = e.features.as_ref().unwrap();
+        assert_eq!(features.len(), 3);
+        assert!(matches!(
+            &features[0].geometry,
+            LegendFeatureGeometry::Polygon { coordinates } if coordinates[0].len() == 4
+        ));
+        assert_eq!(features[0].properties["part"], "building");
+        assert!(features[1].properties.is_empty());
+        assert_eq!(
+            features[2].geometry,
+            LegendFeatureGeometry::Point {
+                coordinates: [0.25, 0.6]
+            }
+        );
+        assert_eq!(e.check_features(), Ok(()));
+        // And back out unchanged, for a host that draws its own swatches.
+        let round: LegendEntry = serde_json::from_str(&serde_json::to_string(&e).unwrap()).unwrap();
+        assert_eq!(round.features, e.features);
+    }
+
+    #[test]
+    fn an_unknown_stand_in_geometry_type_is_a_parse_error() {
+        let json = r#"{ "name": "l", "nodes": {}, "output": "@x",
+          "legend": { "entries": [{ "label": "x", "from": "@n",
+            "features": [{ "geometry": { "type": "MultiPoint", "coordinates": [[0.5, 0.5]] } }] }] } }"#;
+        assert!(Document::from_json(json).is_err());
+        let misspelt = json
+            .replace("MultiPoint", "Point")
+            .replace("[[0.5, 0.5]]", "[0.5, 0.5], \"coordinate\": [0, 0]");
+        let err = Document::from_json(&misspelt).unwrap_err();
+        assert!(err.to_string().contains("coordinate"), "{err}");
+    }
+
+    #[test]
+    fn stand_in_features_are_checked() {
+        let point = r#"{ "geometry": { "type": "Point", "coordinates": [0.5, 0.5] } }"#;
+        for (entry, needle) in [
+            (
+                format!(r#"{{ "label": "x", "from": "@n", "geometry": "point", "features": [{point}] }}"#),
+                "both `geometry` and `features`",
+            ),
+            (
+                r#"{ "label": "x", "from": "@n", "features": [] }"#.to_string(),
+                "empty",
+            ),
+            (
+                r#"{ "label": "x", "from": "@n", "features": [
+                     { "geometry": { "type": "LineString", "coordinates": [[0.1, 0.1]] } }] }"#
+                    .to_string(),
+                "at least two",
+            ),
+            (
+                r#"{ "label": "x", "from": "@n", "features": [
+                     { "geometry": { "type": "Polygon", "coordinates": [[[0, 0], [1, 0], [0, 0]]] } }] }"#
+                    .to_string(),
+                "at least three",
+            ),
+            (
+                r#"{ "label": "x", "from": "@n", "features": [
+                     { "geometry": { "type": "Point", "coordinates": [0.5, 1.5] } }] }"#
+                    .to_string(),
+                "[0.5, 1.5] is outside the swatch",
+            ),
+        ] {
+            let err = legend_entry(&entry).check_features().unwrap_err();
+            assert!(err.contains(needle), "{needle:?} not in {err:?}");
+        }
     }
 }
