@@ -12,11 +12,11 @@ use std::sync::Arc;
 use ezu_graph::{
     schema_frag, take_input_ref, Asset, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError,
     FactoryCtx, FactoryError, In, InReader, InfluenceCtx, Node, NodeFactory, PortKind, PortSpec,
-    PortValue, RasterBuf,
+    PortValue,
 };
 use ezu_style as spec;
 use serde_json::Value;
-use tiny_skia::{PixmapPaint, PixmapRef, Transform};
+use tiny_skia::{PixmapPaint, Transform};
 use xxhash_rust::xxh3::Xxh3;
 
 use ezu_core::{
@@ -26,7 +26,7 @@ use ezu_core::{
 
 use crate::nodes::common::{
     canvas_into_raster, core_tile, downcast_features, empty_raster, make_canvas,
-    unwrap_raster_or_sprite, ACCEPTS_RASTER_OR_SPRITE,
+    unwrap_raster_or_sprite, FramedImage, ACCEPTS_RASTER_OR_SPRITE,
 };
 
 const STAMP_SALT: u32 = 0x5354_4d50; // 'STMP'
@@ -196,12 +196,12 @@ impl Node for StampNode {
         // not depend on the group the point came from.
         let stamp_points = |pm: &mut tiny_skia::Pixmap,
                             points: &[(i32, i32)],
-                            img: PixmapRef,
+                            img: &FramedImage,
                             scale: f32,
                             rotation_deg: f32,
                             pix_paint: &PixmapPaint| {
-            let iw = img.width() as f32;
-            let ih = img.height() as f32;
+            let (iw, ih) = img.size();
+            let mut pm = pm.as_mut();
             for &(x, y) in points {
                 let px = x as f32 * sx + pad;
                 let py = y as f32 * sy + pad;
@@ -230,7 +230,7 @@ impl Node for StampNode {
                     .pre_rotate(rotation_deg + rot_off)
                     .pre_scale(s, s)
                     .pre_translate(-iw * 0.5, -ih * 0.5);
-                pm.draw_pixmap(0, 0, img, pix_paint, t, None);
+                img.draw(&mut pm, pix_paint, t);
             }
         };
         let has_paint_expr = self.scale_expr.is_some()
@@ -253,18 +253,15 @@ impl Node for StampNode {
                     "asset `{key}` is not a sprite sheet"
                 )));
             };
-            let mut crops: HashMap<String, Option<Arc<RasterBuf>>> = HashMap::new();
+            let mut crops: HashMap<String, Option<FramedImage>> = HashMap::new();
             for group in &feats.groups {
                 let ectx = crate::render::group_expr_context(group, z);
                 let Some(name) = eval_icon_name(name_expr, &ectx) else {
                     continue;
                 };
-                let cropped = crops
+                let Some(img) = crops
                     .entry(name.clone())
-                    .or_insert_with(|| sheet.crop(&name).map(Arc::new))
-                    .clone();
-                let Some(img) = cropped else { continue };
-                let Some(img_ref) = PixmapRef::from_bytes(&img.pixels, img.width, img.height)
+                    .or_insert_with(|| sheet.crop(&name).as_ref().and_then(FramedImage::new))
                 else {
                     continue;
                 };
@@ -275,7 +272,7 @@ impl Node for StampNode {
                     opacity,
                     ..PixmapPaint::default()
                 };
-                stamp_points(pm, &group.points, img_ref, scale, rotation_deg, &pix_paint);
+                stamp_points(pm, &group.points, img, scale, rotation_deg, &pix_paint);
             }
         } else {
             // Single `image` input stamped at every point.
@@ -283,11 +280,9 @@ impl Node for StampNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("image".into()))?;
             let (image, _) = unwrap_raster_or_sprite(image_in, "image")?;
-            if image.width == 0 || image.height == 0 {
+            let Some(img) = FramedImage::new(&image) else {
                 return Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))));
-            }
-            let img_ref = PixmapRef::from_bytes(&image.pixels, image.width, image.height)
-                .ok_or_else(|| EvalError::Other("stamp: invalid image pixmap bytes".into()))?;
+            };
             if has_paint_expr {
                 for group in &feats.groups {
                     let ectx = crate::render::group_expr_context(group, z);
@@ -300,7 +295,7 @@ impl Node for StampNode {
                         opacity,
                         ..PixmapPaint::default()
                     };
-                    stamp_points(pm, &group.points, img_ref, scale, rotation_deg, &pix_paint);
+                    stamp_points(pm, &group.points, &img, scale, rotation_deg, &pix_paint);
                 }
             } else {
                 let pix_paint = PixmapPaint {
@@ -311,7 +306,7 @@ impl Node for StampNode {
                 stamp_points(
                     pm,
                     &points,
-                    img_ref,
+                    &img,
                     const_scale,
                     const_rotation_deg,
                     &pix_paint,

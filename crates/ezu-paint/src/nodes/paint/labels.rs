@@ -28,10 +28,10 @@ use ezu_graph::{
     Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
 };
 use serde_json::Value;
-use tiny_skia::{PixmapPaint, PixmapRef, Transform};
+use tiny_skia::{PixmapPaint, Transform};
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{canvas_into_raster, empty_raster, make_canvas};
+use crate::nodes::common::{canvas_into_raster, empty_raster, make_canvas, FramedImage};
 use ezu_core::text::{
     collide, draw, draw_line, FaceEntry, Font, GlyphPlacement, LabelCandidate, OutlineSdfCache,
     SectionPaint, StackEntry, TextBlock, TextPaint,
@@ -247,6 +247,8 @@ pub(super) fn draw_labels(
     let sdf_cache = set.outline_sdf.then(OutlineSdfCache::new);
     let pm = canvas.pixmap_mut();
     let mut pm = pm.as_mut();
+    // Symbols of one group share their icon's buffer; it is framed once.
+    let mut framed: HashMap<*const RasterBuf, Option<FramedImage>> = HashMap::new();
     // maplibre-gl-js draws a symbol layer's icons underneath its text, so
     // the icons of the whole layer go down first rather than per symbol.
     for p in placed {
@@ -278,23 +280,23 @@ pub(super) fn draw_labels(
             continue;
         }
         let img = &icon.image;
-        let Some(img_ref) = PixmapRef::from_bytes(&img.pixels, img.width, img.height) else {
+        let Some(framed) = framed
+            .entry(Arc::as_ptr(img))
+            .or_insert_with(|| FramedImage::new(img))
+        else {
             continue;
         };
         let t = Transform::from_translate(ax, ay)
             .pre_rotate(icon.rotation_deg)
             .pre_scale(icon.scale, icon.scale)
             .pre_translate(img.width as f32 * -0.5, img.height as f32 * -0.5);
-        pm.draw_pixmap(
-            0,
-            0,
-            img_ref,
+        framed.draw(
+            &mut pm,
             &PixmapPaint {
                 opacity: icon.opacity,
                 ..PixmapPaint::default()
             },
             t,
-            None,
         );
     }
     for p in placed {

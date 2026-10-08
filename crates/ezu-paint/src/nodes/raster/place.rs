@@ -23,12 +23,12 @@ use ezu_graph::{
     FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
-use tiny_skia::{PixmapPaint, PixmapRef, Transform};
+use tiny_skia::{PixmapPaint, Transform};
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
     canvas_into_raster, make_canvas, read_optional_string, read_xy, unwrap_raster_or_sprite,
-    ACCEPTS_RASTER_OR_SPRITE,
+    FramedImage, ACCEPTS_RASTER_OR_SPRITE,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,11 +105,9 @@ impl Node for PlaceNode {
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
         let (src, _) = unwrap_raster_or_sprite(input, "input")?;
         let mut canvas = make_canvas(ctx)?;
-        if src.width == 0 || src.height == 0 {
+        let Some(framed) = FramedImage::new(&src) else {
             return Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))));
-        }
-        let img_ref = PixmapRef::from_bytes(&src.pixels, src.width, src.height)
-            .ok_or_else(|| EvalError::Other("place: invalid image pixmap bytes".into()))?;
+        };
 
         let pad = canvas.pad() as f32;
         let tile_w = canvas.tile_width() as f32;
@@ -164,9 +162,7 @@ impl Node for PlaceNode {
             opacity,
             ..PixmapPaint::default()
         };
-        canvas
-            .pixmap_mut()
-            .draw_pixmap(0, 0, img_ref, &paint, transform, None);
+        framed.draw(&mut canvas.pixmap_mut().as_mut(), &paint, transform);
         Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))))
     }
     fn param_hash(&self, h: &mut Xxh3) {

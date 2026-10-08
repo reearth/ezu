@@ -20,12 +20,12 @@ use ezu_graph::{
     FactoryError, In, InReader, InfluenceCtx, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
-use tiny_skia::{PixmapPaint, PixmapRef, Transform};
+use tiny_skia::{PixmapPaint, Transform};
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
     canvas_into_raster, downcast_features, empty_raster, make_canvas, unwrap_raster_or_sprite,
-    ACCEPTS_RASTER_OR_SPRITE,
+    FramedImage, ACCEPTS_RASTER_OR_SPRITE,
 };
 
 struct LineStampNode {
@@ -98,8 +98,9 @@ impl Node for LineStampNode {
             (iw * scale).max(1.0)
         };
 
-        let img_ref = PixmapRef::from_bytes(&image.pixels, image.width, image.height)
-            .ok_or_else(|| EvalError::Other("line-stamp: invalid image pixmap bytes".into()))?;
+        let Some(framed) = FramedImage::new(&image) else {
+            return Ok(empty_raster(ctx));
+        };
         let pix_paint = PixmapPaint {
             opacity,
             ..PixmapPaint::default()
@@ -112,7 +113,7 @@ impl Node for LineStampNode {
         let extent = feats.extent.max(1) as f32;
         let sx = tile_w / extent;
         let sy = tile_h / extent;
-        let pm = canvas.pixmap_mut();
+        let mut pm = canvas.pixmap_mut().as_mut();
 
         for line in feats.lines() {
             if line.len() < 2 {
@@ -143,7 +144,7 @@ impl Node for LineStampNode {
                         .pre_rotate(angle)
                         .pre_scale(scale, scale)
                         .pre_translate(-iw * 0.5, -ih * 0.5);
-                    pm.draw_pixmap(0, 0, img_ref, &pix_paint, t, None);
+                    framed.draw(&mut pm, &pix_paint, t);
                     next += spacing;
                 }
                 next -= seg;

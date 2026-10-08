@@ -94,6 +94,8 @@ mod schema;
 mod segment_to;
 #[path = "paint/sharpen_field.rs"]
 mod sharpen_field;
+#[path = "paint/sprite_icon_edges.rs"]
+mod sprite_icon_edges;
 #[path = "paint/stamp_position_jitter.rs"]
 mod stamp_position_jitter;
 #[path = "paint/stroke_gap_width.rs"]

@@ -751,6 +751,62 @@ pub(super) fn empty_raster(ctx: &EvalCtx<'_>) -> PortValue {
     PortValue::Raster(Arc::new(RasterBuf::new(pw, ph)))
 }
 
+/// An image wrapped in a one-pixel transparent frame, for drawing under an
+/// arbitrary transform.
+///
+/// tiny-skia's `draw_pixmap` fills the transformed image rect and samples it
+/// with `SpreadMode::Pad`, so any destination pixel whose centre falls just
+/// outside the image repeats the image's edge row or column. That happens
+/// routinely: the rect's edges are rounded to whole pixels, and an
+/// odd-sized icon centred on a whole-pixel anchor puts both edges on a half
+/// pixel, which rounds the covered span one pixel past the image on one side
+/// — a ghost copy of the icon's last column (or row) beside it. Bilinear
+/// filtering reads half a pixel past every edge as well. The frame makes
+/// every such sample transparent, which is what MapLibre gets by padding
+/// its atlas entries.
+pub(super) struct FramedImage(tiny_skia::Pixmap);
+
+impl FramedImage {
+    /// `None` for an empty image.
+    pub(super) fn new(img: &RasterBuf) -> Option<FramedImage> {
+        if img.width == 0 || img.height == 0 {
+            return None;
+        }
+        let mut framed = tiny_skia::Pixmap::new(img.width + 2, img.height + 2)?;
+        let fw = framed.width() as usize;
+        let row = img.width as usize * 4;
+        let dst = framed.data_mut();
+        for (y, src) in img.pixels.chunks_exact(row).enumerate() {
+            let at = ((y + 1) * fw + 1) * 4;
+            dst[at..at + row].copy_from_slice(src);
+        }
+        Some(FramedImage(framed))
+    }
+
+    /// The image's own size, without the frame.
+    pub(super) fn size(&self) -> (f32, f32) {
+        ((self.0.width() - 2) as f32, (self.0.height() - 2) as f32)
+    }
+
+    /// Draw the image with `t` mapping its own (unframed) pixel space onto
+    /// `pm`, exactly as `draw_pixmap` would be called with the bare image.
+    pub(super) fn draw(
+        &self,
+        pm: &mut tiny_skia::PixmapMut<'_>,
+        paint: &tiny_skia::PixmapPaint,
+        t: tiny_skia::Transform,
+    ) {
+        pm.draw_pixmap(
+            0,
+            0,
+            self.0.as_ref(),
+            paint,
+            t.pre_translate(-1.0, -1.0),
+            None,
+        );
+    }
+}
+
 pub(super) fn core_tile(ctx: &EvalCtx<'_>) -> CoreTileId {
     CoreTileId::new(ctx.tile.z, ctx.tile.x, ctx.tile.y)
 }
