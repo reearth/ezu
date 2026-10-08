@@ -1864,6 +1864,44 @@ mod tests {
     }
 
     #[test]
+    fn a_file_glyphs_source_reads_the_fontstack_directory_as_named() {
+        // A MapLibre glyphs tree on disk: one directory per fontstack,
+        // named with the fontstack's spaces.
+        let root = std::env::temp_dir().join(format!("ezu-glyphs-{}", std::process::id()));
+        let stack_dir = root.join("Noto Sans Regular");
+        std::fs::create_dir_all(&stack_dir).unwrap();
+        let vendored = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../ezu-core/tests/glyphs/0-255.pbf");
+        std::fs::copy(vendored, stack_dir.join("0-255.pbf")).unwrap();
+
+        let url = format!("file:{}/{{fontstack}}/{{range}}.pbf", root.display()).replace('\\', "/");
+        let doc = ezu_style::Document::from_json(&format!(
+            r##"{{ "name": "t",
+                 "sources": {{ "g": {{ "type": "glyphs", "url": "{url}",
+                                      "fontstack": "Noto Sans Regular" }} }},
+                 "nodes": {{ "out": {{ "op": "solid", "color": "#000000" }} }},
+                 "output": "@out" }}"##
+        ))
+        .unwrap();
+        let ezu_style::SourceDecl::Glyphs(glyphs) = &doc.sources["g"] else {
+            panic!("expected a glyphs source");
+        };
+        let loader = BrushBankLoader::new();
+        let Asset::Glyphs(opq) = loader.load(&glyphs.asset_key()).expect("template loads") else {
+            panic!("expected a Glyphs asset");
+        };
+        let stack = opq
+            .downcast::<ezu_core::text::SdfFontStack>()
+            .expect("payload is an SdfFontStack");
+        let found = stack.glyph('A').is_some();
+        std::fs::remove_dir_all(&root).ok();
+        assert!(
+            found,
+            "the range is read from `Noto Sans Regular/0-255.pbf`"
+        );
+    }
+
+    #[test]
     fn font_magic_is_sniffed_for_data_urls() {
         assert!(is_font_magic(&[0x00, 0x01, 0x00, 0x00, 0xff]));
         assert!(is_font_magic(b"OTTO...."));

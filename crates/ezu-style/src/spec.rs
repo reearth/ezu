@@ -537,12 +537,21 @@ pub struct GlyphsSource {
 
 impl GlyphsSource {
     /// The asset key this source resolves to: the URL template with
-    /// `{fontstack}` substituted (percent-encoded, as MapLibre does)
-    /// and `{range}` left in place for per-range fetching. Hosts
-    /// register the source's glyph stack under this key.
+    /// `{fontstack}` substituted and `{range}` left in place for per-range
+    /// fetching. Hosts register the source's glyph stack under this key.
+    ///
+    /// An `http(s)://` template gets the fontstack percent-encoded, as
+    /// MapLibre requests it. A `file:` template is a path, read as written
+    /// like every other `file:` source, so it gets the fontstack as it is:
+    /// the directory on disk is `Noto Sans Regular`, not
+    /// `Noto%20Sans%20Regular`.
     pub fn asset_key(&self) -> String {
-        self.url
-            .replace("{fontstack}", &percent_encode(&self.fontstack))
+        if self.url.starts_with("file:") {
+            self.url.replace("{fontstack}", &self.fontstack)
+        } else {
+            self.url
+                .replace("{fontstack}", &percent_encode(&self.fontstack))
+        }
     }
 }
 
@@ -1099,6 +1108,28 @@ mod tests {
             "https://example.com/fonts/Noto%20Sans%20Regular%2C%20Arial%20Unicode%20MS%20Regular/{range}.pbf"
         );
         assert_eq!(doc.attributions(), ["© Glyph Server"]);
+    }
+
+    #[test]
+    fn a_file_glyphs_template_takes_the_fontstack_as_written() {
+        let json = r##"{
+          "name": "demo",
+          "sources": {
+            "labels": { "type": "glyphs",
+                        "url": "file:/srv/glyphs/{fontstack}/{range}.pbf",
+                        "fontstack": "Noto Sans JP Bold" }
+          },
+          "nodes": { "out": { "op": "solid", "color": "#000000" } },
+          "output": "@out"
+        }"##;
+        let doc = Document::from_json(json).unwrap();
+        let SourceDecl::Glyphs(g) = &doc.sources["labels"] else {
+            panic!("expected glyphs source");
+        };
+        assert_eq!(
+            g.asset_key(),
+            "file:/srv/glyphs/Noto Sans JP Bold/{range}.pbf"
+        );
     }
 
     #[test]

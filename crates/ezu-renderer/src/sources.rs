@@ -119,7 +119,8 @@ impl<'a> SourceInfo<'a> {
             ),
             SourceDecl::Font(s) => (SourceKind::Font, Some(borrowed(&s.url)), None),
             // `{fontstack}` is resolved here rather than left to the host:
-            // it is percent-encoded the way MapLibre encodes it, and a host
+            // in an http(s) URL it is percent-encoded the way MapLibre
+            // encodes it (a `file:` path takes it as written), and a host
             // doing that itself is the style interpretation this call
             // exists to remove.
             SourceDecl::Glyphs(s) => (SourceKind::Glyphs, Some(Cow::Owned(s.asset_key())), None),
