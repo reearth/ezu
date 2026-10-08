@@ -33,7 +33,7 @@ Two structural facts first:
 | `line` (+ `line-dasharray`, `line-cap`/`join`, `line-gap-width`) | `features` → `boundary` (`clip-edges: drop`) → crisp `stroke`, dash in px. On a polygon source-layer the rings are stroked without the tile-buffer clip edges, as MapLibre does. A gap renders MapLibre's casing annulus — one stroke's footprint with the corridor knocked out — so joins, caps and dash phase behave like the GL shader |
 | `circle` (+ `circle-stroke-*`) | a `circle` sprite `stamp`ed at each point; the stroke is a larger ring stamped underneath |
 | `raster` | `raster` |
-| `hillshade` (over `raster-dem`) | `dem` + `hillshade` (tone calibration still approximate) |
+| `hillshade` (over `raster-dem`) | `dem` + `hillshade` (tone calibration still approximate). The source `encoding` maps `mapbox` (the default) to `mapbox-rgb` and `terrarium` to `terrarium`; a `custom` encoding is accepted only when its factors equal one of those two, otherwise it warns and is read as `mapbox-rgb` |
 | `heatmap` | `features` → `density` (GL-JS kernel) → `color-ramp`, with the colour expression over `heatmap-density` baked to a 256-entry ramp per tile |
 | `fill-extrusion` | flat footprint `fill-solid` using `fill-extrusion-color` — no 3-D, height and base dropped |
 | `symbol` (icons) | the icon rides the layer's label: a point symbol's icon and text boxes join the shared collision index and place or drop **as one unit** |

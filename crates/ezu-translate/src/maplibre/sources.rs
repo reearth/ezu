@@ -139,11 +139,7 @@ pub(crate) fn convert_sources(
             }
             "raster-dem" => {
                 if let Some(url) = url {
-                    // Encoding hint: MapLibre `encoding` maps to ezu's.
-                    let enc = decl
-                        .get("encoding")
-                        .and_then(Value::as_str)
-                        .unwrap_or("mapbox");
+                    let enc = dem_encoding(name, decl, report);
                     // `neighbor-fetch` stitches the 3×3 tile neighbourhood so
                     // hillshade slopes stay correct up to the tile edge. No
                     // `tileSize` carries over: ezu reads each tile's edge from
@@ -277,4 +273,50 @@ pub(crate) fn features_node(
         m.insert("max-zoom".into(), Value::from(z));
     }
     Value::Object(m)
+}
+
+/// Map a MapLibre `raster-dem` `encoding` onto the two ezu `dem` accepts.
+///
+/// - absent or `mapbox` (MapLibre's default) -> `mapbox-rgb`
+/// - `terrarium` -> `terrarium`
+/// - `custom` -> the matching ezu encoding when its
+///   `redFactor`/`greenFactor`/`blueFactor`/`baseShift` equal that encoding's
+///   exactly (Mapbox: 6553.6, 25.6, 0.1, -10000; Terrarium: 256, 1, 1/256,
+///   -32768). Any other factors have no ezu equivalent, and a `dem` source
+///   cannot be dropped because the `hillshade` layer's `dem` node refers to
+///   it, so the source is kept with `mapbox-rgb` and a warning says the
+///   decoded heights are wrong.
+fn dem_encoding(name: &str, decl: &Map<String, Value>, report: &mut Report) -> &'static str {
+    match decl.get("encoding").and_then(Value::as_str) {
+        None | Some("mapbox") => "mapbox-rgb",
+        Some("terrarium") => "terrarium",
+        Some("custom") => {
+            let f = |key: &str| decl.get(key).and_then(Value::as_f64);
+            let got = [
+                f("redFactor").unwrap_or(1.0),
+                f("greenFactor").unwrap_or(1.0),
+                f("blueFactor").unwrap_or(1.0),
+                f("baseShift").unwrap_or(0.0),
+            ];
+            let same = |want: [f64; 4]| got.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-9);
+            if same([6553.6, 25.6, 0.1, -10000.0]) {
+                "mapbox-rgb"
+            } else if same([256.0, 1.0, 1.0 / 256.0, -32768.0]) {
+                "terrarium"
+            } else {
+                report.warn(format!(
+                    "source `{name}`: custom raster-dem encoding {got:?} has no ezu \
+                     equivalent — decoded as mapbox-rgb, elevations will be wrong"
+                ));
+                "mapbox-rgb"
+            }
+        }
+        Some(other) => {
+            report.warn(format!(
+                "source `{name}`: raster-dem encoding `{other}` not supported — \
+                 decoded as mapbox-rgb"
+            ));
+            "mapbox-rgb"
+        }
+    }
 }
