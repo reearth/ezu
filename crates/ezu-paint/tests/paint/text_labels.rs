@@ -515,3 +515,56 @@ fn format_section_font_selects_a_different_stack() {
         "digit section should add ink via its own font: with={with_digits} without={without}"
     );
 }
+
+fn polygon_feature(exterior: &[(i32, i32)]) -> Feature {
+    let mut geometry = Geometry::default();
+    geometry.polygons.push(ezu_features::Polygon {
+        exterior: exterior.to_vec(),
+        holes: vec![],
+    });
+    Feature {
+        id: None,
+        geometry,
+        properties: HashMap::new(),
+    }
+}
+
+#[test]
+fn point_placement_labels_a_polygon_at_its_pole_of_inaccessibility() {
+    let recipe = format!(
+        r##"{{
+      "name": "text-polygon",
+      "tile-size": 64,
+      "sources": {{
+        "src":  {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
+        "body": {{ "type": "font", "url": "{font}" }}
+      }},
+      "nodes": {{
+        "feats": {{ "op": "features", "source": "src", "layer": "pts" }},
+        "out":   {{ "op": "text", "features": "@feats", "font": ["body"],
+                    "text": "W", "size": 12 }}
+      }},
+      "output": "@out"
+    }}"##,
+        font = font_url()
+    );
+    // An L whose centroid falls in its notch, outside the shape: the label
+    // goes inside the tall west arm instead, around x = 512 of 4096.
+    let l_shape = polygon_feature(&[
+        (0, 0),
+        (1024, 0),
+        (1024, 3072),
+        (4096, 3072),
+        (4096, 4096),
+        (0, 4096),
+    ]);
+    let r = render(&recipe, layer(vec![l_shape]));
+    assert!(opaque_in(&r, 0, 16) > 10, "the label sits in the west arm");
+    assert_eq!(opaque_in(&r, 24, 64), 0, "nothing near the centroid");
+
+    // A polygon whose pole lies in the tile buffer, past the east edge, is
+    // left to the tile that holds the pole.
+    let in_buffer = polygon_feature(&[(4000, 1000), (4224, 1000), (4224, 3000), (4000, 3000)]);
+    let r = render(&recipe, layer(vec![in_buffer]));
+    assert_eq!(opaque_in(&r, 0, 64), 0);
+}

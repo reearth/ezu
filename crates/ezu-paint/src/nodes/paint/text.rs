@@ -23,8 +23,9 @@
 //! constant-plus-`*-expr`-sibling pattern. Layout knobs (anchor,
 //! justify, wrapping, spacing) are build-time constants.
 //!
-//! Point placement ignores lines/polygons; line placement ignores
-//! points/polygons. Drawing is a pure function of world position (no
+//! Point placement labels each point and each polygon, at the polygon's
+//! pole of inaccessibility as MapLibre does, and ignores lines; line
+//! placement ignores points/polygons. Drawing is a pure function of world position (no
 //! jitter), so labels match across tile borders. Collision (default on)
 //! is likewise world-space deterministic: candidates are gathered from
 //! this tile plus its 8 neighbour tiles (host-bound under
@@ -42,9 +43,11 @@
 //! emulated: no viewport-centre priority and no per-frame fade in/out.
 //! See [`ezu_core::text::collide`].
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use ezu_features::ops::polylabel::pole_of_inaccessibility;
 use ezu_graph::{
     schema_frag, take_input_ref, Asset, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError,
     FactoryCtx, FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
@@ -434,6 +437,10 @@ struct LabelSection {
 /// `reach` — the widest a label can lay out — without a second evaluation pass.
 struct GroupPrep<'g> {
     group: &'g FeatureGroup,
+    /// Where point placement puts the group's symbols, in its own tile's
+    /// frame (see [`point_anchors`]). Empty for line placement, which walks
+    /// the group's lines instead.
+    anchors: Cow<'g, [(i32, i32)]>,
     dx: i64,
     dy: i64,
     /// The group's position in its own tile's filtered layer — MapLibre's
@@ -456,6 +463,35 @@ struct GroupPrep<'g> {
     reach: f32,
     /// A `font-expr` was set but resolved to the default stack (warned, own only).
     font_fallback: bool,
+}
+
+/// Where point placement puts a group's symbols: each of its points, then
+/// one anchor per polygon at the polygon's pole of inaccessibility — the
+/// spot inside it farthest from its outline.
+///
+/// This is MapLibre's point placement on a polygon feature, and like
+/// MapLibre it works on the polygon as this tile clipped it and keeps the
+/// anchor only when it falls inside the tile. A polygon spanning several
+/// tiles is then labelled by whichever tiles find a pole in their own
+/// square, each the same way from every tile that gathers it as a
+/// neighbour. The pole is found to 16 units of MapLibre's 8192 tile
+/// extent, the precision MapLibre asks for.
+fn point_anchors(group: &FeatureGroup, extent: i64) -> Cow<'_, [(i32, i32)]> {
+    if group.polygons.is_empty() {
+        return Cow::Borrowed(&group.points);
+    }
+    let precision = 16.0 * extent as f64 / 8192.0;
+    let mut anchors = group.points.clone();
+    anchors.extend(
+        group
+            .polygons
+            .iter()
+            .filter_map(|p| pole_of_inaccessibility(p, precision))
+            .filter(|&(x, y)| {
+                (0..extent).contains(&i64::from(x)) && (0..extent).contains(&i64::from(y))
+            }),
+    );
+    Cow::Owned(anchors)
 }
 
 /// Resolve an evaluated `text` value into label sections, or `None` to skip
@@ -1092,6 +1128,7 @@ impl TextNode {
         let reach = self.label_reach(&sections, size, padding, halo_width, cap);
         Some(GroupPrep {
             group,
+            anchors: Cow::Borrowed(&[]),
             dx,
             dy,
             feature,
@@ -1679,7 +1716,8 @@ impl TextNode {
         let mut preps: Vec<GroupPrep> = Vec::new();
         let mut reach_max = 0.0f32;
         for (fi, group) in feats.groups.iter().enumerate() {
-            if group.points.is_empty() {
+            let anchors = point_anchors(group, extent_i);
+            if anchors.is_empty() {
                 continue;
             }
             if let Some(prep) = self.prep_group(
@@ -1700,12 +1738,13 @@ impl TextNode {
                 if prep.font_fallback {
                     font_fallbacks += 1;
                 }
-                preps.push(prep);
+                preps.push(GroupPrep { anchors, ..prep });
             }
         }
         for (groups, dx, dy) in &nbr_groups {
             for (fi, group) in groups.iter().enumerate() {
-                if group.points.is_empty() {
+                let anchors = point_anchors(group, extent_i);
+                if anchors.is_empty() {
                     continue;
                 }
                 if let Some(prep) = self.prep_group(
@@ -1723,7 +1762,7 @@ impl TextNode {
                     true,
                 ) {
                     reach_max = reach_max.max(prep.reach);
-                    preps.push(prep);
+                    preps.push(GroupPrep { anchors, ..prep });
                 }
             }
         }
@@ -1775,7 +1814,7 @@ impl TextNode {
         for prep in &preps {
             let dx = prep.dx;
             let dy = prep.dy;
-            let group = prep.group;
+            let anchors: &[(i32, i32)] = &prep.anchors;
             let sections = &prep.sections;
             let text = &prep.text;
             let size = prep.size;
@@ -1790,7 +1829,7 @@ impl TextNode {
             if dx != 0 || dy != 0 {
                 let (mut min_x, mut min_y, mut max_x, mut max_y) =
                     (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-                for &(x, y) in &group.points {
+                for &(x, y) in anchors {
                     let lpx = (dx * extent_i + x as i64) as f32 * sx;
                     let lpy = (dy * extent_i + y as i64) as f32 * sy;
                     min_x = min_x.min(lpx);
@@ -1873,7 +1912,7 @@ impl TextNode {
                     * size;
                 if half_extent > self.max_extent_px {
                     if dx == 0 && dy == 0 {
-                        culled += group.points.len();
+                        culled += anchors.len();
                     }
                     text_blocks.clear();
                 } else if primary.is_empty() {
@@ -1967,7 +2006,7 @@ impl TextNode {
                 }
                 .inflate(padding)
             };
-            for (pi, &(x, y)) in group.points.iter().enumerate() {
+            for (pi, &(x, y)) in anchors.iter().enumerate() {
                 let world_ax = (tx + dx) * extent_i + x as i64;
                 let world_ay = (ty + dy) * extent_i + y as i64;
                 // Local world-pixel frame (current tile origin subtracted):
@@ -2086,7 +2125,7 @@ impl TextNode {
         let has_own = if line {
             feats.has_lines()
         } else {
-            feats.has_points()
+            feats.has_points() || feats.has_polygons()
         };
         if !self.collide && !has_own {
             return Ok(self.label_set(Vec::new(), Vec::new()));
@@ -2864,7 +2903,7 @@ fn text_schema(stage: Stage) -> Value {
                     "description": "A MapLibre number expression giving opacity, evaluated per feature group; multiplies both fill and halo alpha. Overrides the constant `opacity`.",
                 },
                 "placement": { "type": "string", "enum": ["point", "line", "line-center"],
-                               "description": "MapLibre `symbol-placement`. `point` (default) labels each feature point. `line` repeats labels along each polyline every `spacing-px`; `line-center` places one at each line's arc-length midpoint. Line placement ignores wrapping (`max-width-em`) and lays out a single line along the path." },
+                               "description": "MapLibre `symbol-placement`. `point` (default) labels each feature point, and each polygon once at its pole of inaccessibility (the interior spot farthest from its outline, as MapLibre places it). `line` repeats labels along each polyline every `spacing-px`; `line-center` places one at each line's arc-length midpoint. Line placement ignores wrapping (`max-width-em`) and lays out a single line along the path." },
                 "spacing-px": { "type": "number", "minimum": 1.0,
                                 "description": "Gap in px between successive line anchors (MapLibre `symbol-spacing`). Line placement only. Default 250." },
                 "max-angle-deg": { "type": "number", "minimum": 0.0,

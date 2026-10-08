@@ -55,7 +55,8 @@ per-anchor offset mirroring), and on lines `symbol-spacing` / `text-max-angle` /
 `text-keep-upright`. Collision: `text-allow-overlap`/`-ignore-placement`/
 `-padding`, `text-overlap`, `symbol-sort-key`.
 
-Point placement labels each point; line placement walks each polyline with
+Point placement labels each point, and each polygon once at its pole of
+inaccessibility (MapLibre's `findPoleOfInaccessibility`, per tile); line placement walks each polyline with
 tangent-rotated glyphs and per-glyph collision, anchored on tile-clipped geometry
 with MapLibre's spacing phases.
 

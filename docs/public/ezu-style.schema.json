@@ -4992,7 +4992,7 @@
                 "type": "number"
               },
               "placement": {
-                "description": "MapLibre `symbol-placement`. `point` (default) labels each feature point. `line` repeats labels along each polyline every `spacing-px`; `line-center` places one at each line's arc-length midpoint. Line placement ignores wrapping (`max-width-em`) and lays out a single line along the path.",
+                "description": "MapLibre `symbol-placement`. `point` (default) labels each feature point, and each polygon once at its pole of inaccessibility (the interior spot farthest from its outline, as MapLibre places it). `line` repeats labels along each polyline every `spacing-px`; `line-center` places one at each line's arc-length midpoint. Line placement ignores wrapping (`max-width-em`) and lays out a single line along the path.",
                 "enum": [
                   "point",
                   "line",
@@ -5402,7 +5402,7 @@
                 "type": "number"
               },
               "placement": {
-                "description": "MapLibre `symbol-placement`. `point` (default) labels each feature point. `line` repeats labels along each polyline every `spacing-px`; `line-center` places one at each line's arc-length midpoint. Line placement ignores wrapping (`max-width-em`) and lays out a single line along the path.",
+                "description": "MapLibre `symbol-placement`. `point` (default) labels each feature point, and each polygon once at its pole of inaccessibility (the interior spot farthest from its outline, as MapLibre places it). `line` repeats labels along each polyline every `spacing-px`; `line-center` places one at each line's arc-length midpoint. Line placement ignores wrapping (`max-width-em`) and lays out a single line along the path.",
                 "enum": [
                   "point",
                   "line",
