@@ -59,3 +59,39 @@ fn both_vector_sources_convert() {
     let text = serde_json::to_string(&recipe).unwrap();
     ezu_style::Document::from_json(&text).expect("recipe parses as ezu Document");
 }
+
+#[test]
+fn each_vector_source_keeps_its_own_zoom_range() {
+    let style: serde_json::Value = serde_json::from_str(
+        r##"{
+          "version": 8,
+          "name": "zoom-ranges",
+          "sources": {
+            "blocks": { "type": "vector", "tiles": ["https://e.com/b/{z}/{x}/{y}.pbf"],
+                        "minzoom": 14, "maxzoom": 14 },
+            "buildings": { "type": "vector", "tiles": ["https://e.com/h/{z}/{x}/{y}.pbf"],
+                           "maxzoom": 17 },
+            "plain": { "type": "vector", "tiles": ["https://e.com/p/{z}/{x}/{y}.pbf"] }
+          },
+          "layers": [
+            { "id": "b", "type": "fill", "source": "blocks", "source-layer": "b" },
+            { "id": "h", "type": "fill", "source": "buildings", "source-layer": "h" },
+            { "id": "p", "type": "fill", "source": "plain", "source-layer": "p" }
+          ]
+        }"##,
+    )
+    .unwrap();
+    let (recipe, _) = convert(&style, &ConvertOptions::default()).expect("convert");
+    let sources = &recipe["sources"];
+    assert_eq!(sources["blocks"]["min-zoom"], 14);
+    assert_eq!(sources["blocks"]["max-zoom"], 14);
+    assert!(sources["buildings"].get("min-zoom").is_none());
+    assert_eq!(sources["buildings"]["max-zoom"], 17);
+    assert!(sources["plain"].get("min-zoom").is_none());
+    assert!(sources["plain"].get("max-zoom").is_none());
+
+    let doc = ezu_style::Document::from_json(&serde_json::to_string(&recipe).unwrap())
+        .expect("recipe parses as ezu Document");
+    assert_eq!(doc.sources["blocks"].min_zoom(), Some(14));
+    assert_eq!(doc.sources["buildings"].max_zoom(), Some(17));
+}

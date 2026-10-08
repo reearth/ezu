@@ -6225,6 +6225,16 @@
                 "description": "Explicit attribution; inherits upstream TileJSON / PMTiles metadata when absent.",
                 "type": "string"
               },
+              "max-zoom": {
+                "description": "Deepest zoom the source serves. Past it, tiles are overzoomed from the covering ancestor (MapLibre's source `maxzoom`).",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "min-zoom": {
+                "description": "Shallowest zoom the source serves. Below it nothing is bound, so its layers draw nothing (MapLibre's source `minzoom`).",
+                "minimum": 0,
+                "type": "integer"
+              },
               "type": {
                 "enum": [
                   "mvt",

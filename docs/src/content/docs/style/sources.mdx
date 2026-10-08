@@ -61,8 +61,13 @@ tile per render, decodes every layer, and binds each under `tile.<layer-name>` �
 the names a `features` node references. The source key is just a label. **Declare
 only one MVT-flavoured source per style**; later entries are ignored.
 
+Optional `min-zoom` / `max-zoom` give the zoom range the source serves, as a
+MapLibre source's `minzoom` / `maxzoom` do: below `min-zoom` the source binds
+nothing and its layers draw nothing; past `max-zoom` each tile is cut from the
+covering ancestor at `max-zoom`, its geometry reprojected into the requested tile.
+
 **`pmtiles`** — a PMTiles archive (local path or `http(s)://`). Layers bind exactly
-as `mvt`.
+as `mvt`, and it takes the same `min-zoom` / `max-zoom`.
 
 **`dem`** — a raster-DEM pyramid. `encoding` is `terrarium` or `mapbox-rgb` and
 must match the data, since the RGB channels mean different things. The host

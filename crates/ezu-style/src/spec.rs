@@ -479,6 +479,28 @@ impl SourceDecl {
             SourceDecl::Glyphs(s) => &s.attribution,
         }
     }
+
+    /// The shallowest zoom a tile pyramid serves, when it declares one:
+    /// below it the source has nothing to bind.
+    pub fn min_zoom(&self) -> Option<u8> {
+        match self {
+            SourceDecl::Mvt(s) => s.min_zoom,
+            SourceDecl::Pmtiles(s) => s.min_zoom,
+            _ => None,
+        }
+    }
+
+    /// The deepest zoom a tile pyramid serves, when it declares one: past
+    /// it, a tile is drawn from the covering ancestor at this zoom.
+    pub fn max_zoom(&self) -> Option<u8> {
+        match self {
+            SourceDecl::Mvt(s) => s.max_zoom,
+            SourceDecl::Pmtiles(s) => s.max_zoom,
+            SourceDecl::Dem(s) => s.max_zoom,
+            SourceDecl::Raster(s) => s.max_zoom,
+            _ => None,
+        }
+    }
 }
 
 /// A document-scoped font face (TTF / OTF / TTC bytes) consumed by the
@@ -663,6 +685,14 @@ pub struct MvtSource {
     /// TileJSON `attribution` field.
     #[serde(default)]
     pub attribution: Option<String>,
+    /// Shallowest zoom the source serves. Below it nothing is bound, so
+    /// its layers draw nothing (MapLibre's source `minzoom`).
+    #[serde(default)]
+    pub min_zoom: Option<u8>,
+    /// Deepest zoom the source serves. Past it, tiles are overzoomed from
+    /// the covering ancestor (MapLibre's source `maxzoom`).
+    #[serde(default)]
+    pub max_zoom: Option<u8>,
 }
 
 /// PMTiles archive source — local path or `http(s)://` URL.
@@ -674,6 +704,12 @@ pub struct PmtilesSource {
     /// `attribution` key of the archive's metadata JSON.
     #[serde(default)]
     pub attribution: Option<String>,
+    /// Shallowest zoom the source serves, as [`MvtSource::min_zoom`].
+    #[serde(default)]
+    pub min_zoom: Option<u8>,
+    /// Deepest zoom the source serves, as [`MvtSource::max_zoom`].
+    #[serde(default)]
+    pub max_zoom: Option<u8>,
 }
 
 /// Raster-DEM source. Tiles encode elevation in the RGB channels using

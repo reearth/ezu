@@ -461,14 +461,19 @@ impl Renderer {
     /// The tile a host should actually fetch from `name` in order to draw
     /// `z/x/y`, as `(z, x, y)`.
     ///
-    /// For a source that declares `max-zoom`, a request past the ceiling
-    /// answers with the covering ancestor — bind those bytes with
+    /// For a source that declares `max-zoom` (any tile pyramid: `dem`,
+    /// `raster`, `mvt`, `pmtiles`), a request past the ceiling answers with
+    /// the covering ancestor — bind those bytes with
     /// [`BindOptions::source_zoom`] set to the returned zoom and the
     /// renderer resamples or reprojects them into the requested tile.
     /// Below the ceiling, and for a source that declares no ceiling, the
     /// answer is the tile itself. This exists so the ceiling lives in one
     /// place; a host that hard-codes each source's maxzoom keeps a second
     /// copy of something the style already states, and the two drift.
+    ///
+    /// The floor is not answered here: below an `mvt` / `pmtiles` source's
+    /// `min-zoom` the render ignores whatever is bound for it, so a host
+    /// may skip the fetch, and loses nothing by not skipping it.
     ///
     /// `x` and `y` may be off the tile grid, which is what a host walking
     /// a neighbourhood hands in: `x` wraps around the antimeridian, so
@@ -485,11 +490,7 @@ impl Renderer {
             .sources
             .get(name)
             .ok_or_else(|| err(UnknownSource, format!("no source `{name}` in style")))?;
-        let max_zoom = match decl {
-            SourceDecl::Dem(s) => s.max_zoom,
-            SourceDecl::Raster(s) => s.max_zoom,
-            _ => None,
-        };
+        let max_zoom = decl.max_zoom();
         let world = 1i64 << z.min(30);
         let x = (x as i64).rem_euclid(world);
         let y = y as i64;
@@ -821,6 +822,11 @@ impl Renderer {
         for (name, binding) in &self.bindings {
             match binding {
                 SourceBinding::Mvt(byte_map) => {
+                    // Below the source's `min-zoom` it has nothing to show.
+                    let min_zoom = self.doc.sources.get(name).and_then(SourceDecl::min_zoom);
+                    if min_zoom.is_some_and(|mz| z < mz) {
+                        continue;
+                    }
                     // Centre under `<source>.<layer>`, any neighbours the
                     // host bound under `@dx,dy` (cross-tile collision). A
                     // host binding only the centre degrades to centre-only
@@ -1350,6 +1356,60 @@ mod tests {
             oz.from.map(|(a, _)| (a.z, a.x as i64, a.y as i64)),
             Some((tz, tx, ty))
         );
+    }
+
+    /// A vector style over the Go package's z14 fixture tile, with `zoom`
+    /// spliced into the source's declaration.
+    fn vector_style(zoom: &str) -> String {
+        format!(
+            r##"{{
+                "name": "test",
+                "tile-size": 64,
+                "sources": {{ "basemap": {{ "type": "mvt", "url": "https://x/{{z}}/{{x}}/{{y}}.mvt" {zoom} }} }},
+                "nodes": {{
+                    "f": {{ "op": "features", "source": "basemap", "layer": "earth" }},
+                    "out": {{ "op": "fill-solid", "features": "@f", "fill": "#000000" }}
+                }},
+                "output": "out"
+            }}"##
+        )
+    }
+
+    const BASEMAP_Z14: &[u8] = include_bytes!("../../../go/testdata/basemap-14-14554-6454.mvt");
+
+    #[test]
+    fn a_vector_source_overzooms_past_its_declared_max_zoom() {
+        let r = Renderer::new(&vector_style(r#", "max-zoom": 14"#)).expect("builds");
+        assert_eq!(
+            r.source_tile("basemap", 16, 58218, 25817).unwrap(),
+            (14, 14554, 6454)
+        );
+        let r = Renderer::new(&vector_style("")).expect("builds");
+        assert_eq!(
+            r.source_tile("basemap", 16, 58218, 25817).unwrap(),
+            (16, 58218, 25817)
+        );
+    }
+
+    #[test]
+    fn a_vector_source_draws_nothing_below_its_declared_min_zoom() {
+        let ink = |zoom: &str| {
+            let mut r = Renderer::new(&vector_style(zoom)).expect("builds");
+            r.bind_source("basemap", BASEMAP_Z14.to_vec(), &BindOptions::default())
+                .expect("binds");
+            let opts = RenderOptions {
+                format: OutputFormat::Rgba,
+                ..RenderOptions::default()
+            };
+            let px = r.render_tile(14, 14554, 6454, opts).expect("renders");
+            px.chunks(4).filter(|p| p[3] > 0).count()
+        };
+        assert!(ink("") > 0, "the fixture has land to fill");
+        assert!(
+            ink(r#", "min-zoom": 14"#) > 0,
+            "the floor itself is in range"
+        );
+        assert_eq!(ink(r#", "min-zoom": 15"#), 0);
     }
 
     #[test]

@@ -90,10 +90,15 @@ pub(crate) fn convert_sources(
                     ));
                     continue;
                 };
-                out.insert(
-                    name.clone(),
-                    serde_json::json!({ "type": "mvt", "url": url }),
-                );
+                // The source's zoom range carries over: past `maxzoom` its
+                // tiles are overzoomed, below `minzoom` it draws nothing.
+                let mut mvt = serde_json::json!({ "type": "mvt", "url": url });
+                for (from, to) in [("minzoom", "min-zoom"), ("maxzoom", "max-zoom")] {
+                    if let Some(z) = decl.get(from).and_then(Value::as_f64) {
+                        mvt[to] = Value::from(z.clamp(0.0, 30.0) as u8);
+                    }
+                }
+                out.insert(name.clone(), mvt);
                 sources.vector.push(name.clone());
             }
             "raster" => {

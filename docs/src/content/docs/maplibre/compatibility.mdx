@@ -90,7 +90,7 @@ once the style is migrated (`--migrate`, see below).
 | zoom / data functions (`interpolate`, `step`, any expression) | emitted raw onto the target node's `*-expr` field, evaluated per tile |
 | legacy forms — `{stops}` function objects, `{token}` label strings, non-standard `hsl()` colours | converted only with `--migrate` (`ConvertOptions::migrate`), by `maplibre_expr::migrate` — MapLibre's own `migrate`, each value converted with its property spec. Off by default: a legacy form is passed through untouched and named in a warning; a function object is then rejected by ezu-paint, a token string renders literally |
 | layer `minzoom` / `maxzoom` | the `features` node's `min-zoom` / `max-zoom` render-time gate |
-| multiple `vector` sources | all emitted; each `features` node targets its `(source, layer)` |
+| multiple `vector` sources | all emitted, each with its `minzoom` / `maxzoom` as `min-zoom` / `max-zoom`; each `features` node targets its `(source, layer)` |
 | inline / remote `geojson` source | a `geojson` source; the host projects it per tile and binds one layer (`features` targets `(source, source)`) |
 | CSS named colours (`steelblue`, `transparent`, …) | resolved to hex |
 | `layout.visibility: "none"` | dropped by default, or kept behind a `switch` with `--keep-hidden` (flip `select` to `b` to enable) |
