@@ -16,20 +16,20 @@ use ezu::style::Document;
 use serde::Serialize;
 use tokio::sync::{broadcast, RwLock};
 
-use crate::source::TileSource;
+use crate::source::FeatureSources;
 
 /// State held by every request handler.
 #[derive(Clone)]
 pub struct AppState {
-    pub source: Option<Arc<TileSource>>,
-    /// Document source name that `source`'s bytes get bound under.
-    /// Mirrors the `Prepared::source_name` in the one-shot CLI path.
-    pub source_name: Option<Arc<str>>,
+    /// Every mvt/pmtiles source the style declares, each bound under its
+    /// own name, as in the one-shot CLI path.
+    pub feature_sources: Arc<FeatureSources>,
     pub style: Arc<RwLock<StyleSnapshot>>,
     /// Base directory used to resolve relative asset `src` paths and
     /// as the fall-through for the per-snapshot loader's disk lookups.
     pub assets_dir: Arc<PathBuf>,
-    pub mvt_cache: Arc<DashMap<TileId, Bytes>>,
+    /// Fetched MVT bytes per `(source name, tile)`.
+    pub mvt_cache: Arc<DashMap<(Arc<str>, TileId), Bytes>>,
     /// Maximum number of parent-zoom fallbacks attempted when the
     /// requested tile is missing from the source. `0` disables overzoom.
     pub overzoom_levels: u8,
@@ -146,8 +146,7 @@ pub fn validate_text(text: &str) -> Result<(), BuildSnapshotError> {
 
 impl AppState {
     pub fn new(
-        source: Option<TileSource>,
-        source_name: Option<String>,
+        feature_sources: FeatureSources,
         snapshot: StyleSnapshot,
         assets_dir: PathBuf,
         overzoom_levels: u8,
@@ -157,8 +156,7 @@ impl AppState {
         // subscribers (open editor tabs) typically count 0–2.
         let (events, _) = broadcast::channel(8);
         Self {
-            source: source.map(Arc::new),
-            source_name: source_name.map(Arc::from),
+            feature_sources: Arc::new(feature_sources),
             style: Arc::new(RwLock::new(snapshot)),
             assets_dir: Arc::new(assets_dir),
             mvt_cache: Arc::new(DashMap::new()),

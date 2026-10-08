@@ -51,11 +51,11 @@ Options:
       --assets-dir <ASSETS_DIR>
           Base directory for resolving asset `src` paths. Defaults to the style file's parent directory (or the current directory when `--style` is a URL)
       --pmtiles <PMTILES>
-          PMTiles archive — local path or http(s):// URL
+          PMTiles archive — local path or http(s):// URL. Stands in for the first `mvt`/`pmtiles` source the style declares; any others keep their own URLs
       --mvt <MVT>
-          Templated MVT tile source containing `{z}`, `{x}`, `{y}` placeholders. Accepts an http(s):// URL or a local path template (e.g. `/tiles/{z}/{x}/{y}.pbf`)
+          Templated MVT tile source containing `{z}`, `{x}`, `{y}` placeholders. Accepts an http(s):// URL or a local path template (e.g. `/tiles/{z}/{x}/{y}.pbf`). Stands in for the first `mvt`/`pmtiles` source the style declares; any others keep their own URLs
       --overzoom-levels <OVERZOOM_LEVELS>
-          When a requested tile is missing, fall back to a parent tile up to this many zoom levels up and re-project its geometry onto the requested tile (MVT "overzoom"). `0` disables [default: 4]
+          When a requested tile is missing, fall back to a parent tile up to this many zoom levels up and re-project its geometry onto the requested tile (MVT "overzoom"). `0` disables. A source past its declared `max-zoom` overzooms from that zoom regardless [default: 4]
       --param <NAME=VALUE>
           Override a document parameter, as `name=value` (repeatable). Values are validated against the style's `params` declarations: numbers respect `min`/`max`, colors are `#rrggbb[aa]`, bools are `true`/`false`
       --strict
@@ -85,11 +85,11 @@ Options:
       --assets-dir <ASSETS_DIR>
           Base directory for resolving asset `src` paths. Defaults to the style file's parent directory (or the current directory when `--style` is a URL)
       --pmtiles <PMTILES>
-          PMTiles archive — local path or http(s):// URL
+          PMTiles archive — local path or http(s):// URL. Stands in for the first `mvt`/`pmtiles` source the style declares; any others keep their own URLs
       --mvt <MVT>
-          Templated MVT tile source containing `{z}`, `{x}`, `{y}` placeholders. Accepts an http(s):// URL or a local path template (e.g. `/tiles/{z}/{x}/{y}.pbf`)
+          Templated MVT tile source containing `{z}`, `{x}`, `{y}` placeholders. Accepts an http(s):// URL or a local path template (e.g. `/tiles/{z}/{x}/{y}.pbf`). Stands in for the first `mvt`/`pmtiles` source the style declares; any others keep their own URLs
       --overzoom-levels <OVERZOOM_LEVELS>
-          When a requested tile is missing, fall back to a parent tile up to this many zoom levels up and re-project its geometry onto the requested tile (MVT "overzoom"). `0` disables [default: 4]
+          When a requested tile is missing, fall back to a parent tile up to this many zoom levels up and re-project its geometry onto the requested tile (MVT "overzoom"). `0` disables. A source past its declared `max-zoom` overzooms from that zoom regardless [default: 4]
       --param <NAME=VALUE>
           Override a document parameter, as `name=value` (repeatable). Values are validated against the style's `params` declarations: numbers respect `min`/`max`, colors are `#rrggbb[aa]`, bools are `true`/`false`
       --strict
@@ -121,11 +121,11 @@ Options:
       --assets-dir <ASSETS_DIR>
           Base directory for resolving asset `src` paths. Defaults to the style file's parent directory (or the current directory when `--style` is a URL)
       --pmtiles <PMTILES>
-          PMTiles archive — local path or http(s):// URL
+          PMTiles archive — local path or http(s):// URL. Stands in for the first `mvt`/`pmtiles` source the style declares; any others keep their own URLs
       --mvt <MVT>
-          Templated MVT tile source containing `{z}`, `{x}`, `{y}` placeholders. Accepts an http(s):// URL or a local path template (e.g. `/tiles/{z}/{x}/{y}.pbf`)
+          Templated MVT tile source containing `{z}`, `{x}`, `{y}` placeholders. Accepts an http(s):// URL or a local path template (e.g. `/tiles/{z}/{x}/{y}.pbf`). Stands in for the first `mvt`/`pmtiles` source the style declares; any others keep their own URLs
       --overzoom-levels <OVERZOOM_LEVELS>
-          When a requested tile is missing, fall back to a parent tile up to this many zoom levels up and re-project its geometry onto the requested tile (MVT "overzoom"). `0` disables [default: 4]
+          When a requested tile is missing, fall back to a parent tile up to this many zoom levels up and re-project its geometry onto the requested tile (MVT "overzoom"). `0` disables. A source past its declared `max-zoom` overzooms from that zoom regardless [default: 4]
       --param <NAME=VALUE>
           Override a document parameter, as `name=value` (repeatable). Values are validated against the style's `params` declarations: numbers respect `min`/`max`, colors are `#rrggbb[aa]`, bools are `true`/`false`
       --strict

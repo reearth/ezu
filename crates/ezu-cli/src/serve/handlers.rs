@@ -28,6 +28,15 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 
 use super::state::{validate_text, AppState, StyleSnapshot};
+use crate::source::FeatureSource;
+
+/// One feature source's bytes for a tile: its name, the centre tile, and
+/// the neighbours the graph asks for, each with the tile they came from.
+type FetchedMvt = (
+    Arc<str>,
+    Option<(bytes::Bytes, CoreTileId)>,
+    Vec<((i32, i32), (bytes::Bytes, CoreTileId))>,
+);
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -59,7 +68,13 @@ const ABSOLUTE_MAXZOOM: u8 = 22;
 /// Server-side knobs the editor needs to configure its map. Kept as one
 /// endpoint so the front end never has to guess at CLI defaults.
 async fn get_config(State(s): State<AppState>) -> Json<serde_json::Value> {
-    let data_maxzoom = s.source.as_ref().and_then(|src| src.data_maxzoom());
+    // The deepest any source goes, when every one of them says.
+    let data_maxzoom = s
+        .feature_sources
+        .iter()
+        .map(|src| src.max_zoom())
+        .collect::<Option<Vec<u8>>>()
+        .and_then(|zooms| zooms.into_iter().max());
     // Past the source's own depth the tile handler reprojects ancestor
     // tiles, `overzoom_levels` of them, so that is exactly how much
     // deeper than the data the editor can still ask for.
@@ -137,16 +152,15 @@ async fn get_attribution(State(s): State<AppState>) -> Json<serde_json::Value> {
     {
         push(a);
     }
-    // The MVT/PMTiles feature source: inherit upstream metadata only
+    // Each MVT/PMTiles feature source inherits upstream metadata only
     // when the document's own entry doesn't declare attribution.
-    let mvt_declares = snap.doc.sources.values().any(|d| {
-        matches!(
-            d,
-            ezu::style::SourceDecl::Mvt(_) | ezu::style::SourceDecl::Pmtiles(_)
-        ) && d.attribution().is_some()
-    });
-    if !mvt_declares {
-        if let Some(src) = s.source.as_ref() {
+    for src in s.feature_sources.iter() {
+        let declares = snap
+            .doc
+            .sources
+            .get(&*src.name)
+            .is_some_and(|d| d.attribution().is_some());
+        if !declares {
             if let Some(a) = src.attribution() {
                 push(a.to_string());
             }
@@ -264,8 +278,6 @@ async fn get_tile(
         .map_err(|_| (StatusCode::BAD_REQUEST, "bad y".into()))?;
     let tile = CoreTileId::new(z, x, y);
 
-    let fetched = fetch_mvt(&s, tile).await?;
-
     // Take only what we need from the snapshot to keep the lock window
     // short. Query-string parameter overrides are validated against
     // the document's `params` declarations while we hold the lock.
@@ -304,23 +316,27 @@ async fn get_tile(
         )
     };
 
-    // Cross-tile placement (label collision): fetch only the neighbour
-    // tiles the graph asks for via `@dx,dy` binding names — never the
-    // whole 3×3 window unconditionally. Reuses the MVT cache per tile.
-    let mut neighbor_mvt: Vec<((i32, i32), (bytes::Bytes, CoreTileId))> = Vec::new();
-    if let Some(name) = s.source_name.as_deref() {
-        let offsets = requested_neighbor_offsets(&graph.asset_inputs(), name);
+    // Every feature source, each at its own zoom. Cross-tile placement
+    // (label collision) adds only the neighbour tiles the graph asks for
+    // via `@dx,dy` binding names — never the whole 3×3 window
+    // unconditionally. Reuses the MVT cache per tile.
+    let mut fetched_mvt: Vec<FetchedMvt> = Vec::new();
+    let asset_inputs = graph.asset_inputs();
+    for src in s.feature_sources.iter() {
+        let centre = fetch_mvt(&s, src, tile).await?;
+        let mut neighbours = Vec::new();
         let world = 1i64 << tile.z;
-        for (dx, dy) in offsets {
+        for (dx, dy) in requested_neighbor_offsets(&asset_inputs, &src.name) {
             let ny = tile.y as i64 + dy as i64;
             if ny < 0 || ny >= world {
                 continue;
             }
             let nx = (tile.x as i64 + dx as i64).rem_euclid(world) as u32;
-            if let Some(hit) = fetch_mvt(&s, CoreTileId::new(tile.z, nx, ny as u32)).await? {
-                neighbor_mvt.push(((dx, dy), hit));
+            if let Some(hit) = fetch_mvt(&s, src, CoreTileId::new(tile.z, nx, ny as u32)).await? {
+                neighbours.push(((dx, dy), hit));
             }
         }
+        fetched_mvt.push((Arc::clone(&src.name), centre, neighbours));
     }
 
     let canvas = CanvasInfo::square(tile_size, pad);
@@ -336,16 +352,13 @@ async fn get_tile(
         .await
         .map_err(raster_fetch_status)?;
 
-    let source_name = s.source_name.as_ref().map(Arc::clone);
     let bytes = tokio::task::spawn_blocking({
         move || {
             render_tile(
                 &graph,
                 &cache,
                 &assets,
-                fetched,
-                neighbor_mvt,
-                source_name.as_deref(),
+                fetched_mvt,
                 dem_bindings,
                 raster_bindings,
                 &geojson_sources,
@@ -374,18 +387,39 @@ async fn get_tile(
         .expect("response builder with valid headers + body never fails"))
 }
 
-/// Return raw decompressed MVT bytes for `(z, x, y)`. Used by the WASM demo,
+/// The feature source a raw-MVT request names with `?source=`, or the
+/// style's first one.
+fn requested_source<'s>(
+    s: &'s AppState,
+    q: &HashMap<String, String>,
+) -> Result<Option<&'s FeatureSource>, (StatusCode, String)> {
+    match q.get("source") {
+        Some(name) => s
+            .feature_sources
+            .get(Some(name))
+            .map(Some)
+            .ok_or((StatusCode::NOT_FOUND, format!("no feature source `{name}`"))),
+        None => Ok(s.feature_sources.get(None)),
+    }
+}
+
+/// Return raw decompressed MVT bytes for `(z, x, y)` from the feature
+/// source named by `?source=` (default: the first). Used by the WASM demo,
 /// which does its own decoding + rendering client-side.
 async fn get_mvt(
     State(s): State<AppState>,
     Path((z, x, y)): Path<(u8, u32, u32)>,
+    Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response, (StatusCode, String)> {
     let tile = CoreTileId::new(z, x, y);
+    let Some(source) = requested_source(&s, &q)? else {
+        return Err((StatusCode::NOT_FOUND, "tile not in source".into()));
+    };
     // This endpoint serves native MVT bytes that callers expect to
     // decode at the requested tile's coordinate frame, so a parent
     // fallback (different coords) would be wrong. Treat overzoom hits
     // as misses here.
-    let Some((bytes, src)) = fetch_mvt(&s, tile).await? else {
+    let Some((bytes, src)) = fetch_mvt(&s, source, tile).await? else {
         return Err((StatusCode::NOT_FOUND, "tile not in source".into()));
     };
     if src != tile {
@@ -404,11 +438,15 @@ async fn get_mvt(
 async fn get_mvt_meta(
     State(s): State<AppState>,
     Path((z, x, y)): Path<(u8, u32, u32)>,
+    Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let tile = CoreTileId::new(z, x, y);
+    let Some(source) = requested_source(&s, &q)? else {
+        return Ok(Json(json!({ "layers": [] })));
+    };
     // Layer names + geometry kinds don't change under overzoom, so it's
     // fine if the bytes came from an ancestor — no clipping needed.
-    let Some((bytes, _src)) = fetch_mvt(&s, tile).await? else {
+    let Some((bytes, _src)) = fetch_mvt(&s, source, tile).await? else {
         return Ok(Json(json!({ "layers": [] })));
     };
     let decoded =
@@ -449,31 +487,34 @@ async fn get_mvt_meta(
     Ok(Json(json!({ "layers": layers })))
 }
 
-/// Fetch the MVT for `tile`, walking up to `overzoom_levels` parents on
-/// misses. The returned `CoreTileId` identifies which tile the bytes
-/// actually came from — equal to `tile` on a direct hit, an ancestor
-/// on overzoom. Callers that intend to render must run those bytes
-/// through [`ezu_features::mvt::clip_to_descendant`] when the IDs
-/// differ; callers that need the raw native bytes (the `/mvt`
-/// endpoint) should treat a non-matching ID as a miss.
+/// Fetch `source`'s MVT for `tile`: nothing below the source's
+/// `min-zoom`, the covering ancestor past its `max-zoom`, and on a miss
+/// up to `overzoom_levels` parents further. The returned `CoreTileId`
+/// identifies which tile the bytes actually came from — equal to `tile`
+/// on a direct hit, an ancestor on overzoom. Callers that intend to
+/// render must run those bytes through
+/// [`ezu_features::mvt::clip_to_descendant`] when the IDs differ; callers
+/// that need the raw native bytes (the `/mvt` endpoint) should treat a
+/// non-matching ID as a miss.
 ///
 /// Each level is cached independently, so two sibling tiles requesting
 /// the same parent share the fetch.
 async fn fetch_mvt(
     s: &AppState,
+    source: &FeatureSource,
     tile: CoreTileId,
 ) -> Result<Option<(bytes::Bytes, CoreTileId)>, (StatusCode, String)> {
-    let Some(source) = s.source.as_ref() else {
+    let Some(mut current) = source.native_tile(tile) else {
         return Ok(None);
     };
-    let mut current = tile;
     for _ in 0..=s.overzoom_levels {
-        if let Some(b) = s.mvt_cache.get(&current).map(|r| r.clone()) {
+        let key = (Arc::clone(&source.name), current);
+        if let Some(b) = s.mvt_cache.get(&key).map(|r| r.clone()) {
             return Ok(Some((b, current)));
         }
-        match source.fetch(current).await {
+        match source.fetch_tile(current).await {
             Ok(Some(b)) => {
-                s.mvt_cache.insert(current, b.clone());
+                s.mvt_cache.insert(key, b.clone());
                 return Ok(Some((b, current)));
             }
             Ok(None) => {}
@@ -553,9 +594,7 @@ fn render_tile(
     graph: &ezu::graph::Graph,
     cache: &ezu::graph::Cache,
     assets: &BrushBankLoader,
-    fetched_mvt: Option<(bytes::Bytes, CoreTileId)>,
-    neighbor_mvt: Vec<((i32, i32), (bytes::Bytes, CoreTileId))>,
-    source_name: Option<&str>,
+    fetched_mvt: Vec<FetchedMvt>,
     dem_bindings: Vec<(String, ezu::graph::ScalarField)>,
     raster_bindings: Vec<(String, ezu::graph::RasterBuf)>,
     geojson_sources: &GeoJsonSources,
@@ -571,23 +610,25 @@ fn render_tile(
         y: tile.y,
     };
     let mut tile_loader = TileLoader::new(assets, tile_id);
-    if let (Some((bytes, src_tile)), Some(src_name)) = (fetched_mvt, source_name) {
-        let mut decoded = mvt::decode(&bytes).map_err(|e| format!("mvt decode: {e}"))?;
-        if src_tile != tile {
-            tracing::debug!(
-                "overzoom clip {}/{}/{} ← {}/{}/{}",
-                tile.z,
-                tile.x,
-                tile.y,
-                src_tile.z,
-                src_tile.x,
-                src_tile.y
-            );
-            decoded = mvt::clip_to_descendant(&decoded, src_tile, tile)
-                .map_err(|e| format!("overzoom clip: {e}"))?;
+    for (src_name, centre, neighbours) in fetched_mvt {
+        if let Some((bytes, src_tile)) = centre {
+            let mut decoded = mvt::decode(&bytes).map_err(|e| format!("mvt decode: {e}"))?;
+            if src_tile != tile {
+                tracing::debug!(
+                    "overzoom clip `{src_name}` {}/{}/{} ← {}/{}/{}",
+                    tile.z,
+                    tile.x,
+                    tile.y,
+                    src_tile.z,
+                    src_tile.x,
+                    src_tile.y
+                );
+                decoded = mvt::clip_to_descendant(&decoded, src_tile, tile)
+                    .map_err(|e| format!("overzoom clip: {e}"))?;
+            }
+            tile_loader.bind_mvt(&src_name, decoded);
         }
-        tile_loader.bind_mvt(src_name, decoded);
-        for ((dx, dy), (bytes, src_tile)) in neighbor_mvt {
+        for ((dx, dy), (bytes, src_tile)) in neighbours {
             let ntile = CoreTileId::new(
                 tile.z,
                 (tile.x as i64 + dx as i64).rem_euclid(1i64 << tile.z) as u32,
@@ -609,7 +650,7 @@ fn render_tile(
                     }
                 }
             }
-            tile_loader.bind_mvt_neighbor(src_name, dx, dy, decoded);
+            tile_loader.bind_mvt_neighbor(&src_name, dx, dy, decoded);
         }
     }
     for (name, field) in dem_bindings {

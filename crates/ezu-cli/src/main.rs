@@ -33,7 +33,7 @@ use futures::stream::{StreamExt, TryStreamExt};
 use tiny_skia::{Pixmap, PixmapPaint, Transform};
 use tracing_subscriber::EnvFilter;
 
-use crate::source::{SourceSpec, TileSource};
+use crate::source::{FeatureSources, SourceSpec};
 
 #[derive(Parser, Debug)]
 #[command(name = "ezu", version, about = "Render Ezu Style documents to PNG")]
@@ -90,17 +90,22 @@ struct CommonArgs {
     /// `--style` is a URL).
     #[arg(long)]
     assets_dir: Option<PathBuf>,
-    /// PMTiles archive — local path or http(s):// URL.
+    /// PMTiles archive — local path or http(s):// URL. Stands in for the
+    /// first `mvt`/`pmtiles` source the style declares; any others keep
+    /// their own URLs.
     #[arg(long, conflicts_with = "mvt")]
     pmtiles: Option<String>,
     /// Templated MVT tile source containing `{z}`, `{x}`, `{y}`
     /// placeholders. Accepts an http(s):// URL or a local path
-    /// template (e.g. `/tiles/{z}/{x}/{y}.pbf`).
+    /// template (e.g. `/tiles/{z}/{x}/{y}.pbf`). Stands in for the first
+    /// `mvt`/`pmtiles` source the style declares; any others keep their
+    /// own URLs.
     #[arg(long, conflicts_with = "pmtiles")]
     mvt: Option<String>,
     /// When a requested tile is missing, fall back to a parent tile
     /// up to this many zoom levels up and re-project its geometry
-    /// onto the requested tile (MVT "overzoom"). `0` disables.
+    /// onto the requested tile (MVT "overzoom"). `0` disables. A source
+    /// past its declared `max-zoom` overzooms from that zoom regardless.
     #[arg(long, default_value_t = 4)]
     overzoom_levels: u8,
     /// Override a document parameter, as `name=value` (repeatable).
@@ -449,11 +454,9 @@ struct Prepared {
     graph: Arc<Graph>,
     cache: Arc<Cache>,
     loader: Arc<BrushBankLoader>,
-    source: Option<Arc<TileSource>>,
-    /// Name of the document's mvt/pmtiles source that `source`
-    /// resolves to; passed to `bind_mvt` so that bindings land under
-    /// the same name the style's `features` nodes reference.
-    source_name: Option<Arc<str>>,
+    /// Every mvt/pmtiles source the document declares, each bound under
+    /// its own name — the name the style's `features` nodes reference.
+    feature_sources: Arc<FeatureSources>,
     dem_sources: Arc<DemSourceRegistry>,
     raster_sources: Arc<RasterSourceRegistry>,
     /// The document's `geojson` sources, read once here rather than per
@@ -506,35 +509,7 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
         (None, None) => None,
         _ => return Err("--pmtiles and --mvt are mutually exclusive".into()),
     };
-    let pick = feature_source_from_doc(&doc);
-    let (source, source_name): (Option<Arc<TileSource>>, Option<Arc<str>>) = match (
-        pick,
-        cli_override,
-    ) {
-        (Some(p), Some((spec, origin))) => {
-            tracing::info!("opening source ({origin}, bound as `{}`): {spec:?}", p.name);
-            (
-                Some(Arc::new(TileSource::open(&spec).await?)),
-                Some(Arc::from(p.name)),
-            )
-        }
-        (Some(p), None) => {
-            tracing::info!("opening source ({}): {:?}", p.origin, p.spec);
-            (
-                Some(Arc::new(TileSource::open(&p.spec).await?)),
-                Some(Arc::from(p.name)),
-            )
-        }
-        (None, Some((spec, origin))) => {
-            return Err(format!(
-                    "{origin} ({spec:?}) requires the style to declare a matching `mvt`/`pmtiles` source, but the document has none — `features` nodes have no source to reference"
-                )
-                .into());
-        }
-        // Whether this leaves `features` with nothing to read depends on
-        // the geojson sources too, so the notice waits until those are in.
-        (None, None) => (None, None),
-    };
+    let feature_sources = Arc::new(FeatureSources::open(&doc, cli_override).await?);
 
     let dem_sources = Arc::new(build_dem_sources(&doc));
     if !dem_sources.is_empty() {
@@ -550,7 +525,7 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
     if !geojson_sources.is_empty() {
         let names: Vec<&str> = geojson_sources.names().collect();
         tracing::info!("geojson sources: {}", names.join(", "));
-    } else if source.is_none() {
+    } else if feature_sources.is_empty() {
         tracing::info!("no mvt, pmtiles or geojson source — `features` bindings will be empty");
     }
 
@@ -558,8 +533,7 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
         graph,
         cache,
         loader,
-        source,
-        source_name,
+        feature_sources,
         dem_sources,
         raster_sources,
         geojson_sources,
@@ -844,8 +818,7 @@ async fn run_graph_view(args: GraphCmd) -> Result<(), Box<dyn std::error::Error>
         Arc::clone(&prep.graph),
         Arc::clone(&prep.cache),
         Arc::clone(&prep.loader),
-        prep.source.clone(),
-        prep.source_name.clone(),
+        Arc::clone(&prep.feature_sources),
         Arc::clone(&prep.dem_sources),
         Arc::clone(&prep.raster_sources),
         Arc::clone(&prep.geojson_sources),
@@ -1193,8 +1166,7 @@ async fn run_tile(args: TileCmd) -> Result<(), Box<dyn std::error::Error>> {
         Arc::clone(&prep.graph),
         Arc::clone(&prep.cache),
         Arc::clone(&prep.loader),
-        prep.source.as_ref().map(Arc::clone),
-        prep.source_name.as_ref().map(Arc::clone),
+        Arc::clone(&prep.feature_sources),
         Arc::clone(&prep.dem_sources),
         Arc::clone(&prep.raster_sources),
         Arc::clone(&prep.geojson_sources),
@@ -1239,8 +1211,7 @@ async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
             let graph = Arc::clone(&prep.graph);
             let cache = Arc::clone(&prep.cache);
             let loader = Arc::clone(&prep.loader);
-            let source = prep.source.as_ref().map(Arc::clone);
-            let source_name = prep.source_name.as_ref().map(Arc::clone);
+            let feature_sources = Arc::clone(&prep.feature_sources);
             let dem_sources = Arc::clone(&prep.dem_sources);
             let raster_sources = Arc::clone(&prep.raster_sources);
             let geojson_sources = Arc::clone(&prep.geojson_sources);
@@ -1252,8 +1223,7 @@ async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
                     graph,
                     cache,
                     loader,
-                    source,
-                    source_name,
+                    feature_sources,
                     dem_sources,
                     raster_sources,
                     geojson_sources,
@@ -1343,8 +1313,7 @@ async fn run_tiles(args: TilesCmd) -> Result<(), Box<dyn std::error::Error>> {
                     Arc::clone(&prep.graph),
                     Arc::clone(&prep.cache),
                     Arc::clone(&prep.loader),
-                    prep.source.as_ref().map(Arc::clone),
-                    prep.source_name.as_ref().map(Arc::clone),
+                    Arc::clone(&prep.feature_sources),
                     Arc::clone(&prep.dem_sources),
                     Arc::clone(&prep.raster_sources),
                     Arc::clone(&prep.geojson_sources),
@@ -1388,8 +1357,7 @@ async fn render_one(
     graph: Arc<Graph>,
     cache: Arc<Cache>,
     loader: Arc<BrushBankLoader>,
-    source: Option<Arc<TileSource>>,
-    source_name: Option<Arc<str>>,
+    feature_sources: Arc<FeatureSources>,
     dem_sources: Arc<DemSourceRegistry>,
     raster_sources: Arc<RasterSourceRegistry>,
     geojson_sources: Arc<GeoJsonSources>,
@@ -1401,25 +1369,25 @@ async fn render_one(
     // uses it to collect one picture per node from this same render.
     observer: Option<Arc<dyn NodeObserver + Send + Sync>>,
 ) -> Result<Arc<RasterBuf>, Box<dyn std::error::Error + Send + Sync>> {
-    let fetched = match &source {
-        Some(s) => s.fetch_with_fallback(tile, overzoom_levels).await?,
-        None => None,
-    };
-    // Cross-tile placement (label collision): fetch only the neighbour
-    // tiles the graph actually asks for (via `@dx,dy` binding names),
-    // never the whole 3×3 window unconditionally.
-    let neighbor_mvt: Vec<((i32, i32), (bytes::Bytes, CoreTileId))> = match (&source, &source_name)
-    {
-        (Some(s), Some(name)) => {
-            let offsets = requested_neighbor_offsets(&graph.asset_inputs(), name);
-            if offsets.is_empty() {
+    // Every feature source, each at its own zoom: one past its
+    // `max-zoom` comes from the covering ancestor, one below its
+    // `min-zoom` brings nothing. Cross-tile placement (label collision)
+    // adds only the neighbour tiles the graph actually asks for (via
+    // `@dx,dy` binding names), never the whole 3×3 window.
+    let asset_inputs = graph.asset_inputs();
+    let fetched_mvt = futures::future::try_join_all(feature_sources.iter().map(|s| {
+        let offsets = requested_neighbor_offsets(&asset_inputs, &s.name);
+        async move {
+            let centre = s.fetch(tile, overzoom_levels).await?;
+            let neighbours = if offsets.is_empty() {
                 Vec::new()
             } else {
                 s.fetch_neighbors(tile, &offsets, overzoom_levels).await?
-            }
+            };
+            Ok::<_, source::SourceError>((Arc::clone(&s.name), centre, neighbours))
         }
-        _ => Vec::new(),
-    };
+    }))
+    .await?;
     let tile_id = TileId {
         z: tile.z,
         x: tile.x,
@@ -1456,15 +1424,15 @@ async fn render_one(
     let raster = tokio::task::spawn_blocking(
         move || -> Result<Arc<RasterBuf>, Box<dyn std::error::Error + Send + Sync>> {
             let mut tile_loader = TileLoader::new(loader.as_ref(), tile_id);
-            if let (Some((bytes, src_tile)), Some(src_name)) = (fetched, &source_name) {
-                let mut decoded = mvt::decode(&bytes)?;
-                if src_tile != tile {
-                    decoded = mvt::clip_to_descendant(&decoded, src_tile, tile)?;
+            for (src_name, centre, neighbours) in fetched_mvt {
+                if let Some((bytes, src_tile)) = centre {
+                    let mut decoded = mvt::decode(&bytes)?;
+                    if src_tile != tile {
+                        decoded = mvt::clip_to_descendant(&decoded, src_tile, tile)?;
+                    }
+                    tile_loader.bind_mvt(&src_name, decoded);
                 }
-                tile_loader.bind_mvt(src_name, decoded);
-            }
-            if let Some(src_name) = &source_name {
-                for ((dx, dy), (bytes, src_tile)) in neighbor_mvt {
+                for ((dx, dy), (bytes, src_tile)) in neighbours {
                     let ntile = CoreTileId::new(
                         tile.z,
                         (tile.x as i64 + dx as i64).rem_euclid(1i64 << tile.z) as u32,
@@ -1474,7 +1442,7 @@ async fn render_one(
                     if src_tile != ntile {
                         decoded = mvt::clip_to_descendant(&decoded, src_tile, ntile)?;
                     }
-                    tile_loader.bind_mvt_neighbor(src_name, dx, dy, decoded);
+                    tile_loader.bind_mvt_neighbor(&src_name, dx, dy, decoded);
                 }
             }
             for (name, field) in dem_bindings {
@@ -1599,50 +1567,6 @@ pub(crate) async fn fetch_text(arg: &str) -> Result<String, Box<dyn std::error::
     } else {
         Ok(std::fs::read_to_string(arg)?)
     }
-}
-
-/// Return the first MVT/Pmtiles entry in the style's `sources` block as
-/// a [`SourceSpec`] the CLI can open. DEM sources are handled
-/// separately. Returns `None` if no compatible source is declared;
-/// when several are present the document order wins (later entries are
-/// ignored with a warning).
-pub(crate) struct FeatureSourcePick {
-    pub name: String,
-    pub spec: SourceSpec,
-    pub origin: &'static str,
-}
-
-pub(crate) fn feature_source_from_doc(doc: &Document) -> Option<FeatureSourcePick> {
-    let mut chosen: Option<FeatureSourcePick> = None;
-    for (name, decl) in &doc.sources {
-        let (spec, origin) = match decl {
-            SourceDecl::Mvt(s) => (SourceSpec::Mvt(s.url.clone()), "style sources (mvt)"),
-            SourceDecl::Pmtiles(s) => (
-                SourceSpec::PmTiles(s.url.clone()),
-                "style sources (pmtiles)",
-            ),
-            // Document-scoped and tile-scoped raster — not feature
-            // sources, skip.
-            SourceDecl::Brush(_)
-            | SourceDecl::Image(_)
-            | SourceDecl::Dem(_)
-            | SourceDecl::GeoJson(_)
-            | SourceDecl::Sprite(_)
-            | SourceDecl::Font(_)
-            | SourceDecl::Glyphs(_)
-            | SourceDecl::Raster(_) => continue,
-        };
-        if chosen.is_some() {
-            tracing::warn!("multiple feature sources in style; ignoring `{name}`");
-            continue;
-        }
-        chosen = Some(FeatureSourcePick {
-            name: name.clone(),
-            spec,
-            origin,
-        });
-    }
-    chosen
 }
 
 fn is_url(s: &str) -> bool {

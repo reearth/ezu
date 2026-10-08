@@ -57,9 +57,10 @@ serving pre-rendered SDF ranges, fetched lazily. The no-font-files alternative t
 ## Tile-scoped types
 
 **`mvt`** — an XYZ MVT URL template, or a TileJSON document. The host fetches one
-tile per render, decodes every layer, and binds each under `tile.<layer-name>` —
-the names a `features` node references. The source key is just a label. **Declare
-only one MVT-flavoured source per style**; later entries are ignored.
+tile per render, decodes every layer, and binds each under `<source>.<layer>` —
+the `source` and `layer` a `features` node names. A style may declare any number
+of `mvt` / `pmtiles` sources (a basemap and an overlay, say, or one per data set);
+each is fetched and bound under its own name.
 
 Optional `min-zoom` / `max-zoom` give the zoom range the source serves, as a
 MapLibre source's `minzoom` / `maxzoom` do: below `min-zoom` the source binds

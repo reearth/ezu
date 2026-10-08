@@ -21,7 +21,7 @@ use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
-use crate::source::{SourceSpec, TileSource};
+use crate::source::{FeatureSources, SourceSpec};
 use state::{AppState, StyleReload, StyleSnapshot};
 
 #[derive(Args, Debug)]
@@ -102,43 +102,17 @@ pub async fn run(args: ServeCmd) -> Result<(), Box<dyn std::error::Error>> {
         snapshot.dem_sources.len(),
     );
 
-    // Resolve the feature-tile source. CLI flag overrides the URL,
-    // but the binding name always comes from the style's `sources`
-    // block so the document's `features` nodes can reference it. A
-    // CLI override without any matching style source is an error —
-    // we'd have nothing to bind it under.
-    let pick = crate::feature_source_from_doc(&snapshot.doc);
-    let (source, source_name) = match (pick, cli_source) {
-        (Some(p), Some((spec, origin))) => {
-            tracing::info!(
-                "opening tile source ({origin}, bound as `{}`): {spec:?}",
-                p.name
-            );
-            (Some(TileSource::open(&spec).await?), Some(p.name))
-        }
-        (Some(p), None) => {
-            tracing::info!("opening tile source ({}): {:?}", p.origin, p.spec);
-            (Some(TileSource::open(&p.spec).await?), Some(p.name))
-        }
-        (None, Some((spec, origin))) => {
-            return Err(format!(
-                "{origin} ({spec:?}) requires the style to declare a matching `mvt`/`pmtiles` source, but the document has none"
-            )
-            .into());
-        }
-        (None, None) => {
-            tracing::info!("no MVT source — `features` bindings will be empty");
-            (None, None)
-        }
-    };
+    // Open every feature-tile source the style declares. A CLI flag
+    // overrides the first one's URL, but the binding names always come
+    // from the style's `sources` block so the document's `features`
+    // nodes can reference them. A CLI override without any matching
+    // style source is an error — we'd have nothing to bind it under.
+    let feature_sources = FeatureSources::open(&snapshot.doc, cli_source).await?;
+    if feature_sources.is_empty() {
+        tracing::info!("no MVT source — `features` bindings will be empty");
+    }
 
-    let state = AppState::new(
-        source,
-        source_name,
-        snapshot,
-        assets_dir,
-        args.overzoom_levels,
-    );
+    let state = AppState::new(feature_sources, snapshot, assets_dir, args.overzoom_levels);
 
     // Spawn a polling watcher when the style was loaded from a local
     // path. URL-sourced styles aren't watched (we don't know how the
