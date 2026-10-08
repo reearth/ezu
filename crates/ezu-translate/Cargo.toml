@@ -28,6 +28,7 @@ thiserror = { workspace = true }
 maplibre-expr = { workspace = true, features = ["collator"] }
 
 [dev-dependencies]
+ezu-features = { workspace = true }
 ezu-style = { workspace = true }
 ezu-graph = { workspace = true }
 ezu-paint = { workspace = true }

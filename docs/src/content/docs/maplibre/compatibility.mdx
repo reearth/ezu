@@ -30,7 +30,7 @@ Two structural facts first:
 | --- | --- |
 | `background` | `solid` |
 | `fill` (solid colour, `fill-outline-color`) | `features` + `fill-solid` (outline → `edge`) |
-| `line` (+ `line-dasharray`, `line-cap`/`join`, `line-gap-width`) | `features` + crisp `stroke`, dash in px. A gap renders MapLibre's casing annulus — one stroke's footprint with the corridor knocked out — so joins, caps and dash phase behave like the GL shader |
+| `line` (+ `line-dasharray`, `line-cap`/`join`, `line-gap-width`) | `features` → `boundary` (`clip-edges: drop`) → crisp `stroke`, dash in px. On a polygon source-layer the rings are stroked without the tile-buffer clip edges, as MapLibre does. A gap renders MapLibre's casing annulus — one stroke's footprint with the corridor knocked out — so joins, caps and dash phase behave like the GL shader |
 | `circle` (+ `circle-stroke-*`) | a `circle` sprite `stamp`ed at each point; the stroke is a larger ring stamped underneath |
 | `raster` | `raster` |
 | `hillshade` (over `raster-dem`) | `dem` + `hillshade` (tone calibration still approximate) |
@@ -77,7 +77,7 @@ once the style is migrated (`--migrate`, see below).
 | MapLibre | ezu |
 | --- | --- |
 | `fill-pattern` (constant) | `icon` → `tiling`, clipped to the fill shape via `blend { clip: true }` |
-| `line-pattern` (constant) | `icon` → `line-stamp`, repeated along the line and fitted to `line-width` |
+| `line-pattern` (constant) | `icon` → `line-stamp` (over `boundary`, so polygon rings too), repeated along the line and fitted to `line-width` |
 | top-level `sprite` (single URL or `[{id, url}]`) | one `sprite` source per sheet — atlas `<url>.png` plus index `<url>.json`, or an inline index. `sheet:icon` names supported |
 
 ## Data, filters and functions

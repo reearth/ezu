@@ -89,3 +89,65 @@ fn line_gap_width_becomes_a_stroke_casing() {
     let text = serde_json::to_string(&recipe).unwrap();
     ezu_style::Document::from_json(&text).expect("recipe parses as ezu Document");
 }
+
+const POLYGON_LINE_STYLE: &str = r##"{
+  "version": 8,
+  "name": "polygon-outline",
+  "sources": { "s": { "type": "vector", "tiles": ["https://example.com/{z}/{x}/{y}.pbf"] } },
+  "layers": [
+    { "id": "block-line", "type": "line", "source": "s", "source-layer": "blocks",
+      "paint": { "line-color": "#ff0000", "line-width": 4 } }
+  ]
+}"##;
+
+#[test]
+fn a_line_layer_strokes_the_rings_of_polygon_features() {
+    use ezu_features::{Feature, FeatureLayer, Geometry, Polygon};
+    use ezu_graph::{build_graph, Cache, CanvasInfo, Evaluator, NoAssets, ParamValues, TileId};
+    use ezu_paint::host::TileLoader;
+
+    let style: serde_json::Value = serde_json::from_str(POLYGON_LINE_STYLE).unwrap();
+    let (recipe, report) = convert(&style, &ConvertOptions::default()).unwrap();
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+
+    // The stroke reads the polygons' rings, without the edges the tile
+    // encoder added where it clipped them.
+    let nodes = recipe["nodes"].as_object().unwrap();
+    let stroke = &nodes["block-line__stroke"];
+    let lines_ref = stroke["features"].as_str().unwrap().trim_start_matches('@');
+    assert_eq!(nodes[lines_ref]["op"], "boundary");
+    assert_eq!(nodes[lines_ref]["clip-edges"], "drop");
+
+    // A square block from 1024 to 3072 of a 4096 extent: on a 256 px tile
+    // its outline runs at 64 and 192 px.
+    let mut geometry = Geometry::default();
+    geometry.polygons.push(Polygon {
+        exterior: vec![(1024, 1024), (3072, 1024), (3072, 3072), (1024, 3072)],
+        holes: vec![],
+    });
+    let layer = FeatureLayer {
+        name: "blocks".into(),
+        extent: 4096,
+        features: vec![Feature {
+            id: None,
+            geometry,
+            properties: Default::default(),
+        }],
+    };
+
+    let doc = ezu_style::Document::from_json(&serde_json::to_string(&recipe).unwrap()).unwrap();
+    let graph = build_graph(&doc, &ezu_paint::nodes::default_registry()).unwrap();
+    let cache = Cache::new();
+    let tile = TileId { z: 14, x: 0, y: 0 };
+    let mut loader = TileLoader::new(&NoAssets, tile);
+    loader.bind_features("s.blocks", layer);
+    let out = Evaluator::new(&graph, &cache, &loader)
+        .render(tile, CanvasInfo::square(256, 0), &ParamValues::new(), 0)
+        .unwrap();
+    let raster = out.as_raster().expect("a raster");
+    let alpha = |x: u32, y: u32| raster.pixels[((y * raster.width + x) * 4 + 3) as usize];
+
+    assert_eq!(alpha(64, 128), 255, "west edge is stroked");
+    assert_eq!(alpha(128, 192), 255, "south edge is stroked");
+    assert_eq!(alpha(128, 128), 0, "the inside is not filled");
+}

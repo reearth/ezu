@@ -860,6 +860,7 @@ name = "ezu-translate"
 version = "0.11.0"
 dependencies = [
  "ezu-core",
+ "ezu-features",
  "ezu-graph",
  "ezu-paint",
  "ezu-style",

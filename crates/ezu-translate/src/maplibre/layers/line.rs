@@ -1,5 +1,5 @@
 //! `line` layer → a crisp `stroke` (or `line-stamp` when `line-pattern`
-//! is set).
+//! is set), over the layer's lines and polygon rings.
 
 use serde_json::{Map, Value};
 
@@ -21,7 +21,6 @@ pub(crate) fn convert_line(
     let Some((source, source_layer)) = resolve_layer_source(id, layer, sources, report) else {
         return;
     };
-    let (min_zoom, max_zoom) = zoom_range;
     let base_filter_expr = filter::layer_filter_expr(layer, report, id);
     let paint = paint_of(layer);
 
@@ -76,17 +75,20 @@ pub(crate) fn convert_line(
         .and_then(Value::as_str)
         .unwrap_or("miter");
 
-    let feat_id = format!("{id}__feat");
     let stroke_id = format!("{id}__stroke");
-    nodes.insert(
-        feat_id.clone(),
-        features_node(&source, &source_layer, base_filter_expr, min_zoom, max_zoom),
+    let lines_id = line_features(
+        id,
+        &source,
+        &source_layer,
+        base_filter_expr,
+        zoom_range,
+        nodes,
     );
     // Crisp `stroke` (tiny-skia) rather than a painterly brush, to match
     // MapLibre's clean vector lines.
     let mut spec = serde_json::json!({
         "op": "stroke",
-        "features": format!("@{feat_id}"),
+        "features": format!("@{lines_id}"),
         "color": hex,
         "width-px": width,
         "cap": cap,
@@ -125,6 +127,40 @@ pub(crate) fn convert_line(
     outputs.push(stroke_id);
 }
 
+/// The features a line layer draws, as polylines: `features` → `boundary`.
+/// Returns the id of the node to stroke.
+///
+/// A MapLibre line layer on a polygon source-layer strokes the polygons'
+/// rings, while `stroke` and `line-stamp` only draw polylines, so the rings
+/// are turned into polylines first. `clip-edges: drop` leaves out the edges
+/// the tile encoder added where it clipped a polygon at the tile buffer —
+/// MapLibre skips those too, or every tile seam would carry a line. Line
+/// geometry passes `boundary` unchanged, so the node is always inserted.
+fn line_features(
+    id: &str,
+    source: &str,
+    source_layer: &str,
+    filter_expr: Option<Value>,
+    (min_zoom, max_zoom): ZoomRange,
+    nodes: &mut Map<String, Value>,
+) -> String {
+    let feat_id = format!("{id}__feat");
+    nodes.insert(
+        feat_id.clone(),
+        features_node(source, source_layer, filter_expr, min_zoom, max_zoom),
+    );
+    let lines_id = format!("{id}__lines");
+    nodes.insert(
+        lines_id.clone(),
+        serde_json::json!({
+            "op": "boundary",
+            "features": format!("@{feat_id}"),
+            "clip-edges": "drop",
+        }),
+    );
+    lines_id
+}
+
 /// `line-pattern` → repeat the named sprite icon along each line, fit to the
 /// stroke width: `features` → `icon` → `line-stamp`.
 #[allow(clippy::too_many_arguments)]
@@ -142,7 +178,6 @@ pub(crate) fn convert_line_pattern(
     outputs: &mut Vec<String>,
     report: &mut Report,
 ) {
-    let (min_zoom, max_zoom) = zoom_range;
     let Some(name) = pattern.as_str() else {
         report.warn(format!(
             "layer `{id}`: data-driven `line-pattern` not supported — skipped"
@@ -155,10 +190,13 @@ pub(crate) fn convert_line_pattern(
         ));
         return;
     };
-    let feat_id = format!("{id}__feat");
-    nodes.insert(
-        feat_id.clone(),
-        features_node(source, source_layer, base_filter_expr, min_zoom, max_zoom),
+    let lines_id = line_features(
+        id,
+        source,
+        source_layer,
+        base_filter_expr,
+        zoom_range,
+        nodes,
     );
     let icon_id = format!("{id}__icon");
     nodes.insert(
@@ -167,7 +205,7 @@ pub(crate) fn convert_line_pattern(
     );
     let out_id = format!("{id}__linepat");
     let mut spec = serde_json::json!({
-        "op": "line-stamp", "features": format!("@{feat_id}"),
+        "op": "line-stamp", "features": format!("@{lines_id}"),
         "image": format!("@{icon_id}"), "width-px": width
     });
     if let Some(a) = opacity {
