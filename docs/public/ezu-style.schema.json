@@ -168,7 +168,63 @@
                       ]
                     },
                     "properties": {
-                      "description": "Laid over the entry's `properties` for this feature alone.",
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "not": {
+                              "type": "object"
+                            }
+                          },
+                          {
+                            "not": {
+                              "anyOf": [
+                                {
+                                  "required": [
+                                    "swatch-x"
+                                  ]
+                                },
+                                {
+                                  "required": [
+                                    "swatch-y"
+                                  ]
+                                }
+                              ]
+                            },
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "Fraction of the way across the swatch, replaced by the longitude that lands there when the swatch is drawn.",
+                            "properties": {
+                              "swatch-x": {
+                                "maximum": 1,
+                                "minimum": 0,
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "swatch-x"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "Fraction of the way down the swatch, replaced by the latitude that lands there when the swatch is drawn.",
+                            "properties": {
+                              "swatch-y": {
+                                "maximum": 1,
+                                "minimum": 0,
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "swatch-y"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "description": "Laid over the entry's `properties` for this feature alone. A value written as `{ \"swatch-x\": f }` or `{ \"swatch-y\": f }` becomes the longitude or latitude of that place in the swatch.",
                       "type": "object"
                     }
                   },
@@ -209,7 +265,63 @@
                 "type": "string"
               },
               "properties": {
-                "description": "Feature properties selecting this entry's case.",
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "not": {
+                        "type": "object"
+                      }
+                    },
+                    {
+                      "not": {
+                        "anyOf": [
+                          {
+                            "required": [
+                              "swatch-x"
+                            ]
+                          },
+                          {
+                            "required": [
+                              "swatch-y"
+                            ]
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "description": "Fraction of the way across the swatch, replaced by the longitude that lands there when the swatch is drawn.",
+                      "properties": {
+                        "swatch-x": {
+                          "maximum": 1,
+                          "minimum": 0,
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "swatch-x"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "description": "Fraction of the way down the swatch, replaced by the latitude that lands there when the swatch is drawn.",
+                      "properties": {
+                        "swatch-y": {
+                          "maximum": 1,
+                          "minimum": 0,
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "swatch-y"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "description": "Feature properties selecting this entry's case. A value written as `{ \"swatch-x\": f }` or `{ \"swatch-y\": f }` becomes the longitude or latitude of that place in the swatch, for ops that read a position from a feature.",
                 "type": "object"
               }
             },

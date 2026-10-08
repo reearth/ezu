@@ -47,7 +47,7 @@ And on an entry:
 | --- | --- | --- |
 | `label` | string | required — what the reader sees |
 | `from` | `@node` | required — the node that draws this symbol |
-| `properties` | object | feature properties that select this case |
+| `properties` | object | feature properties that select this case; a value may be a place in the swatch, see below |
 | `note` | string | prose for this entry alone |
 | `min-zoom` / `max-zoom` | integer | zooms this entry applies to; absent means all |
 | `geometry` | `all` \| `polygon` \| `line` \| `point` | which geometry the swatch's stand-in feature carries; see below |
@@ -131,9 +131,20 @@ Some symbols are an arrangement of parts, and the fixed stand-in cannot
 arrange anything. A ledger map's "assigned house number" is a building square,
 a dot at its representative point, a dotted connector out to an entrance dot,
 and the number over the representative point — a `stack` of a fill, circles,
-a dashed stroke and a `text` node, each fed by its own `features` node.
+a dashed stroke and a `text` node, each fed by its own `features` node. On the
+map, the connector comes from the entrance points themselves: each carries
+its building's representative point as a longitude and latitude, and
+[`segment-to`](/ezu/style/nodes/geometry/#segment-to) joins the two.
 
-`features` lists the stand-ins to draw instead:
+```json
+"ent":  { "op": "features", "source": "ledger", "layer": "entrances" },
+"conn": { "op": "segment-to", "features": "@ent", "lng-field": "rep_lng", "lat-field": "rep_lat" },
+"dash": { "op": "dash", "features": "@conn", "dash-px": 3, "gap-px": 2 },
+"line": { "op": "stroke", "features": "@dash", "width-px": 1.5, "color": "#606060" }
+```
+
+`features` lists the stand-ins to draw instead, and the entrance carries the
+same two properties the map's entrances do:
 
 ```json
 {
@@ -144,10 +155,9 @@ a dashed stroke and a `text` node, each fed by its own `features` node.
                     "coordinates": [[[0.06, 0.45], [0.42, 0.45], [0.42, 0.92], [0.06, 0.92]]] } },
     { "geometry": { "type": "Point", "coordinates": [0.24, 0.68] },
       "properties": { "part": "rep" } },
-    { "geometry": { "type": "LineString", "coordinates": [[0.24, 0.68], [0.88, 0.68]] },
-      "properties": { "part": "connector" } },
     { "geometry": { "type": "Point", "coordinates": [0.88, 0.68] },
-      "properties": { "part": "entrance" } }
+      "properties": { "part": "entrance",
+                      "rep_lng": { "swatch-x": 0.24 }, "rep_lat": { "swatch-y": 0.68 } } }
   ]
 }
 ```
@@ -184,6 +194,32 @@ give the legend an entry pointing at a node that draws a single dot.
 
 Swatches are drawn at one zoom, since a symbol may change with scale; `--zoom`
 picks it and defaults to 12.
+
+### Positions in properties
+
+`segment-to` reads where to draw to from the feature's properties, in
+longitude and latitude, and a swatch has no geography for those to mean
+anything in. So a swatch is given one: it is drawn as a fixed tile at its zoom
+(the one whose top-left corner is the middle of the world), spanning that
+tile from corner to corner. A property written as `{ "swatch-x": f }` becomes
+the longitude `f` of the way across that tile, and `{ "swatch-y": f }` the
+latitude `f` of the way down. In the house-number entry, `rep_lng` and
+`rep_lat` come out as the longitude and latitude of the representative point's
+dot, and `segment-to` draws the connector from there to the entrance, as it
+does on the map — the swatch needs no stroke of its own.
+
+Each property holds one axis, because that is how the fields come: a longitude
+in one and a latitude in another. Mercator maps the two independently, so each
+converts without the other. They work in the entry's `properties` as well as
+in a feature's, and with the fixed stand-in as well as with `features`.
+
+The `ent` node has no filter and needs none: every stand-in reaches it, but
+only the entrance carries the two fields, and `segment-to` draws nothing for a
+feature without them.
+
+`ezu check` refuses an object naming `swatch-x` or `swatch-y` that is not
+exactly one of them holding a number from `0` to `1`. Any other object as a
+property value is dropped: a feature property is a scalar.
 
 ## Give the stand-in whatever the layer filters on
 
@@ -268,7 +304,12 @@ And the JSON, with `swatch` paths added:
 resolve. Absent fields stay absent rather than coming through as nulls, so a
 host can test for them. An entry's `features` come back as declared, so a host
 that draws its own swatches can stand in the same features `--swatch-dir`
-does.
+does. Swatch positions in `properties` come back as declared too, not as
+degrees: which longitude `{ "swatch-x": 0.24 }` stands for depends on the zoom
+the swatch is drawn at, and a host drawing its own picks that. Hosts building
+on the Rust crates get the conversion from `ezu::paint::legend` —
+`stand_in_layer` resolves it for a zoom, and `swatch_tile` names the tile to
+render as.
 
 ## The whole command
 

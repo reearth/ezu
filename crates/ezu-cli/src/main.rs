@@ -951,6 +951,9 @@ struct LegendOut<'a> {
 struct EntryOut<'a> {
     label: &'a str,
     from: &'a ezu::style::NodeRef,
+    /// As declared, swatch positions included: what longitude a
+    /// `{ "swatch-x": … }` stands for depends on the zoom a swatch is
+    /// drawn at, which is the host's choice when it draws its own.
     #[serde(skip_serializing_if = "serde_json::Map::is_empty")]
     properties: &'a serde_json::Map<String, serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]

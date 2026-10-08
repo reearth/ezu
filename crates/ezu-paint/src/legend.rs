@@ -20,6 +20,13 @@
 //!   or the arrangement the entry declares — so whatever the node would
 //!   draw for real features of that description is what the swatch shows
 //!
+//! The swatch is rendered as one fixed tile ([`swatch_tile`]), so an op
+//! that projects a longitude and latitude read from a feature — such as
+//! `segment-to` — has a geographic frame to project in. A stand-in
+//! property written as a [`SwatchCoord`] is turned into the longitude or
+//! latitude that lands at that place in the swatch, so such an op draws
+//! where the entry says without knowing it is in a legend.
+//!
 //! The canvas need not be square, which is why [`CanvasInfo`] has two
 //! sides: a swatch is as wide and as tall as the legend has room for.
 
@@ -27,13 +34,14 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use ezu_core::coord::{world_x_to_lon, world_y_to_lat};
 use ezu_features::{Feature, FeatureLayer, Geometry, Polygon, Value as FeatureValue};
 use ezu_graph::{
     build_graph, parse_neighbor_binding, Asset, AssetError, AssetLoader, BuildGraphError, Cache,
     CanvasInfo, Evaluator, NodeRegistry, OpaqueValue, ParamValues, PortValue, RasterBuf,
     RenderError, TileId,
 };
-use ezu_style::{Document, LegendEntry, LegendFeatureGeometry, LegendGeometry};
+use ezu_style::{Document, LegendEntry, LegendFeatureGeometry, LegendGeometry, SwatchCoord};
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::host::looks_like_asset_src;
@@ -146,7 +154,8 @@ pub fn render_swatch(
     // The entry's own choice wins; the option is the default for the
     // entries that do not make one.
     let geometry = entry.geometry.unwrap_or(opts.geometry);
-    let loader = SwatchLoader::new(assets, stand_in_layer(entry, geometry), entry, geometry);
+    let layer = stand_in_layer(entry, geometry, opts.zoom);
+    let loader = SwatchLoader::new(assets, layer, entry, geometry);
     let ev = Evaluator::new(&graph, cache, &loader);
     let required = graph.required_pad().unwrap_or(0);
     let canvas = CanvasInfo {
@@ -154,17 +163,8 @@ pub fn render_swatch(
         tile_h: opts.height,
         pad: opts.pad.max(required),
     };
-    // The middle of the world: a latitude where Mercator's scale is 1,
-    // so an area-based symbol reads as it does near the equator, and a
-    // zoom the caller chose.
-    let n = 1u32 << opts.zoom;
-    let tile = TileId {
-        z: opts.zoom,
-        x: n / 2,
-        y: n / 2,
-    };
     let out = ev
-        .render(tile, canvas, params, 0)
+        .render(swatch_tile(opts.zoom), canvas, params, 0)
         .map_err(|e| SwatchError::Render {
             label: entry.label.clone(),
             source: Box::new(e),
@@ -176,6 +176,34 @@ pub fn render_swatch(
             src: src.to_string(),
             got: format!("{:?}", other.kind()),
         }),
+    }
+}
+
+/// The tile a swatch drawn at `zoom` is rendered as, which is the
+/// geography its canvas covers: the swatch spans that tile from corner
+/// to corner, whatever its own shape.
+///
+/// It is the tile whose top-left corner is the middle of the world, where
+/// Mercator's scale is 1, so an area-based symbol reads as it does near
+/// the equator. Fixed, so that a host drawing its own swatches can put
+/// the same longitudes and latitudes in the same places.
+pub fn swatch_tile(zoom: u8) -> TileId {
+    let n = 1u32 << zoom;
+    TileId {
+        z: zoom,
+        x: n / 2,
+        y: n / 2,
+    }
+}
+
+/// The longitude or latitude that lands at `coord` in a swatch drawn at
+/// `zoom` — see [`swatch_tile`].
+pub fn swatch_coord_degrees(coord: SwatchCoord, zoom: u8) -> f64 {
+    let tile = swatch_tile(zoom);
+    let n = f64::from(1u32 << zoom);
+    match coord {
+        SwatchCoord::X(f) => world_x_to_lon((f64::from(tile.x) + f) / n),
+        SwatchCoord::Y(f) => world_y_to_lat((f64::from(tile.y) + f) / n),
     }
 }
 
@@ -203,22 +231,25 @@ const LINE_VERTICES: usize = 64;
 /// Otherwise the stand-in is one feature filling the swatch, carrying
 /// the entry's declared properties and the geometry `geometry` selects.
 ///
+/// Either way, a property written as a [`SwatchCoord`] arrives as the
+/// longitude or latitude of that place in the swatch drawn at `zoom`.
+///
 /// Public because a host drawing its own swatches needs the same
 /// stand-in to get the same answer as `ezu legend` does.
-pub fn stand_in_layer(entry: &LegendEntry, geometry: LegendGeometry) -> FeatureLayer {
+pub fn stand_in_layer(entry: &LegendEntry, geometry: LegendGeometry, zoom: u8) -> FeatureLayer {
     let features = match &entry.features {
         Some(declared) => declared
             .iter()
             .map(|f| Feature {
                 id: None,
                 geometry: declared_geometry(&f.geometry),
-                properties: feature_values(entry.properties.iter().chain(&f.properties)),
+                properties: feature_values(entry.properties.iter().chain(&f.properties), zoom),
             })
             .collect(),
         None => vec![Feature {
             id: None,
             geometry: filling_geometry(geometry),
-            properties: feature_values(&entry.properties),
+            properties: feature_values(&entry.properties, zoom),
         }],
     };
     FeatureLayer {
@@ -309,13 +340,24 @@ fn filling_geometry(geometry: LegendGeometry) -> Geometry {
 /// Declared properties as feature values, later keys winning — which is
 /// how a stand-in feature's own properties are laid over the entry's.
 /// Numbers keep their integer-ness where they have it, since
-/// `["get", …]` comparisons can see the difference. Arrays and objects
+/// `["get", …]` comparisons can see the difference. A swatch position
+/// becomes its longitude or latitude at `zoom`. Other arrays and objects
 /// are dropped: a feature property is a scalar.
 fn feature_values<'a>(
     props: impl IntoIterator<Item = (&'a String, &'a serde_json::Value)>,
+    zoom: u8,
 ) -> HashMap<String, FeatureValue> {
     let mut out = HashMap::new();
     for (k, v) in props {
+        // A malformed one is refused by the style check; one reaching
+        // here anyway is dropped with the other objects.
+        if let Ok(Some(coord)) = SwatchCoord::parse(v) {
+            out.insert(
+                k.clone(),
+                FeatureValue::Double(swatch_coord_degrees(coord, zoom)),
+            );
+            continue;
+        }
         let value = match v {
             serde_json::Value::String(s) => FeatureValue::String(s.clone()),
             serde_json::Value::Bool(b) => FeatureValue::Bool(*b),
@@ -443,7 +485,7 @@ mod tests {
     /// brush-stroked entry came out blank at legend sizes.
     #[test]
     fn the_stand_in_line_is_finely_sampled() {
-        let layer = stand_in_layer(&entry(&[]), LegendGeometry::Line);
+        let layer = stand_in_layer(&entry(&[]), LegendGeometry::Line, 12);
         let line = &layer.features[0].geometry.lines[0];
         assert!(
             line.len() >= 32,
@@ -465,7 +507,7 @@ mod tests {
             (LegendGeometry::Line, 0, 1, 0),
             (LegendGeometry::Point, 0, 0, 1),
         ] {
-            let layer = stand_in_layer(&entry(&[]), geometry);
+            let layer = stand_in_layer(&entry(&[]), geometry, 12);
             let g = &layer.features[0].geometry;
             assert_eq!(
                 (g.polygons.len(), g.lines.len(), g.points.len()),
@@ -493,7 +535,7 @@ mod tests {
             .unwrap(),
         );
         // `geometry` is not consulted for an entry that places its own.
-        let layer = stand_in_layer(&e, LegendGeometry::Point);
+        let layer = stand_in_layer(&e, LegendGeometry::Point, 12);
         assert_eq!(layer.features.len(), 3);
         let [poly, point, line] = &layer.features[..] else {
             unreachable!()
@@ -536,6 +578,7 @@ mod tests {
                 ("nope", serde_json::json!([1, 2])),
             ]),
             LegendGeometry::All,
+            12,
         );
         let p = &layer.features[0].properties;
         assert!(matches!(p.get("cls"), Some(FeatureValue::String(s)) if s == "trunk"));
@@ -543,5 +586,45 @@ mod tests {
         assert!(matches!(p.get("density"), Some(FeatureValue::Double(d)) if *d == 12.5));
         assert!(matches!(p.get("on"), Some(FeatureValue::Bool(true))));
         assert!(p.get("nope").is_none(), "an array is not a property value");
+    }
+
+    /// A swatch position comes out as the degrees that project back to
+    /// the same place in the swatch's tile — at every zoom, since the
+    /// tile changes with it — and lands on the same extent unit as a
+    /// stand-in geometry declared at that fraction.
+    #[test]
+    fn swatch_positions_become_degrees_that_project_back_to_them() {
+        use ezu_core::coord::{lat_to_world_y, lon_to_world_x};
+        let mut e = entry(&[("lng", serde_json::json!({ "swatch-x": 0.24 }))]);
+        e.features = Some(
+            serde_json::from_value(serde_json::json!([
+                { "geometry": { "type": "Point", "coordinates": [0.24, 0.72] },
+                  "properties": { "lat": { "swatch-y": 0.72 } } }
+            ]))
+            .unwrap(),
+        );
+        for zoom in [0, 12, 22] {
+            let layer = stand_in_layer(&e, LegendGeometry::All, zoom);
+            let f = &layer.features[0];
+            let (Some(FeatureValue::Double(lng)), Some(FeatureValue::Double(lat))) =
+                (f.properties.get("lng"), f.properties.get("lat"))
+            else {
+                panic!("z{zoom}: expected degrees, got {:?}", f.properties)
+            };
+            let tile = swatch_tile(zoom);
+            let n = f64::from(1u32 << zoom);
+            let e = f64::from(EXTENT);
+            let x = (lon_to_world_x(*lng) * n - f64::from(tile.x)) * e;
+            let y = (lat_to_world_y(*lat) * n - f64::from(tile.y)) * e;
+            assert!(
+                (x - 0.24 * e).abs() < 1e-3 && (y - 0.72 * e).abs() < 1e-3,
+                "z{zoom}: ({x}, {y})"
+            );
+            assert_eq!(
+                (x.round() as i32, y.round() as i32),
+                f.geometry.points[0],
+                "z{zoom}"
+            );
+        }
     }
 }

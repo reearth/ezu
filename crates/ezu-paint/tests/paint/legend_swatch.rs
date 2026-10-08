@@ -498,3 +498,183 @@ fn stand_ins_scale_with_the_swatch() {
         "the entrance dot should scale along: {p:?}"
     );
 }
+
+/// The composite symbol again, but with the connector drawn the way the
+/// map draws it: `segment-to` from the entrance to the representative
+/// point its feature names by longitude and latitude, here written as
+/// places in the swatch. The entrance sits up and to the right, so the
+/// connector runs on a diagonal and both axes have to come out right.
+fn connector_style() -> String {
+    format!(
+        r##"{{
+      "name": "ledger",
+      "sources": {{
+        "src":  {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
+        "body": {{ "type": "font", "url": "{font}" }}
+      }},
+      "nodes": {{
+        "bldg":  {{ "op": "features", "source": "src", "layer": "buildings",
+                    "filter-expr": ["==", ["geometry-type"], "Polygon"] }},
+        "pts":   {{ "op": "features", "source": "src", "layer": "addresses",
+                    "filter-expr": ["==", ["geometry-type"], "Point"] }},
+        "ent":   {{ "op": "features", "source": "src", "layer": "addresses",
+                    "filter-expr": ["==", ["get", "part"], "entrance"] }},
+        "rep":   {{ "op": "features", "source": "src", "layer": "addresses",
+                    "filter-expr": ["==", ["get", "part"], "rep"] }},
+        "conn":  {{ "op": "segment-to", "features": "@ent",
+                    "lng-field": "rep_lng", "lat-field": "rep_lat" }},
+        "fill":  {{ "op": "fill-solid", "features": "@bldg", "fill": "#c0c0c0" }},
+        "line":  {{ "op": "stroke", "features": "@conn", "width-px": 2, "color": "#00a000" }},
+        "dots":  {{ "op": "circles", "features": "@pts", "radius": 3, "color": "#ff0000" }},
+        "num":   {{ "op": "text", "features": "@rep", "font": ["body"], "size": 14,
+                    "text": ["get", "no"], "color": "#0000ff", "anchor": "bottom",
+                    "source": "src", "layer": "addresses",
+                    "filter-expr": ["==", ["get", "part"], "rep"] }},
+        "addr":  {{ "op": "stack", "layers": ["@fill", "@line", "@dots", "@num"] }}
+      }},
+      "legend": {{ "entries": [{{ "label": "assigned house number", "from": "@addr",
+        "properties": {{ "no": "12" }},
+        "features": [
+          {{ "geometry": {{ "type": "Polygon",
+                           "coordinates": [[[0.06, 0.5], [0.42, 0.5], [0.42, 0.95], [0.06, 0.95]]] }} }},
+          {{ "geometry": {{ "type": "Point", "coordinates": [0.24, 0.72] }},
+             "properties": {{ "part": "rep" }} }},
+          {{ "geometry": {{ "type": "Point", "coordinates": [0.88, 0.3] }},
+             "properties": {{ "part": "entrance",
+                             "rep_lng": {{ "swatch-x": 0.24 }}, "rep_lat": {{ "swatch-y": 0.72 }} }} }}
+        ] }}] }},
+      "output": "@addr"
+    }}"##,
+        font = font_url(),
+    )
+}
+
+/// Draw the connector swatch at `scale` times the composite size and
+/// return its cropped pixels with its width and height.
+fn connector_swatch(scale: u32) -> (Vec<[u8; 4]>, u32, u32) {
+    let json = connector_style();
+    let doc = Document::from_json(&json).expect("parse");
+    ezu_graph::build_graph(&doc, &default_registry()).expect("build");
+    let (w, h) = (CW * scale, CH * scale);
+    let o = SwatchOptions {
+        width: w,
+        height: h,
+        ..opts()
+    };
+    let (buf, canvas) = render_swatch(
+        &doc,
+        &composite_entry(&json),
+        &default_registry(),
+        &ezu_paint::host::BrushBankLoader::new(),
+        &ParamValues::new(),
+        &Cache::new(),
+        &o,
+    )
+    .expect("swatch");
+    let mut out = Vec::with_capacity((w * h) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            out.push(pixel(&buf, x + canvas.pad, y + canvas.pad));
+        }
+    }
+    (out, w, h)
+}
+
+/// Whether any pixel within one of the point `(fx, fy)` — fractions of
+/// the swatch — is the connector's green.
+fn green_near(px: &[[u8; 4]], w: u32, h: u32, fx: f64, fy: f64) -> bool {
+    let (cx, cy) = ((fx * w as f64) as i64, (fy * h as f64) as i64);
+    (-1..=1).any(|dy| {
+        (-1..=1).any(|dx| {
+            let (x, y) = (cx + dx, cy + dy);
+            if x < 0 || y < 0 || x >= w as i64 || y >= h as i64 {
+                return false;
+            }
+            let p = px[(y as u32 * w + x as u32) as usize];
+            p[1] > 100 && p[0] < 60 && p[2] < 60 && p[3] > 120
+        })
+    })
+}
+
+/// The connector is the map's own `segment-to` node, and it runs between
+/// the two places the entry declares: the entrance dot, and the
+/// representative point the entrance's properties name in swatch
+/// fractions. Checked near both ends and in the middle, and away from
+/// the diagonal, at the composite size and at twice it.
+#[test]
+fn segment_to_draws_between_declared_swatch_positions() {
+    let (rep, ent) = ([0.24, 0.72], [0.88, 0.3]);
+    let along = |t: f64| {
+        (
+            rep[0] + (ent[0] - rep[0]) * t,
+            rep[1] + (ent[1] - rep[1]) * t,
+        )
+    };
+    for scale in [1, 2] {
+        let (px, w, h) = connector_swatch(scale);
+        for t in [0.15, 0.5, 0.85] {
+            let (fx, fy) = along(t);
+            assert!(
+                green_near(&px, w, h, fx, fy),
+                "{scale}x: the connector should pass ({fx:.3}, {fy:.3})"
+            );
+        }
+        // Not drawn level with either end, as it would be if one axis
+        // were lost.
+        let (mx, _) = along(0.5);
+        for fy in [rep[1], ent[1]] {
+            assert!(
+                !green_near(&px, w, h, mx, fy),
+                "{scale}x: the connector strayed to row {fy}"
+            );
+        }
+        // The parts it joins are drawn too, over its ends.
+        for [fx, fy] in [rep, ent] {
+            let p = px[((fy * h as f64) as u32 * w + (fx * w as f64) as u32) as usize];
+            assert!(
+                p[0] > 200 && p[1] < 80,
+                "{scale}x: dot at ({fx}, {fy}): {p:?}"
+            );
+        }
+        let label = (0..h * 72 / 100)
+            .flat_map(|y| (0..w / 2).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                let p = px[(y * w + x) as usize];
+                p[2] > 120 && p[0] < 80 && p[1] < 80 && p[3] > 120
+            })
+            .count();
+        assert!(label > 20, "{scale}x: the house number should be drawn");
+    }
+}
+
+/// A malformed swatch position is refused before anything is drawn, by
+/// the swatch as well as by the graph build that `ezu check` runs.
+#[test]
+fn a_malformed_swatch_position_is_refused() {
+    let json = connector_style().replace(r#""swatch-x": 0.24"#, r#""swatch-x": 1.24"#);
+    let doc = Document::from_json(&json).expect("parse");
+    let err = ezu_graph::build_graph(&doc, &default_registry()).unwrap_err();
+    assert!(
+        matches!(err, ezu_graph::BuildGraphError::LegendFeatures { .. }),
+        "{err:?}"
+    );
+    let err = render_swatch(
+        &doc,
+        &composite_entry(&json),
+        &default_registry(),
+        &NoAssets,
+        &ParamValues::new(),
+        &Cache::new(),
+        &opts(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, ezu_paint::legend::SwatchError::Features { .. }),
+        "{err:?}"
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("`features[2].properties.rep_lng`: `swatch-x` is 1.24"),
+        "{msg}"
+    );
+}

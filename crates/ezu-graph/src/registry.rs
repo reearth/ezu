@@ -268,6 +268,34 @@ impl NodeRegistry {
                 "properties": { "type": { "const": ty }, "coordinates": coordinates }
             })
         };
+        // A stand-in's properties. A value may be a place in the swatch,
+        // which becomes the longitude or latitude landing there, for ops
+        // that read a position from a feature.
+        let swatch_coord = |key: &str, way: &str, degrees: &str| {
+            json!({
+                "type": "object",
+                "required": [key],
+                "additionalProperties": false,
+                "properties": { key: { "type": "number", "minimum": 0, "maximum": 1 } },
+                "description": format!("Fraction of the way {way} the swatch, replaced by the {degrees} that lands there when the swatch is drawn.")
+            })
+        };
+        let stand_in_properties = |description: &str| {
+            json!({
+                "type": "object",
+                "description": description,
+                "additionalProperties": {
+                    "anyOf": [
+                        { "not": { "type": "object" } },
+                        { "type": "object", "not": { "anyOf": [
+                            { "required": ["swatch-x"] }, { "required": ["swatch-y"] }
+                        ] } },
+                        swatch_coord("swatch-x", "across", "longitude"),
+                        swatch_coord("swatch-y", "down", "latitude")
+                    ]
+                }
+            })
+        };
         let legend_features = json!({
             "type": "array",
             "minItems": 1,
@@ -289,7 +317,7 @@ impl NodeRegistry {
                             }))
                         ]
                     },
-                    "properties": { "type": "object", "description": "Laid over the entry's `properties` for this feature alone." }
+                    "properties": stand_in_properties("Laid over the entry's `properties` for this feature alone. A value written as `{ \"swatch-x\": f }` or `{ \"swatch-y\": f }` becomes the longitude or latitude of that place in the swatch.")
                 }
             }
         });
@@ -338,7 +366,7 @@ impl NodeRegistry {
                                 "properties": {
                                     "label": { "type": "string", "description": "What the reader sees." },
                                     "from": { "type": "string", "description": "The node that draws this symbol; must produce a Raster." },
-                                    "properties": { "type": "object", "description": "Feature properties selecting this entry's case." },
+                                    "properties": stand_in_properties("Feature properties selecting this entry's case. A value written as `{ \"swatch-x\": f }` or `{ \"swatch-y\": f }` becomes the longitude or latitude of that place in the swatch, for ops that read a position from a feature."),
                                     "note": { "type": "string" },
                                     "min-zoom": { "type": "integer", "minimum": 0 },
                                     "max-zoom": { "type": "integer", "minimum": 0 },

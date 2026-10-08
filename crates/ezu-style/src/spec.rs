@@ -302,12 +302,79 @@ pub enum LegendFeatureGeometry {
     Polygon { coordinates: Vec<Vec<[f64; 2]>> },
 }
 
+/// A stand-in property written as a place in the swatch rather than as a
+/// value: `{ "swatch-x": 0.24 }` for a longitude, `{ "swatch-y": 0.72 }`
+/// for a latitude.
+///
+/// Some ops read a geographic position from a feature's properties —
+/// `segment-to` draws to the longitude and latitude two fields name. A
+/// swatch has no geography of its own, so whoever draws it gives it a
+/// fixed one and replaces each of these with the longitude or latitude
+/// that lands that fraction of the way across or down the swatch. The op
+/// then draws to the right place without knowing it is in a legend.
+///
+/// One axis per property, because that is how the fields come: a
+/// longitude and a latitude in two properties. Web Mercator maps each
+/// independently of the other, so each converts on its own.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SwatchCoord {
+    /// Fraction of the way across, from the left edge.
+    X(f64),
+    /// Fraction of the way down, from the top edge.
+    Y(f64),
+}
+
+impl SwatchCoord {
+    /// Read a property value as a swatch position. An ordinary value is
+    /// `Ok(None)`; an object naming `swatch-x` or `swatch-y` that is not
+    /// exactly one of them holding a fraction from `0` to `1` is refused
+    /// with the reason.
+    pub fn parse(value: &serde_json::Value) -> Result<Option<Self>, String> {
+        let Some(obj) = value.as_object() else {
+            return Ok(None);
+        };
+        let (key, v, make): (_, _, fn(f64) -> Self) =
+            match (obj.get("swatch-x"), obj.get("swatch-y")) {
+                (None, None) => return Ok(None),
+                (Some(_), Some(_)) => {
+                    return Err("gives both `swatch-x` and `swatch-y`; a property holds \
+                                one coordinate, so put the other in a property of its own"
+                        .to_string())
+                }
+                (Some(v), None) => ("swatch-x", v, SwatchCoord::X),
+                (None, Some(v)) => ("swatch-y", v, SwatchCoord::Y),
+            };
+        if obj.len() != 1 {
+            return Err(format!("`{key}` must be the object's only key"));
+        }
+        match v.as_f64() {
+            Some(f) if (0.0..=1.0).contains(&f) => Ok(Some(make(f))),
+            _ => Err(format!(
+                "`{key}` is {v}, not a fraction of the swatch from 0 to 1"
+            )),
+        }
+    }
+}
+
+/// Every swatch position in `props`, refused with the property's name.
+fn check_swatch_coords(
+    props: &serde_json::Map<String, serde_json::Value>,
+    at: &str,
+) -> Result<(), String> {
+    for (k, v) in props {
+        SwatchCoord::parse(v).map_err(|reason| format!("`{at}properties.{k}`: {reason}"))?;
+    }
+    Ok(())
+}
+
 impl LegendEntry {
-    /// Whether the entry's stand-in features are ones a swatch can draw:
+    /// Whether the entry's stand-ins are ones a swatch can draw:
     /// `features` alongside `geometry`, an empty list, a line of fewer
-    /// than two positions, a ring of fewer than three, or a position
-    /// outside the swatch are refused with the reason.
+    /// than two positions, a ring of fewer than three, a position outside
+    /// the swatch, or a property that is a malformed [`SwatchCoord`] are
+    /// refused with the reason.
     pub fn check_features(&self) -> Result<(), String> {
+        check_swatch_coords(&self.properties, "")?;
         let Some(features) = &self.features else {
             return Ok(());
         };
@@ -320,6 +387,7 @@ impl LegendEntry {
             return Err("`features` is empty, so the swatch would draw nothing".to_string());
         }
         for (i, f) in features.iter().enumerate() {
+            check_swatch_coords(&f.properties, &format!("features[{i}]."))?;
             let positions: Vec<&[f64; 2]> = match &f.geometry {
                 LegendFeatureGeometry::Point { coordinates } => vec![coordinates],
                 LegendFeatureGeometry::LineString { coordinates } => {
@@ -1370,9 +1438,63 @@ mod tests {
                     .to_string(),
                 "[0.5, 1.5] is outside the swatch",
             ),
+            (
+                r#"{ "label": "x", "from": "@n", "properties": { "lng": { "swatch-x": 1.2 } } }"#
+                    .to_string(),
+                "`properties.lng`: `swatch-x` is 1.2, not a fraction",
+            ),
+            (
+                format!(
+                    r#"{{ "label": "x", "from": "@n", "features": [{point},
+                         {{ "geometry": {{ "type": "Point", "coordinates": [0.5, 0.5] }},
+                           "properties": {{ "lat": {{ "swatch-y": "half" }} }} }}] }}"#
+                ),
+                "`features[1].properties.lat`: `swatch-y` is \"half\"",
+            ),
+            (
+                r#"{ "label": "x", "from": "@n",
+                     "properties": { "at": { "swatch-x": 0.1, "swatch-y": 0.2 } } }"#
+                    .to_string(),
+                "both `swatch-x` and `swatch-y`",
+            ),
+            (
+                r#"{ "label": "x", "from": "@n",
+                     "properties": { "at": { "swatch-x": 0.1, "unit": "px" } } }"#
+                    .to_string(),
+                "`swatch-x` must be the object's only key",
+            ),
         ] {
             let err = legend_entry(&entry).check_features().unwrap_err();
             assert!(err.contains(needle), "{needle:?} not in {err:?}");
         }
+    }
+
+    #[test]
+    fn a_swatch_position_is_read_from_a_one_key_object() {
+        use serde_json::json;
+        assert_eq!(
+            SwatchCoord::parse(&json!({ "swatch-x": 0.25 })),
+            Ok(Some(SwatchCoord::X(0.25)))
+        );
+        assert_eq!(
+            SwatchCoord::parse(&json!({ "swatch-y": 1 })),
+            Ok(Some(SwatchCoord::Y(1.0)))
+        );
+        // Anything else is an ordinary value, objects included.
+        for v in [
+            json!(0.25),
+            json!("swatch-x"),
+            json!({ "x": 0.25 }),
+            json!([0.1]),
+        ] {
+            assert_eq!(SwatchCoord::parse(&v), Ok(None), "{v}");
+        }
+        // And an entry using them both ways passes the check.
+        let e = legend_entry(
+            r#"{ "label": "x", "from": "@n", "properties": { "lng": { "swatch-x": 0 } },
+                 "features": [{ "geometry": { "type": "Point", "coordinates": [0.5, 0.5] },
+                                "properties": { "lat": { "swatch-y": 0.5 } } }] }"#,
+        );
+        assert_eq!(e.check_features(), Ok(()));
     }
 }
