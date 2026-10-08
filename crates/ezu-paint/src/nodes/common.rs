@@ -630,18 +630,26 @@ pub(super) fn resolve_source(
 /// `dx = -1..=1`, skipping the centre.
 ///
 /// A neighbour that is not bound, or whose payload is not a feature layer,
-/// is left out. So is one whose extent differs from the centre's `extent`:
-/// callers place a neighbour's features at `(dx, dy) * extent` from the
-/// centre's origin, and that shared world frame only holds when every tile
-/// counts the same units across.
+/// is left out. So is one whose extent differs from the frame's: callers
+/// place a neighbour's features at `(dx, dy) * extent` from the centre's
+/// origin, and that shared world frame only holds when every tile counts
+/// the same units across.
+///
+/// `extent` is the centre layer's, or `0` when the centre tile has no copy
+/// of the layer — an MVT encoder leaves out a layer with no features in
+/// that tile, yet a neighbour's label or line can still reach across. The
+/// first bound neighbour then sets the frame. The extent the groups are in
+/// is returned alongside them, so a caller with no layer of its own knows
+/// which units to place them in.
 pub(super) fn neighbor_feature_groups(
     ctx: &EvalCtx<'_>,
     base: &str,
-    extent: i64,
+    extent: u32,
     filter_expr: Option<&maplibre_expr::Expr>,
     min_zoom_field: &Option<String>,
     z: u8,
-) -> Vec<(Vec<FeatureGroup>, i64, i64)> {
+) -> (i64, Vec<(Vec<FeatureGroup>, i64, i64)>) {
+    let mut frame = (extent > 0).then_some(i64::from(extent));
     let mut out = Vec::new();
     for dy in -1i32..=1 {
         for dx in -1i32..=1 {
@@ -654,14 +662,15 @@ pub(super) fn neighbor_feature_groups(
                 _ => None,
             };
             let Some(shared) = shared else { continue };
-            if shared.layer.extent.max(1) as i64 != extent {
+            let e = shared.layer.extent.max(1) as i64;
+            if *frame.get_or_insert(e) != e {
                 continue;
             }
             let groups = collect_groups(&shared, filter_expr, min_zoom_field, z);
             out.push((groups, dx as i64, dy as i64));
         }
     }
-    out
+    (frame.unwrap_or(1), out)
 }
 
 // ---------------------------------------------------------------------------

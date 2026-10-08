@@ -244,3 +244,48 @@ fn seam_is_identical_across_adjacent_tiles() {
         "expected the winning label's ink in the shared border strip"
     );
 }
+
+#[test]
+fn a_tile_without_the_layer_still_draws_a_neighbours_straddling_label() {
+    // An MVT encoder leaves a layer out of a tile it has no features in, so
+    // tile B=(6,7) binds no `src.pts` at all — only its west neighbour's
+    // copy. A's label sits just inside A's east edge and runs across into B;
+    // B must draw that half, matching what A draws in its east pad.
+    let tile_size = 64u32;
+    let pad = 8u32;
+    let rc = recipe(r#", "source": "src", "layer": "pts""#);
+    let layer_a = || layer(vec![feat("HHHH", 0, 3900, 2048)]);
+
+    let left = render_with_features_and_images(
+        &rc,
+        tile_size,
+        pad,
+        TileId { z: 4, x: 5, y: 7 },
+        &[("src.pts", layer_a())],
+        &[],
+    );
+    let right = render_with_features_and_images(
+        &rc,
+        tile_size,
+        pad,
+        TileId { z: 4, x: 6, y: 7 },
+        &[("src.pts@-1,0", layer_a())],
+        &[],
+    );
+
+    let mut matched = 0usize;
+    for y in 0..left.height {
+        for dx in 0..pad {
+            let l = left.pixel(tile_size + pad + dx, y);
+            let r = right.pixel(pad + dx, y);
+            assert_eq!(l, r, "seam mismatch at dx={dx}, y={y}: {l:?} vs {r:?}");
+            if l[3] > 100 {
+                matched += 1;
+            }
+        }
+    }
+    assert!(
+        matched > 0,
+        "expected the label's ink to cross into the tile with no layer of its own"
+    );
+}

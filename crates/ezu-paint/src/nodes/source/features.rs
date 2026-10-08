@@ -127,9 +127,8 @@ impl Node for FeaturesNode {
         let extent = shared.layer.extent;
         let mut groups = collect_groups(&shared, fe, &self.min_zoom_field, z);
         if let Some(mode) = self.stitch {
-            let e = extent.max(1) as i64;
-            let neighbors =
-                neighbor_feature_groups(ctx, &self.name, e, fe, &self.min_zoom_field, z);
+            let (e, neighbors) =
+                neighbor_feature_groups(ctx, &self.name, extent, fe, &self.min_zoom_field, z);
             // With no neighbour bound there is nothing to join, and this
             // tile's own data is exactly what an unstitched layer emits.
             if !neighbors.is_empty() {

@@ -1148,25 +1148,29 @@ impl TextNode {
     }
 
     /// Gather the 8 neighbour tiles' feature groups for cross-tile collision
-    /// (see [`neighbor_feature_groups`]). Empty when collision is off, no
-    /// upstream source is set, or nothing is bound. Decoded once and reused
-    /// by the reach pre-scan and the build.
+    /// (see [`neighbor_feature_groups`]), with the extent every candidate is
+    /// placed in: the tile's own layer's, or — when this tile has no copy of
+    /// the layer — the neighbours', so a label anchored next door still
+    /// draws its half here. No groups when collision is off, no upstream
+    /// source is set, or nothing is bound. Decoded once and reused by the
+    /// reach pre-scan and the build.
     fn neighbor_groups(
         &self,
         ctx: &EvalCtx<'_>,
         z: u8,
-        extent_i: i64,
-    ) -> Vec<(Vec<FeatureGroup>, i64, i64)> {
+        feats: &crate::nodes::common::FilteredFeatures,
+    ) -> (i64, Vec<(Vec<FeatureGroup>, i64, i64)>) {
+        let own = feats.extent.max(1) as i64;
         if !self.collide {
-            return Vec::new();
+            return (own, Vec::new());
         }
         let Some(base) = &self.neighbor_base else {
-            return Vec::new();
+            return (own, Vec::new());
         };
         neighbor_feature_groups(
             ctx,
             base,
-            extent_i,
+            feats.extent,
             self.filter_expr.as_ref(),
             &self.min_zoom_field,
             z,
@@ -1278,10 +1282,12 @@ impl TextNode {
 
         let tile_w = ctx.canvas.tile_w as f32;
         let tile_h = ctx.canvas.tile_h as f32;
-        let extent_i = feats.extent.max(1) as i64;
+        let z = ctx.tile.z;
+        // Gather the neighbour feature groups once (collision only), decoded
+        // here and reused by the single evaluation pass below.
+        let (extent_i, nbr_groups) = self.neighbor_groups(ctx, z, feats);
         let sx = tile_w / extent_i as f32;
         let sy = tile_h / extent_i as f32;
-        let z = ctx.tile.z;
         let params = self.line_layout_params();
         let (tx, ty) = (ctx.tile.x as i64, ctx.tile.y as i64);
 
@@ -1298,10 +1304,6 @@ impl TextNode {
 
         let mut cands: Vec<LabelCandidate> = Vec::new();
         let mut draws: Vec<LabelDraw> = Vec::new();
-
-        // Gather the neighbour feature groups once (collision only), decoded
-        // here and reused by the single evaluation pass below.
-        let nbr_groups = self.neighbor_groups(ctx, z, extent_i);
 
         // Evaluate every own and neighbour group once, up front — label sections
         // and per-group paint scalars, never the shaping — tracking the widest
@@ -1679,10 +1681,12 @@ impl TextNode {
 
         let tile_w = ctx.canvas.tile_w as f32;
         let tile_h = ctx.canvas.tile_h as f32;
-        let extent_i = feats.extent.max(1) as i64;
+        let z = ctx.tile.z;
+        // Gather the neighbour feature groups once (collision only): each bound
+        // neighbour layer, filtered exactly like this tile's own features.
+        let (extent_i, nbr_groups) = self.neighbor_groups(ctx, z, feats);
         let sx = tile_w / extent_i as f32;
         let sy = tile_h / extent_i as f32;
-        let z = ctx.tile.z;
         let (tx, ty) = (ctx.tile.x as i64, ctx.tile.y as i64);
 
         // Shaping is the expensive step; a label is laid out once per eval no
@@ -1705,10 +1709,6 @@ impl TextNode {
 
         let mut cands: Vec<LabelCandidate> = Vec::new();
         let mut draws: Vec<LabelDraw> = Vec::new();
-
-        // Gather the neighbour feature groups once (collision only): each bound
-        // neighbour layer, filtered exactly like this tile's own features.
-        let nbr_groups = self.neighbor_groups(ctx, z, extent_i);
 
         // Evaluate every own and neighbour group once, up front — label sections
         // and per-group paint scalars, never the shaping — tracking the widest
