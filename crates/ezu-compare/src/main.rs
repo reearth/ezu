@@ -701,6 +701,7 @@ mod tests {
                 extent,
                 features,
             }],
+            overzoom: 0,
         }
     }
 

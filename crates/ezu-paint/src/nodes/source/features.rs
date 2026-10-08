@@ -132,6 +132,10 @@ impl Node for FeaturesNode {
             // With no neighbour bound there is nothing to join, and this
             // tile's own data is exactly what an unstitched layer emits.
             if !neighbors.is_empty() {
+                let neighbors = neighbors
+                    .into_iter()
+                    .map(|n| (n.groups, n.dx, n.dy))
+                    .collect();
                 groups = stitch_groups(groups, neighbors, e as i32);
                 if mode == Stitch::Merge {
                     // Drop out-of-reach pieces before paying for the union.
@@ -139,7 +143,7 @@ impl Node for FeaturesNode {
                 }
             }
         }
-        Ok(features_value_culled(ctx, extent, groups))
+        Ok(features_value_culled(ctx, extent, shared.overzoom, groups))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"features");

@@ -568,3 +568,92 @@ fn point_placement_labels_a_polygon_at_its_pole_of_inaccessibility() {
     let r = render(&recipe, layer(vec![in_buffer]));
     assert_eq!(opaque_in(&r, 0, 64), 0);
 }
+
+/// Render `tile` with the polygon layer `src.pts` overzoomed from `parent`:
+/// this tile's piece and both horizontal neighbours', each cut from the
+/// ancestor the way a host binds a source past its `max-zoom`.
+fn render_overzoomed(
+    recipe: &str,
+    parent: (u8, u32, u32),
+    ancestor: &FeatureLayer,
+    tile: TileId,
+) -> std::sync::Arc<ezu_graph::RasterBuf> {
+    use ezu_features::mvt::{clip_to_descendant, DecodedTile};
+    use ezu_graph::{build_graph, Cache, CanvasInfo, Evaluator, ParamValues, PortValue};
+    let doc = ezu_style::Document::from_json(recipe).expect("parse");
+    let graph = build_graph(&doc, &ezu_paint::nodes::default_registry()).expect("build");
+    let cache = Cache::new();
+    let fonts = ezu_paint::host::BrushBankLoader::new();
+    let mut loader = ezu_paint::host::TileLoader::new(&fonts, tile);
+    let parent = ezu_core::TileId::new(parent.0, parent.1, parent.2);
+    let source = DecodedTile {
+        layers: vec![ancestor.clone()],
+        overzoom: 0,
+    };
+    for dx in -1i32..=1 {
+        let x = tile.x as i32 + dx;
+        let target = ezu_core::TileId::new(tile.z, x as u32, tile.y);
+        if x < 0 || !parent.is_ancestor_of(target) {
+            continue;
+        }
+        let cut = clip_to_descendant(&source, parent, target).expect("descendant");
+        loader.bind_mvt_neighbor("src", dx, 0, cut);
+    }
+    let ev = Evaluator::new(&graph, &cache, &loader);
+    match ev
+        .render(tile, CanvasInfo::square(64, 16), &ParamValues::new(), 0)
+        .expect("render")
+    {
+        PortValue::Raster(r) => r,
+        other => panic!("expected raster output, got {:?}", other.kind()),
+    }
+}
+
+#[test]
+fn an_overzoomed_polygon_label_on_a_seam_draws_the_same_on_both_tiles() {
+    let recipe = format!(
+        r##"{{
+      "name": "text-polygon-overzoom",
+      "tile-size": 64,
+      "sources": {{
+        "src":  {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}", "max-zoom": 2 }},
+        "body": {{ "type": "font", "url": "{font}" }}
+      }},
+      "nodes": {{
+        "feats": {{ "op": "features", "source": "src", "layer": "pts" }},
+        "out":   {{ "op": "text", "features": "@feats", "source": "src", "layer": "pts",
+                    "font": ["body"], "text": "WW", "size": 16 }}
+      }},
+      "output": "@out"
+    }}"##,
+        font = font_url()
+    );
+    // A z2 block centred a hair east of the line between its z3 children,
+    // so the east child holds the anchor and the west child only the
+    // label's western half.
+    let ancestor = layer(vec![polygon_feature(&[
+        (1500, 1500),
+        (2600, 1500),
+        (2600, 2500),
+        (1500, 2500),
+    ])]);
+    let west = render_overzoomed(&recipe, (2, 1, 1), &ancestor, TileId { z: 3, x: 2, y: 2 });
+    let east = render_overzoomed(&recipe, (2, 1, 1), &ancestor, TileId { z: 3, x: 3, y: 2 });
+    // The west tile's east pad and the east tile's west interior show the
+    // same strip of the world.
+    let (size, pad) = (64u32, 16u32);
+    let mut inked = 0;
+    for y in 0..west.height {
+        for i in 0..pad {
+            let w = west.pixel(size + pad + i, y);
+            let e = east.pixel(pad + i, y);
+            assert_eq!(w, e, "seam mismatch at {i}, {y}");
+            if w[3] > 100 {
+                inked += 1;
+            }
+        }
+    }
+    assert!(inked > 0, "the label straddles the seam");
+    assert!(opaque_in(&west, pad, size + pad) > 0, "the west half draws");
+    assert!(opaque_in(&east, pad, size + pad) > 0, "the east half draws");
+}

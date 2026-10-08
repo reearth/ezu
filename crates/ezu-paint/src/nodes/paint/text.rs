@@ -57,7 +57,7 @@ use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
     downcast_features, neighbor_feature_groups, read_bool_or, read_number_or, read_optional_string,
-    read_optional_zoom, read_string_or, read_xy, FeatureGroup,
+    read_optional_zoom, read_string_or, read_xy, FeatureGroup, NeighborGroups,
 };
 use ezu_core::text::{
     clip_line,
@@ -475,17 +475,23 @@ struct GroupPrep<'g> {
 /// spot inside it farthest from its outline.
 ///
 /// This is MapLibre's point placement on a polygon feature, and like
-/// MapLibre it works on the polygon as this tile clipped it and keeps the
-/// anchor only when it falls inside the tile. A polygon spanning several
+/// MapLibre it works on the polygon as its source tile cut it and keeps the
+/// anchor only when it falls inside this tile. A polygon spanning several
 /// tiles is then labelled by whichever tiles find a pole in their own
 /// square, each the same way from every tile that gathers it as a
-/// neighbour. The pole is found to 16 units of MapLibre's 8192 tile
-/// extent, the precision MapLibre asks for.
-fn point_anchors(group: &FeatureGroup, extent: i64) -> Cow<'_, [(i32, i32)]> {
+/// neighbour.
+///
+/// The pole is found to 16 units of MapLibre's 8192 tile extent, the
+/// precision MapLibre asks for, measured on the tile the geometry was
+/// encoded for. An overzoomed tile holds its ancestor's whole polygon
+/// scaled up by `2^overzoom`, so it searches that much more coarsely and
+/// lands on the ancestor's own pole: every zoom past the source's agrees,
+/// as MapLibre's, which places the anchor once on the source tile.
+fn point_anchors(group: &FeatureGroup, extent: i64, overzoom: u8) -> Cow<'_, [(i32, i32)]> {
     if group.polygons.is_empty() {
         return Cow::Borrowed(&group.points);
     }
-    let precision = 16.0 * extent as f64 / 8192.0;
+    let precision = 16.0 * extent as f64 / 8192.0 * f64::from(1u32 << overzoom.min(30));
     let mut anchors = group.points.clone();
     anchors.extend(
         group
@@ -1186,7 +1192,7 @@ impl TextNode {
         ctx: &EvalCtx<'_>,
         z: u8,
         feats: &crate::nodes::common::FilteredFeatures,
-    ) -> (i64, Vec<(Vec<FeatureGroup>, i64, i64)>) {
+    ) -> (i64, Vec<NeighborGroups>) {
         let own = feats.extent.max(1) as i64;
         if !self.collide {
             return (own, Vec::new());
@@ -1362,16 +1368,16 @@ impl TextNode {
                 preps.push(prep);
             }
         }
-        for (groups, dx, dy) in &nbr_groups {
-            for (fi, group) in groups.iter().enumerate() {
+        for n in &nbr_groups {
+            for (fi, group) in n.groups.iter().enumerate() {
                 if group.lines.is_empty() {
                     continue;
                 }
                 if let Some(prep) = self.prep_group(
                     group,
                     fi as u32,
-                    *dx,
-                    *dy,
+                    n.dx,
+                    n.dy,
                     registry,
                     z,
                     const_size,
@@ -1746,7 +1752,7 @@ impl TextNode {
         let mut preps: Vec<GroupPrep> = Vec::new();
         let mut reach_max = 0.0f32;
         for (fi, group) in feats.groups.iter().enumerate() {
-            let anchors = point_anchors(group, extent_i);
+            let anchors = point_anchors(group, extent_i, feats.overzoom);
             if anchors.is_empty() {
                 continue;
             }
@@ -1771,17 +1777,17 @@ impl TextNode {
                 preps.push(GroupPrep { anchors, ..prep });
             }
         }
-        for (groups, dx, dy) in &nbr_groups {
-            for (fi, group) in groups.iter().enumerate() {
-                let anchors = point_anchors(group, extent_i);
+        for n in &nbr_groups {
+            for (fi, group) in n.groups.iter().enumerate() {
+                let anchors = point_anchors(group, extent_i, n.overzoom);
                 if anchors.is_empty() {
                     continue;
                 }
                 if let Some(prep) = self.prep_group(
                     group,
                     fi as u32,
-                    *dx,
-                    *dy,
+                    n.dx,
+                    n.dy,
                     registry,
                     z,
                     const_size,
@@ -3109,5 +3115,77 @@ mod tests {
         let diag = r / std::f32::consts::SQRT_2;
         assert!((x - diag).abs() < 1e-6);
         assert!((y - (diag - BASELINE_OFFSET_EM)).abs() < 1e-6);
+    }
+
+    /// A z14 tile holding one city block, widest at its south-west end.
+    fn block_tile() -> ezu_features::mvt::DecodedTile {
+        let mut geometry = ezu_features::Geometry::default();
+        geometry.polygons.push(ezu_features::Polygon {
+            exterior: vec![(3878, 539), (3941, 590), (3796, 784), (3723, 719)],
+            holes: vec![],
+        });
+        ezu_features::mvt::DecodedTile {
+            layers: vec![ezu_features::FeatureLayer {
+                name: "blocks".into(),
+                extent: 4096,
+                features: vec![ezu_features::Feature {
+                    id: None,
+                    geometry,
+                    properties: Default::default(),
+                }],
+            }],
+            overzoom: 0,
+        }
+    }
+
+    /// Every anchor the tiles at zoom `14 + dz` keep for the block, in the
+    /// z14 tile's units.
+    fn kept_anchors(dz: u8) -> Vec<(f64, f64)> {
+        use ezu_core::TileId as T;
+        let parent = T::new(14, 14552, 6452);
+        let tile = block_tile();
+        let n = 1u32 << dz;
+        let mut kept = Vec::new();
+        for y in parent.y * n..(parent.y + 1) * n {
+            for x in parent.x * n..(parent.x + 1) * n {
+                let clipped;
+                let t = if dz == 0 {
+                    &tile
+                } else {
+                    clipped =
+                        ezu_features::mvt::clip_to_descendant(&tile, parent, T::new(14 + dz, x, y))
+                            .unwrap();
+                    &clipped
+                };
+                for f in &t.layers[0].features {
+                    let group =
+                        FeatureGroup::synthetic(f.geometry.polygons.clone(), vec![], vec![]);
+                    for &(ax, ay) in point_anchors(&group, 4096, t.overzoom).iter() {
+                        let s = f64::from(n);
+                        kept.push((
+                            (f64::from((x - parent.x * n) * 4096) + f64::from(ax)) / s,
+                            (f64::from((y - parent.y * n) * 4096) + f64::from(ay)) / s,
+                        ));
+                    }
+                }
+            }
+        }
+        kept
+    }
+
+    #[test]
+    fn an_overzoomed_polygon_is_anchored_once_where_its_source_tile_anchors_it() {
+        let source = kept_anchors(0);
+        assert_eq!(source.len(), 1);
+        let (sx, sy) = source[0];
+        for dz in 1..=5 {
+            let kept = kept_anchors(dz);
+            assert_eq!(kept.len(), 1, "z+{dz}: {kept:?}");
+            let (x, y) = kept[0];
+            assert!(
+                (x - sx).abs() <= 0.5 && (y - sy).abs() <= 0.5,
+                "z+{dz} anchors at ({x}, {y}), the source tile at ({sx}, {sy})"
+            );
+        }
     }
 }

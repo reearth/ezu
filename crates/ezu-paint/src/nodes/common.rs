@@ -67,6 +67,10 @@ impl FeatureGroup {
 pub struct FilteredFeatures {
     pub extent: u32,
     pub groups: Vec<FeatureGroup>,
+    /// How many zoom levels the geometry was scaled up from the tile it was
+    /// encoded for, when it came straight from an overzoomed source tile
+    /// (see [`SharedLayer::overzoom`]); 0 otherwise.
+    pub overzoom: u8,
 }
 
 impl FilteredFeatures {
@@ -648,7 +652,7 @@ pub(super) fn neighbor_feature_groups(
     filter_expr: Option<&maplibre_expr::Expr>,
     min_zoom_field: &Option<String>,
     z: u8,
-) -> (i64, Vec<(Vec<FeatureGroup>, i64, i64)>) {
+) -> (i64, Vec<NeighborGroups>) {
     let mut frame = (extent > 0).then_some(i64::from(extent));
     let mut out = Vec::new();
     for dy in -1i32..=1 {
@@ -666,11 +670,26 @@ pub(super) fn neighbor_feature_groups(
             if *frame.get_or_insert(e) != e {
                 continue;
             }
-            let groups = collect_groups(&shared, filter_expr, min_zoom_field, z);
-            out.push((groups, dx as i64, dy as i64));
+            out.push(NeighborGroups {
+                groups: collect_groups(&shared, filter_expr, min_zoom_field, z),
+                dx: dx as i64,
+                dy: dy as i64,
+                overzoom: shared.overzoom,
+            });
         }
     }
     (frame.unwrap_or(1), out)
+}
+
+/// One neighbour tile's filtered feature groups, from
+/// [`neighbor_feature_groups`]: in the neighbour's own `[0, extent]` frame,
+/// `(dx, dy)` tiles away from the centre.
+pub(super) struct NeighborGroups {
+    pub groups: Vec<FeatureGroup>,
+    pub dx: i64,
+    pub dy: i64,
+    /// The neighbour layer's [`SharedLayer::overzoom`].
+    pub overzoom: u8,
 }
 
 // ---------------------------------------------------------------------------
@@ -815,7 +834,15 @@ pub(super) fn core_tile(ctx: &EvalCtx<'_>) -> CoreTileId {
 // PortValue downcasting
 
 pub(super) fn features_value(extent: u32, groups: Vec<FeatureGroup>) -> PortValue {
-    let payload = FilteredFeatures { extent, groups };
+    features_payload(extent, 0, groups)
+}
+
+fn features_payload(extent: u32, overzoom: u8, groups: Vec<FeatureGroup>) -> PortValue {
+    let payload = FilteredFeatures {
+        extent,
+        groups,
+        overzoom,
+    };
     PortValue::Features(Arc::new(payload) as Arc<dyn Any + Send + Sync>)
 }
 
@@ -836,12 +863,15 @@ pub(super) fn features_value(extent: u32, groups: Vec<FeatureGroup>) -> PortValu
 /// between here and the canvas declares its reach — so ask, and keep
 /// what is within it. Anything further cannot mark the tile whatever
 /// happens downstream.
+///
+/// `overzoom` is the source layer's (see [`FilteredFeatures::overzoom`]).
 pub(super) fn features_value_culled(
     ctx: &EvalCtx<'_>,
     extent: u32,
+    overzoom: u8,
     groups: Vec<FeatureGroup>,
 ) -> PortValue {
-    features_value(extent, cull_groups(ctx, extent, groups))
+    features_payload(extent, overzoom, cull_groups(ctx, extent, groups))
 }
 
 /// The culling step of [`features_value_culled`] on its own, for a caller
@@ -1064,7 +1094,7 @@ mod cull_tests {
             rng_seed: 0,
             influence_pad,
         };
-        let PortValue::Features(p) = features_value_culled(&ctx, EXTENT, groups) else {
+        let PortValue::Features(p) = features_value_culled(&ctx, EXTENT, 0, groups) else {
             panic!("not a features port")
         };
         let f = p

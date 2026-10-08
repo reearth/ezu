@@ -23,12 +23,22 @@ pub enum MvtError {
 pub fn decode(bytes: &[u8]) -> Result<DecodedTile, MvtError> {
     let tile = Tile::decode(bytes).map_err(|e| MvtError::Decode(e.to_string()))?;
     let layers = tile.layers.into_iter().map(decode_layer).collect();
-    Ok(DecodedTile { layers })
+    Ok(DecodedTile {
+        layers,
+        overzoom: 0,
+    })
 }
 
 #[derive(Debug)]
 pub struct DecodedTile {
     pub layers: Vec<FeatureLayer>,
+    /// How many zoom levels [`clip_to_descendant`] scaled this geometry up
+    /// from the tile it was encoded for: 0 for a tile decoded as it is.
+    /// Its vertices then sit on a grid `2^overzoom` units apart, and
+    /// anything that wants to treat the data the way its own zoom would
+    /// (label anchors, which MapLibre places once on the source tile)
+    /// works at that coarser scale.
+    pub overzoom: u8,
 }
 
 impl DecodedTile {
@@ -224,7 +234,10 @@ pub fn clip_to_descendant(
         .iter()
         .map(|layer| clip_layer(layer, sub_x, sub_y, scale))
         .collect();
-    Ok(DecodedTile { layers })
+    Ok(DecodedTile {
+        layers,
+        overzoom: parent_decoded.overzoom.saturating_add(dz),
+    })
 }
 
 fn clip_layer(layer: &FeatureLayer, sub_x: u32, sub_y: u32, scale: u32) -> FeatureLayer {
@@ -368,6 +381,7 @@ mod tests {
                 extent,
                 features: pts.iter().map(|&(x, y)| point_feature(x, y)).collect(),
             }],
+            overzoom: 0,
         }
     }
 
@@ -426,6 +440,10 @@ mod tests {
         // (1100, 2100) → ((1100-1024)*4, (2100-2048)*4) = (304, 208).
         let out = clip_to_descendant(&src, parent, descendant).unwrap();
         assert_eq!(out.layers[0].features[0].geometry.points, vec![(304, 208)]);
+        assert_eq!(out.overzoom, 2);
+        // Clipping a clipped tile further counts every level.
+        let deeper = clip_to_descendant(&out, descendant, TileId::new(11, 10, 12)).unwrap();
+        assert_eq!(deeper.overzoom, 3);
     }
 
     #[test]

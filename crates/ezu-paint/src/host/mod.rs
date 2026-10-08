@@ -834,10 +834,22 @@ impl<'a> TileLoader<'a> {
     /// `"<source>.<layer>"`; the style's `features` node references
     /// the same `(source, layer)` pair.
     pub fn bind_features(&mut self, name: impl Into<String>, layer: FeatureLayer) -> &mut Self {
-        let name = name.into();
-        let hash = self.binding_hash(&name);
-        let opaque: OpaqueValue =
-            Arc::new(crate::render::SharedLayer::new(layer)) as Arc<dyn Any + Send + Sync>;
+        self.bind_layer(name.into(), layer, 0)
+    }
+
+    /// [`bind_features`](Self::bind_features) for a layer scaled up
+    /// `overzoom` levels from the tile it was encoded for (see
+    /// [`DecodedTile::overzoom`]).
+    fn bind_layer(&mut self, name: String, layer: FeatureLayer, overzoom: u8) -> &mut Self {
+        let mut hash = self.binding_hash(&name);
+        if overzoom > 0 {
+            let mut h = Xxh3::new();
+            h.update(&hash.to_le_bytes());
+            h.update(&[overzoom]);
+            hash = h.digest128();
+        }
+        let opaque: OpaqueValue = Arc::new(crate::render::SharedLayer::overzoomed(layer, overzoom))
+            as Arc<dyn Any + Send + Sync>;
         self.bindings.insert(
             name,
             Binding {
@@ -891,7 +903,7 @@ impl<'a> TileLoader<'a> {
     pub fn bind_mvt(&mut self, source: &str, tile: DecodedTile) -> &mut Self {
         for layer in tile.layers {
             let key = format!("{source}.{}", layer.name);
-            self.bind_features(key, layer);
+            self.bind_layer(key, layer, tile.overzoom);
         }
         self
     }
@@ -915,7 +927,11 @@ impl<'a> TileLoader<'a> {
         }
         for layer in tile.layers {
             let base = format!("{source}.{}", layer.name);
-            self.bind_features(ezu_graph::neighbor_binding(&base, dx, dy), layer);
+            self.bind_layer(
+                ezu_graph::neighbor_binding(&base, dx, dy),
+                layer,
+                tile.overzoom,
+            );
         }
         self
     }
@@ -1631,6 +1647,7 @@ mod tests {
             "roads",
             DecodedTile {
                 layers: vec![point_layer("road", &[(10, 20)])],
+                overzoom: 0,
             },
         );
         loader.bind_mvt_neighbor(
@@ -1639,6 +1656,7 @@ mod tests {
             0,
             DecodedTile {
                 layers: vec![point_layer("road", &[(30, 40)])],
+                overzoom: 0,
             },
         );
 
