@@ -15,6 +15,7 @@ mod hatch;
 mod junctions;
 mod medial_axis;
 mod resample;
+mod segment_to;
 mod simplify;
 mod transform;
 mod triangulate;

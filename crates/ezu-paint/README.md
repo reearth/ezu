@@ -236,6 +236,7 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 | `contour` | `ScalarField → Features` | Isolines from a scalar field via marching squares — contour lines over a DEM, edges of a noise field |
 | `dash` | `Features → Features` | Cut polylines into dash / gap segments |
 | `junctions` | `Features → Features` | One point wherever polylines end or meet, carrying `axis-deg` (a cross tick's axis, ready for `stamp`'s `rotation-deg-expr`) and `arms`. Ends cut at the tile buffer are dropped |
+| `segment-to` | `Features → Features` | Each point as a two-vertex polyline from a longitude / latitude its properties hold (`lng-field` / `lat-field`) to the point: leaders, connectors from a building's representative point to its entrance |
 | `wave` | `Features → Features` | Lateral sine displacement of polylines, for hand-drawn wobble |
 
 **Scalars** (`nodes::scalar`) — computed values for any scalar field

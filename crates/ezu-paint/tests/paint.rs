@@ -90,6 +90,8 @@ mod rect_canvas;
 mod scalar_ops;
 #[path = "paint/schema.rs"]
 mod schema;
+#[path = "paint/segment_to.rs"]
+mod segment_to;
 #[path = "paint/sharpen_field.rs"]
 mod sharpen_field;
 #[path = "paint/stamp_position_jitter.rs"]

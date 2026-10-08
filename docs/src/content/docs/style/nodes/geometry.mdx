@@ -9,7 +9,7 @@ sidebar:
 
 `Features -> Features` transforms. They rewrite geometry before anything is painted, so downstream paint ops stay simple.
 
-21 ops: `bbox`, `boundary`, `buffer`, `centroid`, `contour`, `convex-hull`, `dash`, `densify`, `dot-density`, `feature-boolean`, `hatch`, `junctions`, `medial-axis`, `resample`, `simplify`, `smooth`, `transform`, `triangulate`, `voronoi`, `voronoi-fracture`, `wave`.
+22 ops: `bbox`, `boundary`, `buffer`, `centroid`, `contour`, `convex-hull`, `dash`, `densify`, `dot-density`, `feature-boolean`, `hatch`, `junctions`, `medial-axis`, `resample`, `segment-to`, `simplify`, `smooth`, `transform`, `triangulate`, `voronoi`, `voronoi-fracture`, `wave`.
 
 Ops with no demo image below produce no visible result on their own — they feed other nodes rather than paint.
 
@@ -223,6 +223,16 @@ Resample each polyline / polygon ring to evenly-spaced vertices at `spacing-px` 
 | --- | --- | --- | --- |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
 | `spacing-px` | number (0…∞) | yes | — |
+
+### `segment-to`
+
+Turn each point into a two-vertex polyline from a position its feature's properties give in longitude and latitude to the point itself: a leader from a label anchor to what it labels, a connector from a building's representative point to its entrance. Each line keeps its point's properties; dash it with `dash` and paint it with `stroke`. Lines and polygons are ignored, as are features whose fields are missing, not numbers (or numeric strings), or out of range, and points that coincide with their other end. A connector can cross a tile from a point outside it, beyond the tile's thin buffer; set `stitch: "pieces"` on the upstream `features` node to bring in the neighbouring tiles' points too.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `features` | `@node` | yes | Reference to another node (`@name`). |
+| `lat-field` | string | yes | Property holding the other end's latitude, in WGS84 degrees. |
+| `lng-field` | string | yes | Property holding the other end's longitude, in WGS84 degrees. |
 
 ### `simplify`
 

@@ -4231,6 +4231,36 @@
             "type": "object"
           },
           {
+            "description": "Turn each point into a two-vertex polyline from a position its feature's properties give in longitude and latitude to the point itself: a leader from a label anchor to what it labels, a connector from a building's representative point to its entrance. Each line keeps its point's properties; dash it with `dash` and paint it with `stroke`. Lines and polygons are ignored, as are features whose fields are missing, not numbers (or numeric strings), or out of range, and points that coincide with their other end. A connector can cross a tile from a point outside it, beyond the tile's thin buffer; set `stitch: \"pieces\"` on the upstream `features` node to bring in the neighbouring tiles' points too.",
+            "properties": {
+              "features": {
+                "description": "Reference to another node (`@name`).",
+                "pattern": "^@?[A-Za-z_][A-Za-z0-9_-]*$",
+                "type": "string"
+              },
+              "lat-field": {
+                "description": "Property holding the other end's latitude, in WGS84 degrees.",
+                "type": "string"
+              },
+              "lng-field": {
+                "description": "Property holding the other end's longitude, in WGS84 degrees.",
+                "type": "string"
+              },
+              "op": {
+                "const": "segment-to",
+                "description": "Selects the `segment-to` operation."
+              }
+            },
+            "required": [
+              "op",
+              "features",
+              "lng-field",
+              "lat-field"
+            ],
+            "title": "op: segment-to",
+            "type": "object"
+          },
+          {
             "description": "4-neighbour Laplacian sharpen on a raster, sprite or scalar field; the output is the same kind as the input. Amplifies each pixel relative to its orthogonal neighbours by `amount`. Around 0.5–1.0 is a typical unsharp-mask look; negative values give a soft halo. Sharpening an elevation field (`dem`) before `hillshade` or `slope` steepens the flanks of ridges and valleys, so the shading draws crisper crests; a field is not clamped, so values can overshoot past the field's range next to a sharp step. A field keeps its nodata value and geographic scale; a nodata neighbour counts as the centre value, so a hole does not distort its rim, and a nodata sample stays nodata. Grows upstream pad by 1.",
             "properties": {
               "amount": {
