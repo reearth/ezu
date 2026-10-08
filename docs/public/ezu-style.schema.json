@@ -5207,6 +5207,18 @@
                 "minimum": 1.0,
                 "type": "number"
               },
+              "strikethrough": {
+                "description": "Strike the label through: one horizontal bar per wrapped line, spanning the line's advance extent, in the label's `color` / `color-expr` and opacity. It sits at the primary font's strikeout stroke (else half its x-height, else 0.3 em above the baseline); a `glyphs` stack carries no metrics and takes the 0.3 em fallback. With `halo-width` > 0 the bar gets the same halo as the glyphs, drawn underneath. Part of the drawn label, so it moves with the placed anchor and draws identically across tile seams; it does not change the collision box. Point placement only — line-placed labels ignore it. Default false.",
+                "type": "boolean"
+              },
+              "strikethrough-expr": {
+                "description": "A MapLibre boolean expression, evaluated per feature group; overrides the constant `strikethrough` (a non-boolean result falls back to it)."
+              },
+              "strikethrough-width": {
+                "description": "Strikethrough bar thickness in px, rounded to whole pixels. Default 0.07 em of the label's size, at least 1 px.",
+                "minimum": 0.0,
+                "type": "number"
+              },
               "text": {
                 "description": "The label: a literal string, or a MapLibre string expression (evaluated per feature group; empty/failed → the group draws nothing)."
               },
@@ -5615,6 +5627,18 @@
               "spacing-px": {
                 "description": "Gap in px between successive line anchors (MapLibre `symbol-spacing`). Line placement only. Default 250.",
                 "minimum": 1.0,
+                "type": "number"
+              },
+              "strikethrough": {
+                "description": "Strike the label through: one horizontal bar per wrapped line, spanning the line's advance extent, in the label's `color` / `color-expr` and opacity. It sits at the primary font's strikeout stroke (else half its x-height, else 0.3 em above the baseline); a `glyphs` stack carries no metrics and takes the 0.3 em fallback. With `halo-width` > 0 the bar gets the same halo as the glyphs, drawn underneath. Part of the drawn label, so it moves with the placed anchor and draws identically across tile seams; it does not change the collision box. Point placement only — line-placed labels ignore it. Default false.",
+                "type": "boolean"
+              },
+              "strikethrough-expr": {
+                "description": "A MapLibre boolean expression, evaluated per feature group; overrides the constant `strikethrough` (a non-boolean result falls back to it)."
+              },
+              "strikethrough-width": {
+                "description": "Strikethrough bar thickness in px, rounded to whole pixels. Default 0.07 em of the label's size, at least 1 px.",
+                "minimum": 0.0,
                 "type": "number"
               },
               "text": {

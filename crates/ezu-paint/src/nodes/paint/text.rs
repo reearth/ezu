@@ -174,6 +174,9 @@ fn eval_number(
     }
 }
 
+/// Default strikethrough bar thickness, in em of the label's font size.
+const STRIKETHROUGH_WIDTH_EM: f32 = 0.07;
+
 /// The gap (em) MapLibre's shaping leaves between a block's box edge and the
 /// glyph baseline, subtracted from a vertically anchored offset so the visible
 /// text keeps the requested distance from the point.
@@ -460,6 +463,8 @@ struct GroupPrep<'g> {
     color: [f32; 4],
     halo_color: [f32; 4],
     halo_width: f32,
+    /// Strikethrough bar thickness in px, `0` for none.
+    strikethrough_px: f32,
     reach: f32,
     /// A `font-expr` was set but resolved to the default stack (warned, own only).
     font_fallback: bool,
@@ -885,6 +890,14 @@ struct TextNode {
     halo_color_expr_src: Option<String>,
     halo_width_expr_src: Option<String>,
     opacity_expr_src: Option<String>,
+    /// Strike each line of a point label through. `strikethrough_expr`, a
+    /// MapLibre boolean expression evaluated per feature group, overrides
+    /// the constant; `strikethrough_width_px` sets the bar thickness
+    /// (`None` → 0.07 em, at least 1 px).
+    strikethrough: bool,
+    strikethrough_expr: Option<maplibre_expr::Expr>,
+    strikethrough_expr_src: Option<String>,
+    strikethrough_width_px: Option<f32>,
     /// MapLibre `icon-image` and its layout / paint knobs. Point placement
     /// only: a line-placed icon has no ezu equivalent, so line labels ignore
     /// it. The icon shares its symbol's collision decision with the text.
@@ -1123,6 +1136,19 @@ impl TextNode {
         color[3] *= opacity;
         halo_color[3] *= opacity;
         let halo_width = eval_number(&self.halo_width_expr, &ectx, const_halo_width).max(0.0);
+        let struck = match &self.strikethrough_expr {
+            Some(e) => match maplibre_expr::evaluate(e, &ectx) {
+                Ok(maplibre_expr::Value::Bool(b)) => b,
+                _ => self.strikethrough,
+            },
+            None => self.strikethrough,
+        };
+        let strikethrough_px = match struck {
+            true => self
+                .strikethrough_width_px
+                .unwrap_or((STRIKETHROUGH_WIDTH_EM * size).max(1.0)),
+            false => 0.0,
+        };
         // The icon's contribution to the neighbour band is added by the
         // caller, which knows the sprite sheet's dimensions.
         let reach = self.label_reach(&sections, size, padding, halo_width, cap);
@@ -1142,6 +1168,7 @@ impl TextNode {
             color,
             halo_color,
             halo_width,
+            strikethrough_px,
             reach,
             font_fallback,
         })
@@ -1515,12 +1542,15 @@ impl TextNode {
             // A glyph's collision half-height spans the line box plus the
             // perpendicular offset.
             let half_h = 0.5 * block.bbox.height() * size + perp.abs();
+            // A strikethrough is a point-placement decoration; glyphs walked
+            // along a path draw without one.
             let paint = TextPaint {
                 size_px: size,
                 color,
                 halo_color,
                 halo_width_px: halo_width,
                 halo_blur_px: 0.0,
+                strikethrough_px: 0.0,
             };
             let anchor_params = AnchorParams {
                 placement: mode,
@@ -1991,6 +2021,7 @@ impl TextNode {
                 halo_color,
                 halo_width_px: halo_width,
                 halo_blur_px: 0.0,
+                strikethrough_px: prep.strikethrough_px,
             };
             let fonts = Arc::new(flat_fonts);
             let paints = Arc::new(section_paints(sections, opacity));
@@ -2360,6 +2391,19 @@ impl Node for TextNode {
                 cfg.text_fit as u8,
             ]);
         }
+        // Strikethrough — folded only when set, so existing recipes keep
+        // their hashes.
+        if self.strikethrough {
+            h.update(b"strike");
+        }
+        if let Some(s) = &self.strikethrough_expr_src {
+            h.update(b"strikeexpr");
+            h.update(s.as_bytes());
+        }
+        if let Some(w) = self.strikethrough_width_px {
+            h.update(b"strikewidth");
+            h.update(&w.to_le_bytes());
+        }
         if let Some(base) = &self.neighbor_base {
             h.update(b"nbase");
             h.update(base.as_bytes());
@@ -2678,6 +2722,13 @@ fn build_text_node(
         parse_expr_field(fields, "halo-width-expr", &maplibre_expr::Type::Number)?;
     let (opacity_expr, opacity_expr_src) =
         parse_expr_field(fields, "opacity-expr", &maplibre_expr::Type::Number)?;
+    let strikethrough = read_bool_or(fields, "strikethrough", ctx, false)?;
+    let (strikethrough_expr, strikethrough_expr_src) =
+        parse_expr_field(fields, "strikethrough-expr", &maplibre_expr::Type::Boolean)?;
+    let strikethrough_width_px = match fields.get("strikethrough-width") {
+        Some(_) => Some(read_number_or(fields, "strikethrough-width", ctx, 0.0)?.max(0.0) as f32),
+        None => None,
+    };
 
     // Placement (point / line / line-center) and its line-only knobs.
     let placement_s = read_string_or(fields, "placement", ctx, "point")?;
@@ -2785,6 +2836,9 @@ fn build_text_node(
         }
         (_, None) => None,
     };
+    if placement != Placement::Point && (strikethrough || strikethrough_expr.is_some()) {
+        tracing::warn!("text: `strikethrough` applies to point placement only — ignored");
+    }
 
     let mut ports = vec![PortSpec {
         name: "features",
@@ -2823,6 +2877,10 @@ fn build_text_node(
             halo_color_expr_src,
             halo_width_expr_src,
             opacity_expr_src,
+            strikethrough,
+            strikethrough_expr,
+            strikethrough_expr_src,
+            strikethrough_width_px,
             icon,
             text_optional,
             placement,
@@ -2902,6 +2960,13 @@ fn text_schema(stage: Stage) -> Value {
                 "opacity-expr": {
                     "description": "A MapLibre number expression giving opacity, evaluated per feature group; multiplies both fill and halo alpha. Overrides the constant `opacity`.",
                 },
+                "strikethrough": { "type": "boolean",
+                                   "description": "Strike the label through: one horizontal bar per wrapped line, spanning the line's advance extent, in the label's `color` / `color-expr` and opacity. It sits at the primary font's strikeout stroke (else half its x-height, else 0.3 em above the baseline); a `glyphs` stack carries no metrics and takes the 0.3 em fallback. With `halo-width` > 0 the bar gets the same halo as the glyphs, drawn underneath. Part of the drawn label, so it moves with the placed anchor and draws identically across tile seams; it does not change the collision box. Point placement only — line-placed labels ignore it. Default false." },
+                "strikethrough-expr": {
+                    "description": "A MapLibre boolean expression, evaluated per feature group; overrides the constant `strikethrough` (a non-boolean result falls back to it).",
+                },
+                "strikethrough-width": { "type": "number", "minimum": 0.0,
+                                         "description": "Strikethrough bar thickness in px, rounded to whole pixels. Default 0.07 em of the label's size, at least 1 px." },
                 "placement": { "type": "string", "enum": ["point", "line", "line-center"],
                                "description": "MapLibre `symbol-placement`. `point` (default) labels each feature point, and each polygon once at its pole of inaccessibility (the interior spot farthest from its outline, as MapLibre places it). `line` repeats labels along each polyline every `spacing-px`; `line-center` places one at each line's arc-length midpoint. Line placement ignores wrapping (`max-width-em`) and lays out a single line along the path." },
                 "spacing-px": { "type": "number", "minimum": 1.0,

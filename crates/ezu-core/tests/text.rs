@@ -349,6 +349,7 @@ fn draw_produces_pixels_with_the_fill_color() {
         halo_color: [1.0, 1.0, 1.0, 1.0],
         halo_width_px: 0.0,
         halo_blur_px: 0.0,
+        strikethrough_px: 0.0,
     });
     let red = pixmap
         .pixels()
@@ -366,6 +367,7 @@ fn halo_sits_behind_the_fill() {
         halo_color: [1.0, 1.0, 1.0, 1.0],
         halo_width_px: 0.0,
         halo_blur_px: 0.0,
+        strikethrough_px: 0.0,
     });
     let with_halo = render(&TextPaint {
         size_px: 32.0,
@@ -373,6 +375,7 @@ fn halo_sits_behind_the_fill() {
         halo_color: [1.0, 1.0, 1.0, 1.0],
         halo_width_px: 2.0,
         halo_blur_px: 0.0,
+        strikethrough_px: 0.0,
     });
     // Every solidly-filled pixel must be unchanged by the halo (the
     // halo never paints over fill) …
@@ -388,6 +391,135 @@ fn halo_sits_behind_the_fill() {
         .filter(|p| p.alpha() == 255 && p.green() > 200 && p.blue() > 200)
         .count();
     assert!(white > 20, "expected white halo pixels, got {white}");
+}
+
+// --- strikethrough ----------------------------------------------------------
+
+#[test]
+fn layout_records_each_wrapped_line() {
+    let block = layout_one("AA\nA", &no_wrap());
+    assert_eq!(block.lines.len(), 2);
+    let (a, b) = (block.lines[0], block.lines[1]);
+    // Baselines sit one `line-height` apart; both lines are centred, the
+    // shorter one half as wide.
+    assert!((b.baseline - a.baseline - 1.2).abs() < 1e-4);
+    assert!(((a.max_x - a.min_x) - 2.0 * (b.max_x - b.min_x)).abs() < 1e-4);
+    assert!((a.min_x + a.max_x).abs() < 1e-4 && (b.min_x + b.max_x).abs() < 1e-4);
+    // The first glyph of each line starts its span.
+    assert!((block.glyphs[0].x - a.min_x).abs() < 0.05);
+    assert!((block.glyphs[2].x - b.min_x).abs() < 0.05);
+    assert_eq!((a.scale, b.scale), (1.0, 1.0));
+}
+
+fn render_text(text: &str, paint: &TextPaint) -> tiny_skia::Pixmap {
+    let fonts = [latin(), digits()];
+    let fonts = FaceEntry::prepare(&fonts);
+    let block = layout(text, &fonts, &no_wrap());
+    let mut pixmap = tiny_skia::Pixmap::new(96, 96).unwrap();
+    draw(
+        &block,
+        &fonts,
+        &mut pixmap.as_mut(),
+        (48.0, 48.0),
+        paint,
+        &[],
+        None,
+    );
+    pixmap
+}
+
+fn red_paint(halo_width_px: f32, strikethrough_px: f32) -> TextPaint {
+    TextPaint {
+        size_px: 32.0,
+        color: [1.0, 0.0, 0.0, 1.0],
+        halo_color: [1.0, 1.0, 1.0, 1.0],
+        halo_width_px,
+        halo_blur_px: 0.0,
+        strikethrough_px,
+    }
+}
+
+/// The rows on which two renders differ.
+fn changed_rows(a: &tiny_skia::Pixmap, b: &tiny_skia::Pixmap) -> Vec<u32> {
+    let w = a.width() as usize;
+    let mut rows: Vec<u32> = a
+        .pixels()
+        .iter()
+        .zip(b.pixels())
+        .enumerate()
+        .filter(|(_, (p, q))| p != q)
+        .map(|(i, _)| (i / w) as u32)
+        .collect();
+    rows.dedup();
+    rows
+}
+
+#[test]
+fn strikethrough_crosses_the_line_at_the_fonts_strikeout_stroke() {
+    let plain = render_text("Ag", &red_paint(0.0, 0.0));
+    let struck = render_text("Ag", &red_paint(0.0, 2.0));
+    // Noto Sans puts its strikeout stroke 0.322 em up with a 0.05 em
+    // thickness: centre 0.297 em = 9.5 px above the baseline at 32 px. The
+    // block's baseline is at y = 48 + baseline·32; the bar's top edge snaps
+    // to a whole row and it is exactly 2 rows thick.
+    let fonts = [latin(), digits()];
+    let fonts = FaceEntry::prepare(&fonts);
+    let baseline = 48.0 + layout("Ag", &fonts, &no_wrap()).lines[0].baseline * 32.0;
+    let top = (baseline - 9.5 - 1.0).round() as u32;
+    assert_eq!(changed_rows(&plain, &struck), vec![top, top + 1]);
+    // The bar is solid fill colour across the gap between the glyphs.
+    let w = struck.width() as usize;
+    let solid = struck.pixels()[top as usize * w..(top as usize + 1) * w]
+        .iter()
+        .filter(|p| p.alpha() == 255 && p.red() == 255 && p.green() == 0)
+        .count();
+    assert!(solid > 25, "expected a solid red bar row, got {solid} px");
+}
+
+#[test]
+fn strikethrough_draws_one_bar_per_wrapped_line() {
+    let plain = render_text("A\nA", &red_paint(0.0, 0.0));
+    let struck = render_text("A\nA", &red_paint(0.0, 2.0));
+    let rows = changed_rows(&plain, &struck);
+    // Two 2-row bars, one `line-height` (1.2 em = 38.4 px) apart.
+    assert_eq!(rows.len(), 4, "rows {rows:?}");
+    assert_eq!(rows[1], rows[0] + 1);
+    assert_eq!(rows[3], rows[2] + 1);
+    assert!(
+        (rows[2] as i32 - rows[0] as i32 - 38).abs() <= 1,
+        "rows {rows:?}"
+    );
+}
+
+#[test]
+fn strikethrough_gets_a_halo_beneath_its_fill() {
+    let plain = render_text("Ag", &red_paint(2.0, 0.0));
+    let struck = render_text("Ag", &red_paint(2.0, 2.0));
+    let w = plain.width() as usize;
+    let changed: Vec<(usize, tiny_skia::PremultipliedColorU8)> = plain
+        .pixels()
+        .iter()
+        .zip(struck.pixels())
+        .enumerate()
+        .filter(|(_, (p, q))| p != q)
+        .map(|(i, (_, q))| (i, *q))
+        .collect();
+    let rows = |pred: &dyn Fn(&tiny_skia::PremultipliedColorU8) -> bool| -> Vec<usize> {
+        let mut r: Vec<usize> = changed
+            .iter()
+            .filter(|(_, q)| pred(q))
+            .map(|(i, _)| i / w)
+            .collect();
+        r.sort_unstable();
+        r.dedup();
+        r
+    };
+    let red = rows(&|q| q.alpha() == 255 && q.red() == 255 && q.green() == 0);
+    let white = rows(&|q| q.alpha() == 255 && q.green() == 255 && q.blue() == 255);
+    assert_eq!(red.len(), 2, "the bar's fill stays on top: {red:?}");
+    // The halo rings the bar two rows above and below it.
+    assert!(white.contains(&(red[0] - 2)) && white.contains(&(red[1] + 2)));
+    assert!(white.iter().all(|r| *r + 2 >= red[0] && *r <= red[1] + 2));
 }
 
 // --- outline → SDF generation -----------------------------------------------
@@ -482,6 +614,7 @@ fn outline_sdf_draw_overlaps_the_vector_fill() {
         halo_color: [1.0, 1.0, 1.0, 1.0],
         halo_width_px: 0.0,
         halo_blur_px: 0.0,
+        strikethrough_px: 0.0,
     };
     let render = |cache: Option<&OutlineSdfCache>| {
         let mut pm = tiny_skia::Pixmap::new(96, 64).unwrap();

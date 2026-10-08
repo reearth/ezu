@@ -248,6 +248,21 @@ impl EmBox {
     }
 }
 
+/// One wrapped line of a laid-out block, in em relative to the anchor
+/// point (y down): the horizontal span its glyph advances cover (trimmed
+/// of the whitespace a break ate) and its baseline. Line decorations such
+/// as a strikethrough are drawn from these.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct BlockLine {
+    pub min_x: f32,
+    pub max_x: f32,
+    /// The line's baseline — the `y` its baseline-aligned glyphs sit at.
+    pub baseline: f32,
+    /// The line's largest `format` section `font-scale` (`1.0` for plain
+    /// text), which scales its metrics.
+    pub scale: f32,
+}
+
 /// A laid-out label: positioned glyphs plus the block's typographic
 /// bounding box (the future collision box), both in em relative to the
 /// anchor point.
@@ -255,6 +270,9 @@ impl EmBox {
 pub struct TextBlock {
     pub glyphs: Vec<PlacedGlyph>,
     pub bbox: EmBox,
+    /// The block's lines in top-to-bottom order, including any a mandatory
+    /// break left empty (zero width).
+    pub lines: Vec<BlockLine>,
     /// Chars covered by no font in the stack, dropped before shaping.
     /// Callers can surface a warning when non-zero.
     pub dropped_chars: usize,
@@ -378,10 +396,17 @@ pub fn layout_sections(
     let shift_y = -ay * block_h + params.offset_em[1];
 
     let mut glyphs = Vec::new();
+    let mut block_lines = Vec::with_capacity(lines.len());
     for (line_ix, line) in lines.iter().enumerate() {
         let s_line = line_scale[line_ix];
         let line_x = (block_w - line.width) * justify + shift_x;
         let baseline = baselines[line_ix] + shift_y;
+        block_lines.push(BlockLine {
+            min_x: line_x,
+            max_x: line_x + line.width,
+            baseline,
+            scale: s_line,
+        });
         let mut pen = 0.0f32;
         for g in &line.glyphs {
             // A section smaller than the line's tallest is shifted within the
@@ -413,6 +438,7 @@ pub fn layout_sections(
             max_x: shift_x + block_w,
             max_y: shift_y + block_h,
         },
+        lines: block_lines,
         dropped_chars: shaped.dropped,
         missing_range_chars: shaped.missing_range,
     }

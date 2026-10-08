@@ -427,6 +427,7 @@ fn render_sdf(text: &str, size_px: f32, halo_width_px: f32) -> tiny_skia::Pixmap
             halo_color: [1.0, 1.0, 1.0, 1.0],
             halo_width_px,
             halo_blur_px: 0.0,
+            strikethrough_px: 0.0,
         },
         &[],
         None,
@@ -510,10 +511,66 @@ fn vendored_range_renders_a_word() {
             halo_color: [1.0, 1.0, 1.0, 1.0],
             halo_width_px: 1.0,
             halo_blur_px: 0.0,
+            strikethrough_px: 0.0,
         },
         &[],
         None,
     );
     let ink = pixmap.pixels().iter().filter(|p| p.alpha() > 100).count();
     assert!(ink > 100, "expected a rendered word, got {ink} inked px");
+}
+
+/// A glyph-PBF stack has no strikeout metrics, and its layout baseline is
+/// the font's ascender line rather than the visual baseline; the bar must
+/// still cross the digits through their middle, not above them.
+#[test]
+fn sdf_strikethrough_crosses_the_digits() {
+    let sdf = Arc::new(SdfFontStack::new());
+    sdf.insert_range(REAL_RANGE).unwrap();
+    let fonts = [StackEntry::Sdf(sdf)];
+    let fonts = FaceEntry::prepare(&fonts);
+    let block = layout("12", &fonts, &no_wrap());
+    let render = |strikethrough_px: f32| {
+        let mut pixmap = tiny_skia::Pixmap::new(96, 64).unwrap();
+        draw(
+            &block,
+            &fonts,
+            &mut pixmap.as_mut(),
+            (48.0, 32.0),
+            &TextPaint {
+                size_px: 24.0,
+                color: [0.0, 0.0, 0.0, 1.0],
+                halo_color: [1.0, 1.0, 1.0, 1.0],
+                halo_width_px: 0.0,
+                halo_blur_px: 0.0,
+                strikethrough_px,
+            },
+            &[],
+            None,
+        );
+        pixmap
+    };
+    let (plain, struck) = (render(0.0), render(2.0));
+    let w = plain.width() as usize;
+    let rows_where = |pred: &dyn Fn(usize) -> bool| -> Vec<usize> {
+        let mut r: Vec<usize> = (0..plain.pixels().len())
+            .filter(|&i| pred(i))
+            .map(|i| i / w)
+            .collect();
+        r.dedup();
+        r
+    };
+    let ink = rows_where(&|i| plain.pixels()[i].alpha() > 128);
+    let bar = rows_where(&|i| plain.pixels()[i] != struck.pixels()[i]);
+    assert_eq!(bar.len(), 2, "one 2-row bar: {bar:?}");
+    let (top, bottom) = (ink[0], *ink.last().unwrap());
+    let height = (bottom - top) as f32;
+    // Between 30% and 80% of the way down the digits' ink.
+    for r in bar {
+        let t = (r - top) as f32 / height;
+        assert!(
+            (0.3..=0.8).contains(&t),
+            "bar row {r} at {t:.2} of ink {top}..{bottom}"
+        );
+    }
 }

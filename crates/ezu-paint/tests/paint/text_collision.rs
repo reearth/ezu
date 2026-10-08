@@ -289,3 +289,53 @@ fn a_tile_without_the_layer_still_draws_a_neighbours_straddling_label() {
         "expected the label's ink to cross into the tile with no layer of its own"
     );
 }
+
+#[test]
+fn a_struck_label_straddling_the_seam_draws_its_bar_on_both_tiles() {
+    // The same straddling label as above, struck through with a halo: the
+    // bar is part of the drawn label, so the tile that only sees it as a
+    // neighbour draws its half of the bar too, pixel for pixel.
+    let tile_size = 64u32;
+    let pad = 8u32;
+    let layer_a = || layer(vec![feat("HHHH", 0, 3900, 2048)]);
+    let render_pair = |extra: &str| {
+        let rc = recipe(&format!(
+            r#", "source": "src", "layer": "pts", "halo-width": 2 {extra}"#
+        ));
+        let left = render_with_features_and_images(
+            &rc,
+            tile_size,
+            pad,
+            TileId { z: 4, x: 5, y: 7 },
+            &[("src.pts", layer_a())],
+            &[],
+        );
+        let right = render_with_features_and_images(
+            &rc,
+            tile_size,
+            pad,
+            TileId { z: 4, x: 6, y: 7 },
+            &[("src.pts@-1,0", layer_a())],
+            &[],
+        );
+        (left, right)
+    };
+    let (left, right) = render_pair(r#", "strikethrough": true"#);
+    let (_, right_plain) = render_pair("");
+
+    let mut bar = 0usize;
+    for y in 0..left.height {
+        for dx in 0..pad {
+            let l = left.pixel(tile_size + pad + dx, y);
+            let r = right.pixel(pad + dx, y);
+            assert_eq!(l, r, "seam mismatch at dx={dx}, y={y}: {l:?} vs {r:?}");
+            if r != right_plain.pixel(pad + dx, y) {
+                bar += 1;
+            }
+        }
+    }
+    assert!(
+        bar > 0,
+        "expected the bar to cross into the neighbouring tile"
+    );
+}

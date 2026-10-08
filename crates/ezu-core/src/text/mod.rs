@@ -61,7 +61,7 @@ pub use collide::{
 pub use draw::{draw, draw_line, GlyphPlacement, SectionPaint, TextPaint};
 pub use font::{FaceEntry, Font, FontError, StackEntry};
 pub use layout::{
-    char_allows_ideographic_breaking, layout, layout_sections, Anchor, EmBox, Justify,
+    char_allows_ideographic_breaking, layout, layout_sections, Anchor, BlockLine, EmBox, Justify,
     LayoutParams, PlacedGlyph, SectionSpec, TextBlock, TextTransform, VerticalAlign,
 };
 pub use layout_cache::get_or_build_layout;

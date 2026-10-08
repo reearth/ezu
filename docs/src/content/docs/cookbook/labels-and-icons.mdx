@@ -50,6 +50,28 @@ of the background colour at 60–80 % alpha is usually enough. `outline-sdf` is 
 default, which draws outline-font glyphs through the SDF path so the halo shape and
 cost match MapLibre's.
 
+## Striking a label through
+
+A ledger map that keeps abolished house numbers on the page wants them struck
+through and greyed, the current ones plain. `strikethrough-expr` decides per
+feature; the bar takes the label's `color-expr` and opacity, and gets the halo
+too:
+
+```json
+"lots_label": {
+  "op": "text", "features": "@lots", "font": ["sans"], "text": ["get", "number"],
+  "size": 13, "halo-color": "#ffffffcc", "halo-width": 1.5,
+  "color-expr": ["case", ["get", "abolished"], "#8a8a8a", "#222222"],
+  "strikethrough-expr": ["get", "abolished"]
+}
+```
+
+Each wrapped line gets its own bar across its advance width, at the font's
+strikeout position (0.3 em above the baseline for a `glyphs` stack, which has no
+metrics). `strikethrough-width` overrides the default thickness of 0.07 em. The bar
+belongs to the drawn label, so it follows the placed anchor and draws identically
+across tile seams; it leaves the collision box alone. Line-placed labels ignore it.
+
 ## Line placement
 
 ```json

@@ -36,6 +36,10 @@ pub struct TextPaint {
     /// Halo edge softening in px (MapLibre `text-halo-blur`). Only the
     /// SDF backend renders it; outline halos stay crisp.
     pub halo_blur_px: f32,
+    /// Thickness in px of a strikethrough bar across each line of a
+    /// point-placed block (see [`draw`]). `0` draws none. [`draw_line`]
+    /// ignores it.
+    pub strikethrough_px: f32,
 }
 
 /// Per-`format`-section fill override, indexed by [`PlacedGlyph::section`].
@@ -83,6 +87,13 @@ fn sdf_halo_params(halo_width_px: f32, halo_blur_px: f32, font_scale: f32) -> (f
 ///
 /// `outline` optionally routes outline glyphs through the SDF path (see
 /// the module docs); `None` keeps the vector fill / stroke.
+///
+/// With [`TextPaint::strikethrough_px`] set, each non-empty line also gets
+/// a bar spanning its advance extent (see [`strikethrough_rects`]). The bar
+/// joins both passes — its halo (the bar grown by `halo-width` on every
+/// side, round-cornered) goes down with the glyph halos, its fill in the
+/// block colour after the glyph fills — so it reads over busy backgrounds
+/// the way the glyphs do.
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     block: &TextBlock,
@@ -107,11 +118,15 @@ pub fn draw(
         )
         .pre_scale(scale, -scale)
     };
+    let strikes = strikethrough_rects(block, fonts, origin, paint);
 
     if paint.halo_width_px > 0.0 {
         let mut halo = Paint::default();
         halo.set_color(color_of(paint.halo_color));
         halo.anti_alias = true;
+        for rect in &strikes {
+            draw_strikethrough_halo(pixmap, *rect, paint.halo_width_px, &halo);
+        }
         for g in &block.glyphs {
             // SDF glyphs are rasterized at the 24 px em, per-glyph scaled.
             let font_scale = paint.size_px * g.scale / SDF_EM_PX;
@@ -226,6 +241,126 @@ pub fn draw(
                 );
             }
         }
+    }
+
+    if !strikes.is_empty() {
+        let mut fill = Paint::default();
+        fill.set_color(color_of(paint.color));
+        fill.anti_alias = true;
+        for rect in &strikes {
+            pixmap.fill_rect(*rect, &fill, Transform::identity(), None);
+        }
+    }
+}
+
+/// Where a strikethrough crosses a line, in em above its baseline (scaled
+/// by the line's `font-scale`), from the primary stack entry — the one
+/// that sets the line metrics.
+///
+/// An outline font answers from its own metrics: the centre of its OS/2
+/// strikeout stroke, else half its x-height, else
+/// [`STRIKE_FALLBACK_EM`]. A glyph-PBF stack carries no metrics, so it
+/// takes the fallback; its layout baseline is also not the visual one —
+/// fontnik measures each glyph's `top` from the font's ascender line, which
+/// the layout puts where an outline font's baseline goes — so the offset is
+/// shifted down by [`SDF_ASCENDER_PX`], the ascender of the Noto Sans /
+/// Open Sans stacks MapLibre basemaps serve.
+fn strike_offset_em(primary: Option<&FaceEntry<'_>>) -> f32 {
+    match primary {
+        Some(FaceEntry::Outline { font, face }) => {
+            let upm = font.units_per_em();
+            if let Some(m) = face.strikeout_metrics() {
+                (f32::from(m.position) - 0.5 * f32::from(m.thickness)) / upm
+            } else if let Some(x) = face.x_height() {
+                0.5 * f32::from(x) / upm
+            } else {
+                STRIKE_FALLBACK_EM
+            }
+        }
+        Some(FaceEntry::Sdf(_)) => STRIKE_FALLBACK_EM - SDF_ASCENDER_PX / SDF_EM_PX,
+        None => STRIKE_FALLBACK_EM,
+    }
+}
+
+/// Strikethrough height above the baseline (em) when the font names none:
+/// about the middle of a Latin x-height and a little below the middle of
+/// digits and capitals.
+const STRIKE_FALLBACK_EM: f32 = 0.3;
+
+/// Distance (px at the 24 px em) from the ascender line a glyph PBF
+/// measures `top` from down to the baseline, for the Noto Sans / Open Sans
+/// families (ascender ≈ 1.069 em, 25.7 px, which fontnik rounds to 26).
+const SDF_ASCENDER_PX: f32 = 26.0;
+
+/// The strikethrough bar of each non-empty line of `block` drawn at
+/// `origin`, in device px — empty when the paint asks for none.
+///
+/// A bar spans its line's advance extent and is centred
+/// [`strike_offset_em`] above the baseline. Its top edge and thickness are
+/// snapped to whole pixels so a thin bar stays one crisp row; the snap
+/// depends only on the anchor's fractional position, so a label straddling
+/// a tile seam lands on the same rows from both sides.
+fn strikethrough_rects(
+    block: &TextBlock,
+    fonts: &[FaceEntry<'_>],
+    origin: (f32, f32),
+    paint: &TextPaint,
+) -> Vec<tiny_skia::Rect> {
+    if paint.strikethrough_px <= 0.0 {
+        return Vec::new();
+    }
+    let offset_em = strike_offset_em(fonts.first());
+    let size = paint.size_px;
+    let thickness = paint.strikethrough_px.round().max(1.0);
+    block
+        .lines
+        .iter()
+        .filter(|l| l.max_x > l.min_x)
+        .filter_map(|l| {
+            let centre = origin.1 + (l.baseline - offset_em * l.scale) * size;
+            let top = (centre - 0.5 * thickness).round();
+            tiny_skia::Rect::from_ltrb(
+                origin.0 + l.min_x * size,
+                top,
+                origin.0 + l.max_x * size,
+                top + thickness,
+            )
+        })
+        .collect()
+}
+
+/// A strikethrough bar's halo: the bar grown by `halo_px` on every side
+/// with corners rounded to `halo_px` — the shape a glyph's `2 × halo-width`
+/// round stroke makes around its outline. Filled as one path, so a
+/// translucent halo colour covers every pixel once.
+fn draw_strikethrough_halo(
+    pixmap: &mut PixmapMut<'_>,
+    rect: tiny_skia::Rect,
+    halo_px: f32,
+    halo: &Paint<'_>,
+) {
+    let r = halo_px;
+    let (l, t, rt, b) = (
+        rect.left() - r,
+        rect.top() - r,
+        rect.right() + r,
+        rect.bottom() + r,
+    );
+    // Cubic quarter-circle control distance.
+    let k = 0.552_284_8 * r;
+    let mut pb = tiny_skia::PathBuilder::new();
+    pb.move_to(l + r, t);
+    pb.line_to(rt - r, t);
+    pb.cubic_to(rt - r + k, t, rt, t + r - k, rt, t + r);
+    pb.line_to(rt, b - r);
+    pb.cubic_to(rt, b - r + k, rt - r + k, b, rt - r, b);
+    pb.line_to(l + r, b);
+    pb.cubic_to(l + r - k, b, l, b - r + k, l, b - r);
+    pb.line_to(l, t + r);
+    pb.cubic_to(l, t + r - k, l + r - k, t, l + r, t);
+    pb.close();
+    if let Some(path) = pb.finish() {
+        pixmap.fill_path(&path, halo, FillRule::Winding, Transform::identity(), None);
     }
 }
 

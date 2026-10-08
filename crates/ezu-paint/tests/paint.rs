@@ -108,6 +108,8 @@ mod text_labels;
 mod text_line_labels;
 #[path = "paint/text_padding_expr.rs"]
 mod text_padding_expr;
+#[path = "paint/text_strikethrough.rs"]
+mod text_strikethrough;
 #[path = "paint/text_variable_anchor.rs"]
 mod text_variable_anchor;
 #[path = "paint/utility_ops.rs"]
