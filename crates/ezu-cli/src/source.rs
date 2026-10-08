@@ -452,7 +452,9 @@ mod tests {
         tile("blocks", 14, 4, 8, "blocks 14");
         tile("buildings", 17, 32, 64, "buildings 17");
         tile("buildings", 18, 64, 128, "buildings 18");
-        let url = |dir: &str| format!("{}/{dir}/{{z}}/{{x}}/{{y}}.pbf", root.display());
+        let url = |dir: &str| {
+            format!("{}/{dir}/{{z}}/{{x}}/{{y}}.pbf", root.display()).replace('\\', "/")
+        };
         ezu::style::Document::from_json(&format!(
             r##"{{
               "name": "two",
@@ -507,7 +509,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("ezu-feature-override-{}", std::process::id()));
         let doc = two_sources(&root);
-        let flag = format!("{}/buildings/{{z}}/{{x}}/{{y}}.pbf", root.display());
+        let flag = format!("{}/buildings/{{z}}/{{x}}/{{y}}.pbf", root.display()).replace('\\', "/");
         let sources =
             FeatureSources::open(&doc, Some((SourceSpec::Mvt(flag.clone()), "--mvt flag")))
                 .await
