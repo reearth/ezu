@@ -102,6 +102,8 @@ mod stamp_position_jitter;
 mod stroke_gap_width;
 #[path = "paint/terrain_holes.rs"]
 mod terrain_holes;
+#[path = "paint/text_background.rs"]
+mod text_background;
 #[path = "paint/text_collision.rs"]
 mod text_collision;
 #[path = "paint/text_labels.rs"]

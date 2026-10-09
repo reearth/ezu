@@ -339,3 +339,48 @@ fn a_struck_label_straddling_the_seam_draws_its_bar_on_both_tiles() {
         "expected the bar to cross into the neighbouring tile"
     );
 }
+
+#[test]
+fn a_boxed_label_straddling_the_seam_draws_its_box_on_both_tiles() {
+    // The same straddling label behind a background box: the box reaches
+    // past the text, and the tile that only sees the label as a neighbour
+    // draws its half of the box, pixel for pixel.
+    let tile_size = 64u32;
+    let pad = 8u32;
+    let layer_a = || layer(vec![feat("HHH", 0, 3800, 2048)]);
+    let rc = recipe(
+        r##", "source": "src", "layer": "pts", "background-color": "#2f6fe0",
+           "background-padding": [3, 6, 3, 6], "background-radius-px": 4"##,
+    );
+    let left = render_with_features_and_images(
+        &rc,
+        tile_size,
+        pad,
+        TileId { z: 4, x: 5, y: 7 },
+        &[("src.pts", layer_a())],
+        &[],
+    );
+    let right = render_with_features_and_images(
+        &rc,
+        tile_size,
+        pad,
+        TileId { z: 4, x: 6, y: 7 },
+        &[("src.pts@-1,0", layer_a())],
+        &[],
+    );
+    let mut boxed = 0usize;
+    for y in 0..left.height {
+        for dx in 0..pad {
+            let l = left.pixel(tile_size + pad + dx, y);
+            let r = right.pixel(pad + dx, y);
+            assert_eq!(l, r, "seam mismatch at dx={dx}, y={y}: {l:?} vs {r:?}");
+            if r == [0x2f, 0x6f, 0xe0, 255] {
+                boxed += 1;
+            }
+        }
+    }
+    assert!(
+        boxed > 0,
+        "expected the box to cross into the neighbouring tile"
+    );
+}

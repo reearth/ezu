@@ -5004,6 +5004,34 @@
                 },
                 "type": "array"
               },
+              "background-color": {
+                "description": "Fill a box behind each label's text: the laid-out block's bounds, every line included, grown by `background-padding`, with `background-radius-px` corners. The box fits the text however long it is. `anchor` and `offset-em` position the box rather than the text, so with `anchor: top-left` the box's top-left corner sits on the point and the text starts `background-padding` inside it; changing the padding never moves the anchored corner. The box is the label's collision box. It draws under the halo and glyphs, and over the layer's icons; `opacity` applies to it as to the text. Point placement only: line-placed labels draw without it. Absent (default): no box.",
+                "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|[$@][A-Za-z_][A-Za-z0-9_-]*)$",
+                "type": "string"
+              },
+              "background-padding": {
+                "description": "`[top, right, bottom, left]` px between the label's text and the edge of its `background-color` box, in the order `icon-text-fit-padding` uses. Default [0, 0, 0, 0].",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 4,
+                "minItems": 4,
+                "type": "array"
+              },
+              "background-radius-px": {
+                "oneOf": [
+                  {
+                    "description": "Corner radius of the `background-color` box in px, clamped to half its shorter side. Default 0 (square corners).",
+                    "minimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
               "collide": {
                 "description": "Whether to run deterministic label collision. Default true (MapLibre's default). Set false to draw every label (the pre-collision behaviour).",
                 "type": "boolean"
@@ -5433,6 +5461,34 @@
                   "type": "string"
                 },
                 "type": "array"
+              },
+              "background-color": {
+                "description": "Fill a box behind each label's text: the laid-out block's bounds, every line included, grown by `background-padding`, with `background-radius-px` corners. The box fits the text however long it is. `anchor` and `offset-em` position the box rather than the text, so with `anchor: top-left` the box's top-left corner sits on the point and the text starts `background-padding` inside it; changing the padding never moves the anchored corner. The box is the label's collision box. It draws under the halo and glyphs, and over the layer's icons; `opacity` applies to it as to the text. Point placement only: line-placed labels draw without it. Absent (default): no box.",
+                "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|[$@][A-Za-z_][A-Za-z0-9_-]*)$",
+                "type": "string"
+              },
+              "background-padding": {
+                "description": "`[top, right, bottom, left]` px between the label's text and the edge of its `background-color` box, in the order `icon-text-fit-padding` uses. Default [0, 0, 0, 0].",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 4,
+                "minItems": 4,
+                "type": "array"
+              },
+              "background-radius-px": {
+                "oneOf": [
+                  {
+                    "description": "Corner radius of the `background-color` box in px, clamped to half its shorter side. Default 0 (square corners).",
+                    "minimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "collide": {
                 "description": "Whether to run deterministic label collision. Default true (MapLibre's default). Set false to draw every label (the pre-collision behaviour).",

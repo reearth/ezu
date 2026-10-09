@@ -81,6 +81,8 @@ pub(super) enum LabelDraw {
         /// The symbol's icon: one entry, or one per anchor candidate when
         /// `icon-text-fit` sizes it to that anchor's label.
         icons: Vec<Arc<IconDraw>>,
+        /// The box drawn behind the text, if the layer sets one.
+        background: Option<BackgroundDraw>,
     },
     /// A line label: one block walked along the path, with a per-glyph
     /// placement and the perpendicular `offset-em` shift applied at draw.
@@ -124,6 +126,113 @@ pub(super) struct IconDraw {
     /// Half-extent of the drawn icon (px, rotation included), for the
     /// off-canvas reject.
     pub half: (f32, f32),
+}
+
+/// The box a point label draws behind its text (`background-color`): the
+/// laid-out block's bounds, all lines included, grown by `padding`. It is
+/// drawn at its final size every time, so it fits any text without a
+/// stretchable image.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct BackgroundDraw {
+    /// Straight sRGB, the group opacity folded into the alpha.
+    pub color: [f32; 4],
+    /// `[top, right, bottom, left]` px between the block's bounds and the
+    /// box edge.
+    pub padding: [f32; 4],
+    /// Corner radius in px, clamped at draw time to half the shorter side.
+    pub radius_px: f32,
+}
+
+impl BackgroundDraw {
+    /// The box around `block` drawn at `size_px`, relative to the label
+    /// anchor (px, y down).
+    pub(super) fn rect(&self, block: &TextBlock, size_px: f32) -> collide::Aabb {
+        let bb = block.bbox;
+        let [top, right, bottom, left] = self.padding;
+        collide::Aabb {
+            min_x: bb.min_x * size_px - left,
+            min_y: bb.min_y * size_px - top,
+            max_x: bb.max_x * size_px + right,
+            max_y: bb.max_y * size_px + bottom,
+        }
+    }
+}
+
+/// What a point label covers relative to its anchor (px, y down): its
+/// background box when it has one, else its laid-out text block. Collision,
+/// the max-extent cull and the off-canvas reject all measure this.
+pub(super) fn label_rect(
+    block: &TextBlock,
+    size_px: f32,
+    background: Option<&BackgroundDraw>,
+) -> collide::Aabb {
+    match background {
+        Some(bg) => bg.rect(block, size_px),
+        None => {
+            let bb = block.bbox;
+            collide::Aabb {
+                min_x: bb.min_x * size_px,
+                min_y: bb.min_y * size_px,
+                max_x: bb.max_x * size_px,
+                max_y: bb.max_y * size_px,
+            }
+        }
+    }
+}
+
+/// Fill a label's background box, its edges given in canvas px. The edges
+/// snap to whole pixels so the box stays crisp; every tile's canvas origin
+/// is a whole pixel of the same world grid, so the snap agrees across seams.
+fn fill_background(pm: &mut tiny_skia::PixmapMut<'_>, rect: collide::Aabb, bg: &BackgroundDraw) {
+    let (x0, y0) = (rect.min_x.round(), rect.min_y.round());
+    let (x1, y1) = (rect.max_x.round(), rect.max_y.round());
+    let (w, h) = (x1 - x0, y1 - y0);
+    if w <= 0.0 || h <= 0.0 || bg.color[3] <= 0.0 {
+        return;
+    }
+    let r = bg.radius_px.clamp(0.0, 0.5 * w.min(h));
+    let path = if r > 0.0 {
+        // Each corner is a quarter circle, drawn as the usual cubic with its
+        // control points `k·r` along the tangents.
+        const K: f32 = 0.552_284_8;
+        let kr = K * r;
+        let mut pb = tiny_skia::PathBuilder::new();
+        pb.move_to(x0 + r, y0);
+        pb.line_to(x1 - r, y0);
+        pb.cubic_to(x1 - r + kr, y0, x1, y0 + r - kr, x1, y0 + r);
+        pb.line_to(x1, y1 - r);
+        pb.cubic_to(x1, y1 - r + kr, x1 - r + kr, y1, x1 - r, y1);
+        pb.line_to(x0 + r, y1);
+        pb.cubic_to(x0 + r - kr, y1, x0, y1 - r + kr, x0, y1 - r);
+        pb.line_to(x0, y0 + r);
+        pb.cubic_to(x0, y0 + r - kr, x0 + r - kr, y0, x0 + r, y0);
+        pb.close();
+        pb.finish()
+    } else {
+        tiny_skia::Rect::from_ltrb(x0, y0, x1, y1).map(tiny_skia::PathBuilder::from_rect)
+    };
+    let Some(path) = path else {
+        return;
+    };
+    let [cr, cg, cb, ca] = bg.color;
+    let Some(color) = tiny_skia::Color::from_rgba(
+        cr.clamp(0.0, 1.0),
+        cg.clamp(0.0, 1.0),
+        cb.clamp(0.0, 1.0),
+        ca.clamp(0.0, 1.0),
+    ) else {
+        return;
+    };
+    let mut paint = tiny_skia::Paint::default();
+    paint.set_color(color);
+    paint.anti_alias = true;
+    pm.fill_path(
+        &path,
+        &paint,
+        tiny_skia::FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
 }
 
 impl LabelSet {
@@ -311,6 +420,7 @@ pub(super) fn draw_labels(
                 paint,
                 fonts,
                 paints,
+                background,
                 ..
             } => {
                 // The winning variant names the laid-out block, or suppresses
@@ -324,16 +434,23 @@ pub(super) fn draw_labels(
                     continue;
                 };
                 let (ax, ay) = (anchor.0 + pad, anchor.1 + pad);
+                let rel = label_rect(block, paint.size_px, background.as_ref());
+                let rect = collide::Aabb {
+                    min_x: ax + rel.min_x,
+                    min_y: ay + rel.min_y,
+                    max_x: ax + rel.max_x,
+                    max_y: ay + rel.max_y,
+                };
                 if set.collide {
-                    let bb = block.bbox;
-                    let s = paint.size_px;
-                    let min_x = ax + bb.min_x * s - set.padding_px;
-                    let max_x = ax + bb.max_x * s + set.padding_px;
-                    let min_y = ay + bb.min_y * s - set.padding_px;
-                    let max_y = ay + bb.max_y * s + set.padding_px;
-                    if max_x < 0.0 || min_x > padded_w || max_y < 0.0 || min_y > padded_h {
+                    let r = rect.inflate(set.padding_px);
+                    if r.max_x < 0.0 || r.min_x > padded_w || r.max_y < 0.0 || r.min_y > padded_h {
                         continue;
                     }
+                }
+                // Per label: the box, then the halo and glyphs `draw` lays
+                // over it. The layer's icons all went down before any of it.
+                if let Some(bg) = background {
+                    fill_background(&mut pm, rect, bg);
                 }
                 let view = faces.view(fonts);
                 draw(
