@@ -9,6 +9,151 @@ ezu is pre-1.0, so a minor bump may carry a breaking change. What the numbers
 mean is spelled out in
 [versioning](https://reearth.github.io/ezu/reference/changelog/).
 
+## 0.12.0 — 2026-10-12
+
+### Breaking
+
+- `text` and `text-labels` with point placement (the default) label polygons.
+  They used to skip them, so a symbol layer over an area layer drew nothing for
+  its areas. Each polygon now gets one label at its pole of inaccessibility,
+  the spot inside farthest from its outline, found the way MapLibre's
+  `findPoleOfInaccessibility` finds it and to the same precision. As in
+  MapLibre, each tile anchors the polygon as that tile clipped it and keeps the
+  anchor only when it falls inside the tile; the search runs relative to the
+  polygon's first vertex, so the tiles that hold a polygon as a neighbour agree
+  on the spot. Past a source's `max-zoom`, the anchor is found on the polygon
+  as the source tile holds it, so every overzoomed zoom labels it where the
+  source zoom does. **A style that points a point-placed label node at a layer
+  with polygons renders new labels**; to keep the old output, give the
+  `features` node feeding it `["==", ["geometry-type"], "Point"]` as its
+  `filter-expr`. `polygon-anchor`
+  (under Added) chooses a different spot.
+- Sprite icons are drawn inside a one-pixel transparent frame, as MapLibre pads
+  its atlas entries. An icon whose edge fell on a half pixel — any odd-sized
+  icon centred on a whole-pixel anchor — used to repeat its last column or row
+  beside itself, and bilinear sampling read past every edge. `stamp`,
+  `line-stamp`, `place` and label icons are affected: **icons
+  lose that ghost edge, and their outermost pixels move by a level or so**.
+- `boundary` closes a vector tile's polygon rings. A ring decoded from a vector
+  tile leaves its closing vertex implicit, and `boundary` left out the edge back
+  to the start, so every outline drawn from tile data had a gap. **Outlines
+  drawn through `boundary` gain that last edge**; GeoJSON rings, which repeat
+  the closing vertex, are unchanged. `clip-edges: "drop"` now sees the implicit
+  edge too, so a clip edge there is dropped as well.
+- A translated MapLibre `line` layer on a polygon source-layer strokes the
+  polygons' rings, as MapLibre does; it used to draw nothing for them. The
+  translator now routes every line layer, `line-pattern` included, through
+  `boundary` with `clip-edges: "drop"`, so the edges a tile encoder adds at the
+  tile buffer are left out and no tile seam carries a line. Line geometry passes
+  through unchanged. **Re-translated styles draw lines that were missing.**
+- Some public Rust structs gained fields, so a struct literal that names every
+  field needs updating: `ezu_style::spec::LegendEntry` (`features`),
+  `MvtSource` and `PmtilesSource` (`min_zoom`, `max_zoom`),
+  `ezu_core::text::TextPaint` (`strikethrough_px`), `TextBlock` (`lines`),
+  `ezu_features::mvt::DecodedTile` and `ezu_paint`'s `SharedLayer`
+  (`overzoom`). `ezu_paint::legend::stand_in_layer` takes the zoom the swatch is
+  drawn at.
+
+### Added
+
+- `polygon-anchor` on `text` and `text-labels`: `"pole"` (the default) or
+  `"centroid"`, the polygon's area-weighted centroid with its holes cut out,
+  for a label that belongs in the middle of an area, such as a block number on
+  an address map. Where the centroid falls outside the polygon (an L or a U),
+  the pole is used instead.
+- `background-color`, `background-padding` and `background-radius-px` on `text`
+  and `text-labels`: a box behind each point label, as big as the laid-out text
+  (every line of it) plus the padding, with rounded corners. It is drawn at its
+  final size, so it fits "7" and "128" alike without a stretchable sprite.
+  `anchor` and `offset-em` place the box rather than the text, so growing the
+  padding never moves the anchored corner, and the box is the label's
+  collision box. It draws under the halo and glyphs and over the layer's icons.
+  `background-padding` alone gives the label the box without painting it, to
+  reserve space around a label or measure a badge drawn by other ops.
+  Line-placed labels draw without a box.
+- `strikethrough`, `strikethrough-expr` and `strikethrough-width` on `text` and
+  `text-labels`, which bar each wrapped line of a point label through, in the
+  label's colour and opacity and with its halo, for keeping retired names or
+  numbers on the map but marked as such. The bar sits at the font's strikeout
+  position (0.3 em above the baseline for a `glyphs` stack, which carries no
+  metrics) and leaves the collision box alone. Line-placed labels ignore it.
+- `label-boxes`, which emits the boxes a `label-placement` node measured its
+  labels by as polygons, so geometry and paint ops can draw from them: a
+  bordered or rounded badge (`buffer` → `stroke`), an offset shadow
+  (`transform`), or a debug overlay of placement. Each box carries the labelled
+  feature's properties plus `part` (`text`, `icon`, `background`, `glyph` or
+  `collision`), `placed` and a `label-id` shared by every box of one label and
+  the same on every tile. `include: "all"` adds the candidates that lost their
+  collision test, with `placed: false`. The boxes come from the decisions
+  already made, so nothing is placed twice, and labels placed from a
+  neighbour's candidates are included, so boxes continue across tile edges.
+  The labels cookbook shows a bordered badge and a collision overlay built
+  this way.
+- `junctions`, which puts a point wherever polylines end or meet, for marking a
+  line network split into sections (a route cut into stages, a perimeter cut
+  into frontages) with a cross tick at each boundary. Each point carries
+  `axis-deg`, the tick's axis — across the line at a loose end or where it runs
+  straight on, along the bisector at a corner, through the widest gap at a
+  T-junction or a sharp corner — so `stamp` with a bar sprite and
+  `"rotation-deg-expr": ["get", "axis-deg"]` draws it, and `arms`, how many line
+  ends meet there. `snap-px` merges ends that nearly coincide. Ends a vector
+  tile makes by cutting a line at its buffer are dropped, and a junction near a
+  tile border comes out the same, axis included, from both tiles.
+- `segment-to`, which turns each point into a two-vertex line from a longitude
+  and latitude its properties name (`lng-field`, `lat-field`) to the point
+  itself: a leader from a label anchor to what it labels, or a connector from a
+  building to its entrance. Each line keeps its point's properties, ready for
+  `dash` and `stroke`.
+- `features` on a legend entry: stand-in features placed by hand, for a swatch
+  whose symbol is an arrangement of parts. Each is a GeoJSON-shaped `Point`,
+  `LineString` or `Polygon` in `[x, y]` fractions of the swatch, and carries
+  its own `properties` over the entry's, so each `features` node's
+  `filter-expr` can pick out its part. `ezu check` refuses malformed ones, and
+  `ezu legend`'s JSON returns them as declared, for a host that draws its own
+  swatches.
+- `{ "swatch-x": f }` and `{ "swatch-y": f }` as a legend stand-in's property
+  values, which become the longitude or latitude `f` of the way across the
+  swatch. A node that reads a position from properties, such as `segment-to`,
+  then draws in the swatch as it does on the map. Rust hosts drawing their own
+  swatches get the conversion from `ezu::paint::legend` (`stand_in_layer`,
+  `swatch_tile`).
+- `min-zoom` and `max-zoom` on `mvt` and `pmtiles` sources, as a MapLibre
+  source's `minzoom` and `maxzoom`: below `min-zoom` the source's layers draw
+  nothing, and past `max-zoom` each tile is cut from the covering ancestor.
+  `ezu translate` carries a vector source's `minzoom` and `maxzoom` over.
+- `ezu_core::text::place_layers_detailed`, which also reports the label
+  candidates that lost their collision test.
+
+### Changed
+
+- The CLI binds every `mvt` and `pmtiles` source a style declares, each at its
+  own zoom range; it used to bind only the first, so a style reading two vector
+  sources drew the layers of one. `--mvt` and `--pmtiles` stand in for the
+  first declared source and leave the others at their own URLs.
+- A `dem` source's `tile-size` is marked deprecated in the schema and
+  documented as ignored, which it already was: each tile's edge is read from
+  its decoded image. Styles that set it still load, and `ezu translate` no
+  longer writes it.
+
+### Fixed
+
+- A label straddling a tile seam was missing its far half when the tile across
+  the seam had no copy of the label's layer, as happens wherever a vector tile
+  encoder leaves out a layer with no features in that tile. That tile now draws
+  the neighbour's label as the neighbour does.
+- A `file:` glyphs template got its `{fontstack}` percent-encoded, as an
+  `http(s)` URL needs, so `Noto Sans Regular` was looked for in a directory
+  called `Noto%20Sans%20Regular`. A `file:` path now takes the fontstack as
+  written.
+- The JSON Schema for style documents left out the `geojson`, `sprite`, `font`
+  and `glyphs` source types, so an editor or validator using it rejected every
+  style that declared one.
+- `ezu translate` passed a `raster-dem` source's MapLibre `encoding` through
+  unchanged, so a style using the default `mapbox` encoding (or leaving it out)
+  produced a document that failed to parse. `mapbox` now becomes `mapbox-rgb`,
+  and a `custom` encoding whose factors match Mapbox's or Terrarium's becomes
+  that encoding; any other is read as `mapbox-rgb` with a warning.
+
 ## 0.11.0 — 2026-10-06
 
 ### Breaking
