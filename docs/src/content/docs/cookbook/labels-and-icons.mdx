@@ -95,7 +95,9 @@ box's top-left corner sits 0.4 em right of and 0.3 em below the point, and the n
 moving its corner. The box is also what collides. It draws under the label's halo
 and glyphs; when the symbol has an icon too, the icon goes underneath the box.
 Line-placed labels draw without a box. For a box with a shape of its own (a shield,
-a pointer), use a sprite with `icon-text-fit` instead.
+a pointer), use a sprite with `icon-text-fit` instead. For a border, a shadow or
+anything else drawn around the box, take the box itself from `label-boxes` (see
+[drawing the label boxes yourself](#drawing-the-label-boxes-yourself)).
 
 ## Line placement
 
@@ -226,6 +228,70 @@ name underneath it.
 diagram and never what you want for a map. The figure above is the whole
 argument for leaving it on.
 
+## Drawing the label boxes yourself
+
+`label-boxes` turns the boxes a `label-placement` node measured into ordinary
+polygons, so any geometry and paint op can draw them. It reads the decisions
+already made, so nothing is placed twice and every box sits exactly where
+`text-draw` puts its label. Each polygon carries the labelled feature's
+properties, plus:
+
+| Property | Value |
+|---|---|
+| `part` | `text`: the laid-out text block, no padding. `icon`: the icon, turned by `icon-rotate`. `background`: the box `background-color` draws. `glyph`: one glyph of a line label. `collision`: a box placement tested, `padding-px` included. |
+| `placed` | `true`, or `false` for a candidate that lost its collision test (only with `include: "all"`). |
+| `label-id` | Shared by every box of one label, and the same on every tile. |
+
+`parts` picks which kinds to emit (default: all of them), and `labels` limits the
+output to one of the placement's layers. A line label has no single block: it gives
+one `glyph` quad per glyph, turned along the path, plus the axis-aligned `collision`
+box placement tested for each glyph. Labels placed from a neighbouring tile's
+candidates come through like their text, so a box that crosses a tile edge carries
+on across it.
+
+A bordered badge is the `background` box grown with round joins, filled and
+outlined. A transparent `background-color` keeps the box measured, anchored and
+collided while `text-draw` leaves it unpainted:
+
+```json
+"pages_l":  { "op": "text-labels", "features": "@pages", "font": ["sans"],
+              "text": ["get", "page"], "size": 12, "color": "#2f6fe0",
+              "anchor": "top-left", "offset-em": [0.4, 0.3],
+              "background-color": "#ffffff00", "background-padding": [3, 6, 3, 6],
+              "padding-px": 4 },
+"place":    { "op": "label-placement", "labels": ["@pages_l"] },
+"badge":    { "op": "label-boxes", "placement": "@place", "parts": ["background"] },
+"cushion":  { "op": "buffer", "features": "@badge", "distance": 2, "join": "round" },
+"cushion_fill":  { "op": "fill-solid", "features": "@cushion", "fill": "#ffffff" },
+"cushion_rings": { "op": "boundary", "features": "@cushion" },
+"cushion_edge":  { "op": "stroke", "features": "@cushion_rings",
+                   "color": "#2f6fe0", "width-px": 1.5 },
+"pages_d":  { "op": "text-draw", "labels": "@pages_l", "placement": "@place" },
+"out":      { "op": "stack",
+              "layers": ["@base", "@cushion_fill", "@cushion_edge", "@pages_d"] }
+```
+
+The `buffer` radius rounds the corners. The badge then reaches past the box that
+collided, so `padding-px` should cover the buffer distance plus half the stroke
+width, or neighbouring badges can touch. The same boxes make an offset shadow
+(`transform` the cushion and fill it first) or corner brackets (`boundary`, then
+`dash`).
+
+To see why a label is missing, draw every collision box, with the losers in red:
+
+```json
+"debug":       { "op": "label-boxes", "placement": "@place",
+                 "parts": ["collision"], "include": "all" },
+"debug_rings": { "op": "boundary", "features": "@debug" },
+"debug_edge":  { "op": "stroke", "features": "@debug_rings", "width-px": 1,
+                 "color": "#16a34a",
+                 "color-expr": ["case", ["get", "placed"], "#16a34a", "#dc2626"] }
+```
+
+A losing candidate is shown at its first anchor, overlapping the box that blocked
+it. Copies of one label from neighbouring tiles are not candidates of their own,
+so they never show as losers.
+
 ## Glyphs without font files
 
 Instead of a `font` source, point at a MapLibre glyph endpoint:
@@ -249,6 +315,8 @@ when no `--font` mapping is given. In a wasm host you cannot fetch lazily, so as
 
 - Turn on the tile-grid overlay in `ezu serve` and check borders for duplicates —
   the symptom of a missing `source`/`layer`.
+- Draw the collision boxes, rejected candidates included, with `label-boxes`
+  (see [drawing the label boxes yourself](#drawing-the-label-boxes-yourself)).
 - `max-extent-px` (default 128) is the padding the node requests; labels whose
   bounding box exceeds it are culled with a warning. Very large text needs a
   larger value.
