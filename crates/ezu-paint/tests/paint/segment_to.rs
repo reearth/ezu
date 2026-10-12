@@ -30,7 +30,7 @@ fn point(at: (i32, i32), to: (f64, f64), fields: &[&str]) -> Feature {
     let (lng, lat) = lng_lat(to.0, to.1);
     let mut properties = HashMap::new();
     for &f in fields {
-        let v = if f == "rep_lng" { lng } else { lat };
+        let v = if f == "anchor_lng" { lng } else { lat };
         properties.insert(f.to_string(), Value::Double(v));
     }
     let mut geometry = Geometry::default();
@@ -44,7 +44,7 @@ fn point(at: (i32, i32), to: (f64, f64), fields: &[&str]) -> Feature {
 
 #[test]
 fn connectors_run_from_the_named_position_to_each_point() {
-    let both = ["rep_lng", "rep_lat"];
+    let both = ["anchor_lng", "anchor_lat"];
     let layer = FeatureLayer {
         name: "entrances".to_string(),
         extent: 4096,
@@ -52,7 +52,7 @@ fn connectors_run_from_the_named_position_to_each_point() {
             // Across the middle, from px (16, 32) to (48, 32).
             point((3072, 2048), (1024.0, 2048.0), &both),
             // Down the middle, but its latitude is missing.
-            point((2048, 3584), (2048.0, 512.0), &["rep_lng"]),
+            point((2048, 3584), (2048.0, 512.0), &["anchor_lng"]),
             // From px (16, 16) to a point far east of the tile, as a
             // stitched neighbour supplies it.
             point((6000, 1024), (1024.0, 1024.0), &both),
@@ -68,7 +68,7 @@ fn connectors_run_from_the_named_position_to_each_point() {
         "bg":    { "op": "solid", "color": "#ffffff" },
         "pts":   { "op": "features", "source": "src", "layer": "entrances" },
         "links": { "op": "segment-to", "features": "@pts",
-                   "lng-field": "rep_lng", "lat-field": "rep_lat" },
+                   "lng-field": "anchor_lng", "lat-field": "anchor_lat" },
         "draw":  { "op": "stroke", "features": "@links", "color": "#000000", "width-px": 2 },
         "out":   { "op": "blend", "base": "@bg", "over": "@draw" }
       },

@@ -321,7 +321,7 @@ fn blue_in(px: &[[u8; 4]], x0: u32, x1: u32, y0: u32, y1: u32) -> usize {
 fn composite_style(rep: [f64; 2]) -> String {
     format!(
         r##"{{
-      "name": "ledger",
+      "name": "addresses",
       "sources": {{
         "src":  {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
         "body": {{ "type": "font", "url": "{font}" }}
@@ -507,7 +507,7 @@ fn stand_ins_scale_with_the_swatch() {
 fn connector_style() -> String {
     format!(
         r##"{{
-      "name": "ledger",
+      "name": "addresses",
       "sources": {{
         "src":  {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
         "body": {{ "type": "font", "url": "{font}" }}
@@ -522,7 +522,7 @@ fn connector_style() -> String {
         "rep":   {{ "op": "features", "source": "src", "layer": "addresses",
                     "filter-expr": ["==", ["get", "part"], "rep"] }},
         "conn":  {{ "op": "segment-to", "features": "@ent",
-                    "lng-field": "rep_lng", "lat-field": "rep_lat" }},
+                    "lng-field": "anchor_lng", "lat-field": "anchor_lat" }},
         "fill":  {{ "op": "fill-solid", "features": "@bldg", "fill": "#c0c0c0" }},
         "line":  {{ "op": "stroke", "features": "@conn", "width-px": 2, "color": "#00a000" }},
         "dots":  {{ "op": "circles", "features": "@pts", "radius": 3, "color": "#ff0000" }},
@@ -541,7 +541,7 @@ fn connector_style() -> String {
              "properties": {{ "part": "rep" }} }},
           {{ "geometry": {{ "type": "Point", "coordinates": [0.88, 0.3] }},
              "properties": {{ "part": "entrance",
-                             "rep_lng": {{ "swatch-x": 0.24 }}, "rep_lat": {{ "swatch-y": 0.72 }} }} }}
+                             "anchor_lng": {{ "swatch-x": 0.24 }}, "anchor_lat": {{ "swatch-y": 0.72 }} }} }}
         ] }}] }},
       "output": "@addr"
     }}"##,
@@ -674,7 +674,7 @@ fn a_malformed_swatch_position_is_refused() {
     );
     let msg = err.to_string();
     assert!(
-        msg.contains("`features[2].properties.rep_lng`: `swatch-x` is 1.24"),
+        msg.contains("`features[2].properties.anchor_lng`: `swatch-x` is 1.24"),
         "{msg}"
     );
 }

@@ -128,7 +128,7 @@ draws *as well as* the line. Name the geometry on the entry to stop it:
 ### Placing the stand-ins yourself
 
 Some symbols are an arrangement of parts, and the fixed stand-in cannot
-arrange anything. A ledger map's "assigned house number" is a building square,
+arrange anything. On an address map, an "assigned house number" is a building square,
 a dot at its representative point, a dotted connector out to an entrance dot,
 and the number over the representative point — a `stack` of a fill, circles,
 a dashed stroke and a `text` node, each fed by its own `features` node. On the
@@ -137,8 +137,8 @@ its building's representative point as a longitude and latitude, and
 [`segment-to`](/ezu/style/nodes/geometry/#segment-to) joins the two.
 
 ```json
-"ent":  { "op": "features", "source": "ledger", "layer": "entrances" },
-"conn": { "op": "segment-to", "features": "@ent", "lng-field": "rep_lng", "lat-field": "rep_lat" },
+"ent":  { "op": "features", "source": "addresses", "layer": "entrances" },
+"conn": { "op": "segment-to", "features": "@ent", "lng-field": "anchor_lng", "lat-field": "anchor_lat" },
 "dash": { "op": "dash", "features": "@conn", "dash-px": 3, "gap-px": 2 },
 "line": { "op": "stroke", "features": "@dash", "width-px": 1.5, "color": "#606060" }
 ```
@@ -157,7 +157,7 @@ same two properties the map's entrances do:
       "properties": { "part": "rep" } },
     { "geometry": { "type": "Point", "coordinates": [0.88, 0.68] },
       "properties": { "part": "entrance",
-                      "rep_lng": { "swatch-x": 0.24 }, "rep_lat": { "swatch-y": 0.68 } } }
+                      "anchor_lng": { "swatch-x": 0.24 }, "anchor_lat": { "swatch-y": 0.68 } } }
   ]
 }
 ```
@@ -203,8 +203,8 @@ anything in. So a swatch is given one: it is drawn as a fixed tile at its zoom
 (the one whose top-left corner is the middle of the world), spanning that
 tile from corner to corner. A property written as `{ "swatch-x": f }` becomes
 the longitude `f` of the way across that tile, and `{ "swatch-y": f }` the
-latitude `f` of the way down. In the house-number entry, `rep_lng` and
-`rep_lat` come out as the longitude and latitude of the representative point's
+latitude `f` of the way down. In the house-number entry, `anchor_lng` and
+`anchor_lat` come out as the longitude and latitude of the representative point's
 dot, and `segment-to` draws the connector from there to the entrance, as it
 does on the map — the swatch needs no stroke of its own.
 
