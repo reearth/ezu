@@ -83,6 +83,8 @@ pub(super) enum LabelDraw {
         icons: Vec<Arc<IconDraw>>,
         /// The box drawn behind the text, if the layer sets one.
         background: Option<BackgroundDraw>,
+        /// The labelled feature's properties, for `label-boxes`.
+        properties: Properties,
     },
     /// A line label: one block walked along the path, with a per-glyph
     /// placement and the perpendicular `offset-em` shift applied at draw.
@@ -93,8 +95,14 @@ pub(super) enum LabelDraw {
         paint: TextPaint,
         fonts: Arc<Vec<StackEntry>>,
         paints: Arc<Vec<SectionPaint>>,
+        /// The labelled feature's properties, for `label-boxes`.
+        properties: Properties,
     },
 }
+
+/// A feature's properties as a [`crate::nodes::common::FeatureGroup`]
+/// carries them, shared rather than copied.
+pub(super) type Properties = Arc<std::collections::BTreeMap<String, maplibre_expr::Value>>;
 
 /// What one collision variant of a point symbol draws. MapLibre places a
 /// symbol's icon and text as a unit; `icon-optional` / `text-optional`
@@ -168,15 +176,19 @@ pub(super) fn label_rect(
 ) -> collide::Aabb {
     match background {
         Some(bg) => bg.rect(block, size_px),
-        None => {
-            let bb = block.bbox;
-            collide::Aabb {
-                min_x: bb.min_x * size_px,
-                min_y: bb.min_y * size_px,
-                max_x: bb.max_x * size_px,
-                max_y: bb.max_y * size_px,
-            }
-        }
+        None => text_rect(block, size_px),
+    }
+}
+
+/// The laid-out block's own bounds at `size_px`, relative to the label
+/// anchor (px, y down).
+pub(super) fn text_rect(block: &TextBlock, size_px: f32) -> collide::Aabb {
+    let bb = block.bbox;
+    collide::Aabb {
+        min_x: bb.min_x * size_px,
+        min_y: bb.min_y * size_px,
+        max_x: bb.max_x * size_px,
+        max_y: bb.max_y * size_px,
     }
 }
 
@@ -266,18 +278,29 @@ pub(super) fn set_id(param_hash: u64, candidates: &[LabelCandidate]) -> u64 {
     h.digest()
 }
 
-/// What a `label-placement` node decided, keyed by each input layer's
+/// What a `label-placement` node decided: every input layer with its
+/// outcome, in the recipe's (paint) order, plus an index by
 /// [`LabelSet::id`] so a drawing node finds its own decisions without the
 /// recipe repeating a layer index.
 pub(super) struct PlacedLabels {
-    by_set: HashMap<u64, Vec<collide::Placement>>,
+    pub layers: Vec<PlacedLayer>,
+    by_set: HashMap<u64, usize>,
+}
+
+/// One label layer as `label-placement` decided it.
+pub(super) struct PlacedLayer {
+    pub set: Arc<LabelSet>,
+    /// The layer's winners and the candidates that lost their collision.
+    pub outcome: collide::LayerOutcome,
 }
 
 impl PlacedLabels {
     /// The placements for one label set, or `None` when that set never
     /// reached this placement node (a mis-wired recipe).
-    fn get(&self, id: u64) -> Option<&[collide::Placement]> {
-        self.by_set.get(&id).map(Vec::as_slice)
+    pub(super) fn get(&self, id: u64) -> Option<&[collide::Placement]> {
+        self.by_set
+            .get(&id)
+            .map(|&ix| self.layers[ix].outcome.placed.as_slice())
     }
 }
 
@@ -470,6 +493,7 @@ pub(super) fn draw_labels(
                 paint,
                 fonts,
                 paints,
+                ..
             } => {
                 // The margin covers one glyph's reach from its centre sample.
                 let margin = paint.size_px + set.padding_px + perp_px.abs();
@@ -515,7 +539,7 @@ pub(super) fn draw_labels(
 }
 
 /// Downcast a `Labels` port value to `T`, or report which port failed.
-fn labels_input<T: Send + Sync + 'static>(
+pub(super) fn labels_input<T: Send + Sync + 'static>(
     value: Option<&PortValue>,
     port: &str,
 ) -> Result<Arc<T>, EvalError> {
@@ -570,23 +594,28 @@ impl Node for LabelPlacementNode {
         // here keeps the recipe's array in paint order, like `stack`'s.
         let ordered: Vec<&[LabelCandidate]> =
             sets.iter().rev().map(|s| s.candidates.as_slice()).collect();
-        let placed = collide::place_layers(&ordered, collide::COLLISION_CELL_PX);
+        let mut outcomes = collide::place_layers_detailed(&ordered, collide::COLLISION_CELL_PX);
+        // Back to paint order, index-aligned with `sets`.
+        outcomes.reverse();
 
-        let mut by_set: HashMap<u64, Vec<collide::Placement>> = HashMap::with_capacity(sets.len());
+        let candidates = sets.iter().map(|s| s.candidates.len()).sum::<usize>();
+        let mut by_set: HashMap<u64, usize> = HashMap::with_capacity(sets.len());
+        let mut layers = Vec::with_capacity(sets.len());
         let mut total = 0usize;
-        for (set, placements) in sets.iter().rev().zip(placed) {
-            total += placements.len();
-            // Two structurally identical label layers hash to one id; the first
-            // keeps the entry (they place the same labels either way).
-            by_set.entry(set.id).or_insert(placements);
+        for (ix, (set, outcome)) in sets.into_iter().zip(outcomes).enumerate() {
+            total += outcome.placed.len();
+            // Two structurally identical label layers hash to one id; the
+            // topmost keeps the entry (they place the same labels either way).
+            by_set.insert(set.id, ix);
+            layers.push(PlacedLayer { set, outcome });
         }
         tracing::debug!(
-            layers = sets.len(),
-            candidates = sets.iter().map(|s| s.candidates.len()).sum::<usize>(),
+            layers = layers.len(),
+            candidates,
             placed = total,
             "label-placement: shared collision index",
         );
-        Ok(PortValue::Labels(Arc::new(PlacedLabels { by_set })))
+        Ok(PortValue::Labels(Arc::new(PlacedLabels { layers, by_set })))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"label-placement");

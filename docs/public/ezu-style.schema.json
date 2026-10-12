@@ -3068,6 +3068,58 @@
             "type": "object"
           },
           {
+            "description": "The boxes a `label-placement` node measured its labels by, as polygons — one per box — so any geometry and paint op can draw them: a bordered or rounded badge (`buffer` → `stroke`), an offset shadow (`transform`), or a debug overlay of placement. Reads the decisions already made, so nothing is placed twice and the boxes match what `text-draw` draws; labels placed from a neighbour tile's candidates are included, so boxes continue across tile edges. Each polygon carries the labelled feature's properties plus `part` (`text`, `icon`, `background`, `glyph` or `collision`), `placed` (false for a candidate that lost its collision test, with `include: all`) and `label-id` (shared by every box of one label, the same on every tile). A point label gives its `text` block (no padding), `icon` (rotated by `icon-rotate`), `background` box (with `background-color`) and the `collision` box or boxes it was tested with, padding included. A line label gives one `glyph` quad per glyph, rotated along the path, and the axis-aligned `collision` box placement tested for each glyph.",
+            "properties": {
+              "extent": {
+                "default": 4096,
+                "description": "Coordinate extent of the emitted geometry, matching the features it is combined with.",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "include": {
+                "default": "placed",
+                "description": "`placed` emits the labels that placed; `all` adds the candidates that lost their collision test, with `placed: false`, at their first anchor. Duplicate copies of one label are never emitted.",
+                "enum": [
+                  "placed",
+                  "all"
+                ]
+              },
+              "labels": {
+                "description": "Only this `text-labels` layer of the placement (it must be wired into the `placement` node too). Default: every layer.",
+                "pattern": "^@?[A-Za-z_][A-Za-z0-9_-]*$",
+                "type": "string"
+              },
+              "op": {
+                "const": "label-boxes",
+                "description": "Selects the `label-boxes` operation."
+              },
+              "parts": {
+                "description": "Which boxes to emit. Default: every kind a label has.",
+                "items": {
+                  "enum": [
+                    "text",
+                    "icon",
+                    "background",
+                    "glyph",
+                    "collision"
+                  ]
+                },
+                "type": "array"
+              },
+              "placement": {
+                "description": "Reference to another node (`@name`).",
+                "pattern": "^@?[A-Za-z_][A-Za-z0-9_-]*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "op",
+              "placement"
+            ],
+            "title": "op: label-boxes",
+            "type": "object"
+          },
+          {
             "description": "Place the labels of every `text-labels` layer against one shared collision index, the way maplibre-gl-js does — so a POI label can knock out an overlapping road name. `labels` lists the layers bottom-first (paint order, as in `stack`); priority is top-down, so the last entry places first and wins. Feed the result to each layer's `text-draw` node.",
             "properties": {
               "labels": {

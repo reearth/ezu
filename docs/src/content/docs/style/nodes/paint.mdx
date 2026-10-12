@@ -9,7 +9,7 @@ sidebar:
 
 Ops that consume `Features` and put pixels on a canvas — flat fills, scatter dabs, brush strokes, stamps, text.
 
-12 ops: `brush-file`, `circles`, `fill-dabs`, `fill-solid`, `label-placement`, `line`, `line-stamp`, `stamp`, `stroke`, `text`, `text-draw`, `text-labels`.
+13 ops: `brush-file`, `circles`, `fill-dabs`, `fill-solid`, `label-boxes`, `label-placement`, `line`, `line-stamp`, `stamp`, `stroke`, `text`, `text-draw`, `text-labels`.
 
 Ops with no demo image below produce no visible result on their own — they feed other nodes rather than paint.
 
@@ -93,6 +93,18 @@ Solid polygon fill with optional outline and Gaussian blur.
 | `fill-alpha` | number (0…1) \| `$param` \| `@node` | no | — |
 | `fill-expr` | — | no | A MapLibre color expression (JSON array, e.g. ["match", ["get", "class"], "water", "#88c", "#ccc"] or ["interpolate", ["linear"], ["get", "area"], 0, "#eef", 1000, "#049"]), evaluated per feature group at paint time. When present it overrides the constant `fill`; a group whose expression doesn't resolve to a color is not painted. Unlocks continuous data-driven fills that constant `fill` can't express. |
 | `opacity-expr` | — | no | A MapLibre number expression (JSON array) giving fill opacity, evaluated per feature group at paint time. When present it overrides the constant `fill-alpha`; a group whose expression doesn't resolve to a number falls back to `fill-alpha`. |
+
+### `label-boxes`
+
+The boxes a `label-placement` node measured its labels by, as polygons — one per box — so any geometry and paint op can draw them: a bordered or rounded badge (`buffer` → `stroke`), an offset shadow (`transform`), or a debug overlay of placement. Reads the decisions already made, so nothing is placed twice and the boxes match what `text-draw` draws; labels placed from a neighbour tile's candidates are included, so boxes continue across tile edges. Each polygon carries the labelled feature's properties plus `part` (`text`, `icon`, `background`, `glyph` or `collision`), `placed` (false for a candidate that lost its collision test, with `include: all`) and `label-id` (shared by every box of one label, the same on every tile). A point label gives its `text` block (no padding), `icon` (rotated by `icon-rotate`), `background` box (with `background-color`) and the `collision` box or boxes it was tested with, padding included. A line label gives one `glyph` quad per glyph, rotated along the path, and the axis-aligned `collision` box placement tested for each glyph.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `extent` | integer (1…∞) | no | Coordinate extent of the emitted geometry, matching the features it is combined with. |
+| `include` | `placed` \| `all` | no | `placed` emits the labels that placed; `all` adds the candidates that lost their collision test, with `placed: false`, at their first anchor. Duplicate copies of one label are never emitted. |
+| `labels` | `@node` | no | Only this `text-labels` layer of the placement (it must be wired into the `placement` node too). Default: every layer. |
+| `parts` | array of `text` \| `icon` \| `background` \| `glyph` \| `collision` | no | Which boxes to emit. Default: every kind a label has. |
+| `placement` | `@node` | yes | Reference to another node (`@name`). |
 
 ### `label-placement`
 

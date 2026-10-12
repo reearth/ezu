@@ -210,6 +210,7 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 | `stamp` | `Features + Raster\|Sprite → Raster` | Paint a sprite at every feature point, with world-deterministic jitter |
 | `text` | `Features → Raster` | SDF glyph labels with self-contained collision — see [Text labels](#text-labels) |
 | `text-labels` / `label-placement` / `text-draw` | `Features → Labels → Raster` | The shared-placement trio: every label layer's candidates collide in **one** index — see [Text labels](#text-labels) |
+| `label-boxes` | `Labels → Features` | The boxes a `label-placement` node measured — text block, icon, background, per-glyph quads of a line label, padded collision boxes, optionally the losers too — as polygons for any geometry / paint op to draw |
 | `brush-file` | `() → Brush` | Load a MyPaint `.myb` brush, resolved by the host's `AssetLoader` |
 | `brush-solid` | `() → Brush` | Synthesize a crisp constant-width brush without a `.myb` file |
 

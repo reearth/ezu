@@ -527,6 +527,7 @@ export const NO_IMAGE = new Set([
   'switch',
   'pick-channel',
   'label-placement',
+  'label-boxes',
   'text-labels',
   'text-draw',
   'brush-file',

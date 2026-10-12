@@ -37,6 +37,7 @@ fn registry_emits_document_schema_with_all_ops() {
         "text-labels",
         "text-draw",
         "label-placement",
+        "label-boxes",
     ] {
         assert!(
             s.contains(&format!("\"const\":\"{op}\"")),

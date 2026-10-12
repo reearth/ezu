@@ -224,6 +224,77 @@ pub fn field_of_node(
     field.expect("the node ran")
 }
 
+/// Render as [`render_with_features`] does and return the `Features` that
+/// node `node` produced on the way, along with the rendered raster.
+#[allow(dead_code)]
+pub fn features_of_node(
+    json: &str,
+    tile_size: u32,
+    pad: u32,
+    tile: TileId,
+    features: &[(&str, ezu_features::FeatureLayer)],
+    node: &str,
+) -> (
+    std::sync::Arc<ezu_paint::nodes::FilteredFeatures>,
+    std::sync::Arc<RasterBuf>,
+) {
+    use ezu_graph::{NodeIx, NodeObserver};
+    use ezu_paint::host::TileLoader;
+    use ezu_paint::nodes::FilteredFeatures;
+    use std::sync::{Arc, Mutex};
+
+    struct Catch {
+        ix: NodeIx,
+        features: Mutex<Option<Arc<FilteredFeatures>>>,
+    }
+    impl NodeObserver for Catch {
+        fn on_node(&self, ix: NodeIx, value: &PortValue, _cache_hit: bool, _us: u128) {
+            if ix == self.ix {
+                let PortValue::Features(any) = value else {
+                    panic!("expected features, got {:?}", value.kind());
+                };
+                let feats = any
+                    .clone()
+                    .downcast::<FilteredFeatures>()
+                    .expect("a features payload");
+                *self.features.lock().unwrap_or_else(|p| p.into_inner()) = Some(feats);
+            }
+        }
+    }
+
+    let doc = Document::from_json(json).expect("parse");
+    let registry = default_registry();
+    let graph = build_graph(&doc, &registry).expect("build");
+    let catch = Catch {
+        ix: graph.index_of(node).expect("node"),
+        features: Mutex::new(None),
+    };
+    let cache = Cache::new();
+    let base = BrushBankLoader::new();
+    let mut loader = TileLoader::new(&base, tile);
+    for (name, layer) in features {
+        loader.bind_features(name.to_string(), layer.clone());
+    }
+    let out = Evaluator::new(&graph, &cache, &loader)
+        .with_observer(&catch)
+        .render(
+            tile,
+            CanvasInfo::square(tile_size, pad),
+            &ParamValues::new(),
+            0,
+        )
+        .expect("render");
+    let raster = match out {
+        PortValue::Raster(r) => r,
+        other => panic!("expected raster output, got {:?}", other.kind()),
+    };
+    let feats = catch
+        .features
+        .into_inner()
+        .unwrap_or_else(|p| p.into_inner());
+    (feats.expect("the node ran"), raster)
+}
+
 /// Render with tile-scoped feature-layer bindings, the way a host binds
 /// per-tile MVT layers via `TileLoader::bind_features`. `features` maps a
 /// bare `<source>.<layer>` name to the layer a `features` node resolves.

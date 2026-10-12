@@ -62,6 +62,8 @@ mod gradient;
 mod graticule;
 #[path = "paint/icon_labels.rs"]
 mod icon_labels;
+#[path = "paint/label_boxes.rs"]
+mod label_boxes;
 #[path = "paint/label_placement.rs"]
 mod label_placement;
 #[path = "paint/legend_swatch.rs"]

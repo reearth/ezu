@@ -1742,6 +1742,7 @@ impl TextNode {
                             paint,
                             fonts: fonts.clone(),
                             paints: paints.clone(),
+                            properties: group.properties.clone(),
                         });
                     }
                 }
@@ -2198,6 +2199,7 @@ impl TextNode {
                     paints: paints.clone(),
                     icons: icons.iter().map(|(d, _)| d.clone()).collect(),
                     background,
+                    properties: prep.group.properties.clone(),
                 });
             }
         }
