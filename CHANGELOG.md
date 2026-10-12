@@ -26,8 +26,7 @@ mean is spelled out in
   source zoom does. **A style that points a point-placed label node at a layer
   with polygons renders new labels**; to keep the old output, give the
   `features` node feeding it `["==", ["geometry-type"], "Point"]` as its
-  `filter-expr`. `polygon-anchor`
-  (under Added) chooses a different spot.
+  `filter-expr`. `polygon-anchor` (under Added) chooses a different spot.
 - Sprite icons are drawn inside a one-pixel transparent frame, as MapLibre pads
   its atlas entries. An icon whose edge fell on a half pixel — any odd-sized
   icon centred on a whole-pixel anchor — used to repeat its last column or row
