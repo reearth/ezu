@@ -267,6 +267,28 @@ pub struct Placement {
 /// anchor whether or not the label goes on to win its collision, so a
 /// blocked candidate still keeps its neighbours away.
 pub fn place_layers(layers: &[&[LabelCandidate]], cell_px: f32) -> Vec<Vec<Placement>> {
+    place_layers_detailed(layers, cell_px)
+        .into_iter()
+        .map(|l| l.placed)
+        .collect()
+}
+
+/// One layer's outcome from [`place_layers_detailed`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LayerOutcome {
+    /// The placed labels, in placement order (what [`place_layers`]
+    /// returns for the layer).
+    pub placed: Vec<Placement>,
+    /// Candidates (indices into the layer's list) that reached the
+    /// collision test and found no free variant, in placement order.
+    /// Duplicates dropped by the dedup and line labels dropped by the
+    /// repeat filter are not listed: neither ever competed for space.
+    pub rejected: Vec<usize>,
+}
+
+/// [`place_layers`], also reporting the candidates that lost their
+/// collision test, for callers that show what placement turned down.
+pub fn place_layers_detailed(layers: &[&[LabelCandidate]], cell_px: f32) -> Vec<LayerOutcome> {
     // Total order: layer ↑, sort-key ↑, quantized anchor (y, x), text.
     let mut order: Vec<(usize, usize)> = layers
         .iter()
@@ -289,7 +311,7 @@ pub fn place_layers(layers: &[&[LabelCandidate]], cell_px: f32) -> Vec<Vec<Place
     let mut seen: HashSet<(usize, i64, i64, &str, u64)> = HashSet::new();
     // Anchors already taken by each label, for the repeat filter.
     let mut anchors: RepeatAnchors<'_> = HashMap::new();
-    let mut placed: Vec<Vec<Placement>> = vec![Vec::new(); layers.len()];
+    let mut out: Vec<LayerOutcome> = vec![LayerOutcome::default(); layers.len()];
     for (li, i) in order {
         let c = at((li, i));
         // Dedup: keep the first candidate (in total order) per key.
@@ -319,8 +341,11 @@ pub fn place_layers(layers: &[&[LabelCandidate]], cell_px: f32) -> Vec<Vec<Place
                 .iter()
                 .position(|boxes| boxes.iter().all(|b| !grid.intersects_any(b)))
         };
-        let Some(variant) = variant else { continue };
-        placed[li].push(Placement { cand: i, variant });
+        let Some(variant) = variant else {
+            out[li].rejected.push(i);
+            continue;
+        };
+        out[li].placed.push(Placement { cand: i, variant });
         // Blocking: a shown label reserves its chosen boxes unless it ignores
         // placement (so an allow-overlap + ignore-placement label neither
         // collides nor blocks).
@@ -330,7 +355,7 @@ pub fn place_layers(layers: &[&[LabelCandidate]], cell_px: f32) -> Vec<Vec<Place
             }
         }
     }
-    placed
+    out
 }
 
 /// [`place_layers`] for a lone label layer.
@@ -395,6 +420,17 @@ mod tests {
         let b = cand(1.0, 200, 0, "b", 5.0, 0.0); // overlaps a, lower key
         let placed = place(&[a, b], COLLISION_CELL_PX);
         assert_eq!(idxs(&placed), vec![1]); // b (index 1) wins
+    }
+
+    #[test]
+    fn the_detailed_outcome_lists_collision_losers_but_not_duplicates() {
+        let a = cand(1.0, 0, 0, "a", 0.0, 0.0);
+        let b = cand(2.0, 400, 0, "b", 5.0, 0.0); // overlaps a, loses
+        let dup = cand(1.0, 1, 1, "a", 0.0, 0.0); // a's own copy
+        let far = cand(3.0, 4000, 0, "c", 500.0, 0.0);
+        let out = place_layers_detailed(&[&[a, b, dup, far]], COLLISION_CELL_PX);
+        assert_eq!(idxs(&out[0].placed), vec![0, 3]);
+        assert_eq!(out[0].rejected, vec![1]);
     }
 
     #[test]

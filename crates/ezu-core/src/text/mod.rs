@@ -55,8 +55,8 @@ mod shape;
 
 pub use arabic::presentation_forms;
 pub use collide::{
-    place, place_layers, Aabb, Grid, LabelCandidate, PlaceRank, Placement, COLLISION_CELL_PX,
-    DEDUP_QUANTUM,
+    place, place_layers, place_layers_detailed, Aabb, Grid, LabelCandidate, LayerOutcome,
+    PlaceRank, Placement, COLLISION_CELL_PX, DEDUP_QUANTUM,
 };
 pub use draw::{draw, draw_line, GlyphPlacement, SectionPaint, TextPaint};
 pub use font::{FaceEntry, Font, FontError, StackEntry};
