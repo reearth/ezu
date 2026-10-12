@@ -238,7 +238,7 @@ properties, plus:
 
 | Property | Value |
 |---|---|
-| `part` | `text`: the laid-out text block, no padding. `icon`: the icon, turned by `icon-rotate`. `background`: the box `background-color` draws. `glyph`: one glyph of a line label. `collision`: a box placement tested, `padding-px` included. |
+| `part` | `text`: the laid-out text block, no padding. `icon`: the icon, turned by `icon-rotate`. `background`: the label's background box, set by `background-padding` or `background-color`, painted or not. `glyph`: one glyph of a line label. `collision`: a box placement tested, `padding-px` included. |
 | `placed` | `true`, or `false` for a candidate that lost its collision test (only with `include: "all"`). |
 | `label-id` | Shared by every box of one label, and the same on every tile. |
 
@@ -250,15 +250,15 @@ candidates come through like their text, so a box that crosses a tile edge carri
 on across it.
 
 A bordered badge is the `background` box grown with round joins, filled and
-outlined. A transparent `background-color` keeps the box measured, anchored and
-collided while `text-draw` leaves it unpainted:
+outlined. `background-padding` without a `background-color` gives the label its
+box, measured, anchored and collided as usual, while `text-draw` leaves it
+unpainted:
 
 ```json
 "pages_l":  { "op": "text-labels", "features": "@pages", "font": ["sans"],
               "text": ["get", "page"], "size": 12, "color": "#2f6fe0",
               "anchor": "top-left", "offset-em": [0.4, 0.3],
-              "background-color": "#ffffff00", "background-padding": [3, 6, 3, 6],
-              "padding-px": 4 },
+              "background-padding": [3, 6, 3, 6], "padding-px": 4 },
 "place":    { "op": "label-placement", "labels": ["@pages_l"] },
 "badge":    { "op": "label-boxes", "placement": "@place", "parts": ["background"] },
 "cushion":  { "op": "buffer", "features": "@badge", "distance": 2, "join": "round" },

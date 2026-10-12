@@ -136,8 +136,10 @@ pub(super) struct IconDraw {
     pub half: (f32, f32),
 }
 
-/// The box a point label draws behind its text (`background-color`): the
-/// laid-out block's bounds, all lines included, grown by `padding`. It is
+/// The box around a point label's text (`background-padding` and/or
+/// `background-color`): the laid-out block's bounds, all lines included,
+/// grown by `padding`. Without `background-color` its colour is fully
+/// transparent, so it positions and collides but paints nothing. It is
 /// drawn at its final size every time, so it fits any text without a
 /// stretchable image.
 #[derive(Debug, Clone, Copy)]

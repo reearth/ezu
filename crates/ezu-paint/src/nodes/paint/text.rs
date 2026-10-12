@@ -26,9 +26,9 @@
 //! Point placement labels each point and each polygon, at the polygon's
 //! pole of inaccessibility as MapLibre does or at its centroid
 //! (`polygon-anchor`), and ignores lines; line placement ignores
-//! points/polygons. A point label may draw a box behind its text
-//! (`background-color`); the box is then what the anchor positions and what
-//! collides. Drawing is a pure function of world position (no
+//! points/polygons. A point label may have a box around its text
+//! (`background-padding` and/or `background-color`, which fills it); the box
+//! is then what the anchor positions and what collides. Drawing is a pure function of world position (no
 //! jitter), so labels match across tile borders. Collision (default on)
 //! is likewise world-space deterministic: candidates are gathered from
 //! this tile plus its 8 neighbour tiles (host-bound under
@@ -955,11 +955,13 @@ struct TextNode {
     strikethrough_expr: Option<maplibre_expr::Expr>,
     strikethrough_expr_src: Option<String>,
     strikethrough_width_px: Option<f32>,
-    /// `background-color`: a box behind each point label's text, sized to
-    /// the laid-out block plus `background_padding`. `None` draws no box.
-    /// The box, not the text, is what `anchor` and `offset-em` position and
-    /// what collides.
-    background: Option<In<[f32; 4]>>,
+    /// Whether each point label has a box around its text, sized to the
+    /// laid-out block plus `background_padding`: set by `background-padding`
+    /// or `background-color`. The box, not the text, is what `anchor` and
+    /// `offset-em` position and what collides, filled or not.
+    background_box: bool,
+    /// `background-color`: the box's fill. `None` leaves a box unpainted.
+    background_color: Option<In<[f32; 4]>>,
     /// `background-padding`, `[top, right, bottom, left]` px.
     background_padding: [f32; 4],
     /// `background-radius-px`: the box's corner radius.
@@ -1073,7 +1075,7 @@ impl TextNode {
         } else {
             anchor_offset_em(anchor, self.offset_em, self.radial_offset_em)
         };
-        if self.background.is_some() && size > 0.0 {
+        if self.background_box && size > 0.0 {
             let [top, right, bottom, left] = self.background_padding;
             let (fx, fy) = anchor.fraction();
             offset_em[0] += ((1.0 - fx) * left - fx * right) / size;
@@ -1232,7 +1234,7 @@ impl TextNode {
         // caller, which knows the sprite sheet's dimensions.
         let mut reach = self.label_reach(&sections, size, padding, halo_width, cap);
         // A background box reaches its padding past the text on each side.
-        if self.background.is_some() && !sections.is_empty() {
+        if self.background_box && !sections.is_empty() {
             reach += self
                 .background_padding
                 .iter()
@@ -1796,14 +1798,19 @@ impl TextNode {
         let const_halo_width = (self.halo_width.get(ctx, inputs)? as f32).max(0.0);
         let const_opacity = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
         // The background box's colour and radius; the group opacity is folded
-        // in per symbol below.
-        let background = match &self.background {
-            Some(color) => Some(BackgroundDraw {
-                color: color.get(ctx, inputs)?,
+        // in per symbol below. A box without `background-color` is fully
+        // transparent: it positions and collides but paints nothing.
+        let background = if self.background_box {
+            Some(BackgroundDraw {
+                color: match &self.background_color {
+                    Some(color) => color.get(ctx, inputs)?,
+                    None => [0.0; 4],
+                },
                 padding: self.background_padding,
                 radius_px: (self.background_radius.get(ctx, inputs)? as f32).max(0.0),
-            }),
-            None => None,
+            })
+        } else {
+            None
         };
 
         let tile_w = ctx.canvas.tile_w as f32;
@@ -2513,9 +2520,14 @@ impl Node for TextNode {
         }
         // Background box — folded only when set, so existing recipes keep
         // their hashes.
-        if let Some(color) = &self.background {
-            h.update(b"background");
-            color.param_hash(h);
+        if self.background_box {
+            match &self.background_color {
+                Some(color) => {
+                    h.update(b"background");
+                    color.param_hash(h);
+                }
+                None => h.update(b"background-box"),
+            }
             for v in self.background_padding {
                 h.update(&v.to_le_bytes());
             }
@@ -2834,7 +2846,7 @@ fn build_text_node(
     let halo_color = r.color_or("halo-color", [1.0, 1.0, 1.0, 1.0])?;
     let halo_width = r.number_or("halo-width", 0.0)?;
     let opacity = r.number_or("opacity", 1.0)?;
-    let background = r.color_opt("background-color")?;
+    let background_color = r.color_opt("background-color")?;
     let background_radius = r.number_or("background-radius-px", 0.0)?;
     let parts = r.finish();
     let background_padding = read_box_padding(fields, "background-padding", ctx)?;
@@ -2974,16 +2986,13 @@ fn build_text_node(
     }
     // A box behind glyphs walked along a curve has no single rectangle to
     // fill; line-placed labels draw without one.
-    let background = match (placement, background) {
-        (Placement::Point, bg) => bg,
-        (_, Some(_)) => {
-            tracing::warn!(
-                "text: `background-color` applies to point placement only — box ignored"
-            );
-            None
-        }
-        (_, None) => None,
-    };
+    let wants_box = background_color.is_some() || fields.contains_key("background-padding");
+    let background_box = placement == Placement::Point && wants_box;
+    if placement != Placement::Point && wants_box {
+        tracing::warn!(
+            "text: `background-color` / `background-padding` apply to point placement only — box ignored"
+        );
+    }
 
     let mut ports = vec![PortSpec {
         name: "features",
@@ -3026,7 +3035,8 @@ fn build_text_node(
             strikethrough_expr,
             strikethrough_expr_src,
             strikethrough_width_px,
-            background,
+            background_box,
+            background_color,
             background_padding,
             background_radius,
             icon,
@@ -3118,9 +3128,9 @@ fn text_schema(stage: Stage) -> Value {
                                          "description": "Strikethrough bar thickness in px, rounded to whole pixels. Default 0.07 em of the label's size, at least 1 px." },
                 "background-color": schema_frag::color(),
                 "background-padding": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4,
-                                        "description": "`[top, right, bottom, left]` px between the label's text and the edge of its `background-color` box, in the order `icon-text-fit-padding` uses. Default [0, 0, 0, 0]." },
+                                        "description": "`[top, right, bottom, left]` px between the label's text and the edge of its background box, in the order `icon-text-fit-padding` uses. Setting it gives each point label the box even without `background-color`: the box then paints nothing, but `anchor` and `offset-em` still position it, it is still the label's collision box, and `label-boxes` still reports it as `background` — a way to reserve space around a label or measure a badge drawn by other ops. Default [0, 0, 0, 0]." },
                 "background-radius-px": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0,
-                                          "description": "Corner radius of the `background-color` box in px, clamped to half its shorter side. Default 0 (square corners)." })),
+                                          "description": "Corner radius of the background box's `background-color` fill in px, clamped to half its shorter side. Default 0 (square corners)." })),
                 "placement": { "type": "string", "enum": ["point", "line", "line-center"],
                                "description": "MapLibre `symbol-placement`. `point` (default) labels each feature point, and each polygon once at its `polygon-anchor`. `line` repeats labels along each polyline every `spacing-px`; `line-center` places one at each line's arc-length midpoint. Line placement ignores wrapping (`max-width-em`) and lays out a single line along the path." },
                 "polygon-anchor": { "type": "string", "enum": ["pole", "centroid"],
@@ -3225,7 +3235,8 @@ fn text_schema(stage: Stage) -> Value {
          never moves the anchored corner. The box is the label's collision box. It draws \
          under the halo and glyphs, and over the layer's icons; `opacity` applies to it as \
          to the text. Point placement only: line-placed labels draw without it. Absent \
-         (default): no box."
+         (default): no fill; the box still exists, unpainted, when `background-padding` is \
+         set."
             .into(),
     );
     if stage == Stage::Labels {

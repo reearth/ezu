@@ -278,6 +278,38 @@ fn the_background_part_is_the_box_text_draw_fills() {
 }
 
 #[test]
+fn padding_alone_gives_the_same_background_part_without_painting_it() {
+    let padded = r##", "anchor": "top-left", "background-padding": [3, 5, 3, 5]"##;
+    let filled = format!(r##"{padded}, "background-color": "#ff0000""##);
+    let (bare, raster) = run(
+        &recipe(padded, ""),
+        TileId { z: 0, x: 0, y: 0 },
+        &[("src.pts", layer(vec![point("HH", 1024, 1024)]))],
+    );
+    let bare = boxes(&bare);
+    let filled = boxes(&run_centre(
+        &recipe(&filled, ""),
+        vec![point("HH", 1024, 1024)],
+    ));
+    // Every part matches the coloured label's, the background included.
+    for part in ["text", "background", "collision"] {
+        let (b, f) = (of_part(&bare, part), of_part(&filled, part));
+        assert_eq!(b.len(), 1, "{part}");
+        assert!(
+            close(b[0].bounds(), f[0].bounds()),
+            "{part}: {:?} vs {:?}",
+            b[0].bounds(),
+            f[0].bounds()
+        );
+    }
+    // `text-draw` paints no box: nothing red.
+    assert!(
+        pixel_bounds(&raster, |p| p[0] == 255 && p[1] < 255 && p[2] == 0).is_none(),
+        "an unpainted box"
+    );
+}
+
+#[test]
 fn include_all_adds_the_candidates_that_lost_unplaced() {
     // Two boxed labels close enough that only one places.
     let feats = || vec![point("I", 1536, 2048), point("I", 2560, 2048)];

@@ -37,7 +37,8 @@ enum Part {
     Text,
     /// A point symbol's icon, rotated by `icon-rotate`.
     Icon,
-    /// The box `background-color` draws behind a point label.
+    /// A point label's background box (`background-padding` and/or
+    /// `background-color`), painted or not.
     Background,
     /// One glyph of a line label, rotated along the path.
     Glyph,
@@ -420,7 +421,7 @@ impl NodeFactory for LabelBoxesFactory {
                 .into(),
         );
         serde_json::json!({
-            "description": "The boxes a `label-placement` node measured its labels by, as polygons — one per box — so any geometry and paint op can draw them: a bordered or rounded badge (`buffer` → `stroke`), an offset shadow (`transform`), or a debug overlay of placement. Reads the decisions already made, so nothing is placed twice and the boxes match what `text-draw` draws; labels placed from a neighbour tile's candidates are included, so boxes continue across tile edges. Each polygon carries the labelled feature's properties plus `part` (`text`, `icon`, `background`, `glyph` or `collision`), `placed` (false for a candidate that lost its collision test, with `include: all`) and `label-id` (shared by every box of one label, the same on every tile). A point label gives its `text` block (no padding), `icon` (rotated by `icon-rotate`), `background` box (with `background-color`) and the `collision` box or boxes it was tested with, padding included. A line label gives one `glyph` quad per glyph, rotated along the path, and the axis-aligned `collision` box placement tested for each glyph.",
+            "description": "The boxes a `label-placement` node measured its labels by, as polygons — one per box — so any geometry and paint op can draw them: a bordered or rounded badge (`buffer` → `stroke`), an offset shadow (`transform`), or a debug overlay of placement. Reads the decisions already made, so nothing is placed twice and the boxes match what `text-draw` draws; labels placed from a neighbour tile's candidates are included, so boxes continue across tile edges. Each polygon carries the labelled feature's properties plus `part` (`text`, `icon`, `background`, `glyph` or `collision`), `placed` (false for a candidate that lost its collision test, with `include: all`) and `label-id` (shared by every box of one label, the same on every tile). A point label gives its `text` block (no padding), `icon` (rotated by `icon-rotate`), `background` box (with `background-padding` or `background-color`) and the `collision` box or boxes it was tested with, padding included. A line label gives one `glyph` quad per glyph, rotated along the path, and the axis-aligned `collision` box placement tested for each glyph.",
             "properties": {
                 "placement": schema_frag::node_ref(),
                 "labels": labels,

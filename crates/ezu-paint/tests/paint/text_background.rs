@@ -214,6 +214,40 @@ fn the_box_is_the_collision_box() {
 }
 
 #[test]
+fn padding_without_a_colour_makes_an_unpainted_box_that_still_anchors_and_collides() {
+    // Anchoring: the text sits where it does inside a coloured box, and
+    // nothing but the glyphs draws.
+    let feats = || vec![point("HH", 2048, 2048)];
+    for shared in [false, true] {
+        let anchored = r##", "anchor": "top-left", "background-padding": [3, 6, 3, 6]"##;
+        let bare = render(&recipe(anchored, shared), feats());
+        let filled = render(
+            &recipe(
+                &format!(r##"{anchored}, "background-color": "#ff0000""##),
+                shared,
+            ),
+            feats(),
+        );
+        let g = glyphs(&bare).expect("the text draws");
+        assert_eq!(drawn(&bare), Some(g), "shared {shared}: only glyphs draw");
+        assert_eq!(Some(g), glyphs(&filled), "shared {shared}: same text spot");
+    }
+
+    // Collision: the unpainted boxes overlap just as coloured ones do.
+    let feats = || vec![point("I", 1536, 2048), point("I", 2560, 2048)];
+    let r = render(
+        &recipe(r##", "background-padding": [0, 8, 0, 8]"##, false),
+        feats(),
+    );
+    let left = (0..r.height).any(|y| r.pixel(24, y)[3] > 0);
+    let right = (0..r.height).any(|y| r.pixel(40, y)[3] > 0);
+    assert!(
+        left != right,
+        "only one padded label places: {left} {right}"
+    );
+}
+
+#[test]
 fn a_radius_rounds_the_box_corners() {
     let feats = || vec![point("HH", 2048, 2048)];
     let boxed = |radius: &str| {
