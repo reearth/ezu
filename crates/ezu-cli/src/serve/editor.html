@@ -1072,7 +1072,11 @@
           slider.type = 'range';
           slider.min = decl.minimum;
           slider.max = decl.maximum;
-          slider.step = (decl.maximum - decl.minimum) / 100;
+          // A power of ten giving at least 100 stops across the range, so
+          // the stops land on round numbers — the declared default among
+          // them — instead of on hundredths of the span.
+          const span = decl.maximum - decl.minimum;
+          slider.step = span > 0 ? 10 ** Math.floor(Math.log10(span / 100)) : 'any';
           slider.value = cur;
           slider.addEventListener('input', () => {
             const n = Number(slider.value);
