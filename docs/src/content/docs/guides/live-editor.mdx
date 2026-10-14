@@ -37,9 +37,10 @@ curl 'http://127.0.0.1:8080/tiles/13/7276/3225.png?paper=%23ffe0f0&softness=2'
 
 ## Editing features worth knowing
 
-- **Params panel** — controls generated from the style's `params` block: sliders
-  for bounded numbers, colour pickers, toggles. `reset` returns to the declared
-  defaults. Each colour has a hex field beside its swatch, so a value can be
+- **Params panel** — controls generated from the style's `params` block: a
+  number field for every number (with a slider under it when both `min` and
+  `max` are set), colour pickers, toggles. A typed number outside `min`/`max` is
+  pulled back to the nearest bound. `reset` returns to the declared defaults. Each colour has a hex field beside its swatch, so a value can be
   pasted in from anywhere it was picked and copied back out — clicking the field
   selects it. CSS shorthand is understood on the way in (`#fff`, `#fffa`, and
   either without the `#`) and expanded to the `#rrggbb` / `#rrggbbaa` the spec

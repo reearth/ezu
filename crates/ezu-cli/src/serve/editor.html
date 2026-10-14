@@ -73,9 +73,8 @@
   .param-row .head { display: flex; align-items: center; gap: 6px; }
   .param-row .pname { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: #382a1f; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .param-row .pname.changed { color: #387a45; font-weight: 600; }
-  .param-row .pval { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; color: #6a5040; }
   .param-row input[type=range] { width: 100%; accent-color: #5a4636; margin: 0; }
-  .param-row input[type=number] { width: 80px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; padding: 2px 4px; border: 1px solid #d8d2bf; border-radius: 3px; background: #fff; color: #382a1f; }
+  .param-row input[type=number] { width: 72px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; padding: 2px 4px; border: 1px solid #d8d2bf; border-radius: 3px; background: #fff; color: #382a1f; }
   .param-row input[type=color] { width: 36px; height: 22px; padding: 0; border: 1px solid #d8d2bf; border-radius: 3px; background: #fff; cursor: pointer; }
   .param-row .colorbox { display: flex; align-items: center; gap: 6px; }
   .param-row .phex { flex: 1; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; padding: 2px 4px; border: 1px solid #d8d2bf; border-radius: 3px; background: #fff; color: #382a1f; }
@@ -1055,31 +1054,54 @@
 
       if (decl.type === 'number') {
         const cur = paramOverrides.has(name) ? Number(paramOverrides.get(name)) : Number(decl.default ?? 0);
-        const val = document.createElement('span');
-        val.className = 'pval';
-        val.textContent = fmtNum(cur);
-        head.appendChild(val);
-        row.appendChild(head);
         const bounded = typeof decl.minimum === 'number' && typeof decl.maximum === 'number';
-        const input = document.createElement('input');
+        // A typed-in field for every number. A bounded one also gets a
+        // slider under it; the two follow each other.
+        const field = document.createElement('input');
+        field.type = 'number';
+        field.className = 'pval';
+        if (typeof decl.minimum === 'number') field.min = decl.minimum;
+        if (typeof decl.maximum === 'number') field.max = decl.maximum;
+        field.step = 'any';
+        field.value = fmtNum(cur);
+        head.appendChild(field);
+        row.appendChild(head);
+        let slider = null;
         if (bounded) {
-          input.type = 'range';
-          input.min = decl.minimum;
-          input.max = decl.maximum;
-          input.step = (decl.maximum - decl.minimum) / 100;
-        } else {
-          input.type = 'number';
-          if (typeof decl.minimum === 'number') input.min = decl.minimum;
-          if (typeof decl.maximum === 'number') input.max = decl.maximum;
+          slider = document.createElement('input');
+          slider.type = 'range';
+          slider.min = decl.minimum;
+          slider.max = decl.maximum;
+          slider.step = (decl.maximum - decl.minimum) / 100;
+          slider.value = cur;
+          slider.addEventListener('input', () => {
+            const n = Number(slider.value);
+            field.value = fmtNum(n);
+            setOverride(String(n), n === Number(decl.default));
+          });
+          row.appendChild(slider);
         }
-        input.value = cur;
-        input.addEventListener('input', () => {
-          const n = Number(input.value);
+        // The tile server rejects a value outside the declared range, so
+        // a typed one is pulled back inside it before it is sent.
+        const clamp = (n) => {
+          if (typeof decl.minimum === 'number' && n < decl.minimum) return decl.minimum;
+          if (typeof decl.maximum === 'number' && n > decl.maximum) return decl.maximum;
+          return n;
+        };
+        field.addEventListener('input', () => {
+          // Half-typed text (`-`, `1e`) is not a number yet; wait for it.
+          if (field.value.trim() === '') return;
+          const n = Number(field.value);
           if (!Number.isFinite(n)) return;
-          val.textContent = fmtNum(n);
-          setOverride(String(n), n === Number(decl.default));
+          const c = clamp(n);
+          if (slider) slider.value = c;
+          setOverride(String(c), c === Number(decl.default));
         });
-        row.appendChild(input);
+        field.addEventListener('change', () => {
+          const n = Number(paramOverrides.has(name) ? paramOverrides.get(name) : decl.default ?? 0);
+          field.value = fmtNum(n);
+        });
+        field.addEventListener('focus', () => field.select());
       } else if (decl.format === 'color') {
         row.appendChild(head);
         // A swatch to pick with, and a hex field to paste into and copy
