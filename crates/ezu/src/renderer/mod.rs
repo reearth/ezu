@@ -47,6 +47,29 @@
 //! - `geojson` → *remote* GeoJSON only, projected per tile at render
 //!   time (cleared by `clear_sources`). Inline `data` needs no binding.
 //!
+//! The binding table is state a host has to reset between tiles, and it
+//! decodes each payload every time it is bound. The tile-scoped kinds can
+//! instead be loaded once and handed to each render explicitly: a
+//! [`SourceData`] from [`Renderer::load_source`] is a decoded payload, a
+//! [`SourceSet`] is what one render reads, and
+//! [`Renderer::render_tile_with`] renders from a set without touching the
+//! table — so one tile's data serves as its neighbours' neighbour too, and
+//! renders on several threads can share one `&Renderer`.
+//!
+//! ```no_run
+//! # use ezu::renderer::{BindOptions, RenderOptions, Renderer, SourceSet};
+//! # fn fetch_mvt(z: u8, x: u32, y: u32) -> Vec<u8> { unimplemented!() }
+//! # fn main() -> Result<(), ezu::renderer::Error> {
+//! # let style_json = "";
+//! let r = Renderer::new(style_json)?;
+//! let data = r.load_source("basemap", &fetch_mvt(12, 1, 2))?;
+//! let mut set = SourceSet::new();
+//! set.bind(&data, &BindOptions::default())?;
+//! let png = r.render_tile_with(12, 1, 2, &set, RenderOptions::default())?;
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! This host cannot fetch anything itself, so everything a render needs
 //! must be bound before it: [`Renderer::requested_neighbor_offsets`]
 //! names the neighbour tiles, and [`Renderer::needed_codepoints`] the
@@ -58,12 +81,16 @@
 mod error;
 mod frame;
 mod options;
+mod source_set;
 mod sources;
 
 pub use error::{Error, ErrorKind};
 pub use frame::{FrameBinder, RenderFrameError};
 pub use options::{BindOptions, OutputFormat, RenderOptions};
+pub use source_set::{SourceData, SourceSet};
 pub use sources::{SourceInfo, SourceKind};
+
+use source_set::Payload;
 
 /// Print-frame geometry, re-exported so a shell needs this crate and
 /// nothing under it. See [`Renderer::compute_frame`] and
@@ -102,41 +129,6 @@ fn err(kind: ErrorKind, e: impl std::fmt::Display) -> Error {
     Error::new(kind, e)
 }
 
-/// Pending tile bytes for a single named source. MVT bytes are
-/// validated at bind time (we attempt a decode and discard the
-/// result) so errors surface immediately, but we keep the raw bytes
-/// because `DecodedTile` isn't `Clone` and rendering wants to bind
-/// freshly. DEM stays as raw bytes per `(dx, dy)` neighbour offset
-/// until render time, when the centre tile id is known.
-enum SourceBinding {
-    /// Raw MVT bytes per `(dx, dy)` neighbour offset. The centre tile is
-    /// `coord: (0, 0)` (default); neighbours feed cross-tile label
-    /// collision and are bound under `@dx,dy` names at render time.
-    /// Re-decoded at render because `DecodedTile` isn't Clone.
-    Mvt(HashMap<(i32, i32), BoundBytes>),
-    Dem(HashMap<(i32, i32), BoundBytes>),
-    /// RGBA imagery tiles per `(dx, dy)` neighbour offset, decoded +
-    /// stitched at render time like DEM.
-    Raster(HashMap<(i32, i32), BoundBytes>),
-    /// Raw GeoJSON bytes (WGS84 lon/lat) per `(dx, dy)` neighbour offset,
-    /// projected into each tile frame at render time. Only needed for
-    /// *remote* geojson; inline `data` is read straight from the document.
-    GeoJson(HashMap<(i32, i32), Vec<u8>>),
-}
-
-/// One bound tile payload and, when the host is overzooming, the zoom the
-/// bytes are natively encoded at. Shared by every tile-scoped source kind
-/// — vector geometry is reprojected, DEM and imagery are resampled, but
-/// the host states the same thing in the same way for all of them.
-struct BoundBytes {
-    bytes: Vec<u8>,
-    /// `Some(z)` when these bytes belong to an ancestor of the tile being
-    /// rendered — a source that stops at `maxzoom` while the host serves
-    /// deeper tiles. `None` means the bytes are already in the requested
-    /// tile's frame, which is the ordinary case.
-    source_zoom: Option<u8>,
-}
-
 /// Payload sizes of what a renderer is holding, so a host can shed load
 /// *before* an allocation fails rather than after.
 ///
@@ -171,9 +163,10 @@ pub struct Renderer {
     graph: Arc<Graph>,
     cache: Arc<Cache>,
     assets: BrushBankLoader,
-    /// Pending source bindings, keyed by the `sources.<name>` entry in
-    /// the style. Cleared by [`Renderer::clear_sources`].
-    bindings: HashMap<String, SourceBinding>,
+    /// What `bind_source` has bound for the next `render_tile`: the set
+    /// `render_tile_with` would be handed, kept here for hosts that bind
+    /// and clear. Cleared by [`Renderer::clear_sources`].
+    bindings: SourceSet,
     /// Ceiling on resident glyph bytes per fontstack, applied after each
     /// render. `None` (the default) keeps every bound range.
     glyph_budget: Option<usize>,
@@ -191,7 +184,7 @@ impl Renderer {
             graph: Arc::new(graph),
             cache: Arc::new(Cache::new()),
             assets: BrushBankLoader::new(),
-            bindings: HashMap::new(),
+            bindings: SourceSet::new(),
             glyph_budget: None,
             tile_size_override: None,
         })
@@ -343,7 +336,7 @@ impl Renderer {
         self.doc
             .sources
             .keys()
-            .filter(|n| self.bindings.contains_key(n.as_str()))
+            .filter(|n| self.bindings.contains(n))
             .cloned()
             .collect()
     }
@@ -408,74 +401,29 @@ impl Renderer {
                     .map_err(|e| err(MvtDecode, format!("image decode: {e}")))?;
                 self.assets.insert_image(src_key, raster);
             }
-            SourceDecl::Mvt(_) | SourceDecl::Pmtiles(_) => {
-                // Validate now so a malformed payload fails at bind
-                // time rather than render time — we toss the result and
-                // re-decode at render since `DecodedTile` isn't Clone.
-                let _ = ezu_features::mvt::decode(&bytes).map_err(|e| err(MvtDecode, e))?;
-                let entry = self
-                    .bindings
-                    .entry(name.to_string())
-                    .or_insert_with(|| SourceBinding::Mvt(HashMap::new()));
-                let SourceBinding::Mvt(map) = entry else {
-                    return Err(already_bound_otherwise(name));
-                };
-                map.insert(
-                    opts.coord,
-                    BoundBytes {
-                        bytes,
-                        source_zoom: opts.source_zoom,
-                    },
-                );
+            // Vector tiles and remote GeoJSON decode here, once, and the
+            // render binds what was decoded. (Inline GeoJSON `data` needs
+            // no bind — it's read from the document at render time.)
+            SourceDecl::Mvt(_) | SourceDecl::Pmtiles(_) | SourceDecl::GeoJson(_) => {
+                let data = self.load_source(name, &bytes)?;
+                self.bindings.bind(&data, opts)?;
             }
-            SourceDecl::Dem(_) => {
-                let entry = self
-                    .bindings
-                    .entry(name.to_string())
-                    .or_insert_with(|| SourceBinding::Dem(HashMap::new()));
-                let SourceBinding::Dem(map) = entry else {
-                    return Err(already_bound_otherwise(name));
+            // DEM and imagery bytes stay raw until the render, as they
+            // always have here: their decode errors surface from
+            // `render_tile` and name the tile, which callers rely on.
+            // `load_source` is the way to decode them up front.
+            SourceDecl::Dem(_) | SourceDecl::Raster(_) => {
+                let bytes: Arc<[u8]> = bytes.into();
+                let payload = if matches!(decl, SourceDecl::Dem(_)) {
+                    Payload::DemBytes(bytes)
+                } else {
+                    Payload::RasterBytes(bytes)
                 };
-                map.insert(
-                    opts.coord,
-                    BoundBytes {
-                        bytes,
-                        source_zoom: opts.source_zoom,
-                    },
-                );
-            }
-            SourceDecl::Raster(_) => {
-                let entry = self
-                    .bindings
-                    .entry(name.to_string())
-                    .or_insert_with(|| SourceBinding::Raster(HashMap::new()));
-                let SourceBinding::Raster(map) = entry else {
-                    return Err(already_bound_otherwise(name));
+                let data = SourceData {
+                    name: name.into(),
+                    payload,
                 };
-                map.insert(
-                    opts.coord,
-                    BoundBytes {
-                        bytes,
-                        source_zoom: opts.source_zoom,
-                    },
-                );
-            }
-            // Remote GeoJSON: the host fetched the document and hands the
-            // raw bytes here. (Inline `data` needs no bind — it's read from
-            // the document at render time.) Stored tile-scoped; projected per
-            // tile when the render runs.
-            SourceDecl::GeoJson(_) => {
-                // Validate now so malformed bytes fail at bind time.
-                serde_json::from_slice::<serde_json::Value>(&bytes)
-                    .map_err(|e| err(GeoJsonDecode, e))?;
-                let entry = self
-                    .bindings
-                    .entry(name.to_string())
-                    .or_insert_with(|| SourceBinding::GeoJson(HashMap::new()));
-                let SourceBinding::GeoJson(map) = entry else {
-                    return Err(already_bound_otherwise(name));
-                };
-                map.insert(opts.coord, bytes);
+                self.bindings.bind(&data, opts)?;
             }
             // Sprite: the host provides the atlas image as `bytes`. The index
             // is either inline in the document or supplied as `opts.index` (the
@@ -531,6 +479,84 @@ impl Renderer {
             }
         }
         Ok(())
+    }
+
+    /// Decode a tile-scoped source's bytes — `mvt`, `pmtiles`, `dem`,
+    /// `raster`, or remote `geojson` — into a [`SourceData`] that any
+    /// number of [`SourceSet`]s can bind without decoding it again.
+    ///
+    /// Nothing on the renderer changes, so loading is safe from several
+    /// threads at once. A host that renders a block of tiles loads each
+    /// tile it fetched once and binds it into the set of every tile it
+    /// borders, rather than decoding it as the centre of one and again as
+    /// a neighbour of each of the others.
+    ///
+    /// Fails with [`ErrorKind::UnknownSource`] if `name` is not declared or
+    /// is a kind that binds into the renderer itself (brush, image, sprite,
+    /// font, glyphs — those go through [`bind_source`](Self::bind_source));
+    /// with the matching decode kind if the payload does not parse. Unlike
+    /// `bind_source`, a DEM or imagery payload that does not decode fails
+    /// here and not at render, and the message names the source rather
+    /// than a tile, since no tile is known yet.
+    pub fn load_source(&self, name: &str, bytes: &[u8]) -> Result<SourceData, Error> {
+        let decl = self
+            .doc
+            .sources
+            .get(name)
+            .ok_or_else(|| err(UnknownSource, format!("no source `{name}` in style")))?;
+        let payload = match decl {
+            SourceDecl::Mvt(_) | SourceDecl::Pmtiles(_) => {
+                let tile = ezu_features::mvt::decode(bytes).map_err(|e| err(MvtDecode, e))?;
+                Payload::Mvt(tile.layers.into_iter().map(Arc::new).collect())
+            }
+            SourceDecl::Dem(spec) => {
+                // The tile id only names the tile in an error message, and
+                // `Decode` carries it separately, so drop it from the one
+                // reported here.
+                let t = decode_dem_tile(bytes, spec.encoding, 0, 0, 0).map_err(|e| match e {
+                    ezu_paint::host::DemDecodeError::Decode { msg, .. } => {
+                        err(DemDecode, format!("source `{name}`: {msg}"))
+                    }
+                })?;
+                Payload::Dem(Arc::new(t), spec.encoding)
+            }
+            SourceDecl::Raster(_) => {
+                let buf = ezu_paint::host::decode_image_bytes(bytes)
+                    .map_err(|e| err(RasterDecode, format!("source `{name}`: {e}")))?;
+                if buf.width != buf.height {
+                    return Err(err(
+                        RasterDecode,
+                        format!(
+                            "source `{name}`: non-square tile {}x{}",
+                            buf.width, buf.height
+                        ),
+                    ));
+                }
+                Payload::Raster(Arc::new(RasterTile {
+                    size: buf.width,
+                    pixels: buf.pixels,
+                }))
+            }
+            SourceDecl::GeoJson(_) => {
+                let doc: serde_json::Value =
+                    serde_json::from_slice(bytes).map_err(|e| err(GeoJsonDecode, e))?;
+                Payload::GeoJson(Arc::new(doc))
+            }
+            other => {
+                let kind = SourceInfo::new(name, other).kind.name();
+                return Err(err(
+                    UnknownSource,
+                    format!(
+                        "source `{name}` is a `{kind}`, which is bound into the renderer \
+                         itself with bind_source rather than loaded per tile"
+                    ),
+                ));
+            }
+        };
+        Ok(SourceData {
+            name: name.into(),
+            payload,
+        })
     }
 
     /// The tile a host should actually fetch from `name` in order to draw
@@ -630,7 +656,13 @@ impl Renderer {
     /// the letters around it call for, and those shapes live in
     /// U+FB50‥U+FDFF and U+FE70‥U+FEFF.
     pub fn needed_codepoints(&self) -> Result<BTreeMap<&str, Vec<u32>>, Error> {
-        self.needed_glyph_units(|cp| cp)
+        Ok(self.needed_glyph_units(&self.bindings, |cp| cp))
+    }
+
+    /// [`needed_codepoints`](Self::needed_codepoints) for the features in
+    /// `set` rather than the ones bound to the renderer.
+    pub fn needed_codepoints_in(&self, set: &SourceSet) -> BTreeMap<&str, Vec<u32>> {
+        self.needed_glyph_units(set, |cp| cp)
     }
 
     /// Glyph ranges the currently bound features can require, per glyphs
@@ -646,7 +678,13 @@ impl Renderer {
     /// see the same set of codepoints and carry the same
     /// over-approximation caveat.
     pub fn needed_glyph_ranges(&self) -> Result<BTreeMap<&str, Vec<u32>>, Error> {
-        self.needed_glyph_units(|cp| cp & !0xFF)
+        Ok(self.needed_glyph_units(&self.bindings, |cp| cp & !0xFF))
+    }
+
+    /// [`needed_glyph_ranges`](Self::needed_glyph_ranges) for the features
+    /// in `set` rather than the ones bound to the renderer.
+    pub fn needed_glyph_ranges_in(&self, set: &SourceSet) -> BTreeMap<&str, Vec<u32>> {
+        self.needed_glyph_units(set, |cp| cp & !0xFF)
     }
 
     /// What this renderer is holding, in bytes.
@@ -693,7 +731,7 @@ impl Renderer {
         y: u32,
         opts: RenderOptions,
     ) -> Result<Vec<u8>, Error> {
-        let out = self.render_with_bindings(z, x, y, opts);
+        let out = self.render_tile_with(z, x, y, &self.bindings, opts);
         // Trim here rather than at bind time: this tile is done with its
         // glyphs, so dropping the coldest ranges now cannot cost it any.
         // A failed render trims too — it held the same glyphs.
@@ -701,9 +739,35 @@ impl Renderer {
         out
     }
 
-    /// Bring every bound fontstack back under the glyph budget. A no-op
-    /// until a host sets one with `set_glyph_budget`.
-    fn trim_glyphs(&self) {
+    /// Render a single tile from the tile-scoped data in `set`, ignoring
+    /// whatever [`bind_source`](Self::bind_source) has bound for
+    /// [`render_tile`](Self::render_tile).
+    ///
+    /// It reads `set` and the renderer's style and asset banks and changes
+    /// nothing but the render cache, which is locked internally, so renders
+    /// of different tiles can run on several threads over one `&Renderer`.
+    /// It does not apply [`set_glyph_budget`](Self::set_glyph_budget):
+    /// trimming while another thread is rendering could drop glyphs that
+    /// render was bound with, so a host with a budget calls
+    /// [`trim_glyphs`](Self::trim_glyphs) once its renders are done.
+    pub fn render_tile_with(
+        &self,
+        z: u8,
+        x: u32,
+        y: u32,
+        set: &SourceSet,
+        opts: RenderOptions,
+    ) -> Result<Vec<u8>, Error> {
+        self.render_from(z, x, y, set, opts)
+    }
+
+    /// Bring every bound fontstack back under the
+    /// [glyph budget](Self::set_glyph_budget). A no-op until a host sets
+    /// one. [`render_tile`](Self::render_tile) does this after each
+    /// render; a host rendering with
+    /// [`render_tile_with`](Self::render_tile_with) calls it when no render
+    /// is running.
+    pub fn trim_glyphs(&self) {
         if self.glyph_budget.is_none() {
             return;
         }
@@ -718,43 +782,40 @@ impl Renderer {
         }
     }
 
-    /// Decode every bound MVT source once, centre and neighbours alike,
-    /// for inspection ahead of a render.
-    fn decode_bound_features(&self) -> Result<Vec<(&str, ezu_features::mvt::DecodedTile)>, Error> {
-        let mut out = Vec::new();
-        for (name, binding) in &self.bindings {
-            let SourceBinding::Mvt(byte_map) = binding else {
-                continue;
-            };
-            for payload in byte_map.values() {
-                let tile =
-                    ezu_features::mvt::decode(&payload.bytes).map_err(|e| err(MvtDecode, e))?;
-                out.push((name.as_str(), tile));
-            }
-        }
-        Ok(out)
-    }
-
-    /// Shared body of the two prepass calls: the needed codepoints per
-    /// glyphs source, mapped through `unit` (identity, or the range
-    /// start containing it) and deduped.
-    fn needed_glyph_units(&self, unit: fn(u32) -> u32) -> Result<BTreeMap<&str, Vec<u32>>, Error> {
+    /// Shared body of the prepass calls: the needed codepoints per glyphs
+    /// source, for the features in `set`, mapped through `unit` (identity,
+    /// or the range start containing it) and deduped.
+    fn needed_glyph_units(
+        &self,
+        set: &SourceSet,
+        unit: fn(u32) -> u32,
+    ) -> BTreeMap<&str, Vec<u32>> {
         let mut out = BTreeMap::new();
-        for (source, codepoints) in self.needed_codepoints_by_source()? {
+        for (source, codepoints) in self.needed_codepoints_by_source(set) {
             let mut units: Vec<u32> = codepoints.into_iter().map(unit).collect();
             units.dedup();
             out.insert(source, units);
         }
-        Ok(out)
+        out
     }
 
     /// Glyphs source name → the BMP codepoints its fontstacks can be
     /// asked to shape, over-approximated as documented on
     /// [`needed_glyph_ranges`](Self::needed_glyph_ranges).
-    fn needed_codepoints_by_source(&self) -> Result<BTreeMap<&str, BTreeSet<u32>>, Error> {
+    fn needed_codepoints_by_source(&self, set: &SourceSet) -> BTreeMap<&str, BTreeSet<u32>> {
         let mut needed: BTreeMap<&str, BTreeSet<u32>> = BTreeMap::new();
 
-        let decoded = self.decode_bound_features()?;
+        // Every bound vector tile, centre and neighbours alike.
+        let decoded: Vec<(&str, &[Arc<ezu_features::FeatureLayer>])> = set
+            .entries
+            .iter()
+            .flat_map(|(name, slots)| {
+                slots.values().filter_map(move |p| match &p.data.payload {
+                    Payload::Mvt(layers) => Some((&**name, &**layers)),
+                    _ => None,
+                })
+            })
+            .collect();
         for spec in self.doc.nodes.values() {
             let Some(stacks) = glyph_source_names(&self.doc, &spec.fields) else {
                 continue;
@@ -773,11 +834,11 @@ impl Renderer {
             if !props.is_empty() {
                 let source = spec.fields.get("source").and_then(|v| v.as_str());
                 let layer = spec.fields.get("layer").and_then(|v| v.as_str());
-                for (bound_source, tile) in &decoded {
-                    if source.is_some_and(|s| s != *bound_source) {
+                for &(bound_source, layers) in &decoded {
+                    if source.is_some_and(|s| s != bound_source) {
                         continue;
                     }
-                    for l in &tile.layers {
+                    for l in layers {
                         if layer.is_some_and(|want| want != l.name) {
                             continue;
                         }
@@ -795,16 +856,17 @@ impl Renderer {
                 needed.entry(stack).or_default().extend(codepoints.iter());
             }
         }
-        Ok(needed)
+        needed
     }
 
-    /// Reads pending source bindings from `self.bindings` and dispatches
-    /// each based on its declared kind in the style.
-    fn render_with_bindings(
+    /// Binds each payload in `set` to a per-render loader, dispatching on
+    /// the source's declared kind in the style, and renders.
+    fn render_from(
         &self,
         z: u8,
         x: u32,
         y: u32,
+        set: &SourceSet,
         opts: RenderOptions,
     ) -> Result<Vec<u8>, Error> {
         let tile_size = opts.tile_size.unwrap_or(self.render_tile_size());
@@ -840,12 +902,7 @@ impl Renderer {
             if on_missing != OnMissing::Error || !requested.contains(name.as_str()) {
                 continue;
             }
-            let has_centre = match self.bindings.get(name) {
-                Some(SourceBinding::Dem(m)) | Some(SourceBinding::Raster(m)) => {
-                    m.contains_key(&(0, 0))
-                }
-                _ => false,
-            };
+            let has_centre = set.get(name).is_some_and(|m| m.contains_key(&(0, 0)));
             if !has_centre {
                 return Err(err(
                     UnknownSource,
@@ -867,11 +924,13 @@ impl Renderer {
         // `requested_neighbor_offsets` names.
         let world = 1i64 << z.min(30);
         for (name, decl) in &self.doc.sources {
-            let bound = match self.bindings.get(name) {
-                Some(SourceBinding::Dem(m)) | Some(SourceBinding::Raster(m)) => m,
-                // Vector neighbours are collision candidates, not pixels;
-                // binding only the centre is a documented degrade.
-                _ => continue,
+            // Vector neighbours are collision candidates, not pixels;
+            // binding only the centre is a documented degrade.
+            if !matches!(decl, SourceDecl::Dem(_) | SourceDecl::Raster(_)) {
+                continue;
+            }
+            let Some(bound) = set.get(name) else {
+                continue;
             };
             let wanted = ezu_paint::host::source_neighbor_offsets(decl, &requested, name);
             // A row off the top or bottom of the world has no tile to
@@ -894,112 +953,156 @@ impl Renderer {
             }
         }
 
-        for (name, binding) in &self.bindings {
-            match binding {
-                SourceBinding::Mvt(byte_map) => {
+        let here = CoreTileId::new(z, x, y);
+        for (name, slots) in &set.entries {
+            let name: &str = name;
+            // Dispatch on what the active style declares, not on what was
+            // loaded: data loaded under another style may not match it.
+            let Some(decl) = self.doc.sources.get(name) else {
+                return Err(err(
+                    UnknownSource,
+                    format!("source `{name}` is bound but not declared in the active style"),
+                ));
+            };
+            let mismatch = || {
+                err(
+                    UnknownSource,
+                    format!(
+                        "source `{name}` was loaded as another kind than the active style \
+                         declares it; load it again under this style"
+                    ),
+                )
+            };
+            match decl {
+                SourceDecl::Mvt(_) | SourceDecl::Pmtiles(_) => {
                     // Below the source's `min-zoom` it has nothing to show.
-                    let min_zoom = self.doc.sources.get(name).and_then(SourceDecl::min_zoom);
-                    if min_zoom.is_some_and(|mz| z < mz) {
+                    if decl.min_zoom().is_some_and(|mz| z < mz) {
                         continue;
                     }
                     // Centre under `<source>.<layer>`, any neighbours the
                     // host bound under `@dx,dy` (cross-tile collision). A
                     // host binding only the centre degrades to centre-only
                     // collision at borders — no error.
-                    for (&(dx, dy), payload) in byte_map {
-                        let mut decoded = ezu_features::mvt::decode(&payload.bytes)
-                            .map_err(|e| err(MvtDecode, e))?;
-                        // Overzoom: the bytes are an ancestor's, so put
-                        // their geometry into this tile's frame first.
-                        // Each neighbour resolves against its own
-                        // ancestor, which may or may not be the centre's.
-                        let here = CoreTileId::new(tile_id.z, tile_id.x, tile_id.y);
-                        let oz = resolve_overzoom(here, dx, dy, payload.source_zoom)
+                    for (&(dx, dy), placed) in slots {
+                        let Payload::Mvt(layers) = &placed.data.payload else {
+                            return Err(mismatch());
+                        };
+                        // Overzoom: the data is an ancestor's, so put its
+                        // geometry into this tile's frame first. Each
+                        // neighbour resolves against its own ancestor,
+                        // which may or may not be the centre's.
+                        let oz = resolve_overzoom(here, dx, dy, placed.source_zoom)
                             .map_err(|e| err(UnknownSource, e))?;
-                        if let Some((ancestor, _)) = oz.from {
-                            decoded = ezu_features::mvt::clip_to_descendant(
-                                &decoded, ancestor, oz.target,
-                            )
-                            .map_err(|e| err(MvtDecode, e))?;
+                        match oz.from {
+                            Some((ancestor, shift)) => {
+                                let clipped = layers
+                                    .iter()
+                                    .map(|l| {
+                                        ezu_features::mvt::clip_layer_to_descendant(
+                                            l, ancestor, oz.target,
+                                        )
+                                        .map(Arc::new)
+                                    })
+                                    .collect::<Result<Vec<_>, _>>()
+                                    .map_err(|e| err(MvtDecode, e))?;
+                                tile_loader.bind_mvt_layers(name, dx, dy, clipped, shift);
+                            }
+                            // The same layers every render that binds this
+                            // data shares, uncopied.
+                            None => {
+                                tile_loader.bind_mvt_layers(
+                                    name,
+                                    dx,
+                                    dy,
+                                    layers.iter().cloned(),
+                                    0,
+                                );
+                            }
                         }
-                        tile_loader.bind_mvt_neighbor(name, dx, dy, decoded);
                     }
                 }
-                SourceBinding::Dem(byte_map) => {
-                    let encoding = match self.doc.sources.get(name) {
-                        Some(SourceDecl::Dem(spec)) => spec.encoding,
-                        _ => {
-                            return Err(err(
-                                UnknownSource,
-                                format!("source `{name}` is no longer a DEM in the active style"),
-                            ));
-                        }
-                    };
-                    let elevation_offset = match self.doc.sources.get(name) {
-                        Some(SourceDecl::Dem(spec)) => spec.elevation_offset,
-                        _ => 0.0,
-                    };
-                    let here = CoreTileId::new(z, x, y);
-                    let mut decoded: HashMap<(i32, i32), DemTile> =
-                        HashMap::with_capacity(byte_map.len());
-                    for (&(dx, dy), payload) in byte_map {
-                        let oz = resolve_overzoom(here, dx, dy, payload.source_zoom)
+                SourceDecl::Dem(spec) => {
+                    let mut tiles: HashMap<(i32, i32), Arc<DemTile>> =
+                        HashMap::with_capacity(slots.len());
+                    for (&(dx, dy), placed) in slots {
+                        let oz = resolve_overzoom(here, dx, dy, placed.source_zoom)
                             .map_err(|e| err(UnknownSource, e))?;
-                        // Decode errors name the tile the host actually
-                        // fetched, which under overzoom is the ancestor.
-                        let src = oz.from.map_or(oz.target, |(a, _)| a);
-                        let t = decode_dem_tile(&payload.bytes, encoding, src.z, src.x, src.y)
-                            .map_err(|e| err(DemDecode, e))?;
+                        let t = match &placed.data.payload {
+                            Payload::Dem(t, encoding) if *encoding == spec.encoding => t.clone(),
+                            Payload::DemBytes(bytes) => {
+                                // Decode errors name the tile the host
+                                // actually fetched, which under overzoom is
+                                // the ancestor.
+                                let src = oz.from.map_or(oz.target, |(a, _)| a);
+                                let t = decode_dem_tile(bytes, spec.encoding, src.z, src.x, src.y)
+                                    .map_err(|e| err(DemDecode, e))?;
+                                Arc::new(t)
+                            }
+                            _ => return Err(mismatch()),
+                        };
                         // Overzoom: resample the ancestor's sub-rectangle
                         // covering this tile, matching what the native
                         // host does for a source past its `max-zoom`.
                         let t = match oz.from {
-                            Some((a, shift)) => {
-                                upsample_subregion(&t, shift, oz.target.x, oz.target.y, a.x, a.y)
-                            }
-                            None => t,
-                        };
-                        decoded.insert((dx, dy), t);
-                    }
-                    let borrowed: HashMap<(i32, i32), &DemTile> =
-                        decoded.iter().map(|(k, v)| (*k, v)).collect();
-                    let field = stitch_padded_field(&borrowed, elevation_offset, tile_id, canvas)
-                        .ok_or_else(|| {
-                        err(
-                            DemDecode,
-                            format!(
-                                "source `{name}`: missing centre tile (bind with coord [0, 0])"
-                            ),
-                        )
-                    })?;
-                    // Bare source name — the `dem` node's asset lookup key.
-                    tile_loader.bind_scalar_field(name.clone(), field);
-                }
-                SourceBinding::Raster(byte_map) => {
-                    let here = CoreTileId::new(z, x, y);
-                    let mut decoded: HashMap<(i32, i32), RasterTile> =
-                        HashMap::with_capacity(byte_map.len());
-                    for (&(dx, dy), payload) in byte_map {
-                        let oz = resolve_overzoom(here, dx, dy, payload.source_zoom)
-                            .map_err(|e| err(UnknownSource, e))?;
-                        let src = oz.from.map_or(oz.target, |(a, _)| a);
-                        let t = decode_raster_tile(&payload.bytes, src.z, src.x, src.y)
-                            .map_err(|e| err(RasterDecode, e))?;
-                        let t = match oz.from {
-                            Some((a, shift)) => upsample_subregion_raster(
+                            Some((a, shift)) => Arc::new(upsample_subregion(
                                 &t,
                                 shift,
                                 oz.target.x,
                                 oz.target.y,
                                 a.x,
                                 a.y,
-                            ),
+                            )),
                             None => t,
                         };
-                        decoded.insert((dx, dy), t);
+                        tiles.insert((dx, dy), t);
+                    }
+                    let borrowed: HashMap<(i32, i32), &DemTile> =
+                        tiles.iter().map(|(k, v)| (*k, &**v)).collect();
+                    let field =
+                        stitch_padded_field(&borrowed, spec.elevation_offset, tile_id, canvas)
+                            .ok_or_else(|| {
+                                err(
+                                    DemDecode,
+                                    format!(
+                                        "source `{name}`: missing centre tile (bind with coord \
+                                         [0, 0])"
+                                    ),
+                                )
+                            })?;
+                    // Bare source name — the `dem` node's asset lookup key.
+                    tile_loader.bind_scalar_field(name, field);
+                }
+                SourceDecl::Raster(_) => {
+                    let mut tiles: HashMap<(i32, i32), Arc<RasterTile>> =
+                        HashMap::with_capacity(slots.len());
+                    for (&(dx, dy), placed) in slots {
+                        let oz = resolve_overzoom(here, dx, dy, placed.source_zoom)
+                            .map_err(|e| err(UnknownSource, e))?;
+                        let t = match &placed.data.payload {
+                            Payload::Raster(t) => t.clone(),
+                            Payload::RasterBytes(bytes) => {
+                                let src = oz.from.map_or(oz.target, |(a, _)| a);
+                                let t = decode_raster_tile(bytes, src.z, src.x, src.y)
+                                    .map_err(|e| err(RasterDecode, e))?;
+                                Arc::new(t)
+                            }
+                            _ => return Err(mismatch()),
+                        };
+                        let t = match oz.from {
+                            Some((a, shift)) => Arc::new(upsample_subregion_raster(
+                                &t,
+                                shift,
+                                oz.target.x,
+                                oz.target.y,
+                                a.x,
+                                a.y,
+                            )),
+                            None => t,
+                        };
+                        tiles.insert((dx, dy), t);
                     }
                     let borrowed: HashMap<(i32, i32), &RasterTile> =
-                        decoded.iter().map(|(k, v)| (*k, v)).collect();
+                        tiles.iter().map(|(k, v)| (*k, &**v)).collect();
                     let buf = stitch_padded_raster(&borrowed, canvas).ok_or_else(|| {
                         err(
                             RasterDecode,
@@ -1008,16 +1111,18 @@ impl Renderer {
                             ),
                         )
                     })?;
-                    tile_loader.bind_raster(name.clone(), buf);
+                    tile_loader.bind_raster(name, buf);
                 }
-                SourceBinding::GeoJson(byte_map) => {
-                    for (&(dx, dy), bytes) in byte_map {
-                        let data: serde_json::Value =
-                            serde_json::from_slice(bytes).map_err(|e| err(GeoJsonDecode, e))?;
-                        ezu_paint::host::bind_geojson(&mut tile_loader, name, &data, dx, dy)
+                SourceDecl::GeoJson(_) => {
+                    for (&(dx, dy), placed) in slots {
+                        let Payload::GeoJson(data) = &placed.data.payload else {
+                            return Err(mismatch());
+                        };
+                        ezu_paint::host::bind_geojson(&mut tile_loader, name, data, dx, dy)
                             .map_err(|e| err(GeoJsonDecode, e))?;
                     }
                 }
+                _ => return Err(mismatch()),
             }
         }
 
@@ -1025,7 +1130,7 @@ impl Renderer {
         // project it straight into this tile. Anything bound remotely above
         // is already done and drops out here.
         let mut inline = ezu_paint::host::GeoJsonSources::inline(&self.doc);
-        inline.retain(|name| !self.bindings.contains_key(name));
+        inline.retain(|name| !set.contains(name));
         ezu_paint::host::bind_geojson_sources(&mut tile_loader, &inline, &requested)
             .map_err(|e| err(GeoJsonDecode, e))?;
 

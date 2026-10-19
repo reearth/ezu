@@ -217,18 +217,7 @@ pub fn clip_to_descendant(
     parent_id: TileId,
     descendant_id: TileId,
 ) -> Result<DecodedTile, MvtError> {
-    if !parent_id.is_ancestor_of(descendant_id) {
-        return Err(MvtError::NotDescendant {
-            parent: parent_id,
-            target: descendant_id,
-        });
-    }
-    let dz = descendant_id.z - parent_id.z;
-    let scale = 1u32 << dz;
-    // Descendant's offset within the parent in tile units.
-    let sub_x = descendant_id.x - parent_id.x * scale;
-    let sub_y = descendant_id.y - parent_id.y * scale;
-
+    let (sub_x, sub_y, scale) = descendant_window(parent_id, descendant_id)?;
     let layers = parent_decoded
         .layers
         .iter()
@@ -236,8 +225,40 @@ pub fn clip_to_descendant(
         .collect();
     Ok(DecodedTile {
         layers,
-        overzoom: parent_decoded.overzoom.saturating_add(dz),
+        overzoom: parent_decoded
+            .overzoom
+            .saturating_add(descendant_id.z - parent_id.z),
     })
+}
+
+/// [`clip_to_descendant`] for one layer, for a host that keeps a decoded
+/// tile's layers apart (shared between renders) rather than as one
+/// [`DecodedTile`]. The layer scales up `descendant.z - parent.z` levels.
+pub fn clip_layer_to_descendant(
+    layer: &FeatureLayer,
+    parent_id: TileId,
+    descendant_id: TileId,
+) -> Result<FeatureLayer, MvtError> {
+    let (sub_x, sub_y, scale) = descendant_window(parent_id, descendant_id)?;
+    Ok(clip_layer(layer, sub_x, sub_y, scale))
+}
+
+/// Where `descendant` sits inside `parent`: its offset in descendant-sized
+/// tiles, and how many of those span the parent along each axis.
+fn descendant_window(
+    parent_id: TileId,
+    descendant_id: TileId,
+) -> Result<(u32, u32, u32), MvtError> {
+    if !parent_id.is_ancestor_of(descendant_id) {
+        return Err(MvtError::NotDescendant {
+            parent: parent_id,
+            target: descendant_id,
+        });
+    }
+    let scale = 1u32 << (descendant_id.z - parent_id.z);
+    let sub_x = descendant_id.x - parent_id.x * scale;
+    let sub_y = descendant_id.y - parent_id.y * scale;
+    Ok((sub_x, sub_y, scale))
 }
 
 fn clip_layer(layer: &FeatureLayer, sub_x: u32, sub_y: u32, scale: u32) -> FeatureLayer {

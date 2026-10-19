@@ -32,6 +32,17 @@ mean is spelled out in
   part of the umbrella crate (the `renderer` feature, on by default), so a
   Rust host that does its own fetching can bind and render — a tile or a
   print page — with the same calls.
+- In Rust, the renderer can render a tile from data handed to the call
+  instead of from what is bound to it. `load_source` decodes a vector, DEM,
+  imagery or GeoJSON payload once into a `SourceData`; a `SourceSet` holds
+  the payloads one render reads, each at its neighbour offset; and
+  `render_tile_with` renders from a set and nothing else that is
+  tile-scoped. A tile loaded once can sit in the set of every tile it
+  borders, so a block of tiles decodes each tile once instead of once per
+  render it appears in, and renders on several threads can share one
+  renderer. `bind_source` and `render_tile` work as before, and a vector
+  tile bound with `bind_source` is now decoded once rather than at both the
+  bind and the render.
 - `text` and `text-labels` take `anchor-expr`, a MapLibre expression that
   names a point label's anchor per feature, so one layer can put some labels
   left of their points and others right of them, or switch sides with zoom.

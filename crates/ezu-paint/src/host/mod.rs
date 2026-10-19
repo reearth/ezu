@@ -836,13 +836,13 @@ impl<'a> TileLoader<'a> {
     /// `"<source>.<layer>"`; the style's `features` node references
     /// the same `(source, layer)` pair.
     pub fn bind_features(&mut self, name: impl Into<String>, layer: FeatureLayer) -> &mut Self {
-        self.bind_layer(name.into(), layer, 0)
+        self.bind_layer(name.into(), Arc::new(layer), 0)
     }
 
     /// [`bind_features`](Self::bind_features) for a layer scaled up
     /// `overzoom` levels from the tile it was encoded for (see
     /// [`DecodedTile::overzoom`]).
-    fn bind_layer(&mut self, name: String, layer: FeatureLayer, overzoom: u8) -> &mut Self {
+    fn bind_layer(&mut self, name: String, layer: Arc<FeatureLayer>, overzoom: u8) -> &mut Self {
         let mut hash = self.binding_hash(&name);
         if overzoom > 0 {
             let mut h = Xxh3::new();
@@ -850,7 +850,7 @@ impl<'a> TileLoader<'a> {
             h.update(&[overzoom]);
             hash = h.digest128();
         }
-        let opaque: OpaqueValue = Arc::new(crate::render::SharedLayer::overzoomed(layer, overzoom))
+        let opaque: OpaqueValue = Arc::new(crate::render::SharedLayer::from_shared(layer, overzoom))
             as Arc<dyn Any + Send + Sync>;
         self.bindings.insert(
             name,
@@ -903,9 +903,31 @@ impl<'a> TileLoader<'a> {
     /// reference the same `source` (matching one of the document's
     /// `sources` entries) plus a `layer` to look up these bindings.
     pub fn bind_mvt(&mut self, source: &str, tile: DecodedTile) -> &mut Self {
-        for layer in tile.layers {
-            let key = format!("{source}.{}", layer.name);
-            self.bind_layer(key, layer, tile.overzoom);
+        self.bind_mvt_layers(
+            source,
+            0,
+            0,
+            tile.layers.into_iter().map(Arc::new),
+            tile.overzoom,
+        )
+    }
+
+    /// [`bind_mvt_neighbor`](Self::bind_mvt_neighbor) for layers the host
+    /// already holds behind an `Arc`, so one decoded tile can be bound to
+    /// several renders — as the centre of one and a neighbour of the next
+    /// — without being decoded or copied again. `overzoom` is what
+    /// [`DecodedTile::overzoom`] would say for these layers.
+    pub fn bind_mvt_layers(
+        &mut self,
+        source: &str,
+        dx: i32,
+        dy: i32,
+        layers: impl IntoIterator<Item = Arc<FeatureLayer>>,
+        overzoom: u8,
+    ) -> &mut Self {
+        for layer in layers {
+            let base = format!("{source}.{}", layer.name);
+            self.bind_layer(ezu_graph::neighbor_binding(&base, dx, dy), layer, overzoom);
         }
         self
     }
@@ -924,18 +946,13 @@ impl<'a> TileLoader<'a> {
         dy: i32,
         tile: DecodedTile,
     ) -> &mut Self {
-        if dx == 0 && dy == 0 {
-            return self.bind_mvt(source, tile);
-        }
-        for layer in tile.layers {
-            let base = format!("{source}.{}", layer.name);
-            self.bind_layer(
-                ezu_graph::neighbor_binding(&base, dx, dy),
-                layer,
-                tile.overzoom,
-            );
-        }
-        self
+        self.bind_mvt_layers(
+            source,
+            dx,
+            dy,
+            tile.layers.into_iter().map(Arc::new),
+            tile.overzoom,
+        )
     }
 
     fn binding_hash(&self, name: &str) -> u128 {

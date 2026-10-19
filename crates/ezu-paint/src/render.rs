@@ -20,7 +20,10 @@ use crate::nodes::common::FeatureGroup;
 /// aims dozens of `features` nodes at the single `roads` layer (each with its
 /// own filter), so sharing collapses that many redundant conversions to one.
 pub struct SharedLayer {
-    pub layer: FeatureLayer,
+    /// Behind an `Arc` so a host can bind one decoded layer to several
+    /// tiles' renders without copying it. The conversion below is not
+    /// shared that way: it depends on the zoom of the tile being drawn.
+    pub layer: Arc<FeatureLayer>,
     /// How many zoom levels the layer's geometry was scaled up from the
     /// tile it was encoded for (see [`ezu_features::mvt::DecodedTile::overzoom`]).
     pub overzoom: u8,
@@ -34,6 +37,12 @@ impl SharedLayer {
 
     /// A layer whose geometry an overzoom scaled up `overzoom` levels.
     pub fn overzoomed(layer: FeatureLayer, overzoom: u8) -> SharedLayer {
+        SharedLayer::from_shared(Arc::new(layer), overzoom)
+    }
+
+    /// [`overzoomed`](Self::overzoomed) for a layer some other binding may
+    /// hold too.
+    pub fn from_shared(layer: Arc<FeatureLayer>, overzoom: u8) -> SharedLayer {
         SharedLayer {
             layer,
             overzoom,
