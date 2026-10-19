@@ -13,24 +13,21 @@ mean is spelled out in
 
 ### Added
 
-- The Go package renders print pages the way `ezu frame` does.
-  `Renderer.ComputeFrame` works out the zoom, tile size and covered tiles for a
-  scale, dpi, page size and centre, with the CLI's own arithmetic, and
-  `Renderer.RenderFrame` renders those tiles, calling the host back to bind each
-  one, and crops them into one image that matches the CLI's page pixel for
-  pixel. `Renderer.SetTileSize` and `ClearTileSize` render at another tile size
-  without editing the style, for a host that renders a frame's tiles itself.
-  The wasm module's ABI version is now 3.
-- The npm package renders print pages too. `Renderer.computeFrame` answers
-  the same zoom, tile size and covered tiles as the Go package and the CLI,
-  and `Renderer.renderFrame` renders those tiles, awaiting the host's bind
-  for each one so it can fetch, and resolves to one straight-RGBA page that
-  matches the CLI's pixel for pixel. The bind binds through a `FrameBinder`
-  that works only for its own tile, and until the page settles any other call
-  that would change the renderer throws `Busy`, so a request running while a
-  bind awaits its fetch cannot land its bindings in the page.
-  `Renderer.setTileSize` and `clearTileSize` render at another tile size
-  without editing the style.
+- The Rust renderer, the Go package and the npm package render print pages
+  the way `ezu frame` does. `compute_frame` (`ComputeFrame`, `computeFrame`)
+  works out the zoom, tile size and covered tiles for a scale, dpi, page size
+  and centre, with the CLI's own arithmetic, and `render_frame`
+  (`RenderFrame`, `renderFrame`) renders those tiles, calling the host back to
+  bind each one, and crops them into one RGBA page that matches the CLI's
+  pixel for pixel; from JS the bind may return a promise, so it can fetch.
+  The bind binds through a `FrameBinder` that works only for its own tile.
+  While the frame renders nothing else can change the renderer: in Rust the
+  borrow checker forbids it, and in Go and JS such a call fails with
+  `ErrFrameInProgress` (`FrameInProgress`), so another request cannot land
+  its bindings in the page. `set_tile_size` (`SetTileSize`, `setTileSize`)
+  and its clearing counterpart render at another tile size without editing
+  the style, for a host that renders a frame's tiles itself. The wasm
+  module's ABI version is now 3.
 - `text` and `text-labels` take `anchor-expr`, a MapLibre expression that
   names a point label's anchor per feature, so one layer can put some labels
   left of their points and others right of them, or switch sides with zoom.

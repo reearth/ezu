@@ -402,6 +402,16 @@ type Renderer struct {
 	// Set once the instance has trapped, after which nothing about it is
 	// trustworthy.
 	dead atomic.Bool
+
+	// Set while [Renderer.RenderFrame] holds the renderer. busy guards one
+	// call; this guards the whole frame, across the bind calls in which
+	// the renderer is otherwise idle.
+	framing atomic.Bool
+	// The [FrameBinder] whose tile is being bound, or 0 between and outside
+	// them, and how many binders have been handed out, so no two share a
+	// number.
+	openTile atomic.Uint64
+	issued   atomic.Uint64
 	// Bytes the allocator last failed to get, recorded by the host call
 	// before it trapped.
 	oomBytes atomic.Uint64
@@ -607,6 +617,15 @@ func IsKind(err error, name string) bool {
 
 // call runs one ABI interaction under the concurrency guard, and converts a
 // trap into a typed error.
+// idle refuses, with [ErrFrameInProgress], a call that would change what
+// the renderer draws while [Renderer.RenderFrame] holds it.
+func (r *Renderer) idle() error {
+	if r.framing.Load() {
+		return ErrFrameInProgress
+	}
+	return nil
+}
+
 func (r *Renderer) call(ctx context.Context, f func(context.Context) (int64, error)) (int64, error) {
 	if r.dead.Load() {
 		return 0, ErrRendererDead
@@ -889,6 +908,9 @@ func (o Render) json() ([]byte, error) {
 // them. A tile size set with [Renderer.SetTileSize] is cleared: it was
 // derived from the old style's.
 func (r *Renderer) SetStyle(ctx context.Context, styleJSON []byte) (int, error) {
+	if err := r.idle(); err != nil {
+		return 0, err
+	}
 	n, err := r.call(ctx, func(ctx context.Context) (int64, error) {
 		ptr, err := r.writeBytes(ctx, styleJSON)
 		if err != nil {
@@ -933,6 +955,13 @@ func (r *Renderer) TileSize(ctx context.Context) (uint32, error) {
 // glyphs are missing is dropped with a warning rather than an error, so a
 // runtime built with [WithLogger] is how you find out.
 func (r *Renderer) BindSource(ctx context.Context, name string, data []byte, opts ...BindOption) error {
+	if err := r.idle(); err != nil {
+		return err
+	}
+	return r.bindSource(ctx, name, data, opts...)
+}
+
+func (r *Renderer) bindSource(ctx context.Context, name string, data []byte, opts ...BindOption) error {
 	var cfg bindOptions
 	for _, opt := range opts {
 		opt(&cfg)
@@ -969,6 +998,13 @@ func (r *Renderer) BindSource(ctx context.Context, name string, data []byte, opt
 // ClearSources drops every pending tile-scoped binding, keeping the
 // persistent banks. Call it between tiles.
 func (r *Renderer) ClearSources(ctx context.Context) error {
+	if err := r.idle(); err != nil {
+		return err
+	}
+	return r.clearSources(ctx)
+}
+
+func (r *Renderer) clearSources(ctx context.Context) error {
 	_, err := r.call(ctx, func(ctx context.Context) (int64, error) {
 		return r.call1(ctx, "ezu_clear_sources", uint64(r.handle))
 	})
@@ -1074,6 +1110,9 @@ func (r *Renderer) ClearGlyphBudget(ctx context.Context) error {
 }
 
 func (r *Renderer) setGlyphBudget(ctx context.Context, value, set uint64) error {
+	if err := r.idle(); err != nil {
+		return err
+	}
 	_, err := r.call(ctx, func(ctx context.Context) (int64, error) {
 		return r.call1(ctx, "ezu_set_glyph_budget", uint64(r.handle), value, set)
 	})
@@ -1346,6 +1385,13 @@ func (r *Renderer) MemoryUsage(ctx context.Context) (Usage, error) {
 // RenderTile renders one tile from whatever sources are currently bound and
 // returns the encoded bytes.
 func (r *Renderer) RenderTile(ctx context.Context, tile Tile, opts Render) ([]byte, error) {
+	if err := r.idle(); err != nil {
+		return nil, err
+	}
+	return r.renderTile(ctx, tile, opts)
+}
+
+func (r *Renderer) renderTile(ctx context.Context, tile Tile, opts Render) ([]byte, error) {
 	optsJSON, err := opts.json()
 	if err != nil {
 		return nil, fmt.Errorf("ezu: encoding the render options: %w", err)

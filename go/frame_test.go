@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"image"
 	"math"
 	"testing"
@@ -184,9 +185,9 @@ func TestRenderFrameMatchesTheCLI(t *testing.T) {
 
 	parent := readFile(t, "testdata/basemap-13-7277-3227.mvt")
 	var bound []Tile
-	bind := func(ctx context.Context, tile Tile) error {
+	bind := func(ctx context.Context, tile Tile, b *FrameBinder) error {
 		bound = append(bound, tile)
-		return renderer.BindSource(ctx, "basemap", parent, FromZoom(13))
+		return b.BindSource(ctx, "basemap", parent, FromZoom(13))
 	}
 	img, err := renderer.RenderFrame(ctx, f, bind, Render{})
 	if err != nil {
@@ -216,6 +217,95 @@ func TestRenderFrameMatchesTheCLI(t *testing.T) {
 	}
 	if _, err := renderer.RenderFrame(ctx, f, bind, Render{TileSize: 256}); err == nil {
 		t.Error("RenderFrame accepted a tile size other than the frame's")
+	}
+}
+
+// A frame holds the renderer until it returns: another goroutine reaching
+// for it while a bind fetches is refused, a binder kept past its tile's bind
+// is refused, and the renderer comes back usable, with nothing bound,
+// however the frame ended.
+func TestRenderFrameHoldsTheRenderer(t *testing.T) {
+	ctx, renderer := open(t, stainedGlassStyle)
+	f, err := renderer.ComputeFrame(ctx, FrameRequest{
+		CenterLon: 139.812, CenterLat: 35.6216,
+		Scale: 40000, DPI: 200,
+		Width: 500, Height: 400,
+	}, AtZoom(14))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := readFile(t, "testdata/basemap-13-7277-3227.mvt")
+
+	var kept *FrameBinder
+	bind := func(ctx context.Context, tile Tile, b *FrameBinder) error {
+		// What another goroutine would hit while this bind fetches. It runs
+		// on its own goroutine, and between the frame's calls into the
+		// module, so it meets the frame rather than a call in progress.
+		refusals := make(chan []error)
+		go func() {
+			_, styleErr := renderer.SetStyle(ctx, readFile(t, stainedGlassStyle))
+			_, renderErr := renderer.RenderTile(ctx, tile, Render{})
+			_, frameErr := renderer.RenderFrame(ctx, f, nil, Render{})
+			refusals <- []error{
+				renderer.BindSource(ctx, "basemap", parent),
+				renderer.ClearSources(ctx),
+				renderErr,
+				frameErr,
+				styleErr,
+				renderer.SetTileSize(ctx, 256),
+				renderer.ClearTileSize(ctx),
+				renderer.SetGlyphBudget(ctx, 1024),
+				renderer.ClearGlyphBudget(ctx),
+			}
+		}()
+		for i, err := range <-refusals {
+			if !errors.Is(err, ErrFrameInProgress) {
+				t.Errorf("call %d during the frame gave %v, want ErrFrameInProgress", i, err)
+			}
+		}
+		// Reading is still fine: a bind needs these.
+		if got, err := renderer.SourceTile(ctx, "basemap", tile); err != nil || got != tile {
+			t.Errorf("SourceTile during the frame gave %v (%v)", got, err)
+		}
+		if kept != nil {
+			if err := kept.BindSource(ctx, "basemap", parent); !errors.Is(err, ErrStaleBinder) {
+				t.Errorf("the previous tile's binder gave %v, want ErrStaleBinder", err)
+			}
+		}
+		kept = b
+		return b.BindSource(ctx, "basemap", parent, FromZoom(13))
+	}
+	img, err := renderer.RenderFrame(ctx, f, bind, Render{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(img.Pix)
+	if got := hex.EncodeToString(sum[:]); got != cornerFramePixels {
+		t.Errorf("frame pixels %s, the CLI's are %s", got, cornerFramePixels)
+	}
+	if err := kept.BindSource(ctx, "basemap", parent); !errors.Is(err, ErrStaleBinder) {
+		t.Errorf("a binder after the frame gave %v, want ErrStaleBinder", err)
+	}
+
+	// A frame that fails gives the renderer back too, with nothing bound.
+	failure := errors.New("fetch failed")
+	_, err = renderer.RenderFrame(ctx, f, func(ctx context.Context, tile Tile, b *FrameBinder) error {
+		if err := b.BindSource(ctx, "basemap", parent, FromZoom(13)); err != nil {
+			return err
+		}
+		return failure
+	}, Render{})
+	if !errors.Is(err, failure) {
+		t.Errorf("a failing bind gave %v", err)
+	}
+	if bound, err := renderer.BoundSources(ctx); err != nil || len(bound) != 0 {
+		t.Errorf("after a failed frame %v is bound (%v)", bound, err)
+	}
+	if err := renderer.BindSource(ctx, "basemap", parent, FromZoom(13)); err != nil {
+		t.Errorf("after a failed frame BindSource gave %v", err)
+	}
+	if _, err := renderer.RenderTile(ctx, Tile{Z: 14, X: 14554, Y: 6454}, Render{}); err != nil {
+		t.Errorf("after a failed frame RenderTile gave %v", err)
 	}
 }
 

@@ -208,8 +208,13 @@ f, err := r.ComputeFrame(ctx, ezu.FrameRequest{
 })
 // f.Zoom 19, f.TileSize 489, f.TilesX/f.TilesY: the 5 × 4 tiles to render
 
-img, err := r.RenderFrame(ctx, f, func(ctx context.Context, tile ezu.Tile) error {
-    return bindTile(ctx, r, tile) // the bind loop above, for this tile
+img, err := r.RenderFrame(ctx, f, func(ctx context.Context, tile ezu.Tile, b *ezu.FrameBinder) error {
+    // The bind loop above, for this tile, binding through b.
+    mvt, err := fetchMVT(ctx, tile)
+    if err != nil {
+        return err
+    }
+    return b.BindSource(ctx, "basemap", mvt)
 }, ezu.Render{})
 // img is a 1929 × 1370 *image.NRGBA; png.Encode it, or draw it into a PDF page
 ```
@@ -221,6 +226,17 @@ another, calling your function before each to bind it — the same bind loop as 
 single tile, so neighbours, overzoom and glyphs work as above, and the tile size
 changes nothing about what you fetch. It draws at `f.TileSize` per render, so
 the renderer's own tile size is untouched.
+
+Until `RenderFrame` returns, the renderer is the frame's. Your function binds
+through the `*ezu.FrameBinder` it is handed, which works for that tile only and
+only until the function returns; kept and used later it fails with
+`ezu.ErrStaleBinder`. Anything else that would change the renderer —
+`BindSource`, `ClearSources`, `RenderTile`, another `RenderFrame`, `SetStyle`,
+`SetTileSize`, `SetGlyphBudget` and their clearing counterparts — fails with
+`ezu.ErrFrameInProgress`, so a goroutine that reaches for the renderer while
+your function fetches cannot land its bindings in the page. Queries that only
+read, such as `SourceTile` and `NeededCodepoints`, still answer, and the
+renderer is given back with nothing bound however the frame ends.
 
 To render a frame's tiles yourself — to spread them over a `Pool`, say — draw
 each at `f.TileSize` (`ezu.Render{TileSize: f.TileSize}`, or `SetTileSize` on
