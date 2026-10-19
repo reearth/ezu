@@ -189,8 +189,9 @@ const f = r.computeFrame({
 });
 // f.zoom 19, f.tileSize 489, f.tilesX × f.tilesY: the 5 × 4 tiles to render
 
-const rgba = await r.renderFrame(f, async ({ z, x, y }) => {
-  await bindTile(r, z, x, y); // bind this tile as under "Binding sources" above
+const rgba = await r.renderFrame(f, async ({ z, x, y }, binder) => {
+  // Bind this tile as under "Binding sources" above, but through the binder.
+  binder.bindSource('basemap', await fetchMvt(z, x, y));
 });
 // 1929 × 1370 straight RGBA: putImageData it, or encode it as a PNG
 ```
@@ -201,7 +202,17 @@ the CLI's `--zoom` does. `renderFrame` renders the tiles one after another,
 clearing the tile-scoped sources and awaiting your function before each — the
 same binding as for a single tile, so neighbours, overzoom and glyphs work as
 above. It draws at `f.tileSize` per render, so the renderer's own tile size is
-untouched. Leave the renderer to the frame until the promise settles.
+untouched.
+
+Until the promise settles the renderer is the frame's. Your function binds
+through the `binder` it is handed, which works for that tile only and only until
+the function returns or settles; used later it throws `StaleBinder`. Anything
+else that would change the renderer — `bindSource`, `clearSources`,
+`renderTile`, another `renderFrame`, `setStyle`, `setTileSize` — throws `Busy`,
+so a request that runs while your function awaits its fetch cannot slip its
+bindings into the frame. Queries that only read, such as `sourceTile` and
+`neededCodepoints`, still answer, and the renderer is given back however the
+frame ends.
 
 To render a frame's tiles yourself — spread over several renderers, say — draw
 each at `f.tileSize` (`renderTile(z, x, y, { format: "rgba", tileSize: f.tileSize })`,

@@ -150,12 +150,20 @@ class Renderer {
   computeFrame(req: FrameRequest): Frame;
   renderFrame(
     frame: Frame,
-    bind: ((tile: { z: number; x: number; y: number }) => void | Promise<void>)
+    bind: ((tile: { z: number; x: number; y: number },
+            binder: FrameBinder) => void | Promise<void>)
       | null | undefined,
     opts?: { pad?: number; params?: Record<string, number | boolean | string> },
   ): Promise<Uint8Array>;                    // straight RGBA, width × height
 
   free(): void;
+}
+
+// Handed to renderFrame's bind: bindSource for that tile only, and only
+// until that tile's bind returns or settles (then it throws StaleBinder).
+class FrameBinder {
+  bindSource(name: string, bytes: Uint8Array,
+             opts?: { coord?: [number, number]; sourceZoom?: number }): void;
 }
 
 interface FrameRequest {
@@ -221,8 +229,8 @@ const f = r.computeFrame({
 });
 // f.zoom 19, f.tileSize 489, f.tilesX × f.tilesY: the 5 × 4 tiles to render
 
-const rgba = await r.renderFrame(f, async ({ z, x, y }) => {
-  r.bindSource("basemap", await fetchMvt(z, x, y)); // the per-tile bind, as for renderTile
+const rgba = await r.renderFrame(f, async ({ z, x, y }, binder) => {
+  binder.bindSource("basemap", await fetchMvt(z, x, y)); // the per-tile bind, as for renderTile
 });
 // 1929 × 1370 straight RGBA: putImageData it, or encode it as a PNG
 ```
@@ -233,8 +241,19 @@ zoom as the CLI's `--zoom` does; a request it cannot meet throws
 `InvalidStyle`. `renderFrame` clears the tile-scoped sources before each
 tile, awaits your `bind` for it, renders it at `f.tileSize` and copies its
 share into the page, so neighbours, overzoom and glyphs work as they do
-for a single tile, and the renderer's own tile size is untouched. Leave
-the renderer to the frame until the promise settles.
+for a single tile, and the renderer's own tile size is untouched.
+
+Until the promise settles the renderer is the frame's. Your `bind` binds
+through the `binder` it is handed, which works for that tile only and only
+until that bind returns or settles; used later it throws `StaleBinder`.
+Anything else that would change the renderer — `bindSource`,
+`clearSources`, `renderTile`, another `renderFrame`, `setStyle`,
+`setTileSize`, `clearTileSize`, `setGlyphBudget` — throws `Busy`, so a
+request that runs while a bind awaits its fetch cannot slip its bindings
+into the frame's tiles. Queries that only read (`sourceTile`,
+`requestedNeighborOffsets`, `neededCodepoints`, `boundSources`, …) still
+answer. The renderer is given back however the frame ends, with nothing
+left bound.
 
 To render a frame's tiles yourself — spread over several renderers, say —
 draw each at `f.tileSize` (`renderTile(..., { tileSize: f.tileSize })`, or
@@ -500,6 +519,8 @@ discriminates the failure kind:
 | `PngEncode`    | PNG encoding failed |
 | `WebpEncode`   | WebP encoding failed |
 | `OutOfMemory`  | The wasm heap could not grow — the render needs more memory than the host allows |
+| `Busy`         | A call would change a renderer that a `renderFrame` holds until its promise settles |
+| `StaleBinder`  | A frame's `binder` was used after its tile's bind returned or settled |
 
 `OutOfMemory` is thrown from wherever the allocation failed, which means
 **the module instance is finished**: the exception unwinds the wasm

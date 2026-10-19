@@ -163,12 +163,20 @@ class Renderer {
   computeFrame(req: FrameRequest): Frame;
   renderFrame(
     frame: Frame,
-    bind: ((tile: { z: number; x: number; y: number }) => void | Promise<void>)
+    bind: ((tile: { z: number; x: number; y: number },
+            binder: FrameBinder) => void | Promise<void>)
       | null | undefined,
     opts?: { pad?: number; params?: Record<string, number | boolean | string> },
   ): Promise<Uint8Array>;                    // straight RGBA, width × height
 
   free(): void;
+}
+
+// Handed to renderFrame's bind: bindSource for that tile only, and only
+// until that tile's bind returns or settles (then it throws StaleBinder).
+class FrameBinder {
+  bindSource(name: string, bytes: Uint8Array,
+             opts?: { coord?: [number, number]; sourceZoom?: number }): void;
 }
 
 interface FrameRequest {
@@ -206,12 +214,19 @@ const f = renderer.computeFrame({
   scale: 1000, dpi: 200,
   width: mm(245, 200), height: mm(174, 200),   // 1929 × 1370
 });
-const rgba = await renderer.renderFrame(f, async ({ z, x, y }) => {
-  renderer.bindSource("basemap", await fetchMvt(z, x, y));
+const rgba = await renderer.renderFrame(f, async ({ z, x, y }, binder) => {
+  binder.bindSource("basemap", await fetchMvt(z, x, y));
 });
 ```
 
-Leave the renderer to the frame until the promise settles.
+Until the promise settles the renderer is the frame's: bind through the
+`binder` you are handed, which works only for its own tile and only until
+that bind returns or settles. Calls that would change the renderer —
+`bindSource`, `clearSources`, `renderTile`, another `renderFrame`,
+`setStyle`, `setTileSize`, `clearTileSize`, `setGlyphBudget` — throw
+`Busy` meanwhile, so another request cannot slip its bindings into the
+frame. Queries that only read, such as `sourceTile` and
+`neededCodepoints`, still answer.
 
 ## Output formats
 
@@ -250,6 +265,8 @@ discriminates the kind:
 | `RenderFailed` | A node `eval` failed (e.g. missing brush, downcast mismatch) |
 | `PngEncode`    | PNG encoding failed |
 | `WebpEncode`   | WebP encoding failed |
+| `Busy`         | A call would change a renderer that a `renderFrame` holds until its promise settles |
+| `StaleBinder`  | A frame's `binder` was used after its tile's bind returned or settled |
 
 ```js
 try {

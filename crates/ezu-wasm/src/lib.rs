@@ -63,7 +63,9 @@
 //! `computeFrame(req)` turns a scale, dpi, page size and centre into the
 //! zoom, tile size and tiles `ezu frame` would render, and
 //! `renderFrame(frame, bind)` renders them — awaiting `bind` for each tile
-//! — into one straight-RGBA page, the CLI's pixel for pixel.
+//! — into one straight-RGBA page, the CLI's pixel for pixel. While it runs
+//! the renderer is the frame's: `bind` binds through the binder it is
+//! handed, and changing the renderer from anywhere else throws `Busy`.
 //! `setTileSize` / `clearTileSize` render at another tile size for a host
 //! that renders a frame's tiles itself.
 //!
@@ -77,6 +79,10 @@
 //! [`ezu_renderer::ErrorKind`]'s names, so a Rust host and a JS host
 //! see the same name for the same failure.
 //!
+//! Two names are this shell's own: `Busy`, for a call that would change a
+//! renderer a `renderFrame` holds, and `StaleBinder`, for a frame's binder
+//! used after its tile's bind has finished.
+//!
 //! `OutOfMemory` is thrown from wherever the heap ran out — see
 //! [`oom`] for what the host may and may not do afterwards.
 
@@ -84,8 +90,8 @@ mod log;
 
 pub use log::LogSink;
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::cell::{Cell, RefCell};
+use std::rc::{Rc, Weak};
 
 use ezu_renderer::{
     BindOptions, Error, ErrorKind, Frame, FrameRequest, OutputFormat, PngCompression, RenderOptions,
@@ -191,13 +197,32 @@ static ALLOC: oom::ThrowOnOom = oom::ThrowOnOom;
 ///
 /// Every method takes `&self` and borrows the renderer inside, rather than
 /// letting wasm-bindgen hold a borrow for the length of the call:
-/// `renderFrame` calls back into JS to bind each tile, and the callback's
-/// `bindSource` has to reach the same renderer while the frame is still
-/// rendering. The `Rc` is what the frame's promise keeps alive between
-/// tiles.
+/// `renderFrame` awaits JS between its tiles, and the read-only queries a
+/// bind makes (`sourceTile`, `neededCodepoints`, …) have to reach the same
+/// renderer while the frame is still rendering. The `Rc` is what the
+/// frame's promise keeps alive between tiles.
 #[wasm_bindgen]
 pub struct Renderer {
     inner: Rc<RefCell<ezu_renderer::Renderer>>,
+    frame: Rc<FrameState>,
+}
+
+/// Who may change the renderer while `renderFrame` runs.
+///
+/// A frame awaits its bind between tiles, and other JS runs during that
+/// await — another request on the same Worker, a timer — so a `bindSource`
+/// arriving then could be the frame's or anybody's, and the call stack no
+/// longer says which. The frame therefore takes the renderer for itself
+/// (`busy`) and hands each tile's bind a [`FrameBinder`] carrying that
+/// tile's number; only a binder whose number is the one `open_tile` holds
+/// binds anything.
+#[derive(Default)]
+struct FrameState {
+    busy: Cell<bool>,
+    /// The tile whose bind is running, or 0 between and outside them.
+    open_tile: Cell<u64>,
+    /// Tile numbers handed out so far, so no two binders ever share one.
+    issued: Cell<u64>,
 }
 
 #[wasm_bindgen]
@@ -211,6 +236,7 @@ impl Renderer {
         let inner = ezu_renderer::Renderer::new(style_json).map_err(js_err)?;
         Ok(Self {
             inner: Rc::new(RefCell::new(inner)),
+            frame: Rc::default(),
         })
     }
 
@@ -219,6 +245,7 @@ impl Renderer {
     /// goes back to the new style's own tile size.
     #[wasm_bindgen(js_name = setStyle)]
     pub fn set_style(&self, style_json: &str) -> Result<usize, JsValue> {
+        self.idle()?;
         self.inner
             .borrow_mut()
             .set_style(style_json)
@@ -249,6 +276,7 @@ impl Renderer {
     /// style's", that is `clearTileSize`.
     #[wasm_bindgen(js_name = setTileSize)]
     pub fn set_tile_size(&self, size: f64) -> Result<(), JsValue> {
+        self.idle()?;
         let size = whole_pixels(size, "tile size")?;
         if size == 0 {
             return Err(named_err(
@@ -266,6 +294,7 @@ impl Renderer {
     /// `setTileSize`.
     #[wasm_bindgen(js_name = clearTileSize)]
     pub fn clear_tile_size(&self) -> Result<(), JsValue> {
+        self.idle()?;
         self.inner.borrow_mut().set_tile_size(None).map_err(js_err)
     }
 
@@ -311,17 +340,29 @@ impl Renderer {
     /// (un-premultiplied) RGBA, `width × height × 4` bytes, as
     /// `format: "rgba"` is.
     ///
-    /// Binding stays yours, tile by tile, exactly as for `renderTile`.
-    /// Before each tile the tile-scoped sources are cleared and
-    /// `bind({ z, x, y })` is called with the tile about to render; it
-    /// binds what that tile needs — the tile itself, the neighbours
-    /// `requestedNeighborOffsets` names, the ancestor `sourceTile` answers
-    /// past a source's max-zoom, the glyphs `neededCodepoints` lists — with
-    /// `bindSource` on this renderer. It may return a promise, which is
+    /// Binding stays yours, tile by tile, as for `renderTile`, but it goes
+    /// through the binder the frame hands you. Before each tile the
+    /// tile-scoped sources are cleared and `bind({ z, x, y }, binder)` is
+    /// called with the tile about to render; it binds what that tile needs
+    /// — the tile itself, the neighbours `requestedNeighborOffsets` names,
+    /// the ancestor `sourceTile` answers past a source's max-zoom, the
+    /// glyphs `neededCodepoints` lists — with `binder.bindSource`, which
+    /// takes what `bindSource` does. It may return a promise, which is
     /// awaited, so it can fetch. A bind that throws or rejects stops the
     /// frame with that error. `bind` may be `null` for a style that needs
     /// nothing bound per tile. Persistent sources (fonts, sprites, brushes,
     /// images) are bound once, before the call, as usual.
+    ///
+    /// Until the promise settles the renderer is the frame's: everything
+    /// that would change what it draws — `bindSource`, `clearSources`,
+    /// `renderTile`, `renderFrame`, `setStyle`, `setTileSize`,
+    /// `clearTileSize`, `setGlyphBudget` — throws `Busy`, so a request
+    /// running while the bind awaits cannot land its bindings in the
+    /// frame's tiles. Queries that only read (`sourceTile`,
+    /// `requestedNeighborOffsets`, `neededCodepoints`, `boundSources`, …)
+    /// still answer. A binder binds only for its own tile and only while
+    /// that tile's bind runs; kept and used later, it throws
+    /// `StaleBinder`. The renderer is given back however the frame ends.
     ///
     /// The tiles render at `frame.tileSize` per render, so the renderer's
     /// own tile size is left as it was. `opts` takes `renderTile`'s
@@ -329,63 +370,31 @@ impl Renderer {
     /// (or match), since the frame fixes both.
     ///
     /// Tiles render one after another, row by row from the top.
-    /// Leave the renderer to the frame until the promise settles: a
-    /// `bindSource` or `renderTile` of your own between its tiles lands in
-    /// the middle of the frame's.
     #[wasm_bindgen(js_name = renderFrame, unchecked_return_type = "Promise<Uint8Array>")]
     pub fn render_frame(
         &self,
         #[wasm_bindgen(unchecked_param_type = "Frame")] frame: js_sys::Object,
         #[wasm_bindgen(
-            unchecked_param_type = "((tile: { z: number; x: number; y: number }) => void | Promise<void>) | null | undefined"
+            unchecked_param_type = "((tile: { z: number; x: number; y: number }, binder: FrameBinder) => void | Promise<void>) | null | undefined"
         )]
         bind: Option<js_sys::Function>,
         opts: Option<js_sys::Object>,
     ) -> js_sys::Promise {
-        let inner = Rc::clone(&self.inner);
+        if let Err(e) = self.idle() {
+            return js_sys::Promise::reject(&e);
+        }
+        // Taken here, before the promise's first poll, so a call made
+        // right after this one already finds the renderer busy.
+        self.frame.busy.set(true);
+        let (inner, state) = (Rc::clone(&self.inner), Rc::clone(&self.frame));
         wasm_bindgen_futures::future_to_promise(async move {
-            let frame = parse_frame(&frame)?;
-            let opts = frame_render_options(opts.as_ref(), frame.tile_size)?;
-            // The page is assembled in JS memory, not in the wasm heap: the
-            // heap never shrinks, and a 1929 × 1370 page is 10 MB that a
-            // 128 MB isolate would otherwise carry for the rest of its life.
-            let out = js_sys::Uint8Array::new_with_length(frame.width * frame.height * 4);
-            let t = frame.tile_size;
-            for y in frame.tiles_y.clone() {
-                for x in frame.tiles_x.clone() {
-                    inner.borrow_mut().clear_sources();
-                    if let Some(bind) = &bind {
-                        let tile = tile_object(frame.zoom, x, y)?;
-                        // Resolving whatever came back awaits a promise and
-                        // lets a plain return through after one microtask.
-                        let ret = bind.call1(&JsValue::NULL, &tile)?;
-                        JsFuture::from(js_sys::Promise::resolve(&ret)).await?;
-                    }
-                    let px = inner
-                        .borrow()
-                        .render_tile(frame.zoom, x, y, opts.clone())
-                        .map_err(js_err)?;
-                    let want = t as usize * t as usize * 4;
-                    if px.len() != want {
-                        return Err(named_err(
-                            ErrorKind::RenderFailed,
-                            format!(
-                                "tile {}/{x}/{y} came back as {} bytes, want {want} for {t}x{t}",
-                                frame.zoom,
-                                px.len()
-                            ),
-                        ));
-                    }
-                    let (dx, dy) = frame.tile_offset(x, y);
-                    blit_rows(frame.width, frame.height, t, dx, dy, |dst, src, len| {
-                        out.subarray(dst as u32, (dst + len) as u32)
-                            .copy_from(&px[src..src + len]);
-                    });
-                }
-            }
-            // Leave nothing of the last tile bound, as a tile loop would.
+            let result = render_frame_tiles(&inner, &state, &frame, bind, opts).await;
+            // Leave nothing of the last tile bound, as a tile loop would,
+            // and give the renderer back, whether or not the frame made it.
+            state.open_tile.set(0);
             inner.borrow_mut().clear_sources();
-            Ok(out.into())
+            state.busy.set(false);
+            result
         })
     }
 
@@ -445,11 +454,8 @@ impl Renderer {
         bytes: Vec<u8>,
         opts: Option<js_sys::Object>,
     ) -> Result<(), JsValue> {
-        let parsed = parse_bind_options(opts.as_ref())?;
-        self.inner
-            .borrow_mut()
-            .bind_source(name, bytes, &parsed)
-            .map_err(js_err)
+        self.idle()?;
+        bind_into(&self.inner, name, bytes, opts.as_ref())
     }
 
     /// Effective attribution declared by the style (document +
@@ -462,8 +468,10 @@ impl Renderer {
 
     /// Drop every pending source binding. Call between tile renders.
     #[wasm_bindgen(js_name = clearSources)]
-    pub fn clear_sources(&self) {
+    pub fn clear_sources(&self) -> Result<(), JsValue> {
+        self.idle()?;
         self.inner.borrow_mut().clear_sources();
+        Ok(())
     }
 
     /// Cap the glyph bytes each bound fontstack keeps resident, in
@@ -495,10 +503,12 @@ impl Renderer {
     /// big cannot be a real ceiling: it is every byte the module could
     /// ever address.
     #[wasm_bindgen(js_name = setGlyphBudget)]
-    pub fn set_glyph_budget(&self, bytes: usize) {
+    pub fn set_glyph_budget(&self, bytes: usize) -> Result<(), JsValue> {
+        self.idle()?;
         self.inner
             .borrow_mut()
             .set_glyph_budget((bytes != usize::MAX).then_some(bytes));
+        Ok(())
     }
 
     /// Every source the style declares, in declaration order, as an array
@@ -782,12 +792,140 @@ impl Renderer {
         y: u32,
         opts: Option<js_sys::Object>,
     ) -> Result<Vec<u8>, JsValue> {
+        self.idle()?;
         let parsed = parse_render_options(opts.as_ref())?;
         self.inner
             .borrow()
             .render_tile(z, x, y, parsed)
             .map_err(js_err)
     }
+}
+
+impl Renderer {
+    /// `Busy` while a `renderFrame` holds the renderer.
+    fn idle(&self) -> Result<(), JsValue> {
+        if self.frame.busy.get() {
+            return Err(shell_err(
+                "Busy",
+                "the renderer is rendering a frame; wait for renderFrame to settle, \
+                 and bind the frame's tiles through the binder it passes",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// What `renderFrame` hands each tile's bind: `bindSource` for that tile,
+/// on the renderer the frame has taken for itself.
+#[wasm_bindgen]
+pub struct FrameBinder {
+    /// Weak, so a binder the host keeps does not keep the renderer alive.
+    renderer: Weak<RefCell<ezu_renderer::Renderer>>,
+    frame: Rc<FrameState>,
+    tile: u64,
+}
+
+#[wasm_bindgen]
+impl FrameBinder {
+    /// `Renderer.bindSource`, for the tile this binder was handed with.
+    /// Throws `StaleBinder` once that tile's bind has returned (or its
+    /// promise settled).
+    #[wasm_bindgen(js_name = bindSource)]
+    pub fn bind_source(
+        &self,
+        name: &str,
+        bytes: Vec<u8>,
+        opts: Option<js_sys::Object>,
+    ) -> Result<(), JsValue> {
+        let stale = || {
+            shell_err(
+                "StaleBinder",
+                "this binder's tile is no longer being bound; bind only from inside \
+                 that tile's bind, before it returns or settles",
+            )
+        };
+        if self.frame.open_tile.get() != self.tile {
+            return Err(stale());
+        }
+        let renderer = self.renderer.upgrade().ok_or_else(stale)?;
+        bind_into(&renderer, name, bytes, opts.as_ref())
+    }
+}
+
+fn bind_into(
+    renderer: &RefCell<ezu_renderer::Renderer>,
+    name: &str,
+    bytes: Vec<u8>,
+    opts: Option<&js_sys::Object>,
+) -> Result<(), JsValue> {
+    let parsed = parse_bind_options(opts)?;
+    renderer
+        .borrow_mut()
+        .bind_source(name, bytes, &parsed)
+        .map_err(js_err)
+}
+
+/// The tile loop of `renderFrame`, which owns the renderer while it runs.
+async fn render_frame_tiles(
+    inner: &Rc<RefCell<ezu_renderer::Renderer>>,
+    state: &Rc<FrameState>,
+    frame: &js_sys::Object,
+    bind: Option<js_sys::Function>,
+    opts: Option<js_sys::Object>,
+) -> Result<JsValue, JsValue> {
+    let frame = parse_frame(frame)?;
+    let opts = frame_render_options(opts.as_ref(), frame.tile_size)?;
+    // The page is assembled in JS memory, not in the wasm heap: the heap
+    // never shrinks, and a 1929 × 1370 page is 10 MB that a 128 MB isolate
+    // would otherwise carry for the rest of its life.
+    let out = js_sys::Uint8Array::new_with_length(frame.width * frame.height * 4);
+    let t = frame.tile_size;
+    for y in frame.tiles_y.clone() {
+        for x in frame.tiles_x.clone() {
+            inner.borrow_mut().clear_sources();
+            if let Some(bind) = &bind {
+                let tile = state.issued.get() + 1;
+                state.issued.set(tile);
+                state.open_tile.set(tile);
+                let binder = FrameBinder {
+                    renderer: Rc::downgrade(inner),
+                    frame: Rc::clone(state),
+                    tile,
+                };
+                // Resolving whatever came back awaits a promise and lets a
+                // plain return through after one microtask.
+                let ret = bind.call2(
+                    &JsValue::NULL,
+                    &tile_object(frame.zoom, x, y)?,
+                    &binder.into(),
+                )?;
+                let settled = JsFuture::from(js_sys::Promise::resolve(&ret)).await;
+                state.open_tile.set(0);
+                settled?;
+            }
+            let px = inner
+                .borrow()
+                .render_tile(frame.zoom, x, y, opts.clone())
+                .map_err(js_err)?;
+            let want = t as usize * t as usize * 4;
+            if px.len() != want {
+                return Err(named_err(
+                    ErrorKind::RenderFailed,
+                    format!(
+                        "tile {}/{x}/{y} came back as {} bytes, want {want} for {t}x{t}",
+                        frame.zoom,
+                        px.len()
+                    ),
+                ));
+            }
+            let (dx, dy) = frame.tile_offset(x, y);
+            blit_rows(frame.width, frame.height, t, dx, dy, |dst, src, len| {
+                out.subarray(dst as u32, (dst + len) as u32)
+                    .copy_from(&px[src..src + len]);
+            });
+        }
+    }
+    Ok(out.into())
 }
 
 /// `{ [glyphsSourceName]: number[] }` from the prepass's answer.
@@ -1328,8 +1466,15 @@ fn js_err(e: Error) -> JsValue {
 /// the failures this shell raises on its own — malformed option objects,
 /// which never reach the renderer.
 fn named_err(kind: ErrorKind, e: impl std::fmt::Display) -> JsValue {
+    shell_err(kind.name(), e)
+}
+
+/// A JS `Error` named `name`, for the failures only this shell has —
+/// `Busy` and `StaleBinder`, which are about JS calling into a renderer a
+/// frame holds and have no counterpart in [`ErrorKind`].
+fn shell_err(name: &str, e: impl std::fmt::Display) -> JsValue {
     let err = js_sys::Error::new(&e.to_string());
-    err.set_name(kind.name());
+    err.set_name(name);
     err.into()
 }
 

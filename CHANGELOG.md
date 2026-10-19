@@ -25,8 +25,12 @@ mean is spelled out in
   the same zoom, tile size and covered tiles as the Go package and the CLI,
   and `Renderer.renderFrame` renders those tiles, awaiting the host's bind
   for each one so it can fetch, and resolves to one straight-RGBA page that
-  matches the CLI's pixel for pixel. `Renderer.setTileSize` and
-  `clearTileSize` render at another tile size without editing the style.
+  matches the CLI's pixel for pixel. The bind binds through a `FrameBinder`
+  that works only for its own tile, and until the page settles any other call
+  that would change the renderer throws `Busy`, so a request running while a
+  bind awaits its fetch cannot land its bindings in the page.
+  `Renderer.setTileSize` and `clearTileSize` render at another tile size
+  without editing the style.
 - `text` and `text-labels` take `anchor-expr`, a MapLibre expression that
   names a point label's anchor per feature, so one layer can put some labels
   left of their points and others right of them, or switch sides with zoom.

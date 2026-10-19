@@ -138,12 +138,12 @@ test("renderFrame matches the CLI and the tiles it is made of", async () => {
 
   const parent = read("go/testdata/basemap-13-7277-3227.mvt");
   const bound = [];
-  const bind = async (tile) => {
+  const bind = async (tile, binder) => {
     // A real bind fetches; the await is what makes this one asynchronous.
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.deepEqual(r.boundSources(), [], "the previous tile's sources were cleared");
     bound.push(tile);
-    r.bindSource("basemap", parent, { sourceZoom: 13 });
+    binder.bindSource("basemap", parent, { sourceZoom: 13 });
   };
   const page = await r.renderFrame(f, bind);
   assert.ok(page instanceof Uint8Array);
@@ -190,7 +190,7 @@ test("renderFrame refuses what contradicts the frame and passes a bind's error o
   const r = new Renderer(stainedGlass());
   const f = r.computeFrame(cornerRequest);
   const parent = read("go/testdata/basemap-13-7277-3227.mvt");
-  const bind = () => r.bindSource("basemap", parent, { sourceZoom: 13 });
+  const bind = (_tile, binder) => binder.bindSource("basemap", parent, { sourceZoom: 13 });
 
   await assert.rejects(r.renderFrame(f, bind, { format: "png" }), { name: "InvalidStyle" });
   await assert.rejects(r.renderFrame(f, bind, { tileSize: 256 }), { name: "InvalidStyle" });
@@ -209,5 +209,60 @@ test("renderFrame refuses what contradicts the frame and passes a bind's error o
     }),
     (e) => e === failure,
   );
+  r.free();
+});
+
+test("a frame holds the renderer until it settles", async () => {
+  const r = new Renderer(stainedGlass());
+  const f = r.computeFrame(cornerRequest);
+  const parent = read("go/testdata/basemap-13-7277-3227.mvt");
+  const busy = { name: "Busy" };
+
+  let kept;
+  const seen = [];
+  const bind = async (tile, binder) => {
+    // What another request would do while this bind awaits its fetch.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.throws(() => r.bindSource("basemap", parent), busy);
+    assert.throws(() => r.clearSources(), busy);
+    assert.throws(() => r.renderTile(14, 14554, 6454), busy);
+    assert.throws(() => r.setStyle(stainedGlass()), busy);
+    assert.throws(() => r.setTileSize(256), busy);
+    assert.throws(() => r.clearTileSize(), busy);
+    assert.throws(() => r.setGlyphBudget(1024), busy);
+    await assert.rejects(r.renderFrame(f, null), busy);
+    // Reading is still fine: a bind needs these.
+    assert.deepEqual(r.sourceTile("basemap", 14, tile.x, tile.y), tile);
+    assert.deepEqual(r.boundSources(), []);
+    assert.equal(r.tileSize, 512);
+
+    // The previous tile's binder no longer binds.
+    if (kept) assert.throws(() => kept.bindSource("basemap", parent), { name: "StaleBinder" });
+    kept = binder;
+    binder.bindSource("basemap", parent, { sourceZoom: 13 });
+    seen.push(r.boundSources());
+  };
+  const page = r.renderFrame(f, bind);
+  // Taken at the call, not at the promise's first turn.
+  assert.throws(() => r.bindSource("basemap", parent), busy);
+  assert.equal(sha256(await page), cornerFramePixels, "the frame came out as it would alone");
+  assert.deepEqual(seen, [["basemap"], ["basemap"], ["basemap"], ["basemap"]]);
+
+  // Settled, the renderer is free again and the last binder is spent.
+  assert.throws(() => kept.bindSource("basemap", parent), { name: "StaleBinder" });
+  r.bindSource("basemap", parent, { sourceZoom: 13 });
+  r.clearSources();
+
+  // A frame that fails gives the renderer back too, with nothing bound.
+  await assert.rejects(
+    r.renderFrame(f, async (_tile, binder) => {
+      binder.bindSource("basemap", parent, { sourceZoom: 13 });
+      throw new Error("fetch failed");
+    }),
+    { message: "fetch failed" },
+  );
+  assert.deepEqual(r.boundSources(), []);
+  await assert.rejects(r.renderFrame({ zoom: 14 }, null), { name: "InvalidStyle" });
+  assert.equal(r.renderTile(14, 14554, 6454, { format: "rgba" }).length, 512 * 512 * 4);
   r.free();
 });
