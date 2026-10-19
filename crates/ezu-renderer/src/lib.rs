@@ -53,16 +53,24 @@
 //! whose [`name`](ErrorKind::name) is what a host branches on.
 
 mod error;
+mod frame;
 mod options;
 mod sources;
 
 pub use error::{Error, ErrorKind};
+pub use frame::{FrameBinder, RenderFrameError};
 pub use options::{BindOptions, OutputFormat, RenderOptions};
 pub use sources::{SourceInfo, SourceKind};
 
 /// Print-frame geometry, re-exported so a shell needs this crate and
-/// nothing under it. See [`Renderer::compute_frame`].
-pub use ezu_core::frame::{Frame, FrameRequest};
+/// nothing under it. See [`Renderer::compute_frame`] and
+/// [`Renderer::render_frame`].
+pub use ezu_core::frame::{Frame, FrameRequest, RowCopy};
+
+/// A Web Mercator tile, as [`Renderer::render_frame`] names the tile it
+/// is about to bind. Re-exported so a shell needs this crate and nothing
+/// under it.
+pub use ezu_core::TileId;
 
 /// Effort the PNG encoder spends, named by
 /// [`RenderOptions::png_compression`]. Re-exported so a shell needs this
@@ -75,7 +83,7 @@ use std::sync::Arc;
 use ezu_core::TileId as CoreTileId;
 use ezu_graph::{
     build_graph, parse_param_value, Cache, CanvasInfo, Evaluator, Graph, ParamValues, PortValue,
-    SpriteSheet, TileId,
+    SpriteSheet, TileId as GraphTileId,
 };
 use ezu_paint::host::{
     build_sprite_icons, crop_to_png, crop_to_rgba8, crop_to_webp, decode_dem_tile,
@@ -809,7 +817,7 @@ impl Renderer {
                     .map_err(|e| err(InvalidStyle, e))?,
             ),
         };
-        let tile_id = TileId { z, x, y };
+        let tile_id = GraphTileId { z, x, y };
         let canvas = CanvasInfo::square(tile_size, pad);
         let mut tile_loader = TileLoader::new(&self.assets, tile_id);
         let requested = self.graph.asset_inputs();
@@ -1052,7 +1060,7 @@ fn encode_render(
     graph: &Graph,
     cache: &Cache,
     tile_loader: &TileLoader<'_>,
-    tile_id: TileId,
+    tile_id: GraphTileId,
     canvas: CanvasInfo,
     opts: RenderOptions,
     params: &ParamValues,

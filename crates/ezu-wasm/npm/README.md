@@ -224,7 +224,7 @@ Until the promise settles the renderer is the frame's: bind through the
 that bind returns or settles. Calls that would change the renderer —
 `bindSource`, `clearSources`, `renderTile`, another `renderFrame`,
 `setStyle`, `setTileSize`, `clearTileSize`, `setGlyphBudget` — throw
-`Busy` meanwhile, so another request cannot slip its bindings into the
+`FrameInProgress` meanwhile, so another request cannot slip its bindings into the
 frame. Queries that only read, such as `sourceTile` and
 `neededCodepoints`, still answer.
 
@@ -265,7 +265,7 @@ discriminates the kind:
 | `RenderFailed` | A node `eval` failed (e.g. missing brush, downcast mismatch) |
 | `PngEncode`    | PNG encoding failed |
 | `WebpEncode`   | WebP encoding failed |
-| `Busy`         | A call would change a renderer that a `renderFrame` holds until its promise settles |
+| `FrameInProgress` | A call would change a renderer that a `renderFrame` holds until its promise settles |
 | `StaleBinder`  | A frame's `binder` was used after its tile's bind returned or settled |
 
 ```js

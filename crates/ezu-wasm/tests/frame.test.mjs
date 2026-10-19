@@ -216,7 +216,7 @@ test("a frame holds the renderer until it settles", async () => {
   const r = new Renderer(stainedGlass());
   const f = r.computeFrame(cornerRequest);
   const parent = read("go/testdata/basemap-13-7277-3227.mvt");
-  const busy = { name: "Busy" };
+  const busy = { name: "FrameInProgress" };
 
   let kept;
   const seen = [];

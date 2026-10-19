@@ -241,6 +241,42 @@ impl Frame {
     pub fn tile_count(&self) -> u64 {
         self.tiles_x.len() as u64 * self.tiles_y.len() as u64
     }
+
+    /// Where tile `(x, y)`'s pixels go in the frame's image: one copy per
+    /// row of the tile that falls inside the frame, as byte ranges of
+    /// straight 8-bit RGBA, 4 bytes a pixel. Each copies `len` bytes from
+    /// offset `src` of the `tile_size × tile_size` tile to offset `dst` of
+    /// the `width × height` image. A tile wholly outside the frame yields
+    /// nothing.
+    ///
+    /// Copying them is the crop a frame makes along its border. Rows are
+    /// copied, not composited: tiles never overlap, so there is nothing
+    /// underneath to blend with.
+    pub fn tile_rows(&self, x: u32, y: u32) -> impl Iterator<Item = RowCopy> {
+        let (dx, dy) = self.tile_offset(x, y);
+        let (w, h, t) = (self.width as i64, self.height as i64, self.tile_size as i64);
+        let (x0, x1) = (dx.max(0), (dx + t).min(w));
+        let (y0, y1) = (dy.max(0), (dy + t).min(h));
+        let rows = if x0 < x1 { y0..y1 } else { 0..0 };
+        let len = ((x1 - x0).max(0) * 4) as usize;
+        rows.map(move |row| RowCopy {
+            dst: ((row * w + x0) * 4) as usize,
+            src: (((row - dy) * t + (x0 - dx)) * 4) as usize,
+            len,
+        })
+    }
+}
+
+/// One row of a tile copied into a frame's image; see
+/// [`Frame::tile_rows`]. Offsets and length are in bytes of RGBA.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RowCopy {
+    /// Offset into the frame's image.
+    pub dst: usize,
+    /// Offset into the tile.
+    pub src: usize,
+    /// Bytes to copy.
+    pub len: usize,
 }
 
 fn validate(req: &FrameRequest) -> Result<(), FrameError> {
@@ -281,6 +317,62 @@ fn validate(req: &FrameRequest) -> Result<(), FrameError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `width × height` frame whose tile (0, 0) sits with its top-left at
+    /// `(dx, dy)` and is `t` px across.
+    fn placed(width: u32, height: u32, t: u32, dx: i64, dy: i64) -> Frame {
+        Frame {
+            zoom: 0,
+            tile_size: t,
+            scale: 0.0,
+            width,
+            height,
+            left: -dx,
+            top: -dy,
+            shift: (0.0, 0.0),
+            tiles_x: 0..1,
+            tiles_y: 0..1,
+        }
+    }
+
+    fn copy_in(frame: &Frame, tile: &[u8], dst: &mut [u8]) {
+        for row in frame.tile_rows(0, 0) {
+            dst[row.dst..row.dst + row.len].copy_from_slice(&tile[row.src..row.src + row.len]);
+        }
+    }
+
+    #[test]
+    fn a_tile_is_cropped_at_every_edge() {
+        // A 4 × 4 tile whose bytes count up, placed so that only its centre
+        // 2 × 2 falls in a 2 × 2 image.
+        let tile: Vec<u8> = (0..4 * 4 * 4).map(|i| i as u8).collect();
+        let mut dst = vec![0u8; 2 * 2 * 4];
+        copy_in(&placed(2, 2, 4, -1, -1), &tile, &mut dst);
+        for y in 0..2 {
+            for x in 0..2 {
+                let src = ((y + 1) * 4 + (x + 1)) * 4;
+                assert_eq!(dst[(y * 2 + x) * 4..][..4], tile[src..][..4], "({x}, {y})");
+            }
+        }
+        // Wholly outside, on every side: nothing to copy.
+        for (dx, dy) in [(2, 0), (-4, 0), (0, 2), (0, -4)] {
+            assert_eq!(
+                placed(2, 2, 4, dx, dy).tile_rows(0, 0).count(),
+                0,
+                "({dx}, {dy})"
+            );
+        }
+    }
+
+    #[test]
+    fn a_tile_inside_the_image_lands_whole() {
+        let tile: Vec<u8> = (0..2 * 2 * 4).map(|i| i as u8 + 1).collect();
+        let mut dst = vec![0u8; 3 * 3 * 4];
+        copy_in(&placed(3, 3, 2, 1, 1), &tile, &mut dst);
+        assert_eq!(dst[(3 + 1) * 4..][..8], tile[..8]);
+        assert_eq!(dst[(2 * 3 + 1) * 4..][..8], tile[8..16]);
+        assert!(dst[..(3 + 1) * 4].iter().all(|b| *b == 0));
+    }
 
     /// Shibuya, Tokyo.
     const LON: f64 = 139.70;

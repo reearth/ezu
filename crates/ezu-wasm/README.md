@@ -248,7 +248,7 @@ through the `binder` it is handed, which works for that tile only and only
 until that bind returns or settles; used later it throws `StaleBinder`.
 Anything else that would change the renderer — `bindSource`,
 `clearSources`, `renderTile`, another `renderFrame`, `setStyle`,
-`setTileSize`, `clearTileSize`, `setGlyphBudget` — throws `Busy`, so a
+`setTileSize`, `clearTileSize`, `setGlyphBudget` — throws `FrameInProgress`, so a
 request that runs while a bind awaits its fetch cannot slip its bindings
 into the frame's tiles. Queries that only read (`sourceTile`,
 `requestedNeighborOffsets`, `neededCodepoints`, `boundSources`, …) still
@@ -519,7 +519,7 @@ discriminates the failure kind:
 | `PngEncode`    | PNG encoding failed |
 | `WebpEncode`   | WebP encoding failed |
 | `OutOfMemory`  | The wasm heap could not grow — the render needs more memory than the host allows |
-| `Busy`         | A call would change a renderer that a `renderFrame` holds until its promise settles |
+| `FrameInProgress` | A call would change a renderer that a `renderFrame` holds until its promise settles |
 | `StaleBinder`  | A frame's `binder` was used after its tile's bind returned or settled |
 
 `OutOfMemory` is thrown from wherever the allocation failed, which means

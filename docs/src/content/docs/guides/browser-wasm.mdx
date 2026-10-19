@@ -208,7 +208,7 @@ Until the promise settles the renderer is the frame's. Your function binds
 through the `binder` it is handed, which works for that tile only and only until
 the function returns or settles; used later it throws `StaleBinder`. Anything
 else that would change the renderer — `bindSource`, `clearSources`,
-`renderTile`, another `renderFrame`, `setStyle`, `setTileSize` — throws `Busy`,
+`renderTile`, another `renderFrame`, `setStyle`, `setTileSize` — throws `FrameInProgress`,
 so a request that runs while your function awaits its fetch cannot slip its
 bindings into the frame. Queries that only read, such as `sourceTile` and
 `neededCodepoints`, still answer, and the renderer is given back however the

@@ -65,7 +65,7 @@
 //! `renderFrame(frame, bind)` renders them — awaiting `bind` for each tile
 //! — into one straight-RGBA page, the CLI's pixel for pixel. While it runs
 //! the renderer is the frame's: `bind` binds through the binder it is
-//! handed, and changing the renderer from anywhere else throws `Busy`.
+//! handed, and changing the renderer from anywhere else throws `FrameInProgress`.
 //! `setTileSize` / `clearTileSize` render at another tile size for a host
 //! that renders a frame's tiles itself.
 //!
@@ -79,7 +79,7 @@
 //! [`ezu_renderer::ErrorKind`]'s names, so a Rust host and a JS host
 //! see the same name for the same failure.
 //!
-//! Two names are this shell's own: `Busy`, for a call that would change a
+//! Two names are this shell's own: `FrameInProgress`, for a call that would change a
 //! renderer a `renderFrame` holds, and `StaleBinder`, for a frame's binder
 //! used after its tile's bind has finished.
 //!
@@ -356,7 +356,7 @@ impl Renderer {
     /// Until the promise settles the renderer is the frame's: everything
     /// that would change what it draws — `bindSource`, `clearSources`,
     /// `renderTile`, `renderFrame`, `setStyle`, `setTileSize`,
-    /// `clearTileSize`, `setGlyphBudget` — throws `Busy`, so a request
+    /// `clearTileSize`, `setGlyphBudget` — throws `FrameInProgress`, so a request
     /// running while the bind awaits cannot land its bindings in the
     /// frame's tiles. Queries that only read (`sourceTile`,
     /// `requestedNeighborOffsets`, `neededCodepoints`, `boundSources`, …)
@@ -802,11 +802,11 @@ impl Renderer {
 }
 
 impl Renderer {
-    /// `Busy` while a `renderFrame` holds the renderer.
+    /// `FrameInProgress` while a `renderFrame` holds the renderer.
     fn idle(&self) -> Result<(), JsValue> {
         if self.frame.busy.get() {
             return Err(shell_err(
-                "Busy",
+                "FrameInProgress",
                 "the renderer is rendering a frame; wait for renderFrame to settle, \
                  and bind the frame's tiles through the binder it passes",
             ));
@@ -918,11 +918,10 @@ async fn render_frame_tiles(
                     ),
                 ));
             }
-            let (dx, dy) = frame.tile_offset(x, y);
-            blit_rows(frame.width, frame.height, t, dx, dy, |dst, src, len| {
-                out.subarray(dst as u32, (dst + len) as u32)
-                    .copy_from(&px[src..src + len]);
-            });
+            for row in frame.tile_rows(x, y) {
+                out.subarray(row.dst as u32, (row.dst + row.len) as u32)
+                    .copy_from(&px[row.src..row.src + row.len]);
+            }
         }
     }
     Ok(out.into())
@@ -1158,34 +1157,6 @@ fn tile_object(z: u8, x: u32, y: u32) -> Result<JsValue, JsValue> {
     js_sys::Reflect::set(&out, &"x".into(), &JsValue::from(x))?;
     js_sys::Reflect::set(&out, &"y".into(), &JsValue::from(y))?;
     Ok(out.into())
-}
-
-/// Copy a `t × t` straight-RGBA tile with its top-left at `(dx, dy)` into
-/// a `width × height` RGBA image, keeping only the part inside it — the
-/// crop `ezu frame` makes along the border. `copy(dst, src, len)` copies
-/// `len` bytes of one row, from byte `src` of the tile to byte `dst` of
-/// the image. Rows are copied, not composited: tiles never overlap, so
-/// there is nothing underneath to blend with.
-fn blit_rows(
-    width: u32,
-    height: u32,
-    t: u32,
-    dx: i64,
-    dy: i64,
-    mut copy: impl FnMut(usize, usize, usize),
-) {
-    let (w, h, t) = (width as i64, height as i64, t as i64);
-    let (x0, x1) = (dx.max(0), (dx + t).min(w));
-    let (y0, y1) = (dy.max(0), (dy + t).min(h));
-    if x0 >= x1 || y0 >= y1 {
-        return;
-    }
-    let len = ((x1 - x0) * 4) as usize;
-    for y in y0..y1 {
-        let src = (((y - dy) * t + (x0 - dx)) * 4) as usize;
-        let dst = ((y * w + x0) * 4) as usize;
-        copy(dst, src, len);
-    }
 }
 
 /// `obj[key]` as a number, `None` when it is absent (`undefined` or
@@ -1470,53 +1441,10 @@ fn named_err(kind: ErrorKind, e: impl std::fmt::Display) -> JsValue {
 }
 
 /// A JS `Error` named `name`, for the failures only this shell has —
-/// `Busy` and `StaleBinder`, which are about JS calling into a renderer a
+/// `FrameInProgress` and `StaleBinder`, which are about JS calling into a renderer a
 /// frame holds and have no counterpart in [`ErrorKind`].
 fn shell_err(name: &str, e: impl std::fmt::Display) -> JsValue {
     let err = js_sys::Error::new(&e.to_string());
     err.set_name(name);
     err.into()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::blit_rows;
-
-    fn blit(dst: &mut [u8], width: u32, height: u32, tile: &[u8], t: u32, dx: i64, dy: i64) {
-        blit_rows(width, height, t, dx, dy, |d, s, len| {
-            dst[d..d + len].copy_from_slice(&tile[s..s + len]);
-        });
-    }
-
-    #[test]
-    fn a_tile_is_cropped_at_every_edge() {
-        // A 4 × 4 tile whose bytes count up, placed so that only its centre
-        // 2 × 2 falls in a 2 × 2 image.
-        let tile: Vec<u8> = (0..4 * 4 * 4).map(|i| i as u8).collect();
-        let mut dst = vec![0u8; 2 * 2 * 4];
-        blit(&mut dst, 2, 2, &tile, 4, -1, -1);
-        for y in 0..2 {
-            for x in 0..2 {
-                let src = ((y + 1) * 4 + (x + 1)) * 4;
-                assert_eq!(dst[(y * 2 + x) * 4..][..4], tile[src..][..4], "({x}, {y})");
-            }
-        }
-        // Wholly outside: nothing written, nothing panics.
-        let before = dst.clone();
-        let zeros = vec![0u8; 4 * 4 * 4];
-        blit(&mut dst, 2, 2, &zeros, 4, 2, 0);
-        blit(&mut dst, 2, 2, &zeros, 4, -4, 0);
-        blit(&mut dst, 2, 2, &zeros, 4, 0, 2);
-        assert_eq!(dst, before, "a tile outside the image wrote into it");
-    }
-
-    #[test]
-    fn a_tile_inside_the_image_lands_whole() {
-        let tile: Vec<u8> = (0..2 * 2 * 4).map(|i| i as u8 + 1).collect();
-        let mut dst = vec![0u8; 3 * 3 * 4];
-        blit(&mut dst, 3, 3, &tile, 2, 1, 1);
-        assert_eq!(dst[(3 + 1) * 4..][..8], tile[..8]);
-        assert_eq!(dst[(2 * 3 + 1) * 4..][..8], tile[8..16]);
-        assert!(dst[..(3 + 1) * 4].iter().all(|b| *b == 0));
-    }
 }

@@ -23,6 +23,24 @@ failures carry — is the same whatever language is calling. It lives here
 so that each shell over it is only a translation: read the host's options,
 build the host's result, convert the error.
 
+A print page at a fixed scale works the same way. `compute_frame` picks
+the zoom, tile size and tiles that meet the scale, and `render_frame`
+renders them, handing each tile's bind a `FrameBinder` and cropping the
+tiles into one RGBA page. While the frame holds the renderer, that
+binder is the only way to bind:
+
+```rust
+let f = r.compute_frame(&request)?;
+let page = r.render_frame(&f, RenderOptions::default(), |b, tile| {
+    let mvt = fetch_mvt(tile)?; // your fetch, your error type
+    b.bind_source("basemap", mvt, &BindOptions::default())?;
+    Ok::<_, MyError>(())
+})?; // RenderFrameError<MyError>: the bind's error, or the renderer's
+```
+
+In Rust the frame's hold is the borrow checker's: `render_frame` takes
+`&mut self`, and the binder cannot outlive the bind it was handed to.
+
 `ezu-wasm` is the first such shell. Because the failure names come from
 [`ErrorKind`](src/error.rs) rather than from any one shell, a JS caller
 branching on `e.name` and a caller in another language branching on the
