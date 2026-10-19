@@ -28,6 +28,7 @@ renderer = [
     "dep:hokusai",
     "dep:serde_json",
     "dep:tracing",
+    "dep:xxhash-rust",
 ]
 # Pull-through to ezu-graph's parallel within-tile evaluation.
 parallel = ["ezu-graph/parallel", "ezu-paint?/parallel"]
@@ -46,6 +47,9 @@ ezu-translate = { workspace = true, optional = true }
 hokusai = { workspace = true, optional = true, features = ["myb-json"] }
 serde_json = { workspace = true, optional = true }
 tracing = { version = "0.1", optional = true }
+# For the renderer: a hash of each loaded payload, so the render cache
+# tells two payloads for one tile apart.
+xxhash-rust = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "fs"] }

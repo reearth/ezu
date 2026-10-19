@@ -413,16 +413,13 @@ impl Renderer {
             // `render_tile` and name the tile, which callers rely on.
             // `load_source` is the way to decode them up front.
             SourceDecl::Dem(_) | SourceDecl::Raster(_) => {
-                let bytes: Arc<[u8]> = bytes.into();
+                let raw: Arc<[u8]> = bytes.into();
                 let payload = if matches!(decl, SourceDecl::Dem(_)) {
-                    Payload::DemBytes(bytes)
+                    Payload::DemBytes(raw.clone())
                 } else {
-                    Payload::RasterBytes(bytes)
+                    Payload::RasterBytes(raw.clone())
                 };
-                let data = SourceData {
-                    name: name.into(),
-                    payload,
-                };
+                let data = SourceData::new(name, payload, &raw);
                 self.bindings.bind(&data, opts)?;
             }
             // Sprite: the host provides the atlas image as `bytes`. The index
@@ -553,10 +550,7 @@ impl Renderer {
                 ));
             }
         };
-        Ok(SourceData {
-            name: name.into(),
-            payload,
-        })
+        Ok(SourceData::new(name, payload, bytes))
     }
 
     /// The tile a host should actually fetch from `name` in order to draw
@@ -1019,6 +1013,15 @@ impl Renderer {
                                 );
                             }
                         }
+                        // Overzoom yields the same layer names, so the
+                        // source's own layers name every binding made.
+                        for layer in layers.iter() {
+                            let base = format!("{name}.{}", layer.name);
+                            tile_loader.mix_content_hash(
+                                &ezu_graph::neighbor_binding(&base, dx, dy),
+                                placed.data.content,
+                            );
+                        }
                     }
                 }
                 SourceDecl::Dem(spec) => {
@@ -1071,6 +1074,7 @@ impl Renderer {
                             })?;
                     // Bare source name — the `dem` node's asset lookup key.
                     tile_loader.bind_scalar_field(name, field);
+                    tile_loader.mix_content_hash(name, stitched_content(slots));
                 }
                 SourceDecl::Raster(_) => {
                     let mut tiles: HashMap<(i32, i32), Arc<RasterTile>> =
@@ -1112,6 +1116,7 @@ impl Renderer {
                         )
                     })?;
                     tile_loader.bind_raster(name, buf);
+                    tile_loader.mix_content_hash(name, stitched_content(slots));
                 }
                 SourceDecl::GeoJson(_) => {
                     for (&(dx, dy), placed) in slots {
@@ -1120,6 +1125,10 @@ impl Renderer {
                         };
                         ezu_paint::host::bind_geojson(&mut tile_loader, name, data, dx, dy)
                             .map_err(|e| err(GeoJsonDecode, e))?;
+                        tile_loader.mix_content_hash(
+                            &ezu_graph::neighbor_binding(&format!("{name}.{name}"), dx, dy),
+                            placed.data.content,
+                        );
                     }
                 }
                 _ => return Err(mismatch()),
@@ -1154,6 +1163,26 @@ impl Renderer {
             &params,
         )
     }
+}
+
+/// The identity of a 3×3 stitch: which payload sits at each offset, and
+/// from which zoom it is resampled. Offsets are sorted so the answer does
+/// not depend on the map's iteration order.
+fn stitched_content(slots: &HashMap<(i32, i32), source_set::Placed>) -> u128 {
+    let mut offsets: Vec<_> = slots.keys().copied().collect();
+    offsets.sort_unstable();
+    let mut h = xxhash_rust::xxh3::Xxh3::new();
+    for (dx, dy) in offsets {
+        let placed = &slots[&(dx, dy)];
+        h.update(&dx.to_le_bytes());
+        h.update(&dy.to_le_bytes());
+        h.update(&placed.data.content.to_le_bytes());
+        h.update(&[
+            u8::from(placed.source_zoom.is_some()),
+            placed.source_zoom.unwrap_or(0),
+        ]);
+    }
+    h.digest128()
 }
 
 fn already_bound_otherwise(name: &str) -> Error {

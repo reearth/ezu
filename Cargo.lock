@@ -702,6 +702,7 @@ dependencies = [
  "tiny-skia",
  "tokio",
  "tracing",
+ "xxhash-rust",
 ]
 
 [[package]]

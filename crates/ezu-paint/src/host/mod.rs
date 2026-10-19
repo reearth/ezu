@@ -955,6 +955,23 @@ impl<'a> TileLoader<'a> {
         )
     }
 
+    /// Mix `content`, a hash of the data bound under `name`, into that
+    /// binding's identity. Without it a binding is known by tile and name
+    /// alone, which is enough while each tile only ever gets one payload;
+    /// a host that may render one tile from different data — a newer
+    /// fetch, a different set of sources — mixes in a hash of the data so
+    /// the render cache cannot answer with the earlier payload's pixels.
+    /// A name with nothing bound is left alone.
+    pub fn mix_content_hash(&mut self, name: &str, content: u128) -> &mut Self {
+        if let Some(b) = self.bindings.get_mut(name) {
+            let mut h = Xxh3::new();
+            h.update(&b.hash.to_le_bytes());
+            h.update(&content.to_le_bytes());
+            b.hash = h.digest128();
+        }
+        self
+    }
+
     fn binding_hash(&self, name: &str) -> u128 {
         let mut h = Xxh3::new();
         h.update(&self.tile.z.to_le_bytes());

@@ -45,6 +45,20 @@ use super::{already_bound_otherwise, BindOptions, Error};
 pub struct SourceData {
     pub(super) name: Arc<str>,
     pub(super) payload: Payload,
+    /// A hash of the bytes this was loaded from, taken once at load. The
+    /// render cache knows a binding by tile and name, and this is what
+    /// tells it two payloads for the same tile apart.
+    pub(super) content: u128,
+}
+
+impl SourceData {
+    pub(super) fn new(name: &str, payload: Payload, bytes: &[u8]) -> Self {
+        Self {
+            name: name.into(),
+            payload,
+            content: xxhash_rust::xxh3::xxh3_128(bytes),
+        }
+    }
 }
 
 #[derive(Clone)]

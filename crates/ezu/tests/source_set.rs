@@ -326,3 +326,51 @@ fn data_loaded_under_another_style_is_refused() {
     let e = r.render_tile_with(10, 909, 402, &set, rgba()).unwrap_err();
     assert_eq!(e.kind(), ErrorKind::UnknownSource);
 }
+
+#[test]
+fn a_tile_rendered_from_other_data_is_not_served_from_the_cache() {
+    // The same tile from two sets that differ only in what the centre
+    // holds. The render cache is keyed by tile and binding name, so
+    // without the data in that key the second render would answer with
+    // the first one's pixels.
+    let tile = (14, 14554, 6454);
+    let render_with = |r: &Renderer, bytes: &[u8]| {
+        let data = r.load_source("basemap", bytes).expect("loads");
+        let mut set = SourceSet::new();
+        set.bind(&data, &BindOptions::default()).expect("binds");
+        r.render_tile_with(tile.0, tile.1, tile.2, &set, rgba())
+            .expect("renders")
+    };
+    let r = Renderer::new(STITCHED).expect("builds");
+    let first = render_with(&r, BASEMAP_Z14);
+    let second = render_with(&r, BASEMAP_Z13);
+    let fresh = render_with(&Renderer::new(STITCHED).expect("builds"), BASEMAP_Z13);
+    assert!(first != fresh, "the two payloads draw the same pixels");
+    assert!(
+        second == fresh,
+        "the second set rendered from the first one's cache"
+    );
+
+    // Rebinding other bytes through `bind_source` is the same case.
+    let mut r = Renderer::new(STITCHED).expect("builds");
+    for bytes in [BASEMAP_Z14, BASEMAP_Z13] {
+        r.clear_sources();
+        r.bind_source("basemap", bytes.to_vec(), &BindOptions::default())
+            .expect("binds");
+    }
+    let rebound = r
+        .render_tile(tile.0, tile.1, tile.2, rgba())
+        .expect("renders");
+    let mut r2 = Renderer::new(STITCHED).expect("builds");
+    r2.bind_source("basemap", BASEMAP_Z14.to_vec(), &BindOptions::default())
+        .expect("binds");
+    r2.render_tile(tile.0, tile.1, tile.2, rgba())
+        .expect("renders");
+    r2.clear_sources();
+    r2.bind_source("basemap", BASEMAP_Z13.to_vec(), &BindOptions::default())
+        .expect("binds");
+    let after_rebind = r2
+        .render_tile(tile.0, tile.1, tile.2, rgba())
+        .expect("renders");
+    assert!(after_rebind == rebound, "a rebind rendered from the cache");
+}
