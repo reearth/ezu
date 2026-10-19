@@ -21,6 +21,12 @@ mean is spelled out in
   reads relative to the working directory. A local `{z}/{x}/{y}` template
   whose directory does not exist now fails to open, naming the directory,
   instead of drawing every tile empty.
+- The CLI panicked at start-up on a machine with no root certificates
+  installed, a bare Linux container say, even when every source was a local
+  file: the `raster` and `dem` registries built their HTTP client up front,
+  and building one loads the system's certificates. The client is now built
+  on the first request, and a failure to build it fails that source's fetch
+  with the reason instead of aborting.
 
 ## 0.12.0 — 2026-10-12
 

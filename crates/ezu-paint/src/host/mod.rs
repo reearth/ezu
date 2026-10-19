@@ -26,6 +26,8 @@ pub use raster::{
     bind_raster_sources, build_raster_sources, RasterFetchError, RasterSourceRegistry,
 };
 #[cfg(feature = "http")]
+mod http_client;
+#[cfg(feature = "http")]
 mod tilejson;
 
 use std::any::Any;

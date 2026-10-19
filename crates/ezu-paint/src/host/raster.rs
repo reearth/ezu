@@ -23,6 +23,7 @@ use pmtiles::{AsyncPmTilesReader, HttpBackend, MmapBackend};
 use reqwest::Client;
 use tokio::sync::OnceCell;
 
+use crate::host::http_client::LazyClient;
 use crate::host::raster_decode::{
     decode_raster_tile, stitch_padded_raster, upsample_subregion_raster, RasterTile,
 };
@@ -95,7 +96,7 @@ type TileCache = Mutex<HashMap<(u8, u32, u32), Option<Arc<RasterTile>>>>;
 pub struct RasterSourceState {
     name: String,
     spec: RasterSource,
-    client: Client,
+    client: LazyClient,
     assets_dir: Option<PathBuf>,
     backend: OnceCell<RasterBackend>,
     upstream_attribution: OnceCell<Option<String>>,
@@ -107,10 +108,7 @@ pub struct RasterSourceState {
 /// paths. Backends open lazily on first use (or eagerly via
 /// [`RasterSourceRegistry::resolve_metadata`]).
 pub fn build_raster_sources(doc: &Document, assets_dir: Option<PathBuf>) -> RasterSourceRegistry {
-    let client = Client::builder()
-        .user_agent(concat!("ezu/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .unwrap_or_default();
+    let client = LazyClient::default();
     let mut sources = Vec::new();
     for (name, decl) in &doc.sources {
         let SourceDecl::Raster(spec) = decl else {
@@ -152,6 +150,13 @@ pub async fn bind_raster_sources(
 }
 
 impl RasterSourceState {
+    fn client(&self) -> Result<&Client, RasterFetchError> {
+        self.client.get().map_err(|msg| RasterFetchError::Http {
+            name: self.name.clone(),
+            msg,
+        })
+    }
+
     async fn backend(&self) -> Result<&RasterBackend, RasterFetchError> {
         self.backend
             .get_or_try_init(|| async {
@@ -159,7 +164,7 @@ impl RasterSourceState {
                 if url.ends_with(".pmtiles") {
                     let (backend, metadata) = if is_url(url) {
                         let reader =
-                            AsyncPmTilesReader::new_with_url(self.client.clone(), url.clone())
+                            AsyncPmTilesReader::new_with_url(self.client()?.clone(), url.clone())
                                 .await
                                 .map_err(|e| RasterFetchError::Open {
                                     name: self.name.clone(),
@@ -192,7 +197,7 @@ impl RasterSourceState {
                     let _ = self.upstream_attribution.set(attribution);
                     Ok(backend)
                 } else if url.split('?').next().is_some_and(|p| p.ends_with(".json")) {
-                    let (template, attribution) = resolve_tilejson(&self.client, url)
+                    let (template, attribution) = resolve_tilejson(self.client()?, url)
                         .await
                         .map_err(|msg| RasterFetchError::Open {
                             name: self.name.clone(),
@@ -304,44 +309,42 @@ impl RasterSourceState {
         if let Some(hit) = self.cache.lock().unwrap().get(&(z, x, y)).cloned() {
             return Ok(hit);
         }
-        let bytes: Option<Vec<u8>> = match self.backend().await? {
-            RasterBackend::Xyz { template } => {
-                let url = template
-                    .replace("{z}", &z.to_string())
-                    .replace("{x}", &x.to_string())
-                    .replace("{y}", &y.to_string());
-                let resp =
-                    self.client
-                        .get(&url)
-                        .send()
-                        .await
-                        .map_err(|e| RasterFetchError::Http {
+        let bytes: Option<Vec<u8>> =
+            match self.backend().await? {
+                RasterBackend::Xyz { template } => {
+                    let url = template
+                        .replace("{z}", &z.to_string())
+                        .replace("{x}", &x.to_string())
+                        .replace("{y}", &y.to_string());
+                    let resp = self.client()?.get(&url).send().await.map_err(|e| {
+                        RasterFetchError::Http {
                             name: self.name.clone(),
                             msg: format!("{url}: {e}"),
-                        })?;
-                if resp.status() == reqwest::StatusCode::NOT_FOUND {
-                    None
-                } else {
-                    let resp = resp
-                        .error_for_status()
-                        .map_err(|e| RasterFetchError::Http {
-                            name: self.name.clone(),
-                            msg: format!("{url}: {e}"),
-                        })?;
-                    Some(
-                        resp.bytes()
-                            .await
+                        }
+                    })?;
+                    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+                        None
+                    } else {
+                        let resp = resp
+                            .error_for_status()
                             .map_err(|e| RasterFetchError::Http {
                                 name: self.name.clone(),
                                 msg: format!("{url}: {e}"),
-                            })?
-                            .to_vec(),
-                    )
+                            })?;
+                        Some(
+                            resp.bytes()
+                                .await
+                                .map_err(|e| RasterFetchError::Http {
+                                    name: self.name.clone(),
+                                    msg: format!("{url}: {e}"),
+                                })?
+                                .to_vec(),
+                        )
+                    }
                 }
-            }
-            RasterBackend::PmHttp(r) => self.pm_tile_bytes(r, z, x, y).await?,
-            RasterBackend::PmLocal(r) => self.pm_tile_bytes(r, z, x, y).await?,
-        };
+                RasterBackend::PmHttp(r) => self.pm_tile_bytes(r, z, x, y).await?,
+                RasterBackend::PmLocal(r) => self.pm_tile_bytes(r, z, x, y).await?,
+            };
         let decoded = match bytes {
             Some(b) => Some(Arc::new(decode_raster_tile(&b, z, x, y).map_err(
                 |msg| RasterFetchError::Decode {

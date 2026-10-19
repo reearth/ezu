@@ -35,6 +35,7 @@ use reqwest::Client;
 use tokio::sync::OnceCell;
 
 use crate::host::dem_decode::{decode_dem_tile, stitch_padded_field, upsample_subregion, DemTile};
+use crate::host::http_client::LazyClient;
 use crate::host::tilejson::resolve_tilejson;
 use crate::host::TileLoader;
 
@@ -102,7 +103,7 @@ type TileCache<T> = Mutex<HashMap<(u8, u32, u32), Option<Arc<T>>>>;
 struct DemSourceState {
     name: String,
     spec: DemSource,
-    client: Client,
+    client: LazyClient,
     template: OnceCell<String>,
     upstream_attribution: OnceCell<Option<String>>,
     cache: TileCache<DemTile>,
@@ -111,10 +112,7 @@ struct DemSourceState {
 /// Build a registry from every `dem`-typed entry in the document's
 /// `sources` block. Returns an empty registry if there are none.
 pub fn build_dem_sources(doc: &Document) -> DemSourceRegistry {
-    let client = Client::builder()
-        .user_agent(concat!("ezu/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .unwrap_or_default();
+    let client = LazyClient::default();
     let mut sources = Vec::new();
     for (name, decl) in &doc.sources {
         let SourceDecl::Dem(spec) = decl else {
@@ -159,12 +157,19 @@ pub async fn bind_dem_sources(
 }
 
 impl DemSourceState {
+    fn client(&self) -> Result<&Client, DemFetchError> {
+        self.client.get().map_err(|msg| DemFetchError::Http {
+            name: self.name.clone(),
+            msg,
+        })
+    }
+
     async fn template(&self) -> Result<&String, DemFetchError> {
         self.template
             .get_or_try_init(|| async {
                 let url = &self.spec.url;
                 if url.split('?').next().is_some_and(|p| p.ends_with(".json")) {
-                    let (template, attribution) = resolve_tilejson(&self.client, url)
+                    let (template, attribution) = resolve_tilejson(self.client()?, url)
                         .await
                         .map_err(|msg| DemFetchError::Http {
                             name: self.name.clone(),
@@ -291,7 +296,7 @@ impl DemSourceState {
             .replace("{x}", &x.to_string())
             .replace("{y}", &y.to_string());
         let resp = self
-            .client
+            .client()?
             .get(&url)
             .send()
             .await
