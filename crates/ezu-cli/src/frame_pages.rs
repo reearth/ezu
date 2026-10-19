@@ -561,7 +561,12 @@ mod tests {
             r#"{{ "pages": [ {{ {page}, "out": "a.png" }}, {{ {page}, "out": "b.png",
                  "features": {{ "boxes": {{ "out": "a.png" }} }} }} ] }}"#
         ));
-        assert_eq!(e, "page 2: /job/a.png is already written by page 1");
+        // The path as the platform joins it: `\` between the parts on Windows.
+        let a = Path::new("/job").join("a.png");
+        assert_eq!(
+            e,
+            format!("page 2: {} is already written by page 1", a.display())
+        );
         let e = err(
             r#"{ "pages": [ { "scale": 1000, "dpi": 96, "size-px": [10, 10], "out": "a.png" } ] }"#,
         );

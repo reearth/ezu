@@ -54,9 +54,15 @@ pub struct TileSource {
 ///
 /// A tile the source does not have is remembered too, so a missing tile is
 /// not asked for twice. Failed fetches are not remembered.
+///
+/// Renders running side by side often want the same source tile at once —
+/// every tile of a page past the source's `max-zoom` reads the same
+/// ancestor — so a fetch holds that tile's lock while it goes to the
+/// source, and the others wait for it and read what it kept.
 pub struct TileByteCache {
     budget: usize,
     inner: std::sync::Mutex<ByteCacheInner>,
+    in_flight: std::sync::Mutex<std::collections::HashMap<ByteKey, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 /// Key: the source's id in the cache, then `z`, `x`, `y`.
@@ -83,6 +89,25 @@ impl TileByteCache {
         Self {
             budget,
             inner: std::sync::Mutex::new(ByteCacheInner::default()),
+            in_flight: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// The lock one fetch of `tile` of source `id` holds while it runs.
+    fn tile_lock(&self, id: usize, tile: TileId) -> Arc<tokio::sync::Mutex<()>> {
+        let key = (id, tile.z, tile.x, tile.y);
+        let mut in_flight = self.in_flight.lock().expect("tile byte cache poisoned");
+        Arc::clone(in_flight.entry(key).or_default())
+    }
+
+    /// Forget `tile`'s lock once nobody else holds it. A fetch that comes
+    /// later finds the tile kept and needs no lock to wait on.
+    fn release(&self, id: usize, tile: TileId, lock: Arc<tokio::sync::Mutex<()>>) {
+        let key = (id, tile.z, tile.x, tile.y);
+        let mut in_flight = self.in_flight.lock().expect("tile byte cache poisoned");
+        // Ours, plus the map's: nobody is waiting.
+        if Arc::strong_count(&lock) == 2 {
+            in_flight.remove(&key);
         }
     }
 
@@ -280,12 +305,22 @@ impl TileSource {
         let Some((cache, id)) = &self.byte_cache else {
             return self.fetch_from_source(tile).await;
         };
-        if let Some(kept) = cache.get(*id, tile) {
-            return Ok(kept);
-        }
-        let fetched = self.fetch_from_source(tile).await?;
-        cache.insert(*id, tile, fetched.clone());
-        Ok(fetched)
+        let lock = cache.tile_lock(*id, tile);
+        let result = {
+            let _held = lock.lock().await;
+            match cache.get(*id, tile) {
+                Some(kept) => Ok(kept),
+                None => {
+                    let fetched = self.fetch_from_source(tile).await;
+                    if let Ok(bytes) = &fetched {
+                        cache.insert(*id, tile, bytes.clone());
+                    }
+                    fetched
+                }
+            }
+        };
+        cache.release(*id, tile, lock);
+        result
     }
 
     async fn fetch_from_source(&self, tile: TileId) -> Result<Option<Bytes>, SourceError> {
