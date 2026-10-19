@@ -87,6 +87,13 @@ mean is spelled out in
   and building one loads the system's certificates. The client is now built
   on the first request, and a failure to build it fails that source's fetch
   with the reason instead of aborting.
+- `label-boxes` gave one label a different `label-id` on each tile when its
+  source carried the feature in more than one tile, as a `geojson` source
+  does for every tile and an MVT tile's buffer does near its edge: each
+  tile kept a different copy of the label, and the id was taken from the
+  copy. It is now taken from what placement treats as the same label (its
+  layer, text, style and anchor), so it matches across tiles as documented.
+  Ids differ from 0.12.0's.
 
 ## 0.12.0 — 2026-10-12
 

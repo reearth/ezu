@@ -467,6 +467,29 @@ fn a_line_label_gives_a_rotated_quad_and_a_collision_box_per_glyph() {
 }
 
 #[test]
+fn a_label_copied_into_several_tiles_keeps_one_id() {
+    // A GeoJSON source projects the feature into every tile, so each tile's
+    // window holds its own set of copies: x=5 sees x=4's and its own, x=6
+    // sees x=5's and its own. Placement keeps a different copy on each.
+    let at = |x: i32| layer(vec![point("HHH", x, 2048)]);
+    let rc = recipe("", "");
+    let (left, _) = run(
+        &rc,
+        TileId { z: 4, x: 5, y: 7 },
+        &[("src.pts@-1,0", at(3800 + 4096)), ("src.pts", at(3800))],
+    );
+    let (right, _) = run(
+        &rc,
+        TileId { z: 4, x: 6, y: 7 },
+        &[("src.pts@-1,0", at(3800)), ("src.pts", at(3800 - 4096))],
+    );
+    let (left, right) = (boxes(&left), boxes(&right));
+    let (l, r) = (of_part(&left, "text"), of_part(&right, "text"));
+    assert_eq!((l.len(), r.len()), (1, 1));
+    assert_eq!(l[0].label_id(), r[0].label_id());
+}
+
+#[test]
 fn a_label_straddling_the_seam_gives_the_same_boxes_on_both_tiles() {
     // The label's own tile is x=5; tile x=6 sees it only as a neighbour.
     let feats = || layer(vec![point("HHH", 3800, 2048)]);

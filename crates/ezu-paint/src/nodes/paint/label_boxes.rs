@@ -25,7 +25,10 @@ use xxhash_rust::xxh3::Xxh3;
 
 use super::labels::{labels_input, text_rect, LabelDraw, LabelSet, PlacedLabels, ACCEPTS_LABELS};
 use crate::nodes::common::{features_value_culled, FeatureGroup};
-use ezu_core::text::{collide::Aabb, LabelCandidate};
+use ezu_core::text::{
+    collide::{Aabb, DEDUP_QUANTUM},
+    LabelCandidate,
+};
 
 /// Coordinate extent of the emitted geometry when the recipe gives none.
 const DEFAULT_EXTENT: u32 = 4096;
@@ -189,21 +192,23 @@ enum Outcome {
 }
 
 /// A label's identity, the same on every tile that sees it: its layer's
-/// place in the `label-placement` list and the world-space quantities the
-/// placement itself keys on. Cut to 53 bits so it survives as an exact
-/// expression number.
+/// place in the `label-placement` list and the key placement dedups
+/// candidates by, so two candidates placement treats as one label share it.
+/// Cut to 53 bits so it survives as an exact expression number.
+///
+/// Which copy of a label survives the dedup depends on the tile: a source
+/// that carries the feature in several tiles (a GeoJSON document, an MVT
+/// tile's buffer) offers one copy per tile of the 3×3 window, each ranked by
+/// the tile it came from and quantised there. The rank and the exact anchor
+/// therefore stay out of the id; the quantised anchor does not.
 fn label_id(layer: usize, c: &LabelCandidate) -> f64 {
     let mut h = Xxh3::new();
     h.update(&(layer as u64).to_le_bytes());
-    h.update(&c.world_ax.to_le_bytes());
-    h.update(&c.world_ay.to_le_bytes());
+    h.update(&c.world_ax.div_euclid(DEDUP_QUANTUM).to_le_bytes());
+    h.update(&c.world_ay.div_euclid(DEDUP_QUANTUM).to_le_bytes());
     h.update(c.text.as_bytes());
     h.update(&[0]);
     h.update(&c.style_id.to_le_bytes());
-    h.update(&c.rank.tile.0.to_le_bytes());
-    h.update(&c.rank.tile.1.to_le_bytes());
-    h.update(&c.rank.feature.to_le_bytes());
-    h.update(&c.rank.symbol.to_le_bytes());
     (h.digest() & ((1u64 << 53) - 1)) as f64
 }
 
