@@ -6,9 +6,11 @@
 //!          --bbox MIN_LNG,MIN_LAT,MAX_LNG,MAX_LAT --zoom Z [--out FILE]
 //! ezu frame --style STYLE.json --center LNG,LAT --scale 1000 --dpi 200 \
 //!           --size-mm 245x174 [--out FILE]
+//! ezu frame --style STYLE.json --pages PAGES.json
 //! ```
 
 mod frame_features;
+mod frame_pages;
 mod graph_view;
 mod serve;
 pub(crate) mod source;
@@ -37,7 +39,7 @@ use futures::stream::{StreamExt, TryStreamExt};
 use tiny_skia::Pixmap;
 use tracing_subscriber::EnvFilter;
 
-use crate::source::{FeatureSources, SourceSpec};
+use crate::source::{FeatureSources, SourceSpec, TileByteCache};
 
 #[derive(Parser, Debug)]
 #[command(name = "ezu", version, about = "Render Ezu Style documents to PNG")]
@@ -130,7 +132,8 @@ struct CommonArgs {
 /// Output raster format. Pure-Rust pipelines on both sides — WebP is
 /// lossless via the `image-webp` codec, typically 20–40 % smaller than
 /// PNG for painterly content.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 enum OutputFormat {
     Png,
     Webp,
@@ -348,21 +351,32 @@ struct BboxCmd {
 struct FrameCmd {
     #[command(flatten)]
     common: CommonArgs,
+    /// Render every page a JSON file lists, in place of the one page the
+    /// flags below describe. Each page takes the fields `center`, `scale`,
+    /// `dpi`, `size-mm` or `size-px`, `zoom`, `out`, `format`,
+    /// `features-coords` and `features` (`{NODE: {"out": PATH, "key":
+    /// [PROP, ...]}}`), any of them but `out` from a `defaults` object. The
+    /// style is read once, and pages over the same tiles fetch them once.
+    #[arg(long, value_name = "PATH", conflicts_with_all = [
+        "center", "scale", "dpi", "size_mm", "size_px", "zoom", "out", "format",
+        "features", "features_key", "features_coords",
+    ])]
+    pages: Option<PathBuf>,
     /// Centre of the frame as `lng,lat` (WGS84). The scale is matched at
     /// this latitude.
-    #[arg(long, value_parser = parse_lnglat)]
-    center: (f64, f64),
+    #[arg(long, value_parser = parse_lnglat, required_unless_present = "pages")]
+    center: Option<(f64, f64)>,
     /// Scale denominator: `1000` for 1:1000.
-    #[arg(long)]
-    scale: f64,
+    #[arg(long, required_unless_present = "pages")]
+    scale: Option<f64>,
     /// Output resolution in dots per inch. Always required: with the scale
     /// it fixes how many ground metres one pixel covers. It does not
     /// enlarge the style's own pixel sizes (line widths, text).
-    #[arg(long)]
-    dpi: f64,
+    #[arg(long, required_unless_present = "pages")]
+    dpi: Option<f64>,
     /// Paper size as `WIDTHxHEIGHT` in millimetres, converted to pixels at
     /// `--dpi`.
-    #[arg(long, value_parser = parse_size_mm, required_unless_present = "size_px", conflicts_with = "size_px")]
+    #[arg(long, value_parser = parse_size_mm, required_unless_present_any = ["size_px", "pages"], conflicts_with = "size_px")]
     size_mm: Option<(f64, f64)>,
     /// Output size as `WIDTHxHEIGHT` in pixels, in place of `--size-mm`.
     #[arg(long, value_parser = parse_wxh)]
@@ -536,10 +550,28 @@ struct Prepared {
     params: Arc<ParamValues>,
 }
 
+impl Prepared {
+    /// The same style at another tile size. Everything opened is shared;
+    /// only the canvas and the graph's intermediate cache, whose entries are
+    /// sized by the tile, are new. Nothing else read from the document
+    /// depends on the tile size, so this renders what preparing the document
+    /// at `tile_size` would.
+    fn at_tile_size(self, tile_size: u32) -> Prepared {
+        Prepared {
+            cache: Arc::new(Cache::with_limits(
+                ezu::graph::cache::DEFAULT_CAPACITY,
+                cache_budget_bytes(),
+            )),
+            canvas: CanvasInfo::square(tile_size, self.canvas.pad),
+            ..self
+        }
+    }
+}
+
 async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Error>> {
     let style_text = fetch_text(&common.style).await?;
     let doc = Document::from_json(&style_text)?;
-    prepare_doc(common, doc).await
+    prepare_doc(common, doc, None).await
 }
 
 /// [`prepare`] for a document already read, which a caller may have
@@ -547,9 +579,13 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
 /// the tile (the canvas, and through it raster and DEM stitching, GeoJSON
 /// projection and label placement) is derived from the document here, so
 /// an override made before this call reaches all of it.
+///
+/// With `byte_cache`, the vector tile sources keep the bytes they fetch
+/// there.
 async fn prepare_doc(
     common: &CommonArgs,
     doc: Document,
+    byte_cache: Option<&Arc<TileByteCache>>,
 ) -> Result<Prepared, Box<dyn std::error::Error>> {
     tracing::info!(
         "style: {} v{} ({} nodes, tile={})",
@@ -589,7 +625,11 @@ async fn prepare_doc(
         (None, None) => None,
         _ => return Err("--pmtiles and --mvt are mutually exclusive".into()),
     };
-    let feature_sources = Arc::new(FeatureSources::open(&doc, cli_override, &assets_dir).await?);
+    let mut feature_sources = FeatureSources::open(&doc, cli_override, &assets_dir).await?;
+    if let Some(cache) = byte_cache {
+        feature_sources = feature_sources.with_byte_cache(cache);
+    }
+    let feature_sources = Arc::new(feature_sources);
 
     let dem_sources = Arc::new(build_dem_sources(&doc));
     if !dem_sources.is_empty() {
@@ -1358,31 +1398,183 @@ async fn run_frame(args: FrameCmd) -> Result<(), Box<dyn std::error::Error>> {
     if concurrency == 0 {
         return Err("--concurrency must be ≥ 1".into());
     }
-    if !(args.dpi.is_finite() && args.dpi > 0.0) {
-        return Err(format!("--dpi must be a positive number, got {}", args.dpi).into());
+    match &args.pages {
+        Some(path) => {
+            let pages = frame_pages::read(path)?;
+            let cache = Arc::new(TileByteCache::new(tile_cache_budget_bytes()));
+            render_pages(&args.common, &pages, concurrency, Some(cache)).await
+        }
+        None => {
+            let page = page_from_flags(&args)?;
+            render_pages(&args.common, &[page], concurrency, None).await
+        }
+    }
+}
+
+/// The one page the single-page flags describe.
+fn page_from_flags(args: &FrameCmd) -> Result<frame_pages::Page, Box<dyn std::error::Error>> {
+    let (Some(center), Some(scale), Some(dpi)) = (args.center, args.scale, args.dpi) else {
+        return Err("--center, --scale and --dpi are required without --pages".into());
+    };
+    if !(dpi.is_finite() && dpi > 0.0) {
+        return Err(format!("--dpi must be a positive number, got {dpi}").into());
     }
     let format = args
         .format
         .unwrap_or_else(|| OutputFormat::from_path(&args.out));
     let (width, height) = match (args.size_px, args.size_mm) {
         (Some(px), _) => px,
-        (None, Some((w, h))) => (mm_to_px(w, args.dpi), mm_to_px(h, args.dpi)),
+        (None, Some((w, h))) => (mm_to_px(w, dpi), mm_to_px(h, dpi)),
         (None, None) => return Err("one of --size-mm or --size-px is required".into()),
     };
-
-    // The frame's tile size depends on the style's own, so the document is
-    // read before `prepare` builds anything sized from it.
-    let mut doc = Document::from_json(&fetch_text(&args.common.style).await?)?;
-    let frame = Frame::compute(&FrameRequest {
-        center_lon: args.center.0,
-        center_lat: args.center.1,
-        scale: args.scale,
-        dpi: args.dpi,
+    Ok(frame_pages::Page {
+        center,
+        scale,
+        dpi,
         width,
         height,
         zoom: args.zoom,
-        style_tile_size: doc.tile_size,
-    })?;
+        out: args.out.clone(),
+        format,
+        features: args.features.clone(),
+        features_key: args.features_key.clone(),
+        features_coords: args.features_coords,
+    })
+}
+
+/// Render `pages` one after another from the style in `common`, each page's
+/// tiles `concurrency` at a time.
+///
+/// The style is read, and its sources opened, once for every page. The
+/// graph's intermediate cache is sized by the tile, so pages at the same
+/// tile size share one and a page at another size starts a fresh one,
+/// dropping the last: memory stays at one cache however many tile sizes the
+/// job has, and a job ordered by scale keeps the most of it. With
+/// `byte_cache`, vector tile bytes fetched for one page are kept for the
+/// next; raster and DEM sources keep their decoded tiles across pages
+/// already. Every page writes what a single-page run of it would.
+///
+/// A `byte_cache` marks a pages-file run: errors then name the page, and
+/// each page and the whole job log a summary.
+async fn render_pages(
+    common: &CommonArgs,
+    pages: &[frame_pages::Page],
+    concurrency: usize,
+    byte_cache: Option<Arc<TileByteCache>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let many = byte_cache.is_some();
+    let on_page = |i: usize, e: Box<dyn std::error::Error>| -> Box<dyn std::error::Error> {
+        if many {
+            format!("page {}: {e}", i + 1).into()
+        } else {
+            e
+        }
+    };
+    // The frame's tile size depends on the style's own, so the document is
+    // read before `prepare` builds anything sized from it.
+    let doc = Document::from_json(&fetch_text(&common.style).await?)?;
+    let style_tile_size = doc.tile_size;
+    let frames = pages
+        .iter()
+        .enumerate()
+        .map(|(i, page)| {
+            Frame::compute(&FrameRequest {
+                center_lon: page.center.0,
+                center_lat: page.center.1,
+                scale: page.scale,
+                dpi: page.dpi,
+                width: page.width,
+                height: page.height,
+                zoom: page.zoom,
+                style_tile_size,
+            })
+            .map_err(|e| on_page(i, e.into()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let started = std::time::Instant::now();
+    let mut doc = Some(doc);
+    let mut state: Option<Prepared> = None;
+    let mut resolved: Vec<(Vec<frame_features::Export>, Vec<ezu::graph::NodeIx>)> = Vec::new();
+    for (i, (page, frame)) in pages.iter().zip(&frames).enumerate() {
+        let page_started = std::time::Instant::now();
+        let counts_before = byte_cache.as_ref().map(|c| c.counts());
+        log_frame(frame, style_tile_size, page.scale);
+        let prep = match state.take() {
+            Some(prep) if prep.canvas.tile_w == frame.tile_size => prep,
+            Some(prep) => prep.at_tile_size(frame.tile_size),
+            None => {
+                let mut doc = doc.take().expect("the style is prepared once");
+                doc.tile_size = frame.tile_size;
+                prepare_doc(common, doc, byte_cache.as_ref()).await?
+            }
+        };
+        let prep = state.insert(prep);
+        // Every page's features are checked against the graph as soon as
+        // there is one, before the first page renders.
+        if resolved.is_empty() {
+            for (j, p) in pages.iter().enumerate() {
+                let r = frame_features::resolve(&prep.graph, &p.features, &p.features_key)
+                    .map_err(|e| on_page(j, e.into()))?;
+                resolved.push(r);
+            }
+        }
+        let (exports, watched) = &resolved[i];
+
+        let (image, mut captures) = render_frame(prep, frame, concurrency, watched)
+            .await
+            .map_err(|e| on_page(i, e))?;
+        let bytes = match page.format {
+            OutputFormat::Png => image.encode_png().map_err(|e| e.to_string())?,
+            OutputFormat::Webp => pixmap_to_webp(&image).map_err(|e| e.to_string())?,
+        };
+        std::fs::write(&page.out, &bytes).map_err(|e| on_page(i, e.into()))?;
+        tracing::info!("wrote {} ({} bytes)", page.out.display(), bytes.len());
+        for export in exports {
+            let text = frame_features::feature_collection(
+                frame,
+                &mut captures,
+                export,
+                page.features_coords,
+            )?;
+            std::fs::write(&export.path, &text).map_err(|e| on_page(i, e.into()))?;
+            tracing::info!(
+                "wrote {} (features of `{}`, {} bytes)",
+                export.path.display(),
+                export.node,
+                text.len()
+            );
+        }
+        if let (Some(cache), Some((hits, misses))) = (&byte_cache, counts_before) {
+            let (h, m) = cache.counts();
+            tracing::info!(
+                "page {}/{}: {} in {:.2}s, {} tiles at z={}, vector tiles fetched {}, reused {}",
+                i + 1,
+                pages.len(),
+                page.out.display(),
+                page_started.elapsed().as_secs_f64(),
+                frame.tile_count(),
+                frame.zoom,
+                m - misses,
+                h - hits,
+            );
+        }
+    }
+    if let Some(cache) = &byte_cache {
+        let (hits, misses) = cache.counts();
+        tracing::info!(
+            "{} pages in {:.2}s, vector tiles fetched {misses}, reused {hits} ({:.1} MB kept)",
+            pages.len(),
+            started.elapsed().as_secs_f64(),
+            cache.held_bytes() as f64 / (1024.0 * 1024.0),
+        );
+    }
+    Ok(())
+}
+
+/// Log what a frame settled on: its size, zoom, tile size and how near the
+/// scale it came.
+fn log_frame(frame: &Frame, style_tile_size: u32, scale: f64) {
     tracing::info!(
         "frame: {}×{} px at z={}, tile-size {} (style: {}), scale 1:{:.1} ({:+.3}% vs 1:{}), \
          shift ({:+.2}, {:+.2}) px, {} tiles ({}..{}, {}..{})",
@@ -1390,10 +1582,10 @@ async fn run_frame(args: FrameCmd) -> Result<(), Box<dyn std::error::Error>> {
         frame.height,
         frame.zoom,
         frame.tile_size,
-        doc.tile_size,
+        style_tile_size,
         frame.scale,
-        (frame.scale / args.scale - 1.0) * 100.0,
-        args.scale,
+        (frame.scale / scale - 1.0) * 100.0,
+        scale,
         frame.shift.0,
         frame.shift.1,
         frame.tile_count(),
@@ -1402,34 +1594,6 @@ async fn run_frame(args: FrameCmd) -> Result<(), Box<dyn std::error::Error>> {
         frame.tiles_y.start,
         frame.tiles_y.end,
     );
-    doc.tile_size = frame.tile_size;
-    let prep = prepare_doc(&args.common, doc).await?;
-    let (exports, watched) =
-        frame_features::resolve(&prep.graph, &args.features, &args.features_key)?;
-
-    let (image, mut captures) = render_frame(&prep, &frame, concurrency, &watched).await?;
-    let bytes = match format {
-        OutputFormat::Png => image.encode_png().map_err(|e| e.to_string())?,
-        OutputFormat::Webp => pixmap_to_webp(&image).map_err(|e| e.to_string())?,
-    };
-    std::fs::write(&args.out, &bytes)?;
-    tracing::info!("wrote {} ({} bytes)", args.out.display(), bytes.len());
-    for export in &exports {
-        let text = frame_features::feature_collection(
-            &frame,
-            &mut captures,
-            export,
-            args.features_coords,
-        )?;
-        std::fs::write(&export.path, &text)?;
-        tracing::info!(
-            "wrote {} (features of `{}`, {} bytes)",
-            export.path.display(),
-            export.node,
-            text.len()
-        );
-    }
-    Ok(())
 }
 
 /// Render every tile `frame` touches and copy each one's share straight
@@ -1762,6 +1926,17 @@ fn cache_budget_bytes() -> usize {
         .unwrap_or(ezu::graph::cache::DEFAULT_BYTE_BUDGET)
 }
 
+/// Ceiling on the vector tile bytes `ezu frame --pages` keeps across pages,
+/// from `EZU_TILE_CACHE_MB` (default 256 MB).
+fn tile_cache_budget_bytes() -> usize {
+    std::env::var("EZU_TILE_CACHE_MB")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(256)
+        * 1024
+        * 1024
+}
+
 /// Whether to evaluate the graph on one thread, as `EZU_SERIAL=1`
 /// requests. Single-threaded evaluation is what a WebAssembly host gets,
 /// and it holds far fewer intermediates alive at once than the Rayon
@@ -2029,9 +2204,10 @@ mod tests {
         let frame_out = dir.join("frame.png");
         run_frame(FrameCmd {
             common: common(&frame_style),
-            center: (request.center_lon, request.center_lat),
-            scale: request.scale,
-            dpi: request.dpi,
+            pages: None,
+            center: Some((request.center_lon, request.center_lat)),
+            scale: Some(request.scale),
+            dpi: Some(request.dpi),
             size_mm: None,
             size_px: Some((request.width, request.height)),
             zoom: None,

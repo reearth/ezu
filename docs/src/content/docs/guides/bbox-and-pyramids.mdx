@@ -107,6 +107,53 @@ the coordinates:
 The same style, data and flags give a byte-identical file on every run, so a
 diff of two runs shows whether anything on the page changed.
 
+### Many pages in one run
+
+A print job is usually many pages from one style. Run once per page, ezu
+reads the style, builds its graph and fetches the background tiles again for
+every page, though neighbouring pages share most of them. `--pages` renders a
+whole job in one run from a JSON file:
+
+```sh
+ezu frame --style labels.json --pages job.json
+```
+
+```json
+{
+  "defaults": { "dpi": 200, "size-mm": [245, 174], "features-coords": "px" },
+  "pages": [
+    { "center": [139.70, 35.66], "scale": 1000, "out": "p1.png",
+      "features": { "boxes": { "out": "p1-labels.geojson", "key": ["label-id", "part"] } } },
+    { "center": [139.71, 35.66], "scale": 2500, "zoom": 17, "out": "p2.png" }
+  ]
+}
+```
+
+A page has a field for each flag of a single page: `center` (`[lng, lat]`),
+`scale`, `dpi`, `size-mm` or `size-px` (`[width, height]`), `zoom`, `out`,
+`format`, `features-coords`, and `features`, which maps a node to its file
+`out` and, if it has one, its `key`. Every field but `out` can be given once
+in `defaults` instead, and a page's own value wins. A page's paper size and
+its `features` replace the defaults' whole, so a page with `size-px` does not
+also take a default `size-mm`. Relative paths are read from the pages file's
+directory. Each page writes exactly what a single-page `ezu frame` with the
+same values writes.
+
+The whole file is checked before the first page renders: an unknown field, a
+page without `out`, or two pages writing the same file is an error that names
+the page. `--pages` takes the place of the page flags, so it cannot be given
+with `--center`, `--out` and the rest; `--concurrency` and the style flags
+still apply, to every page.
+
+Pages render one after another, each page's tiles in parallel as before. The
+style is read and its sources opened once. Vector tiles one page fetched are
+kept in memory for the next, up to 256 MB (`EZU_TILE_CACHE_MB` sets another
+limit), so pages over the same area at the same zoom fetch them once; raster
+and DEM tiles are kept too. The intermediate cache of the graph belongs to
+one tile size, and a page at a new tile size starts a fresh one, so a job
+ordered by scale reuses the most. Each page logs a line with its time and the
+tiles it fetched and reused, and the run ends with the totals.
+
 ## A whole pyramid
 
 `ezu tiles` bulk-renders `<out>/<z>/<x>/<y>.png` across a zoom range:

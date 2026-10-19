@@ -31,7 +31,8 @@ const PX_DECIMALS: usize = 2;
 // The variants carry plain comments, not doc comments: clap would turn
 // those into per-value help and switch the whole command's `--help` to
 // its long layout.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub(crate) enum FeatureCoords {
     // WGS84 longitude and latitude, as RFC 7946 GeoJSON expects.
     Lonlat,
@@ -607,9 +608,10 @@ mod tests {
                 params: Vec::new(),
                 strict: false,
             },
-            center: (req.center_lon, req.center_lat),
-            scale: req.scale,
-            dpi: req.dpi,
+            pages: None,
+            center: Some((req.center_lon, req.center_lat)),
+            scale: Some(req.scale),
+            dpi: Some(req.dpi),
             size_mm: None,
             size_px: Some((req.width, req.height)),
             zoom: None,

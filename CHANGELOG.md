@@ -82,6 +82,16 @@ mean is spelled out in
   lon/lat (the default) or pixels of the output image. Features wholly
   outside the page are left out, and the file is byte-identical across runs
   of the same input.
+- `ezu frame --pages PATH` renders every page a JSON file lists in one run.
+  Each page has the fields of the single-page flags (`center`, `scale`,
+  `dpi`, `size-mm` or `size-px`, `zoom`, `out`, `format`, `features-coords`,
+  and `features` as `{NODE: {"out": PATH, "key": [PROP, …]}}`), and a
+  `defaults` object supplies any but `out`. The style is read and its sources
+  opened once, and vector tiles fetched for one page are kept in memory for
+  the next (256 MB, or `EZU_TILE_CACHE_MB`), so a job of neighbouring pages
+  fetches its shared background tiles once. Each page is byte-identical to a
+  single-page run of it. The file is checked before anything renders, and a
+  mistake names the page.
 
 ### Changed
 

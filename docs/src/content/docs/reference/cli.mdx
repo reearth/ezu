@@ -112,7 +112,7 @@ Options:
 ```text
 Render a map at a print scale and paper size, cropped to that frame
 
-Usage: ezu frame [OPTIONS] --style <STYLE> --center <CENTER> --scale <SCALE> --dpi <DPI>
+Usage: ezu frame [OPTIONS] --style <STYLE>
 
 Options:
       --style <STYLE>
@@ -131,6 +131,8 @@ Options:
           Override a document parameter, as `name=value` (repeatable). Values are validated against the style's `params` declarations: numbers respect `min`/`max`, colors are `#rrggbb[aa]`, bools are `true`/`false`
       --strict
           Refuse to render a style that raises build warnings — an unnamed `source`, a `$param` baked in at build time. For CI, where a warning is a style that will surprise someone later
+      --pages <PATH>
+          Render every page a JSON file lists, in place of the one page the flags below describe. Each page takes the fields `center`, `scale`, `dpi`, `size-mm` or `size-px`, `zoom`, `out`, `format`, `features-coords` and `features` (`{NODE: {"out": PATH, "key": [PROP, ...]}}`), any of them but `out` from a `defaults` object. The style is read once, and pages over the same tiles fetch them once
       --center <CENTER>
           Centre of the frame as `lng,lat` (WGS84). The scale is matched at this latitude
       --scale <SCALE>

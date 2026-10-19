@@ -41,6 +41,106 @@ pub struct TileSource {
     /// `maxzoom`, PMTiles header `max_zoom`). `None` for a bare
     /// `{z}/{x}/{y}` template, which carries no such metadata.
     data_maxzoom: Option<u8>,
+    /// Where fetched bytes are kept, and this source's id within it.
+    /// Off unless a host asks for it: `serve` reads local tiles afresh on
+    /// every request so that an edited tile shows up.
+    byte_cache: Option<(Arc<TileByteCache>, usize)>,
+}
+
+/// Fetched source tile bytes, kept in memory up to a byte budget so that
+/// a later render over the same tiles reads them from here instead of the
+/// network or disk. Shared by every source of a document; when it is full,
+/// the tile used longest ago goes first.
+///
+/// A tile the source does not have is remembered too, so a missing tile is
+/// not asked for twice. Failed fetches are not remembered.
+pub struct TileByteCache {
+    budget: usize,
+    inner: std::sync::Mutex<ByteCacheInner>,
+}
+
+/// Key: the source's id in the cache, then `z`, `x`, `y`.
+type ByteKey = (usize, u8, u32, u32);
+
+#[derive(Default)]
+struct ByteCacheInner {
+    /// Each tile with the tick it was last used at.
+    entries: std::collections::HashMap<ByteKey, (Option<Bytes>, u64)>,
+    /// The same entries by last use, oldest first.
+    by_use: std::collections::BTreeMap<u64, ByteKey>,
+    bytes: usize,
+    tick: u64,
+    hits: u64,
+    misses: u64,
+}
+
+/// What an entry is charged beyond its bytes, so that a run of missing
+/// tiles cannot grow the cache without bound.
+const BYTE_CACHE_ENTRY_OVERHEAD: usize = 64;
+
+impl TileByteCache {
+    pub fn new(budget: usize) -> Self {
+        Self {
+            budget,
+            inner: std::sync::Mutex::new(ByteCacheInner::default()),
+        }
+    }
+
+    /// The bytes kept for `tile` of source `id` (`Some(None)` when the
+    /// source has no such tile), or `None` when they have to be fetched.
+    fn get(&self, id: usize, tile: TileId) -> Option<Option<Bytes>> {
+        let key = (id, tile.z, tile.x, tile.y);
+        let mut inner = self.inner.lock().expect("tile byte cache poisoned");
+        inner.tick += 1;
+        let tick = inner.tick;
+        let Some((bytes, used)) = inner.entries.get_mut(&key) else {
+            inner.misses += 1;
+            return None;
+        };
+        let (found, old) = (bytes.clone(), std::mem::replace(used, tick));
+        inner.by_use.remove(&old);
+        inner.by_use.insert(tick, key);
+        inner.hits += 1;
+        Some(found)
+    }
+
+    fn insert(&self, id: usize, tile: TileId, bytes: Option<Bytes>) {
+        let size = bytes.as_ref().map_or(0, Bytes::len) + BYTE_CACHE_ENTRY_OVERHEAD;
+        if size > self.budget {
+            return;
+        }
+        let key = (id, tile.z, tile.x, tile.y);
+        let mut inner = self.inner.lock().expect("tile byte cache poisoned");
+        inner.tick += 1;
+        let tick = inner.tick;
+        // Two renders can fetch the same tile at once; keep one copy.
+        if let Some((old, used)) = inner.entries.insert(key, (bytes, tick)) {
+            inner.by_use.remove(&used);
+            inner.bytes -= old.as_ref().map_or(0, Bytes::len) + BYTE_CACHE_ENTRY_OVERHEAD;
+        }
+        inner.by_use.insert(tick, key);
+        inner.bytes += size;
+        while inner.bytes > self.budget {
+            let Some((_, oldest)) = inner.by_use.pop_first() else {
+                break;
+            };
+            if let Some((gone, _)) = inner.entries.remove(&oldest) {
+                inner.bytes -= gone.as_ref().map_or(0, Bytes::len) + BYTE_CACHE_ENTRY_OVERHEAD;
+            }
+        }
+    }
+
+    /// How many fetches were answered from the cache, and how many had to
+    /// go to the source, so far.
+    pub fn counts(&self) -> (u64, u64) {
+        let inner = self.inner.lock().expect("tile byte cache poisoned");
+        (inner.hits, inner.misses)
+    }
+
+    /// Bytes held now, overhead included.
+    pub fn held_bytes(&self) -> usize {
+        self.inner.lock().expect("tile byte cache poisoned").bytes
+    }
 }
 
 enum TileSourceKind {
@@ -93,6 +193,7 @@ impl TileSource {
                     kind,
                     attribution,
                     data_maxzoom,
+                    byte_cache: None,
                 })
             }
             SourceSpec::Mvt(arg) => {
@@ -131,6 +232,7 @@ impl TileSource {
                     kind,
                     attribution,
                     data_maxzoom,
+                    byte_cache: None,
                 })
             }
         }
@@ -175,6 +277,18 @@ impl TileSource {
     }
 
     pub async fn fetch(&self, tile: TileId) -> Result<Option<Bytes>, SourceError> {
+        let Some((cache, id)) = &self.byte_cache else {
+            return self.fetch_from_source(tile).await;
+        };
+        if let Some(kept) = cache.get(*id, tile) {
+            return Ok(kept);
+        }
+        let fetched = self.fetch_from_source(tile).await?;
+        cache.insert(*id, tile, fetched.clone());
+        Ok(fetched)
+    }
+
+    async fn fetch_from_source(&self, tile: TileId) -> Result<Option<Bytes>, SourceError> {
         match &self.kind {
             TileSourceKind::PmTilesHttp(r) => {
                 let coord = make_coord(tile)?;
@@ -348,6 +462,15 @@ impl FeatureSources {
             .into());
         }
         Ok(Self(out))
+    }
+
+    /// Keep the tiles every source fetches in `cache`, for renders that
+    /// come back to the same tiles.
+    pub fn with_byte_cache(mut self, cache: &Arc<TileByteCache>) -> Self {
+        for (id, source) in self.0.iter_mut().enumerate() {
+            source.tiles.byte_cache = Some((Arc::clone(cache), id));
+        }
+        self
     }
 
     pub fn is_empty(&self) -> bool {
@@ -638,6 +761,66 @@ mod tests {
             .expect("a missing directory opens");
         assert!(err.to_string().contains("nowhere"), "{err}");
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// With a byte cache, a tile read once comes from memory after: it
+    /// reads back even once the file is gone, and so does a missing one.
+    #[tokio::test]
+    async fn a_cached_tile_is_not_read_again() {
+        let root = std::env::temp_dir().join(format!("ezu-feature-cache-{}", std::process::id()));
+        let d = root.join("bg/14/4");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("8.pbf"), "bg 14").unwrap();
+
+        let cache = Arc::new(TileByteCache::new(1 << 20));
+        let sources = FeatureSources::open(&mvt_doc("file:bg/{z}/{x}/{y}.pbf"), None, &root)
+            .await
+            .unwrap()
+            .with_byte_cache(&cache);
+        let bg = sources.get(Some("bg")).unwrap();
+        let (here, absent) = (TileId::new(14, 4, 8), TileId::new(14, 4, 9));
+        assert_eq!(
+            bg.fetch_tile(here).await.unwrap().as_deref(),
+            Some(&b"bg 14"[..])
+        );
+        assert_eq!(bg.fetch_tile(absent).await.unwrap(), None);
+        assert_eq!(cache.counts(), (0, 2));
+
+        std::fs::remove_file(d.join("8.pbf")).unwrap();
+        std::fs::write(d.join("9.pbf"), "bg 14 later").unwrap();
+        assert_eq!(
+            bg.fetch_tile(here).await.unwrap().as_deref(),
+            Some(&b"bg 14"[..])
+        );
+        assert_eq!(bg.fetch_tile(absent).await.unwrap(), None);
+        assert_eq!(cache.counts(), (2, 2));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Past its budget the cache lets go of the tile used longest ago.
+    #[test]
+    fn a_full_byte_cache_drops_the_least_recently_used_tile() {
+        let entry = 100 + BYTE_CACHE_ENTRY_OVERHEAD;
+        let cache = TileByteCache::new(2 * entry);
+        let body = || Some(Bytes::from(vec![0u8; 100]));
+        let (a, b, c) = (
+            TileId::new(1, 0, 0),
+            TileId::new(1, 1, 0),
+            TileId::new(1, 0, 1),
+        );
+        cache.insert(0, a, body());
+        cache.insert(0, b, body());
+        assert!(cache.get(0, a).is_some());
+        cache.insert(0, c, body());
+        assert_eq!(cache.held_bytes(), 2 * entry);
+        assert!(cache.get(0, b).is_none(), "b was used longest ago");
+        assert!(cache.get(0, a).is_some() && cache.get(0, c).is_some());
+        // Another source's tile at the same coordinates is its own entry.
+        assert!(cache.get(1, a).is_none());
+        // A tile bigger than the whole budget is not kept.
+        cache.insert(0, b, Some(Bytes::from(vec![0u8; 3 * entry])));
+        assert!(cache.get(0, b).is_none());
+        assert_eq!(cache.held_bytes(), 2 * entry);
     }
 
     #[test]
