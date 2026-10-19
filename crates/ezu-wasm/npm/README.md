@@ -154,9 +154,64 @@ class Renderer {
     png?: { compression?: "fast" | "default" | "best" };
   }): Uint8Array;
 
+  // Render every tile at `size` px instead of the style's tile-size,
+  // without editing the style, until `clearTileSize()` or `setStyle`.
+  setTileSize(size: number): void;
+  clearTileSize(): void;
+
+  // Print frames — see "A page at a print scale" below.
+  computeFrame(req: FrameRequest): Frame;
+  renderFrame(
+    frame: Frame,
+    bind: ((tile: { z: number; x: number; y: number }) => void | Promise<void>)
+      | null | undefined,
+    opts?: { pad?: number; params?: Record<string, number | boolean | string> },
+  ): Promise<Uint8Array>;                    // straight RGBA, width × height
+
   free(): void;
 }
+
+interface FrameRequest {
+  centerLon: number; centerLat: number;      // degrees, WGS84
+  scale: number;                             // 1000 for 1:1000
+  dpi: number;
+  width: number; height: number;             // output pixels
+  zoom?: number;                             // the CLI's --zoom
+  styleTileSize?: number;                    // default: the style's
+}
+
+interface Frame {
+  zoom: number; tileSize: number;            // what the tiles render at
+  scale: number;                             // the denominator met
+  width: number; height: number;
+  left: number; top: number;                 // corner, in world pixels
+  shift: [number, number];                   // rounding, within ±0.5 px
+  tilesX: [number, number];                  // start inclusive, end exclusive
+  tilesY: [number, number];
+}
 ```
+
+## A page at a print scale
+
+A printed page is asked for as "1:1000 at 200 dpi, 245 × 174 mm, centred
+here", not as a zoom. `computeFrame` picks the zoom and tile size that
+meet the scale and the tiles the page covers; `renderFrame` renders them,
+calling you back to bind each one, and crops them into one RGBA page —
+the same page `ezu frame` writes, pixel for pixel:
+
+```js
+const mm = (length, dpi) => Math.round(length / 25.4 * dpi);
+const f = renderer.computeFrame({
+  centerLon: 139.70, centerLat: 35.68,
+  scale: 1000, dpi: 200,
+  width: mm(245, 200), height: mm(174, 200),   // 1929 × 1370
+});
+const rgba = await renderer.renderFrame(f, async ({ z, x, y }) => {
+  renderer.bindSource("basemap", await fetchMvt(z, x, y));
+});
+```
+
+Leave the renderer to the frame until the promise settles.
 
 ## Output formats
 

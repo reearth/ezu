@@ -140,7 +140,41 @@ class Renderer {
                                              // once initThreadPool is up)
   }): Uint8Array;
 
+  // Render every tile at `size` px instead of the style's tile-size,
+  // without editing the style. `tileSize` keeps reporting the style's;
+  // a per-render `opts.tileSize` still wins. `setStyle` clears it too.
+  setTileSize(size: number): void;
+  clearTileSize(): void;
+
+  // Print frames — see "A page at a print scale" below.
+  computeFrame(req: FrameRequest): Frame;
+  renderFrame(
+    frame: Frame,
+    bind: ((tile: { z: number; x: number; y: number }) => void | Promise<void>)
+      | null | undefined,
+    opts?: { pad?: number; params?: Record<string, number | boolean | string> },
+  ): Promise<Uint8Array>;                    // straight RGBA, width × height
+
   free(): void;
+}
+
+interface FrameRequest {
+  centerLon: number; centerLat: number;      // degrees, WGS84
+  scale: number;                             // 1000 for 1:1000
+  dpi: number;
+  width: number; height: number;             // output pixels
+  zoom?: number;                             // the CLI's --zoom
+  styleTileSize?: number;                    // default: the style's
+}
+
+interface Frame {
+  zoom: number; tileSize: number;            // what the tiles render at
+  scale: number;                             // the denominator met
+  width: number; height: number;
+  left: number; top: number;                 // corner, in world pixels
+  shift: [number, number];                   // rounding, within ±0.5 px
+  tilesX: [number, number];                  // start inclusive, end exclusive
+  tilesY: [number, number];
 }
 ```
 
@@ -166,7 +200,47 @@ enough.
 
 `opts.tileSize` and `opts.pad` override the style-level canvas
 geometry for that call. Useful for hi-DPI preview rendering without
-mutating the style.
+mutating the style. `setTileSize(size)` does the same for every render
+until `clearTileSize()` or `setStyle`.
+
+### A page at a print scale
+
+A printed page is asked for as "1:1000 at 200 dpi, 245 × 174 mm, centred
+here", not as a zoom. `ezu frame` meets the scale by choosing the tile
+size, renders the tiles the page covers at that size and crops them to the
+page. `computeFrame` and `renderFrame` do the same with the same code, so
+a page rendered here is the CLI's, pixel for pixel:
+
+```js
+const mm = (length, dpi) => Math.round(length / 25.4 * dpi);
+const f = r.computeFrame({
+  centerLon: 139.70, centerLat: 35.68,
+  scale: 1000, dpi: 200,
+  width: mm(245, 200),   // 1929
+  height: mm(174, 200),  // 1370
+});
+// f.zoom 19, f.tileSize 489, f.tilesX × f.tilesY: the 5 × 4 tiles to render
+
+const rgba = await r.renderFrame(f, async ({ z, x, y }) => {
+  r.bindSource("basemap", await fetchMvt(z, x, y)); // the per-tile bind, as for renderTile
+});
+// 1929 × 1370 straight RGBA: putImageData it, or encode it as a PNG
+```
+
+`computeFrame` changes nothing on the renderer. It aims the tile size at
+the style's own unless `styleTileSize` names another, and `zoom` fixes the
+zoom as the CLI's `--zoom` does; a request it cannot meet throws
+`InvalidStyle`. `renderFrame` clears the tile-scoped sources before each
+tile, awaits your `bind` for it, renders it at `f.tileSize` and copies its
+share into the page, so neighbours, overzoom and glyphs work as they do
+for a single tile, and the renderer's own tile size is untouched. Leave
+the renderer to the frame until the promise settles.
+
+To render a frame's tiles yourself — spread over several renderers, say —
+draw each at `f.tileSize` (`renderTile(..., { tileSize: f.tileSize })`, or
+`setTileSize`) and copy it into the page with its top-left at
+`(x · tileSize − left, y · tileSize − top)`, cropping the tiles along the
+border.
 
 ### Encoding options
 
@@ -570,6 +644,10 @@ RUSTFLAGS="-C target-feature=+simd128" \
 
 Each output directory contains `ezu_wasm.js` (ES module + glue),
 `ezu_wasm_bg.wasm`, and TypeScript declarations.
+
+The JS tests in `tests/` run under Node against the nodejs build;
+`scripts/test-wasm-js.sh` builds it and runs them (it needs
+`wasm-bindgen` at the version `Cargo.lock` pins).
 
 ### Threads (multithreaded rendering)
 

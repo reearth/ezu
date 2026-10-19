@@ -21,6 +21,12 @@ mean is spelled out in
   pixel. `Renderer.SetTileSize` and `ClearTileSize` render at another tile size
   without editing the style, for a host that renders a frame's tiles itself.
   The wasm module's ABI version is now 3.
+- The npm package renders print pages too. `Renderer.computeFrame` answers
+  the same zoom, tile size and covered tiles as the Go package and the CLI,
+  and `Renderer.renderFrame` renders those tiles, awaiting the host's bind
+  for each one so it can fetch, and resolves to one straight-RGBA page that
+  matches the CLI's pixel for pixel. `Renderer.setTileSize` and
+  `clearTileSize` render at another tile size without editing the style.
 - `text` and `text-labels` take `anchor-expr`, a MapLibre expression that
   names a point label's anchor per feature, so one layer can put some labels
   left of their points and others right of them, or switch sides with zoom.

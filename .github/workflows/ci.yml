@@ -96,6 +96,16 @@ jobs:
       # native-only deps (tokio fs/mmap/net, axum) and aren't expected to
       # compile for wasm32-unknown-unknown.
       - run: cargo build -p ezu-wasm --target wasm32-unknown-unknown --release
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '22'
+      # wasm-bindgen-cli must match the `wasm-bindgen` version in Cargo.lock.
+      - name: Install wasm-bindgen-cli
+        uses: taiki-e/install-action@9185c192a96ba09167ad8663015b3fbbf007ec79 # v2.62.55
+        with:
+          tool: wasm-bindgen-cli@0.2.126
+      - name: JS tests (Node)
+        run: ./scripts/test-wasm-js.sh
       - name: Verify +simd128 build
         run: cargo build -p ezu-wasm --target wasm32-unknown-unknown --release
         env:

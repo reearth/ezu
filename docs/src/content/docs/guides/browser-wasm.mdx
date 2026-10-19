@@ -171,6 +171,44 @@ life.
 `system:` font sources do not work here — there are no installed fonts in wasm.
 Use a font file URL or a `glyphs` endpoint.
 
+## A page at a print scale
+
+A printed page is asked for as "1:1000 at 200 dpi, 245 × 174 mm, centred
+here", not as a zoom. [`ezu frame`](/ezu/guides/bbox-and-pyramids/#a-page-at-a-print-scale)
+meets the scale by choosing the tile size, renders the tiles the page covers at
+that size and crops them to the page. The JS package does the same, with the
+same code, so a page rendered here is the CLI's pixel for pixel:
+
+```js
+const mm = (length, dpi) => Math.round(length / 25.4 * dpi);
+const f = r.computeFrame({
+  centerLon: 139.70, centerLat: 35.68,
+  scale: 1000, dpi: 200,
+  width: mm(245, 200),   // 1929
+  height: mm(174, 200),  // 1370
+});
+// f.zoom 19, f.tileSize 489, f.tilesX × f.tilesY: the 5 × 4 tiles to render
+
+const rgba = await r.renderFrame(f, async ({ z, x, y }) => {
+  await bindTile(r, z, x, y); // bind this tile as under "Binding sources" above
+});
+// 1929 × 1370 straight RGBA: putImageData it, or encode it as a PNG
+```
+
+`computeFrame` changes nothing on the renderer; it aims the tile size at the
+style's own unless `styleTileSize` names another, and `zoom` fixes the zoom as
+the CLI's `--zoom` does. `renderFrame` renders the tiles one after another,
+clearing the tile-scoped sources and awaiting your function before each — the
+same binding as for a single tile, so neighbours, overzoom and glyphs work as
+above. It draws at `f.tileSize` per render, so the renderer's own tile size is
+untouched. Leave the renderer to the frame until the promise settles.
+
+To render a frame's tiles yourself — spread over several renderers, say — draw
+each at `f.tileSize` (`renderTile(z, x, y, { format: "rgba", tileSize: f.tileSize })`,
+or `setTileSize` on the renderer) and copy it into the page with its top-left at
+`(x · tileSize − left, y · tileSize − top)`, cropping the tiles along the border.
+`clearTileSize()` goes back to the style's size, and so does `setStyle`.
+
 ## Memory and lifetime
 
 `memoryUsage()` reports the renderer's payloads (glyphs, fonts, images, cache)

@@ -58,6 +58,15 @@
 //! into `ctx.putImageData`). `opts.tileSize` / `opts.pad` override the
 //! style's canvas size for hi-DPI previews.
 //!
+//! ## Print frames
+//!
+//! `computeFrame(req)` turns a scale, dpi, page size and centre into the
+//! zoom, tile size and tiles `ezu frame` would render, and
+//! `renderFrame(frame, bind)` renders them — awaiting `bind` for each tile
+//! — into one straight-RGBA page, the CLI's pixel for pixel.
+//! `setTileSize` / `clearTileSize` render at another tile size for a host
+//! that renders a frame's tiles itself.
+//!
 //! ## Errors
 //!
 //! All fallible methods throw a JavaScript `Error` whose `.name`
@@ -75,9 +84,15 @@ mod log;
 
 pub use log::LogSink;
 
-use ezu_renderer::{BindOptions, Error, ErrorKind, OutputFormat, PngCompression, RenderOptions};
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use ezu_renderer::{
+    BindOptions, Error, ErrorKind, Frame, FrameRequest, OutputFormat, PngCompression, RenderOptions,
+};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
+use wasm_bindgen_futures::JsFuture;
 
 /// The name the allocator puts on a heap-exhaustion error. Read in a
 /// `const` so throwing it needs no allocation.
@@ -173,9 +188,16 @@ mod oom {
 static ALLOC: oom::ThrowOnOom = oom::ThrowOnOom;
 
 /// Stateful WASM renderer.
+///
+/// Every method takes `&self` and borrows the renderer inside, rather than
+/// letting wasm-bindgen hold a borrow for the length of the call:
+/// `renderFrame` calls back into JS to bind each tile, and the callback's
+/// `bindSource` has to reach the same renderer while the frame is still
+/// rendering. The `Rc` is what the frame's promise keeps alive between
+/// tiles.
 #[wasm_bindgen]
 pub struct Renderer {
-    inner: ezu_renderer::Renderer,
+    inner: Rc<RefCell<ezu_renderer::Renderer>>,
 }
 
 #[wasm_bindgen]
@@ -187,20 +209,184 @@ impl Renderer {
         console_error_panic_hook::set_once();
 
         let inner = ezu_renderer::Renderer::new(style_json).map_err(js_err)?;
-        Ok(Self { inner })
+        Ok(Self {
+            inner: Rc::new(RefCell::new(inner)),
+        })
     }
 
     /// Replace the active style. Returns the new node count. Invalidates
-    /// the intermediate cache and drops any pending source bindings.
+    /// the intermediate cache, drops any pending source bindings, and
+    /// goes back to the new style's own tile size.
     #[wasm_bindgen(js_name = setStyle)]
-    pub fn set_style(&mut self, style_json: &str) -> Result<usize, JsValue> {
-        self.inner.set_style(style_json).map_err(js_err)
+    pub fn set_style(&self, style_json: &str) -> Result<usize, JsValue> {
+        self.inner
+            .borrow_mut()
+            .set_style(style_json)
+            .map_err(js_err)
     }
 
-    /// `tile-size` declared by the current style.
+    /// `tile-size` declared by the current style, whatever `setTileSize`
+    /// renders at.
     #[wasm_bindgen(getter, js_name = tileSize)]
     pub fn tile_size(&self) -> u32 {
-        self.inner.tile_size()
+        self.inner.borrow().tile_size()
+    }
+
+    /// Render every tile at `size` px instead of the style's `tile-size`,
+    /// without editing the style. `clearTileSize()` goes back to the
+    /// style's, and so does `setStyle`.
+    ///
+    /// A print frame needs it: `computeFrame` meets the scale by choosing
+    /// the tile size, and the frame's tiles must be drawn at exactly that
+    /// size. It renders what the style with its `tile-size` edited would.
+    /// Nothing you bind depends on it — `requestedNeighborOffsets` and
+    /// `sourceTile` answer as before — and the intermediate cache, which is
+    /// sized by the tile, is dropped when the size changes. `tileSize`
+    /// keeps reporting the style's own, and a `tileSize` in one
+    /// `renderTile`'s options still wins over this.
+    ///
+    /// Throws `InvalidStyle` for a size below 1 px: `0` is not "the
+    /// style's", that is `clearTileSize`.
+    #[wasm_bindgen(js_name = setTileSize)]
+    pub fn set_tile_size(&self, size: f64) -> Result<(), JsValue> {
+        let size = whole_pixels(size, "tile size")?;
+        if size == 0 {
+            return Err(named_err(
+                ErrorKind::InvalidStyle,
+                "a tile size must be at least 1 px; clearTileSize() goes back to the style's",
+            ));
+        }
+        self.inner
+            .borrow_mut()
+            .set_tile_size(Some(size))
+            .map_err(js_err)
+    }
+
+    /// Go back to rendering at the style's own `tile-size`, undoing
+    /// `setTileSize`.
+    #[wasm_bindgen(js_name = clearTileSize)]
+    pub fn clear_tile_size(&self) -> Result<(), JsValue> {
+        self.inner.borrow_mut().set_tile_size(None).map_err(js_err)
+    }
+
+    /// Where a print frame sits on the tile grid: the zoom and tile size
+    /// that meet `req`'s scale, and the tiles that cover it — the
+    /// arithmetic `ezu frame` does before it renders anything, done by the
+    /// same code, so a frame computed here is the one the CLI would render.
+    ///
+    /// `req` is `{ centerLon, centerLat, scale, dpi, width, height, zoom?,
+    /// styleTileSize? }`: `scale` is the denominator (1000 for 1:1000),
+    /// `width` and `height` the output size in pixels. `zoom` fixes the
+    /// zoom, as the CLI's `--zoom` does; left out, the zoom chosen keeps
+    /// the tile size nearest `styleTileSize`, which defaults to this
+    /// renderer's style.
+    ///
+    /// The answer is `{ zoom, tileSize, scale, width, height, left, top,
+    /// shift: [x, y], tilesX: [start, end], tilesY: [start, end] }`. Hand
+    /// it to `renderFrame`, or render tiles `tilesX × tilesY` (end
+    /// exclusive) at `zoom` and `tileSize` yourself: tile `(x, y)` lands
+    /// with its top-left at `(x · tileSize − left, y · tileSize − top)`,
+    /// cropped to `width × height`. `scale` is the denominator actually
+    /// met, and `shift` how far rounding the frame onto whole pixels moved
+    /// it.
+    ///
+    /// It changes nothing on the renderer. A request out of its domain (a
+    /// non-positive scale, a latitude past the Mercator edge, a zero-sized
+    /// output), a frame across the antimeridian, and a scale that needs a
+    /// tile size outside 16..8192 px all throw `InvalidStyle`.
+    #[wasm_bindgen(js_name = computeFrame, unchecked_return_type = "Frame")]
+    pub fn compute_frame(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "FrameRequest")] req: js_sys::Object,
+    ) -> Result<JsValue, JsValue> {
+        let inner = self.inner.borrow();
+        let req = parse_frame_request(&req, inner.tile_size())?;
+        let frame = inner.compute_frame(&req).map_err(js_err)?;
+        frame_object(&frame)
+    }
+
+    /// Render every tile `frame` covers and copy each one's share into one
+    /// frame-sized buffer, which is what `ezu frame` does: the same tiles,
+    /// at the same tile size, cropped the same way. Resolves to straight
+    /// (un-premultiplied) RGBA, `width × height × 4` bytes, as
+    /// `format: "rgba"` is.
+    ///
+    /// Binding stays yours, tile by tile, exactly as for `renderTile`.
+    /// Before each tile the tile-scoped sources are cleared and
+    /// `bind({ z, x, y })` is called with the tile about to render; it
+    /// binds what that tile needs — the tile itself, the neighbours
+    /// `requestedNeighborOffsets` names, the ancestor `sourceTile` answers
+    /// past a source's max-zoom, the glyphs `neededCodepoints` lists — with
+    /// `bindSource` on this renderer. It may return a promise, which is
+    /// awaited, so it can fetch. A bind that throws or rejects stops the
+    /// frame with that error. `bind` may be `null` for a style that needs
+    /// nothing bound per tile. Persistent sources (fonts, sprites, brushes,
+    /// images) are bound once, before the call, as usual.
+    ///
+    /// The tiles render at `frame.tileSize` per render, so the renderer's
+    /// own tile size is left as it was. `opts` takes `renderTile`'s
+    /// `pad` and `params`; its `format` and `tileSize` must be left out
+    /// (or match), since the frame fixes both.
+    ///
+    /// Tiles render one after another, row by row from the top.
+    /// Leave the renderer to the frame until the promise settles: a
+    /// `bindSource` or `renderTile` of your own between its tiles lands in
+    /// the middle of the frame's.
+    #[wasm_bindgen(js_name = renderFrame, unchecked_return_type = "Promise<Uint8Array>")]
+    pub fn render_frame(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "Frame")] frame: js_sys::Object,
+        #[wasm_bindgen(
+            unchecked_param_type = "((tile: { z: number; x: number; y: number }) => void | Promise<void>) | null | undefined"
+        )]
+        bind: Option<js_sys::Function>,
+        opts: Option<js_sys::Object>,
+    ) -> js_sys::Promise {
+        let inner = Rc::clone(&self.inner);
+        wasm_bindgen_futures::future_to_promise(async move {
+            let frame = parse_frame(&frame)?;
+            let opts = frame_render_options(opts.as_ref(), frame.tile_size)?;
+            // The page is assembled in JS memory, not in the wasm heap: the
+            // heap never shrinks, and a 1929 × 1370 page is 10 MB that a
+            // 128 MB isolate would otherwise carry for the rest of its life.
+            let out = js_sys::Uint8Array::new_with_length(frame.width * frame.height * 4);
+            let t = frame.tile_size;
+            for y in frame.tiles_y.clone() {
+                for x in frame.tiles_x.clone() {
+                    inner.borrow_mut().clear_sources();
+                    if let Some(bind) = &bind {
+                        let tile = tile_object(frame.zoom, x, y)?;
+                        // Resolving whatever came back awaits a promise and
+                        // lets a plain return through after one microtask.
+                        let ret = bind.call1(&JsValue::NULL, &tile)?;
+                        JsFuture::from(js_sys::Promise::resolve(&ret)).await?;
+                    }
+                    let px = inner
+                        .borrow()
+                        .render_tile(frame.zoom, x, y, opts.clone())
+                        .map_err(js_err)?;
+                    let want = t as usize * t as usize * 4;
+                    if px.len() != want {
+                        return Err(named_err(
+                            ErrorKind::RenderFailed,
+                            format!(
+                                "tile {}/{x}/{y} came back as {} bytes, want {want} for {t}x{t}",
+                                frame.zoom,
+                                px.len()
+                            ),
+                        ));
+                    }
+                    let (dx, dy) = frame.tile_offset(x, y);
+                    blit_rows(frame.width, frame.height, t, dx, dy, |dst, src, len| {
+                        out.subarray(dst as u32, (dst + len) as u32)
+                            .copy_from(&px[src..src + len]);
+                    });
+                }
+            }
+            // Leave nothing of the last tile bound, as a tile loop would.
+            inner.borrow_mut().clear_sources();
+            Ok(out.into())
+        })
     }
 
     /// JSON Schema for the current style's `params` — types, defaults,
@@ -211,7 +397,7 @@ impl Renderer {
     /// being rendered.
     #[wasm_bindgen(getter, js_name = paramsSchema)]
     pub fn params_schema(&self) -> Result<JsValue, JsValue> {
-        js_sys::JSON::parse(&self.inner.params_schema().to_string())
+        js_sys::JSON::parse(&self.inner.borrow().params_schema().to_string())
     }
 
     /// Bind raw tile bytes under a `sources.<name>` entry from the style.
@@ -254,13 +440,16 @@ impl Renderer {
     /// render time, but obvious cases are caught here).
     #[wasm_bindgen(js_name = bindSource)]
     pub fn bind_source(
-        &mut self,
+        &self,
         name: &str,
         bytes: Vec<u8>,
         opts: Option<js_sys::Object>,
     ) -> Result<(), JsValue> {
         let parsed = parse_bind_options(opts.as_ref())?;
-        self.inner.bind_source(name, bytes, &parsed).map_err(js_err)
+        self.inner
+            .borrow_mut()
+            .bind_source(name, bytes, &parsed)
+            .map_err(js_err)
     }
 
     /// Effective attribution declared by the style (document +
@@ -268,13 +457,13 @@ impl Renderer {
     /// metadata is the JS host's concern — merge it on that side.
     #[wasm_bindgen(getter)]
     pub fn attribution(&self) -> Option<String> {
-        self.inner.attribution()
+        self.inner.borrow().attribution()
     }
 
     /// Drop every pending source binding. Call between tile renders.
     #[wasm_bindgen(js_name = clearSources)]
-    pub fn clear_sources(&mut self) {
-        self.inner.clear_sources();
+    pub fn clear_sources(&self) {
+        self.inner.borrow_mut().clear_sources();
     }
 
     /// Cap the glyph bytes each bound fontstack keeps resident, in
@@ -306,8 +495,9 @@ impl Renderer {
     /// big cannot be a real ceiling: it is every byte the module could
     /// ever address.
     #[wasm_bindgen(js_name = setGlyphBudget)]
-    pub fn set_glyph_budget(&mut self, bytes: usize) {
+    pub fn set_glyph_budget(&self, bytes: usize) {
         self.inner
+            .borrow_mut()
             .set_glyph_budget((bytes != usize::MAX).then_some(bytes));
     }
 
@@ -335,7 +525,8 @@ impl Renderer {
     #[wasm_bindgen(js_name = sources)]
     pub fn sources(&self) -> Result<js_sys::Array, JsValue> {
         let out = js_sys::Array::new();
-        for source in self.inner.sources() {
+        let inner = self.inner.borrow();
+        for source in inner.sources() {
             let entry = js_sys::Object::new();
             js_sys::Reflect::set(&entry, &"name".into(), &JsValue::from_str(source.name))?;
             js_sys::Reflect::set(
@@ -363,7 +554,7 @@ impl Renderer {
     /// Order matches the style's `sources` declaration order.
     #[wasm_bindgen(js_name = boundSources)]
     pub fn bound_sources(&self) -> Vec<String> {
-        self.inner.bound_sources()
+        self.inner.borrow().bound_sources()
     }
 
     /// The style's declared `legend`, or `undefined` when it declares
@@ -375,7 +566,7 @@ impl Renderer {
     /// in a browser, render the named node.
     #[wasm_bindgen(js_name = legend)]
     pub fn legend(&self, zoom: Option<u8>) -> Result<JsValue, JsValue> {
-        match self.inner.legend_json(zoom).map_err(js_err)? {
+        match self.inner.borrow().legend_json(zoom).map_err(js_err)? {
             Some(json) => js_sys::JSON::parse(&json),
             None => Ok(JsValue::UNDEFINED),
         }
@@ -405,7 +596,11 @@ impl Renderer {
     /// Throws `UnknownSource` if `name` is not declared in the style.
     #[wasm_bindgen(js_name = sourceTile)]
     pub fn source_tile(&self, name: &str, z: u8, x: i32, y: i32) -> Result<JsValue, JsValue> {
-        let (tz, tx, ty) = self.inner.source_tile(name, z, x, y).map_err(js_err)?;
+        let (tz, tx, ty) = self
+            .inner
+            .borrow()
+            .source_tile(name, z, x, y)
+            .map_err(js_err)?;
         let out = js_sys::Object::new();
         let _ = js_sys::Reflect::set(&out, &"z".into(), &JsValue::from(tz));
         let _ = js_sys::Reflect::set(&out, &"x".into(), &JsValue::from_f64(tx as f64));
@@ -442,6 +637,7 @@ impl Renderer {
     pub fn requested_neighbor_offsets(&self, name: &str) -> Result<js_sys::Array, JsValue> {
         let offsets = self
             .inner
+            .borrow()
             .requested_neighbor_offsets(name)
             .map_err(js_err)?;
         let out = js_sys::Array::new();
@@ -473,7 +669,7 @@ impl Renderer {
     /// over-approximation caveat.
     #[wasm_bindgen(js_name = neededCodepoints)]
     pub fn needed_codepoints(&self) -> Result<js_sys::Object, JsValue> {
-        glyph_units_object(self.inner.needed_codepoints().map_err(js_err)?)
+        glyph_units_object(self.inner.borrow().needed_codepoints().map_err(js_err)?)
     }
 
     /// Glyph ranges the currently bound features can require, as
@@ -507,7 +703,7 @@ impl Renderer {
     /// U+FB50‥U+FDFF and U+FE70‥U+FEFF.
     #[wasm_bindgen(js_name = neededGlyphRanges)]
     pub fn needed_glyph_ranges(&self) -> Result<js_sys::Object, JsValue> {
-        glyph_units_object(self.inner.needed_glyph_ranges().map_err(js_err)?)
+        glyph_units_object(self.inner.borrow().needed_glyph_ranges().map_err(js_err)?)
     }
 
     /// What this renderer is holding, in bytes, so a host can shed load
@@ -540,7 +736,7 @@ impl Renderer {
     /// sum to less than `heapBytes`.
     #[wasm_bindgen(js_name = memoryUsage)]
     pub fn memory_usage(&self) -> Result<js_sys::Object, JsValue> {
-        let usage = self.inner.memory_usage();
+        let usage = self.inner.borrow().memory_usage();
         let out = js_sys::Object::new();
         let set = |key: &str, value: usize| -> Result<(), JsValue> {
             js_sys::Reflect::set(
@@ -587,7 +783,10 @@ impl Renderer {
         opts: Option<js_sys::Object>,
     ) -> Result<Vec<u8>, JsValue> {
         let parsed = parse_render_options(opts.as_ref())?;
-        self.inner.render_tile(z, x, y, parsed).map_err(js_err)
+        self.inner
+            .borrow()
+            .render_tile(z, x, y, parsed)
+            .map_err(js_err)
     }
 }
 
@@ -604,6 +803,275 @@ fn glyph_units_object(
         js_sys::Reflect::set(&out, &JsValue::from_str(source), &arr)?;
     }
     Ok(out)
+}
+
+#[wasm_bindgen(typescript_custom_section)]
+const FRAME_TYPES: &'static str = r#"
+/** What `computeFrame` is asked for: a print page as scale, dpi, size and centre. */
+export interface FrameRequest {
+  /** The frame's centre in degrees (WGS84). The scale is matched at this latitude. */
+  centerLon: number;
+  centerLat: number;
+  /** The scale denominator: 1000 for 1:1000. */
+  scale: number;
+  /** The output resolution. Together with `scale` it fixes the ground size of a pixel. */
+  dpi: number;
+  /** The output size in pixels: `Math.round(mm / 25.4 * dpi)` from paper millimetres. */
+  width: number;
+  height: number;
+  /** Render at this zoom, deriving the tile size from it, as the CLI's `--zoom`. */
+  zoom?: number;
+  /** The tile size the chosen zoom aims at. Defaults to this renderer's style. */
+  styleTileSize?: number;
+}
+
+/** Where a print frame sits on the tile grid it renders from. */
+export interface Frame {
+  /** The zoom the tiles render at. */
+  zoom: number;
+  /** The tile size, in whole pixels, the tiles render at. */
+  tileSize: number;
+  /** The scale denominator this zoom and tile size actually meet at the centre. */
+  scale: number;
+  /** The output size in pixels, as requested. */
+  width: number;
+  height: number;
+  /** The frame's top-left corner in world pixels at this zoom and tile size. */
+  left: number;
+  top: number;
+  /** How far rounding onto whole pixels moved the frame: the centre sits at (width/2 + shift[0], height/2 + shift[1]). */
+  shift: [number, number];
+  /** The tile columns and rows the frame touches, start inclusive, end exclusive. */
+  tilesX: [number, number];
+  tilesY: [number, number];
+}
+"#;
+
+/// Read `req` as a [`FrameRequest`], with `styleTileSize` defaulting to
+/// the renderer's style. The same fields, with the same meaning, as the C
+/// ABI's `ezu_compute_frame` takes.
+fn parse_frame_request(
+    req: &js_sys::Object,
+    style_tile_size: u32,
+) -> Result<FrameRequest, JsValue> {
+    let required = |key: &str| -> Result<f64, JsValue> {
+        number_field(req, key)?.ok_or_else(|| {
+            named_err(
+                ErrorKind::InvalidStyle,
+                format!("the frame request needs {key} as a number"),
+            )
+        })
+    };
+    let zoom = match number_field(req, "zoom")? {
+        None => None,
+        Some(z) if z.fract() == 0.0 && (0.0..=31.0).contains(&z) => Some(z as u8),
+        Some(z) => {
+            return Err(named_err(
+                ErrorKind::InvalidStyle,
+                format!("zoom must be a whole zoom level in 0..=31, got {z}"),
+            ))
+        }
+    };
+    let style_tile_size = match number_field(req, "styleTileSize")? {
+        Some(n) => whole_pixels(n, "styleTileSize")?,
+        None => style_tile_size,
+    };
+    Ok(FrameRequest {
+        center_lon: required("centerLon")?,
+        center_lat: required("centerLat")?,
+        scale: required("scale")?,
+        dpi: required("dpi")?,
+        width: whole_pixels(required("width")?, "width")?,
+        height: whole_pixels(required("height")?, "height")?,
+        zoom,
+        style_tile_size,
+    })
+}
+
+/// `frame` as the object `computeFrame` answers with.
+fn frame_object(frame: &Frame) -> Result<JsValue, JsValue> {
+    let out = js_sys::Object::new();
+    let set = |key: &str, value: JsValue| js_sys::Reflect::set(&out, &key.into(), &value);
+    let pair = |a: f64, b: f64| -> JsValue {
+        let arr = js_sys::Array::new();
+        arr.push(&JsValue::from_f64(a));
+        arr.push(&JsValue::from_f64(b));
+        arr.into()
+    };
+    set("zoom", JsValue::from(frame.zoom))?;
+    set("tileSize", JsValue::from(frame.tile_size))?;
+    set("scale", JsValue::from_f64(frame.scale))?;
+    set("width", JsValue::from(frame.width))?;
+    set("height", JsValue::from(frame.height))?;
+    // World pixels stay well inside a double's integers: 8192 px tiles at
+    // zoom 31 are 2^44 px across.
+    set("left", JsValue::from_f64(frame.left as f64))?;
+    set("top", JsValue::from_f64(frame.top as f64))?;
+    set("shift", pair(frame.shift.0, frame.shift.1))?;
+    let (tx, ty) = (&frame.tiles_x, &frame.tiles_y);
+    set("tilesX", pair(tx.start as f64, tx.end as f64))?;
+    set("tilesY", pair(ty.start as f64, ty.end as f64))?;
+    Ok(out.into())
+}
+
+/// Read back a frame `computeFrame` answered with — the fields
+/// `renderFrame` places tiles by. `scale` and `shift` only describe the
+/// frame, so they are not read.
+fn parse_frame(obj: &js_sys::Object) -> Result<Frame, JsValue> {
+    let required = |key: &str| -> Result<f64, JsValue> {
+        number_field(obj, key)?.ok_or_else(|| {
+            named_err(
+                ErrorKind::InvalidStyle,
+                format!("the frame has no {key}; compute it with computeFrame"),
+            )
+        })
+    };
+    let whole = |key: &str| -> Result<i64, JsValue> {
+        let n = required(key)?;
+        if n.fract() != 0.0 || n.abs() > 2f64.powi(53) {
+            return Err(named_err(
+                ErrorKind::InvalidStyle,
+                format!("the frame's {key} must be a whole number of pixels, got {n}"),
+            ));
+        }
+        Ok(n as i64)
+    };
+    let range = |key: &str| -> Result<std::ops::Range<u32>, JsValue> {
+        let bad = || {
+            named_err(
+                ErrorKind::InvalidStyle,
+                format!("the frame's {key} must be a [start, end] pair of tile numbers"),
+            )
+        };
+        let arr = js_sys::Reflect::get(obj, &key.into())?
+            .dyn_into::<js_sys::Array>()
+            .map_err(|_| bad())?;
+        if arr.length() != 2 {
+            return Err(bad());
+        }
+        let end = |v: JsValue| {
+            v.as_f64()
+                .ok_or_else(bad)
+                .and_then(|n| whole_pixels(n, key))
+        };
+        Ok(end(arr.get(0))?..end(arr.get(1))?)
+    };
+    let zoom = required("zoom")?;
+    if zoom.fract() != 0.0 || !(0.0..=31.0).contains(&zoom) {
+        return Err(named_err(
+            ErrorKind::InvalidStyle,
+            format!("the frame's zoom must be a whole zoom level in 0..=31, got {zoom}"),
+        ));
+    }
+    let frame = Frame {
+        zoom: zoom as u8,
+        tile_size: whole_pixels(required("tileSize")?, "tileSize")?,
+        scale: 0.0,
+        width: whole_pixels(required("width")?, "width")?,
+        height: whole_pixels(required("height")?, "height")?,
+        left: whole("left")?,
+        top: whole("top")?,
+        shift: (0.0, 0.0),
+        tiles_x: range("tilesX")?,
+        tiles_y: range("tilesY")?,
+    };
+    if frame.tile_size == 0 || frame.width == 0 || frame.height == 0 {
+        return Err(named_err(
+            ErrorKind::InvalidStyle,
+            "the frame has no size; compute it with computeFrame",
+        ));
+    }
+    Ok(frame)
+}
+
+/// `renderTile`'s options for a frame's tiles: the caller's `pad` and
+/// `params`, at the frame's tile size, as raw pixels. A `format` or
+/// `tileSize` that contradicts the frame is refused rather than
+/// overridden, since either would mean the caller expects something else.
+fn frame_render_options(
+    obj: Option<&js_sys::Object>,
+    tile_size: u32,
+) -> Result<RenderOptions, JsValue> {
+    if let Some(obj) = obj {
+        let format = js_sys::Reflect::get(obj, &"format".into())?;
+        if let Some(f) = format.as_string().filter(|f| f != "rgba") {
+            return Err(named_err(
+                ErrorKind::InvalidStyle,
+                format!("a frame renders as raw pixels; leave format out, not \"{f}\""),
+            ));
+        }
+        if let Some(n) = number_field(obj, "tileSize")?.filter(|n| *n != tile_size as f64) {
+            return Err(named_err(
+                ErrorKind::InvalidStyle,
+                format!("the frame renders at tile size {tile_size}; leave tileSize out, not {n}"),
+            ));
+        }
+    }
+    let mut opts = parse_render_options(obj)?;
+    opts.format = OutputFormat::Rgba;
+    opts.tile_size = Some(tile_size);
+    Ok(opts)
+}
+
+/// `{ z, x, y }` for the tile a frame's `bind` is about to bind.
+fn tile_object(z: u8, x: u32, y: u32) -> Result<JsValue, JsValue> {
+    let out = js_sys::Object::new();
+    js_sys::Reflect::set(&out, &"z".into(), &JsValue::from(z))?;
+    js_sys::Reflect::set(&out, &"x".into(), &JsValue::from(x))?;
+    js_sys::Reflect::set(&out, &"y".into(), &JsValue::from(y))?;
+    Ok(out.into())
+}
+
+/// Copy a `t × t` straight-RGBA tile with its top-left at `(dx, dy)` into
+/// a `width × height` RGBA image, keeping only the part inside it — the
+/// crop `ezu frame` makes along the border. `copy(dst, src, len)` copies
+/// `len` bytes of one row, from byte `src` of the tile to byte `dst` of
+/// the image. Rows are copied, not composited: tiles never overlap, so
+/// there is nothing underneath to blend with.
+fn blit_rows(
+    width: u32,
+    height: u32,
+    t: u32,
+    dx: i64,
+    dy: i64,
+    mut copy: impl FnMut(usize, usize, usize),
+) {
+    let (w, h, t) = (width as i64, height as i64, t as i64);
+    let (x0, x1) = (dx.max(0), (dx + t).min(w));
+    let (y0, y1) = (dy.max(0), (dy + t).min(h));
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+    let len = ((x1 - x0) * 4) as usize;
+    for y in y0..y1 {
+        let src = (((y - dy) * t + (x0 - dx)) * 4) as usize;
+        let dst = ((y * w + x0) * 4) as usize;
+        copy(dst, src, len);
+    }
+}
+
+/// `obj[key]` as a number, `None` when it is absent (`undefined` or
+/// `null`), and `InvalidStyle` when it is something else.
+fn number_field(obj: &js_sys::Object, key: &str) -> Result<Option<f64>, JsValue> {
+    let value = js_sys::Reflect::get(obj, &key.into())?;
+    if value.is_undefined() || value.is_null() {
+        return Ok(None);
+    }
+    value
+        .as_f64()
+        .map(Some)
+        .ok_or_else(|| named_err(ErrorKind::InvalidStyle, format!("{key} must be a number")))
+}
+
+/// `n` as a whole, non-negative count of pixels (or tiles).
+fn whole_pixels(n: f64, label: &str) -> Result<u32, JsValue> {
+    if n.fract() != 0.0 || !(0.0..=u32::MAX as f64).contains(&n) {
+        return Err(named_err(
+            ErrorKind::InvalidStyle,
+            format!("{label} must be a whole number of pixels, got {n}"),
+        ));
+    }
+    Ok(n as u32)
 }
 
 /// Parse the `renderTile` options object. Unknown keys are silently
@@ -863,4 +1331,47 @@ fn named_err(kind: ErrorKind, e: impl std::fmt::Display) -> JsValue {
     let err = js_sys::Error::new(&e.to_string());
     err.set_name(kind.name());
     err.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::blit_rows;
+
+    fn blit(dst: &mut [u8], width: u32, height: u32, tile: &[u8], t: u32, dx: i64, dy: i64) {
+        blit_rows(width, height, t, dx, dy, |d, s, len| {
+            dst[d..d + len].copy_from_slice(&tile[s..s + len]);
+        });
+    }
+
+    #[test]
+    fn a_tile_is_cropped_at_every_edge() {
+        // A 4 × 4 tile whose bytes count up, placed so that only its centre
+        // 2 × 2 falls in a 2 × 2 image.
+        let tile: Vec<u8> = (0..4 * 4 * 4).map(|i| i as u8).collect();
+        let mut dst = vec![0u8; 2 * 2 * 4];
+        blit(&mut dst, 2, 2, &tile, 4, -1, -1);
+        for y in 0..2 {
+            for x in 0..2 {
+                let src = ((y + 1) * 4 + (x + 1)) * 4;
+                assert_eq!(dst[(y * 2 + x) * 4..][..4], tile[src..][..4], "({x}, {y})");
+            }
+        }
+        // Wholly outside: nothing written, nothing panics.
+        let before = dst.clone();
+        let zeros = vec![0u8; 4 * 4 * 4];
+        blit(&mut dst, 2, 2, &zeros, 4, 2, 0);
+        blit(&mut dst, 2, 2, &zeros, 4, -4, 0);
+        blit(&mut dst, 2, 2, &zeros, 4, 0, 2);
+        assert_eq!(dst, before, "a tile outside the image wrote into it");
+    }
+
+    #[test]
+    fn a_tile_inside_the_image_lands_whole() {
+        let tile: Vec<u8> = (0..2 * 2 * 4).map(|i| i as u8 + 1).collect();
+        let mut dst = vec![0u8; 3 * 3 * 4];
+        blit(&mut dst, 3, 3, &tile, 2, 1, 1);
+        assert_eq!(dst[(1 * 3 + 1) * 4..][..8], tile[..8]);
+        assert_eq!(dst[(2 * 3 + 1) * 4..][..8], tile[8..16]);
+        assert!(dst[..(3 + 1) * 4].iter().all(|b| *b == 0));
+    }
 }
