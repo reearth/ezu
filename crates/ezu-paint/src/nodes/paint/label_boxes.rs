@@ -12,6 +12,12 @@
 //! labels are placed once and the boxes match what `text-draw` draws.
 //! Labels placed from a neighbour tile's candidates come through like the
 //! text does, so a box straddling a tile edge continues across it.
+//!
+//! `filter-expr` keeps only the boxes a recipe wants, tested per box with
+//! all the properties it carries, so it can pick on what placement did
+//! (`variant-index`, `placed`) and on the kind of box (`part`) alike: the
+//! text blocks of labels that moved off their first position, to draw a
+//! leader line to each with `segment-to`.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -79,19 +85,26 @@ struct LabelBoxesNode {
     /// Also emit the candidates that lost their collision test or were
     /// dropped by the same-value dedupe.
     include_rejected: bool,
+    /// `filter-expr`, compiled once, and its source for the cache key.
+    filter_expr: Option<maplibre_expr::Expr>,
+    filter_expr_src: Option<String>,
     extent: u32,
     ports: Vec<PortSpec>,
 }
 
 /// Converts the label frame (px, this tile's origin at 0) to the emitted
-/// geometry's extent units, and collects the boxes.
-struct Emitter {
+/// geometry's extent units, and collects the boxes that pass `filter`.
+struct Emitter<'a> {
     sx: f32,
     sy: f32,
+    /// `filter-expr`, tested against each box with every property it
+    /// carries, `part` included, as a `Polygon` feature at zoom `z`.
+    filter: Option<&'a maplibre_expr::Expr>,
+    z: u8,
     groups: Vec<FeatureGroup>,
 }
 
-impl Emitter {
+impl Emitter<'_> {
     fn unit(&self, (x, y): (f32, f32)) -> (i32, i32) {
         ((x * self.sx).round() as i32, (y * self.sy).round() as i32)
     }
@@ -131,7 +144,7 @@ impl Emitter {
             "label-id".into(),
             maplibre_expr::Value::Number(props.label_id),
         );
-        self.groups.push(FeatureGroup {
+        let group = FeatureGroup {
             properties: Arc::new(properties),
             polygons: vec![ezu_features::Polygon {
                 exterior,
@@ -139,7 +152,17 @@ impl Emitter {
             }],
             lines: vec![],
             points: vec![],
-        });
+        };
+        // As in `features`: a box passes only when the expression is
+        // truthy, and an evaluation error drops it.
+        if let Some(expr) = self.filter {
+            let ectx = crate::render::group_expr_context(&group, self.z);
+            let pass = maplibre_expr::evaluate(expr, &ectx).is_ok_and(|v| v.is_truthy());
+            if !pass {
+                return;
+            }
+        }
+        self.groups.push(group);
     }
 
     fn rect(&mut self, b: Aabb, props: &Props<'_>, part: Part) {
@@ -364,6 +387,8 @@ impl Node for LabelBoxesNode {
         let mut out = Emitter {
             sx: self.extent as f32 / ctx.canvas.tile_w.max(1) as f32,
             sy: self.extent as f32 / ctx.canvas.tile_h.max(1) as f32,
+            filter: self.filter_expr.as_ref(),
+            z: ctx.tile.z,
             groups: Vec::new(),
         };
         for (layer, placed) in placement.layers.iter().enumerate() {
@@ -394,6 +419,10 @@ impl Node for LabelBoxesNode {
         h.update(&[self.parts, self.include_rejected as u8]);
         h.update(&self.extent.to_le_bytes());
         h.update(&(self.ports.len() as u64).to_le_bytes());
+        if let Some(s) = &self.filter_expr_src {
+            h.update(b"fexpr");
+            h.update(s.as_bytes());
+        }
     }
 }
 
@@ -461,10 +490,22 @@ impl NodeFactory for LabelBoxesFactory {
                     msg: "expected a positive integer".into(),
                 })? as u32,
         };
+        let (filter_expr, filter_expr_src) = match fields.get("filter-expr") {
+            Some(v) => {
+                let expr = maplibre_expr::parse(v).map_err(|e| FactoryError::BadField {
+                    field: "filter-expr".into(),
+                    msg: e.to_string(),
+                })?;
+                (Some(expr), Some(v.to_string()))
+            }
+            None => (None, None),
+        };
         Ok(BuiltNode {
             node: Box::new(LabelBoxesNode {
                 parts,
                 include_rejected,
+                filter_expr,
+                filter_expr_src,
                 extent,
                 ports,
             }),
@@ -492,6 +533,9 @@ impl NodeFactory for LabelBoxesFactory {
                     "enum": ["placed", "all"],
                     "default": "placed",
                     "description": "`placed` emits the labels that placed; `all` adds the candidates that lost their collision test or were dropped by `dedupe-key-expr`, with `placed: false`, at their first anchor. Duplicate copies of one label are never emitted."
+                },
+                "filter-expr": {
+                    "description": "A MapLibre filter expression (JSON array, e.g. [\">\", [\"coalesce\", [\"get\", \"variant-index\"], 0], 0]), evaluated per box against every property the box carries, `part` included, with `geometry-type` `Polygon`. A box is emitted only when the expression is truthy; one whose expression errors is dropped. Picks out, say, the labels that moved off their first position, to draw a leader line to their feature."
                 },
                 "extent": { "type": "integer", "minimum": 1, "default": DEFAULT_EXTENT,
                             "description": "Coordinate extent of the emitted geometry, matching the features it is combined with." }

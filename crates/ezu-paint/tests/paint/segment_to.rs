@@ -204,9 +204,9 @@ fn gap_px_pulls_the_feature_end_back() {
 #[test]
 fn a_leader_runs_from_the_feature_to_the_edge_of_its_moved_label() {
     // Three labels on one point, each position further up: the second and
-    // third move off the first. Every text box gets a leader from the
-    // labelled point that stops at the box; the stroke shows only the
-    // moved ones' by `variant-index`.
+    // third move off the first. Their text boxes, picked out by
+    // `variant-index`, each get a leader from the labelled point that stops
+    // at the box.
     let tile = TileId { z: 0, x: 0, y: 0 };
     let at = (2048, 3072);
     // Tile 0/0/0 spans the world, so its frame is the world's scaled up.
@@ -253,11 +253,11 @@ fn a_leader_runs_from_the_feature_to_the_edge_of_its_moved_label() {
                         {{ "anchor": "bottom", "offset-em": [0, -4.5] }}
                       ] }},
         "placed":  {{ "op": "label-placement", "labels": ["@labels"] }},
-        "boxes":   {{ "op": "label-boxes", "placement": "@placed", "parts": ["text"] }},
+        "boxes":   {{ "op": "label-boxes", "placement": "@placed", "parts": ["text"],
+                      "filter-expr": [">", ["coalesce", ["get", "variant-index"], 0], 0] }},
         "leaders": {{ "op": "segment-to", "features": "@boxes",
                       "lng-field": "rep_lng", "lat-field": "rep_lat" }},
-        "draw":    {{ "op": "stroke", "features": "@leaders", "color": "#000000", "width-px": 1,
-                      "opacity-expr": ["case", [">", ["coalesce", ["get", "variant-index"], 0], 0], 1, 0] }},
+        "draw":    {{ "op": "stroke", "features": "@leaders", "color": "#000000", "width-px": 1 }},
         "text":    {{ "op": "text-draw", "labels": "@labels", "placement": "@placed" }},
         "out":     {{ "op": "stack", "layers": ["@draw", "@text"] }}
       }},
@@ -267,8 +267,17 @@ fn a_leader_runs_from_the_feature_to_the_edge_of_its_moved_label() {
     let bindings = [("src.pts", layer)];
     let (boxes, _) = features_of_node(&json, 128, 0, tile, &bindings, "boxes");
     let (leaders, _) = features_of_node(&json, 128, 0, tile, &bindings, "leaders");
-    assert_eq!(boxes.groups.len(), 3, "three labels place");
-    assert_eq!(leaders.groups.len(), 3, "one leader per box");
+    let mut moved: Vec<_> = boxes
+        .groups
+        .iter()
+        .map(|g| match g.properties.get("variant-index") {
+            Some(maplibre_expr::Value::Number(n)) => *n,
+            other => panic!("variant-index: {other:?}"),
+        })
+        .collect();
+    moved.sort_by(f64::total_cmp);
+    assert_eq!(moved, [1.0, 2.0], "the two labels that moved");
+    assert_eq!(leaders.groups.len(), 2, "one leader per box");
     for (b, l) in boxes.groups.iter().zip(&leaders.groups) {
         assert_eq!(
             b.properties.get("variant-index"),

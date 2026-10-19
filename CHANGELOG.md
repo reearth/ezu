@@ -21,6 +21,11 @@ mean is spelled out in
   feature end of every line, at a polygon's edge or a point, to leave some air
   between the leader and what it reaches. Polygons were ignored before, and
   the gap defaults to 0, so existing styles draw as they did.
+- `label-boxes` takes `filter-expr`, a MapLibre expression tested against each
+  box with every property it carries, `part` included. Only the boxes for which
+  it is true are emitted, so a recipe can keep the labels that moved off their
+  first position (`[">", ["coalesce", ["get", "variant-index"], 0], 0]`) to
+  draw leader lines to, or the ones that lost with `include: "all"`.
 - `text` and `text-labels` take `dedupe-key-expr` and `dedupe-distance-px`,
   to show a repeated name once. Once a point label has placed, later labels in
   the same layer whose key is equal and whose anchor is within the distance are

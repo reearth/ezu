@@ -520,3 +520,83 @@ fn a_label_straddling_the_seam_gives_the_same_boxes_on_both_tiles() {
         assert_eq!(l[0].label_id(), r[0].label_id(), "{part}: same label");
     }
 }
+
+#[test]
+fn filter_expr_keeps_the_labels_that_moved() {
+    // Two labels on one point: B moves to the second anchor. Filtered on
+    // `variant-index`, only B's boxes come through, every part of them.
+    let feats = || vec![point("A", 2048, 2048), point("B", 2048, 2048)];
+    let text = r#", "anchor-variants": ["top", "bottom"], "radial-offset": 1.0"#;
+    let all = boxes(&run_centre(&recipe(text, ""), feats()));
+    let moved = boxes(&run_centre(
+        &recipe(
+            text,
+            r#", "filter-expr": [">", ["coalesce", ["get", "variant-index"], 0], 0]"#,
+        ),
+        feats(),
+    ));
+    assert!(!moved.is_empty());
+    assert!(moved.iter().all(|b| b.name() == "B"), "only B");
+    let parts = |bs: &[Box], name: &str| {
+        let mut v: Vec<String> = bs
+            .iter()
+            .filter(|b| b.name() == name)
+            .map(|b| b.part().to_string())
+            .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(parts(&moved, "B"), parts(&all, "B"), "all of B's boxes");
+}
+
+#[test]
+fn filter_expr_sees_the_part_of_each_box() {
+    let feats = || vec![point("A", 2048, 2048)];
+    let all = boxes(&run_centre(&recipe("", ""), feats()));
+    let text = boxes(&run_centre(
+        &recipe("", r#", "filter-expr": ["==", ["get", "part"], "text"]"#),
+        feats(),
+    ));
+    assert_eq!(text.len(), 1);
+    assert_eq!(text[0].part(), "text");
+    assert_eq!(text[0].bounds(), of_part(&all, "text")[0].bounds());
+    // An expression that errors drops the box, as in `features`.
+    let none = run_centre(
+        &recipe(
+            "",
+            r#", "filter-expr": ["==", ["number", ["get", "name"]], 1]"#,
+        ),
+        feats(),
+    );
+    assert!(none.groups.is_empty());
+}
+
+#[test]
+fn filter_expr_picks_out_the_labels_that_lost() {
+    // As above, two boxed labels of which only one places; with
+    // `include: all` the filter keeps the loser alone.
+    let feats = || vec![point("I", 1536, 2048), point("I", 2560, 2048)];
+    let extra = r##", "background-color": "#ff0000", "background-padding": [0, 8, 0, 8]"##;
+    let lost = boxes(&run_centre(
+        &recipe(
+            extra,
+            r#", "include": "all", "filter-expr": ["!", ["get", "placed"]]"#,
+        ),
+        feats(),
+    ));
+    assert!(!lost.is_empty());
+    assert!(lost.iter().all(|b| !b.placed()), "only the loser");
+    let mut ids: Vec<f64> = lost.iter().map(Box::label_id).collect();
+    ids.dedup();
+    assert_eq!(ids.len(), 1, "one label");
+}
+
+#[test]
+fn a_bad_filter_expr_fails_the_build() {
+    let doc = ezu_style::Document::from_json(&recipe("", r#", "filter-expr": ["no-such-op", 1]"#))
+        .expect("parse");
+    match ezu_graph::build_graph(&doc, &ezu_paint::nodes::default_registry()) {
+        Ok(_) => panic!("the build succeeded"),
+        Err(e) => assert!(e.to_string().contains("filter-expr"), "{e}"),
+    }
+}

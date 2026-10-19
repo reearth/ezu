@@ -280,8 +280,9 @@ properties, plus:
 | `placed` | `true`, or `false` for a candidate that did not place (only with `include: "all"`); its `drop-reason` says why: `collision` or `dedupe`. |
 | `label-id` | Shared by every box of one label, and the same on every tile. |
 
-`parts` picks which kinds to emit (default: all of them), and `labels` limits the
-output to one of the placement's layers. A line label has no single block: it gives
+`parts` picks which kinds to emit (default: all of them), `labels` limits the
+output to one of the placement's layers, and `filter-expr` keeps only the boxes
+for which a MapLibre expression over these properties is true. A line label has no single block: it gives
 one `glyph` quad per glyph, turned along the path, plus the axis-aligned `collision`
 box placement tested for each glyph. Labels placed from a neighbouring tile's
 candidates come through like their text, so a box that crosses a tile edge carries
@@ -338,7 +339,7 @@ stopping at the box's edge rather than running under the text. It needs the
 feature's own position as longitude and latitude properties (`rep_lng` and
 `rep_lat` here), which the boxes carry along with the rest of the feature's
 properties. A placed label's boxes also carry `variant-index`, 0 at the first
-position, so the stroke shows only the leaders of labels that moved:
+position, so `filter-expr` on `label-boxes` keeps only the labels that moved:
 
 ```json
 "names":   { "op": "text-labels", "features": "@shops", "font": ["sans"],
@@ -349,12 +350,12 @@ position, so the stroke shows only the leaders of labels that moved:
                { "anchor": "left",   "radial-em": 1.5 }
              ] },
 "place":   { "op": "label-placement", "labels": ["@names"] },
-"boxes":   { "op": "label-boxes", "placement": "@place", "parts": ["text"] },
-"leaders": { "op": "segment-to", "features": "@boxes",
+"moved":   { "op": "label-boxes", "placement": "@place", "parts": ["text"],
+             "filter-expr": [">", ["coalesce", ["get", "variant-index"], 0], 0] },
+"leaders": { "op": "segment-to", "features": "@moved",
              "lng-field": "rep_lng", "lat-field": "rep_lat", "gap-px": 2 },
 "leader_d": { "op": "stroke", "features": "@leaders", "color": "#555555",
-              "width-px": 0.75,
-              "opacity-expr": ["case", [">", ["coalesce", ["get", "variant-index"], 0], 0], 1, 0] },
+              "width-px": 0.75 },
 "names_d": { "op": "text-draw", "labels": "@names", "placement": "@place" },
 "out":     { "op": "stack", "layers": ["@base", "@leader_d", "@names_d"] }
 ```
@@ -363,6 +364,8 @@ Each line heads for the centre of the box and ends where it first meets the
 edge; `gap-px` leaves that many pixels of air before it. A label whose box covers
 its feature's position gets no leader. With `background-padding` set, take
 `parts: ["background"]` instead, so the leader stops at the padded box.
+`filter-expr` sees every property a box carries, `part` included, so it can pick
+on `placed`, `overlapped` or the labelled feature's own fields just as well.
 
 ## Glyphs without font files
 

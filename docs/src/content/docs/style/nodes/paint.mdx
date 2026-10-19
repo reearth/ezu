@@ -101,6 +101,7 @@ The boxes a `label-placement` node measured its labels by, as polygons — one p
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `extent` | integer (1…∞) | no | Coordinate extent of the emitted geometry, matching the features it is combined with. |
+| `filter-expr` | — | no | A MapLibre filter expression (JSON array, e.g. ["&gt;", ["coalesce", ["get", "variant-index"], 0], 0]), evaluated per box against every property the box carries, `part` included, with `geometry-type` `Polygon`. A box is emitted only when the expression is truthy; one whose expression errors is dropped. Picks out, say, the labels that moved off their first position, to draw a leader line to their feature. |
 | `include` | `placed` \| `all` | no | `placed` emits the labels that placed; `all` adds the candidates that lost their collision test or were dropped by `dedupe-key-expr`, with `placed: false`, at their first anchor. Duplicate copies of one label are never emitted. |
 | `labels` | `@node` | no | Only this `text-labels` layer of the placement (it must be wired into the `placement` node too). Default: every layer. |
 | `parts` | array of `text` \| `icon` \| `background` \| `glyph` \| `collision` | no | Which boxes to emit. Default: every kind a label has. |
