@@ -7,6 +7,7 @@ Core types shared across the [`ezu`](../../README.md) workspace.
 | Module | What it provides |
 |---|---|
 | `coord` | [`TileId`] (z/x/y) and [`WorldPos`] in the `[0,1]²` Web-Mercator unit square; `tile_to_world()` |
+| `frame` | `Frame::compute(&FrameRequest)` — the zoom, tile size and tile range that render a map at a print scale and paper size, and where to crop |
 | `seed`  | `world_seed(WorldPos, salt) -> u64` (xxh3) — the foundation of seamless tile boundaries |
 
 World coordinates here are normalized to the unit square so that
