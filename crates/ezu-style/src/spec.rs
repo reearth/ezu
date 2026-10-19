@@ -844,7 +844,10 @@ pub struct FileSource {
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct MvtSource {
     /// XYZ URL template with `{z}`, `{x}`, `{y}` placeholders, or a
-    /// TileJSON document URL (anything ending in `.json`).
+    /// TileJSON document URL (anything ending in `.json`). A local
+    /// template is a `file:` path, relative to the style's directory, or
+    /// a bare path, relative to the working directory; the directory
+    /// above its first placeholder has to exist.
     pub url: String,
     /// Explicit attribution. When absent, hosts inherit the upstream
     /// TileJSON `attribution` field.

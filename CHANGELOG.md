@@ -9,6 +9,19 @@ ezu is pre-1.0, so a minor bump may carry a breaking change. What the numbers
 mean is spelled out in
 [versioning](https://reearth.github.io/ezu/reference/changelog/).
 
+## Unreleased
+
+### Fixed
+
+- An `mvt` or `pmtiles` source whose `url` was a `file:` path, as `geojson`
+  sources and sprites are written, read nothing: the CLI took `file:` as part
+  of the path, every tile came back missing, and the map drew empty without a
+  warning. `file:` is now taken off and a relative path resolves against the
+  style's directory, as for every other `file:` source; a bare path still
+  reads relative to the working directory. A local `{z}/{x}/{y}` template
+  whose directory does not exist now fails to open, naming the directory,
+  instead of drawing every tile empty.
+
 ## 0.12.0 — 2026-10-12
 
 ### Breaking

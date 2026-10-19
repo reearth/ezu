@@ -509,7 +509,7 @@ async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Er
         (None, None) => None,
         _ => return Err("--pmtiles and --mvt are mutually exclusive".into()),
     };
-    let feature_sources = Arc::new(FeatureSources::open(&doc, cli_override).await?);
+    let feature_sources = Arc::new(FeatureSources::open(&doc, cli_override, &assets_dir).await?);
 
     let dem_sources = Arc::new(build_dem_sources(&doc));
     if !dem_sources.is_empty() {

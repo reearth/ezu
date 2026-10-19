@@ -107,7 +107,7 @@ pub async fn run(args: ServeCmd) -> Result<(), Box<dyn std::error::Error>> {
     // from the style's `sources` block so the document's `features`
     // nodes can reference them. A CLI override without any matching
     // style source is an error — we'd have nothing to bind it under.
-    let feature_sources = FeatureSources::open(&snapshot.doc, cli_source).await?;
+    let feature_sources = FeatureSources::open(&snapshot.doc, cli_source, &assets_dir).await?;
     if feature_sources.is_empty() {
         tracing::info!("no MVT source — `features` bindings will be empty");
     }

@@ -1,7 +1,7 @@
 //! Abstractions over MVT tile sources: PMTiles archives (local or
 //! remote) and templated `{z}/{x}/{y}` MVT sources (URL or path).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -23,6 +23,8 @@ pub enum SourceError {
     BadCoord { z: u8, x: u32, y: u32, msg: String },
     #[error("mvt pattern must contain {{z}}, {{x}}, {{y}}: {0}")]
     BadPattern(String),
+    #[error("mvt pattern {pattern}: directory {dir} does not exist")]
+    MissingDir { pattern: String, dir: String },
     #[error("tilejson at {src}: {msg}")]
     TileJson { src: String, msg: String },
 }
@@ -49,9 +51,13 @@ enum TileSourceKind {
 }
 
 impl TileSource {
-    pub async fn open(spec: &SourceSpec) -> Result<Self, SourceError> {
+    /// Open `spec`. A `file:` path is read from disk, a relative one
+    /// against `base_dir` when given, as every other `file:` source in a
+    /// style is; a path without a scheme is read as written.
+    pub async fn open(spec: &SourceSpec, base_dir: Option<&Path>) -> Result<Self, SourceError> {
         match spec {
             SourceSpec::PmTiles(arg) => {
+                let arg = &local_path(arg, base_dir);
                 let (kind, metadata, data_maxzoom) = if is_url(arg) {
                     let client = Client::new();
                     let reader = AsyncPmTilesReader::new_with_url(client, arg)
@@ -90,6 +96,7 @@ impl TileSource {
                 })
             }
             SourceSpec::Mvt(arg) => {
+                let arg = &local_path(arg, base_dir);
                 let (pattern, attribution, data_maxzoom) = if looks_like_tilejson(arg) {
                     let (resolved, attribution, maxzoom) = load_tilejson_pattern(arg).await?;
                     tracing::info!("tilejson {arg} → {resolved}");
@@ -107,6 +114,17 @@ impl TileSource {
                         client: Client::new(),
                     }
                 } else {
+                    // A missing tile reads as "no data here", so a pattern
+                    // pointing nowhere would draw every tile empty without
+                    // a word. The directory above the first placeholder
+                    // has to exist.
+                    let dir = pattern_dir(&pattern);
+                    if !dir.is_dir() {
+                        return Err(SourceError::MissingDir {
+                            dir: dir.display().to_string(),
+                            pattern,
+                        });
+                    }
                     TileSourceKind::MvtFile { pattern }
                 };
                 Ok(Self {
@@ -289,10 +307,13 @@ impl FeatureSources {
     /// Open each feature source `doc` declares. `cli_override` (a
     /// `--mvt` / `--pmtiles` flag and its name) replaces the URL of the
     /// first one, keeping its name and zoom range; the style must declare
-    /// at least one for it to stand in for.
+    /// at least one for it to stand in for. A relative `file:` path in
+    /// the style resolves against `base_dir`, one in the flag against the
+    /// working directory.
     pub async fn open(
         doc: &ezu::style::Document,
         cli_override: Option<(SourceSpec, &'static str)>,
+        base_dir: &Path,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         use ezu::style::SourceDecl;
         let mut cli_override = cli_override;
@@ -306,11 +327,16 @@ impl FeatureSources {
                 ),
                 _ => continue,
             };
-            let (spec, origin) = cli_override.take().unwrap_or((spec, origin));
+            let (spec, origin, base) = match cli_override.take() {
+                Some((spec, origin)) => (spec, origin, None),
+                None => (spec, origin, Some(base_dir)),
+            };
             tracing::info!("opening source `{name}` ({origin}): {spec:?}");
             out.push(FeatureSource {
                 name: Arc::from(name.as_str()),
-                tiles: TileSource::open(&spec).await?,
+                tiles: TileSource::open(&spec, base)
+                    .await
+                    .map_err(|e| format!("source `{name}`: {e}"))?,
                 min_zoom: decl.min_zoom(),
                 max_zoom: decl.max_zoom(),
             });
@@ -366,6 +392,31 @@ pub enum SourceSpec {
 
 fn is_url(s: &str) -> bool {
     s.starts_with("http://") || s.starts_with("https://")
+}
+
+/// `arg` with a `file:` scheme taken off, a relative path joined onto
+/// `base_dir`. Anything else comes back as it is.
+fn local_path(arg: &str, base_dir: Option<&Path>) -> String {
+    let Some(path) = arg.strip_prefix("file:") else {
+        return arg.to_string();
+    };
+    match base_dir {
+        Some(dir) if !Path::new(path).is_absolute() => {
+            dir.join(path).to_string_lossy().replace('\\', "/")
+        }
+        _ => path.to_string(),
+    }
+}
+
+/// The directory a `{z}/{x}/{y}` path pattern's tiles live under: what
+/// precedes the first placeholder, up to its last separator.
+fn pattern_dir(pattern: &str) -> PathBuf {
+    let fixed = &pattern[..pattern.find('{').unwrap_or(pattern.len())];
+    match fixed.rfind(['/', '\\']) {
+        Some(0) => PathBuf::from("/"),
+        Some(i) => PathBuf::from(&fixed[..i]),
+        None => PathBuf::from("."),
+    }
 }
 
 /// Treat any `.json` argument as a TileJSON document. The TileJSON
@@ -475,7 +526,7 @@ mod tests {
     async fn every_feature_source_is_fetched_at_its_own_zoom() {
         let root = std::env::temp_dir().join(format!("ezu-feature-sources-{}", std::process::id()));
         let doc = two_sources(&root);
-        let sources = FeatureSources::open(&doc, None).await.unwrap();
+        let sources = FeatureSources::open(&doc, None, &root).await.unwrap();
         let names: Vec<&str> = sources.iter().map(|s| &*s.name).collect();
         assert_eq!(names, ["blocks", "buildings"]);
 
@@ -510,10 +561,13 @@ mod tests {
             std::env::temp_dir().join(format!("ezu-feature-override-{}", std::process::id()));
         let doc = two_sources(&root);
         let flag = format!("{}/buildings/{{z}}/{{x}}/{{y}}.pbf", root.display()).replace('\\', "/");
-        let sources =
-            FeatureSources::open(&doc, Some((SourceSpec::Mvt(flag.clone()), "--mvt flag")))
-                .await
-                .unwrap();
+        let sources = FeatureSources::open(
+            &doc,
+            Some((SourceSpec::Mvt(flag.clone()), "--mvt flag")),
+            &root,
+        )
+        .await
+        .unwrap();
         // `blocks` now reads the flag's directory, keeping its own range.
         let blocks = sources.get(Some("blocks")).unwrap();
         assert_eq!(
@@ -531,10 +585,66 @@ mod tests {
         )
         .unwrap();
         assert!(
-            FeatureSources::open(&none, Some((SourceSpec::Mvt(flag), "--mvt flag")))
+            FeatureSources::open(&none, Some((SourceSpec::Mvt(flag), "--mvt flag")), &root)
                 .await
                 .is_err()
         );
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    fn mvt_doc(url: &str) -> ezu::style::Document {
+        ezu::style::Document::from_json(&format!(
+            r##"{{
+              "name": "one",
+              "sources": {{ "bg": {{ "type": "mvt", "url": "{url}" }} }},
+              "nodes": {{ "out": {{ "op": "solid", "color": "#000000" }} }},
+              "output": "@out"
+            }}"##
+        ))
+        .unwrap()
+    }
+
+    /// A `file:` pattern reads from disk like a bare path, relative to
+    /// the style's directory as every other `file:` source is.
+    #[tokio::test]
+    async fn a_file_pattern_reads_relative_to_the_base_dir() {
+        let root = std::env::temp_dir().join(format!("ezu-feature-file-{}", std::process::id()));
+        let d = root.join("bg/14/4");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("8.pbf"), "bg 14").unwrap();
+
+        let sources = FeatureSources::open(&mvt_doc("file:bg/{z}/{x}/{y}.pbf"), None, &root)
+            .await
+            .unwrap();
+        let bytes = sources
+            .get(Some("bg"))
+            .unwrap()
+            .fetch_tile(TileId::new(14, 4, 8))
+            .await
+            .unwrap();
+        assert_eq!(bytes.as_deref(), Some(&b"bg 14"[..]));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A pattern whose directory is not there fails to open instead of
+    /// drawing every tile empty.
+    #[tokio::test]
+    async fn a_pattern_into_a_missing_directory_is_an_error() {
+        let root = std::env::temp_dir().join(format!("ezu-feature-missing-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let err = FeatureSources::open(&mvt_doc("file:nowhere/{z}/{x}/{y}.pbf"), None, &root)
+            .await
+            .err()
+            .expect("a missing directory opens");
+        assert!(err.to_string().contains("nowhere"), "{err}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn pattern_dir_stops_at_the_last_separator_before_a_placeholder() {
+        assert_eq!(pattern_dir("a/b/{z}/{x}/{y}.pbf"), PathBuf::from("a/b"));
+        assert_eq!(pattern_dir("a/tiles-{z}/{x}/{y}.pbf"), PathBuf::from("a"));
+        assert_eq!(pattern_dir("{z}/{x}/{y}.pbf"), PathBuf::from("."));
+        assert_eq!(pattern_dir("/{z}/{x}/{y}.pbf"), PathBuf::from("/"));
     }
 }
