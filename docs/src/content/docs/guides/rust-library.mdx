@@ -77,6 +77,48 @@ For the common cases you do not need to implement the trait yourself:
 `ezu::paint::host` ships `BrushBankLoader`, `TileLoader`,
 `prefetch_doc_assets`, DEM/raster source registries, and PNG/WebP encoders.
 
+## Bind and render, as the JS and Go packages do
+
+The lifecycle above is the whole machine. When your host already does its own
+fetching and only wants to bind bytes and get pixels back, `ezu::renderer` is
+the same embedding API the [JS](/ezu/guides/browser-wasm/) and
+[Go](/ezu/guides/go-package/) packages wrap, with the same calls:
+
+```rust
+use ezu::renderer::{BindOptions, RenderOptions, Renderer};
+
+let mut r = Renderer::new(&style_json)?;
+r.bind_source("basemap", mvt_bytes, &BindOptions::default())?;
+let png = r.render_tile(13, 7276, 3225, RenderOptions::default())?;
+r.clear_sources();
+```
+
+A page at a print scale is `compute_frame` and `render_frame`, which render the
+tiles the page covers at the tile size that meets the scale and crop them into
+one RGBA page, the same as [`ezu frame`](/ezu/guides/bbox-and-pyramids/#a-page-at-a-print-scale):
+
+```rust
+use ezu::renderer::FrameRequest;
+
+let f = r.compute_frame(&FrameRequest {
+    center_lon: 139.70, center_lat: 35.68,
+    scale: 1000.0, dpi: 200.0,
+    width: 1929, height: 1370,   // 245 × 174 mm at 200 dpi
+    zoom: None,
+    style_tile_size: r.tile_size(),
+})?;
+let page = r.render_frame(&f, RenderOptions::default(), |b, tile| {
+    let mvt = fetch_mvt(tile.z, tile.x, tile.y)?;   // your fetch, your error type
+    b.bind_source("basemap", mvt, &BindOptions::default())?;
+    Ok::<_, MyError>(())
+})?;
+```
+
+The bind gets a `FrameBinder` for the tile it is binding. `render_frame` holds
+the renderer by `&mut` for the whole frame, so that binder is the only way to
+bind while it runs — the borrow checker does what the JS and Go packages check at
+run time.
+
 ## Serial or parallel
 
 `Evaluator::render` walks the topological order sequentially.

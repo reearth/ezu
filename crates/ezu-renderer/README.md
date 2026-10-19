@@ -3,7 +3,8 @@
 The embedding renderer, with no host in it.
 
 An *embedding* is ezu running somewhere that owns its own I/O: a browser
-tab, a Workers isolate, a Go process driving a wasm runtime. Such a host
+tab, a Workers isolate, a Go process driving a wasm runtime, a Rust
+service with its own HTTP client and tile cache. Such a host
 cannot let the renderer fetch anything, so the flow inverts — the host
 fetches, binds each source's bytes, and asks for one tile:
 
@@ -41,11 +42,10 @@ let page = r.render_frame(&f, RenderOptions::default(), |b, tile| {
 In Rust the frame's hold is the borrow checker's: `render_frame` takes
 `&mut self`, and the binder cannot outlive the bind it was handed to.
 
-`ezu-wasm` is the first such shell. Because the failure names come from
+A Rust host uses this crate directly, or as `ezu::renderer` through the
+[`ezu`](../ezu) umbrella crate. The JS package (`ezu-wasm`) and the Go
+package (through `ezu-cabi`) are shells over it, and the three offer the
+same calls. Because the failure names come from
 [`ErrorKind`](src/error.rs) rather than from any one shell, a JS caller
 branching on `e.name` and a caller in another language branching on the
 same string see the same failure under the same name.
-
-Not published to crates.io: the shells are not published either, and the
-API is free to move until more than one of them has been written against
-it. Native Rust callers want [`ezu`](../ezu) — it fetches for you.

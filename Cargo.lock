@@ -693,6 +693,7 @@ dependencies = [
  "ezu-features",
  "ezu-graph",
  "ezu-paint",
+ "ezu-renderer",
  "ezu-style",
  "ezu-translate",
  "hokusai",

@@ -19,3 +19,9 @@ pub use ezu_style as style;
 
 #[cfg(feature = "translate")]
 pub use ezu_translate as translate;
+
+/// The embedding renderer: the host fetches, binds each source's bytes,
+/// and renders a tile or a print frame — the same calls the JS and Go
+/// packages make.
+#[cfg(feature = "renderer")]
+pub use ezu_renderer as renderer;

@@ -8,10 +8,9 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
-# Not published: the shells that use it (`ezu-wasm`) are not published
-# either, and the API is deliberately free to move until more than one
-# shell has been built against it.
-publish = false
+readme = "README.md"
+keywords = ["map", "cartography", "painterly", "renderer", "ezu"]
+categories = ["graphics", "rendering", "science::geo"]
 
 [dependencies]
 ezu-core = { workspace = true, features = ["text"] }

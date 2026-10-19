@@ -28,6 +28,11 @@ mean is spelled out in
   and its clearing counterpart render at another tile size without editing
   the style, for a host that renders a frame's tiles itself. The wasm
   module's ABI version is now 3.
+- `ezu-renderer`, the embedding renderer the JS and Go packages wrap, is
+  published to crates.io and re-exported from the umbrella crate as
+  `ezu::renderer` (the `renderer` feature, on by default), so a Rust host
+  that does its own fetching can bind and render — a tile or a print page —
+  with the same calls.
 - `text` and `text-labels` take `anchor-expr`, a MapLibre expression that
   names a point label's anchor per feature, so one layer can put some labels
   left of their points and others right of them, or switch sides with zoom.
