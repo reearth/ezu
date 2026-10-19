@@ -20,8 +20,9 @@
 //! covering a char shapes it. `text` is a constant string or a raw
 //! MapLibre string expression evaluated per feature group; `size` /
 //! `color` / `halo-color` / `halo-width` / `opacity` follow the usual
-//! constant-plus-`*-expr`-sibling pattern. Layout knobs (anchor,
-//! justify, wrapping, spacing) are build-time constants.
+//! constant-plus-`*-expr`-sibling pattern. Layout knobs (justify,
+//! wrapping, spacing) are build-time constants; the point anchor may also
+//! come per feature group from `anchor-expr`.
 //!
 //! Point placement labels each point and each polygon, at the polygon's
 //! pole of inaccessibility as MapLibre does or at its centroid
@@ -48,6 +49,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use ezu_features::ops::centroid::polygon_area_centroid;
@@ -620,6 +622,9 @@ struct GroupPrep<'g> {
     /// The group's `dedupe-key-expr` result; `None` when unset, null or
     /// empty, so the label never dedupes.
     dedupe_key: Option<String>,
+    /// The group's `anchor-expr` result; `None` when unset or not an anchor
+    /// name, so the node's own positions apply.
+    anchor: Option<Anchor>,
     opacity: f32,
     padding: f32,
     color: [f32; 4],
@@ -1155,6 +1160,16 @@ struct TextNode {
     /// `anchor_offsets`.
     anchor_variants: Vec<Anchor>,
     radial_offset_em: f32,
+    /// Data-driven `anchor`: a MapLibre string expression naming the anchor
+    /// per feature group, standing in for the constant `anchor` in the single
+    /// fixed position. `None` when unset, on line placement, or when a
+    /// position list (`anchor-offsets` / `anchor-variants`) already names the
+    /// anchors.
+    anchor_expr: Option<maplibre_expr::Expr>,
+    anchor_expr_src: Option<String>,
+    /// Set once a group's `anchor-expr` result was not an anchor name, so
+    /// that style mistake is reported once per node rather than per label.
+    anchor_expr_warned: AtomicBool,
     /// The widest shift (em) any position applies, for [`Self::label_reach`].
     reach_offset_em: f32,
     justify: Justify,
@@ -1371,6 +1386,10 @@ impl TextNode {
             .as_ref()
             .and_then(|e| maplibre_expr::evaluate(e, &ectx).ok())
             .and_then(dedupe_key);
+        let anchor = self
+            .anchor_expr
+            .as_ref()
+            .and_then(|e| self.eval_anchor(e, &ectx));
         let opacity = eval_number(&self.opacity_expr, &ectx, const_opacity).clamp(0.0, 1.0);
         let padding = eval_number(&self.padding_expr, &ectx, self.padding_px).max(0.0);
         let mut color = eval_color(&self.color_expr, &ectx, const_color);
@@ -1413,6 +1432,7 @@ impl TextNode {
             size,
             sort_key,
             dedupe_key,
+            anchor,
             opacity,
             padding,
             color,
@@ -1422,6 +1442,45 @@ impl TextNode {
             reach,
             font_fallback,
         })
+    }
+
+    /// Evaluate `anchor-expr` for one group into an anchor, or `None` to fall
+    /// back to `anchor`. An evaluation error (a missing property under an
+    /// assertion, say) falls back quietly like the other per-group
+    /// expressions; a string that names no anchor is a style mistake, so it
+    /// is reported, once per node.
+    fn eval_anchor(
+        &self,
+        expr: &maplibre_expr::Expr,
+        ectx: &maplibre_expr::EvaluationContext,
+    ) -> Option<Anchor> {
+        let maplibre_expr::Value::String(name) = maplibre_expr::evaluate(expr, ectx).ok()? else {
+            return None;
+        };
+        let anchor = Anchor::parse(&name);
+        if anchor.is_none() && !self.anchor_expr_warned.swap(true, Ordering::Relaxed) {
+            tracing::warn!(
+                "text: `anchor-expr` gave `{name}`, which is not an anchor name — \
+                 `anchor` was used for such labels"
+            );
+        }
+        anchor
+    }
+
+    /// The positions a point label of `prep` tries: the node's own list, or
+    /// — when `anchor-expr` picked an anchor for this group — the single
+    /// fixed position re-anchored there, shifted as `offset-em` /
+    /// `radial-offset` shift it for the constant `anchor`.
+    fn group_anchor_offsets(&self, prep: &GroupPrep<'_>) -> Cow<'_, [AnchorOffset]> {
+        match prep.anchor {
+            Some(a) => Cow::Owned(legacy_anchor_offsets(
+                a,
+                self.offset_em,
+                &[],
+                self.radial_offset_em,
+            )),
+            None => Cow::Borrowed(&self.anchor_offsets),
+        }
     }
 
     /// Gather the 8 neighbour tiles' feature groups for cross-tile collision
@@ -1996,8 +2055,9 @@ impl TextNode {
         // distinct.
         // A label is laid out once per (content, size, position); a label with
         // several positions shares every other input across them, so only the
-        // position (its index in `anchor_offsets`) varies the layout.
-        let mut blocks: HashMap<(u64, u32, usize), Arc<TextBlock>> = HashMap::new();
+        // position (its index in its position list, plus that position's
+        // anchor, which `anchor-expr` may pick per group) varies the layout.
+        let mut blocks: HashMap<(u64, u32, usize, u8), Arc<TextBlock>> = HashMap::new();
         let mut culled = 0usize;
         let mut dropped_chars = 0usize;
         let mut missing_range_chars = 0usize;
@@ -2143,18 +2203,20 @@ impl TextNode {
             }
 
             let (flat_fonts, ranges, hash) = assemble_stacks(sections, registry);
-            // Lay out one block per position in `anchor_offsets`. Each is
-            // cached by its index in that list — the same anchor may appear
-            // twice at different offsets — so repeated points/neighbours reuse
-            // it. An icon-only symbol has no sections and lays nothing out.
+            // Lay out one block per position the group tries. Each is cached
+            // by its index in that list — the same anchor may appear twice at
+            // different offsets — and by its anchor, since `anchor-expr` gives
+            // groups different anchors at the same index; repeated
+            // points/neighbours reuse it. An icon-only symbol has no sections
+            // and lays nothing out.
             let mut text_blocks: Vec<Arc<TextBlock>> = if sections.is_empty() {
                 Vec::new()
             } else {
-                self.anchor_offsets
+                self.group_anchor_offsets(prep)
                     .iter()
                     .enumerate()
                     .map(|(ci, &cand)| {
-                        let pkey = (hash, size.to_bits(), ci);
+                        let pkey = (hash, size.to_bits(), ci, cand.anchor as u8);
                         if let Some(b) = blocks.get(&pkey) {
                             return b.clone();
                         }
@@ -2606,6 +2668,7 @@ impl Node for TextNode {
             (b"sortkeyexpr".as_slice(), &self.sort_key_expr_src),
             (b"filterexpr".as_slice(), &self.filter_expr_src),
             (b"dedupekeyexpr".as_slice(), &self.dedupe_key_expr_src),
+            (b"anchorexpr".as_slice(), &self.anchor_expr_src),
         ] {
             if let Some(s) = src {
                 h.update(tag);
@@ -3137,12 +3200,17 @@ fn build_text_node(
             Some(v) => {
                 let cands = parse_anchor_offsets(v)?;
                 if placement == Placement::Point {
-                    let ignored: Vec<String> =
-                        ["anchor", "offset-em", "anchor-variants", "radial-offset"]
-                            .into_iter()
-                            .filter(|k| fields.contains_key(*k))
-                            .map(|k| format!("`{k}`"))
-                            .collect();
+                    let ignored: Vec<String> = [
+                        "anchor",
+                        "anchor-expr",
+                        "offset-em",
+                        "anchor-variants",
+                        "radial-offset",
+                    ]
+                    .into_iter()
+                    .filter(|k| fields.contains_key(*k))
+                    .map(|k| format!("`{k}`"))
+                    .collect();
                     if !ignored.is_empty() {
                         ctx.warn(format_args!(
                             "{} ignored: `anchor-offsets` sets the label's positions",
@@ -3180,6 +3248,24 @@ fn build_text_node(
                 (cands, false, anchor_variants, radial_offset_em)
             }
         };
+    // `anchor-expr` picks the anchor of the single fixed position per group.
+    // A position list names its anchors itself, and a line label is centred
+    // on its path, so in either case the expression has nothing to choose.
+    let (anchor_expr, anchor_expr_src) =
+        parse_expr_field(fields, "anchor-expr", &maplibre_expr::Type::String)?;
+    let (anchor_expr, anchor_expr_src) = match anchor_expr {
+        Some(_) if placement != Placement::Point => {
+            ctx.warn("`anchor-expr` applies to point placement only — ignored");
+            (None, None)
+        }
+        // `anchor-offsets` already warned about it above.
+        Some(_) if explicit_anchor_offsets => (None, None),
+        Some(_) if !anchor_variants.is_empty() => {
+            ctx.warn("`anchor-expr` ignored: `anchor-variants` sets the label's positions");
+            (None, None)
+        }
+        _ => (anchor_expr, anchor_expr_src),
+    };
     // How far any position may shift a label, for the neighbour band. The
     // older fields keep the bound they always had; `offset-em` stays in it
     // for line placement, which still reads it.
@@ -3388,6 +3474,9 @@ fn build_text_node(
             explicit_anchor_offsets,
             anchor_variants,
             radial_offset_em,
+            anchor_expr,
+            anchor_expr_src,
+            anchor_expr_warned: AtomicBool::new(false),
             reach_offset_em,
             justify,
             transform,
@@ -3486,6 +3575,9 @@ fn text_schema(stage: Stage) -> Value {
                                   "description": "Flip a right-to-left label so it reads upright (MapLibre `text-keep-upright`). Line placement only. Default true." },
                 "anchor": { "type": "string", "enum": ["center", "left", "right", "top", "bottom", "top-left", "top-right", "bottom-left", "bottom-right"],
                             "description": "Which part of the label block sits on the point (point placement). Default `center`. Ignored when `anchor-offsets` is set." },
+                "anchor-expr": {
+                    "description": "A MapLibre string expression (data-driven MapLibre `text-anchor`), evaluated per feature group with the tile's zoom, naming which part of the label block sits on the point: one of `center`, `left`, `right`, `top`, `bottom`, `top-left`, `top-right`, `bottom-left`, `bottom-right`. It takes the place of `anchor` for that group, with `offset-em` (or `radial-offset`) shifting the block as it would for that constant anchor, and `justify: auto` following it. A group whose result is not an anchor name, or whose evaluation fails, uses `anchor`; a result that is not an anchor name is reported once per node. Ignored, with a warning, when `anchor-offsets` or `anchor-variants` is set, since those name the anchors themselves. Point placement only.",
+                },
                 "anchor-offsets": { "type": "array", "minItems": 1,
                                     "items": { "type": "object",
                                                "properties": {
@@ -3495,7 +3587,7 @@ fn text_schema(stage: Stage) -> Value {
                                                },
                                                "required": ["anchor"],
                                                "additionalProperties": false },
-                                    "description": "The positions a point label tries, in order: on collision it moves to the next, and takes the first whose box is free. Each entry names the `anchor` that sits on the point and how far the block shifts from there: `offset-em` [x, y] in em, right and down positive, or `radial-em`, an em distance pushed away from the point in the anchor's direction (corners split it across both axes, and `top` / `bottom` measure it to the visible text, as MapLibre's `text-radial-offset` does). Give one of the two, or neither for no shift. The same anchor may appear more than once, so a label can try a near spot and then a farther one. `label-boxes` reports the position taken as `variant-index`. MapLibre's `text-variable-anchor-offset` is the nearest counterpart, but it also nudges `top` and `bottom` anchors by a baseline gap that `offset-em` does not; `ezu translate` folds that gap into the offsets it writes. When set, `anchor`, `offset-em`, `anchor-variants` and `radial-offset` are ignored for point placement. Point placement only." },
+                                    "description": "The positions a point label tries, in order: on collision it moves to the next, and takes the first whose box is free. Each entry names the `anchor` that sits on the point and how far the block shifts from there: `offset-em` [x, y] in em, right and down positive, or `radial-em`, an em distance pushed away from the point in the anchor's direction (corners split it across both axes, and `top` / `bottom` measure it to the visible text, as MapLibre's `text-radial-offset` does). Give one of the two, or neither for no shift. The same anchor may appear more than once, so a label can try a near spot and then a farther one. `label-boxes` reports the position taken as `variant-index`. MapLibre's `text-variable-anchor-offset` is the nearest counterpart, but it also nudges `top` and `bottom` anchors by a baseline gap that `offset-em` does not; `ezu translate` folds that gap into the offsets it writes. When set, `anchor`, `anchor-expr`, `offset-em`, `anchor-variants` and `radial-offset` are ignored for point placement. Point placement only." },
                 "anchor-variants": { "type": "array", "items": { "type": "string", "enum": ["center", "left", "right", "top", "bottom", "top-left", "top-right", "bottom-left", "bottom-right"] },
                             "description": "Deprecated: use `anchor-offsets`, with `{ \"anchor\": …, \"radial-em\": … }` entries for a `radial-offset`. MapLibre `text-variable-anchor`: anchors tried in order on collision, the first free one placed (point placement). Overrides `anchor` when set." },
                 "radial-offset": { "type": "number",

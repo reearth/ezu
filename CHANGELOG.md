@@ -13,6 +13,13 @@ mean is spelled out in
 
 ### Added
 
+- `text` and `text-labels` take `anchor-expr`, a MapLibre expression that
+  names a point label's anchor per feature, so one layer can put some labels
+  left of their points and others right of them, or switch sides with zoom.
+  It stands in for `anchor`, with `offset-em` shifting the block as it would
+  for that anchor; a result that names no anchor falls back to `anchor`. It
+  is ignored, with a warning, alongside `anchor-offsets` or `anchor-variants`,
+  and on line placement.
 - `segment-to` draws to polygons too. The line runs from the longitude and
   latitude the feature names towards the polygon's centroid and stops where it
   first meets the polygon's edge, so a leader to a label box from `label-boxes`
