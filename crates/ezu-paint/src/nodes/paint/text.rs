@@ -66,7 +66,7 @@ use crate::nodes::common::{
 };
 use ezu_core::text::{
     clip_line,
-    collide::{self, Aabb, LabelCandidate, PlaceRank},
+    collide::{self, Aabb, LabelCandidate, Overlap, PlaceRank},
     generate_anchors, get_or_build_layout, layout_sections, place_glyphs, Anchor, AnchorParams,
     FaceEntry, Font, GlyphPlacement, Justify, LayoutParams, LinePlacement, SdfFontStack,
     SectionPaint, SectionSpec, StackEntry, TextBlock, TextPaint, TextTransform, VerticalAlign,
@@ -1157,8 +1157,10 @@ struct TextNode {
     /// Whether to run collision. MapLibre's default is on; `false`
     /// restores the draw-everything behaviour (every label draws).
     collide: bool,
-    /// MapLibre `text-allow-overlap`: place regardless of collision.
-    allow_overlap: bool,
+    /// `overlap` (MapLibre `text-allow-overlap` as `always`): whether a
+    /// label may show over earlier ones, and whether it tries its other
+    /// positions first.
+    overlap: Overlap,
     /// MapLibre `text-ignore-placement`: don't block later labels.
     ignore_placement: bool,
     /// MapLibre `text-padding`: collision box inflation in px.
@@ -1855,7 +1857,7 @@ impl TextNode {
                             anchor_x: anchor.x,
                             anchor_y: anchor.y,
                             repeat_px,
-                            allow_overlap: self.allow_overlap,
+                            overlap: self.overlap,
                             ignore_placement: self.ignore_placement,
                         });
                         let placements: Vec<GlyphPlacement> = placed
@@ -2238,16 +2240,26 @@ impl TextNode {
             };
             // A symbol carries one overlap decision. With both halves present
             // the stricter of the two wins — MapLibre's per-box flags have no
-            // single-candidate equivalent.
-            let (allow_overlap, ignore_placement) = match (&self.icon, !icons.is_empty()) {
+            // single-candidate equivalent: `always` needs the icon's
+            // `icon-allow-overlap` too. `fallback` on the text makes the whole
+            // symbol fall back, since it only overlaps once every variant,
+            // icon fallbacks included, has been tried.
+            let icon_overlap = |cfg: &IconConfig| match cfg.allow_overlap {
+                true => Overlap::Always,
+                false => Overlap::Never,
+            };
+            let (overlap, ignore_placement) = match (&self.icon, !icons.is_empty()) {
                 (Some(cfg), true) if text_blocks.is_empty() => {
-                    (cfg.allow_overlap, cfg.ignore_placement)
+                    (icon_overlap(cfg), cfg.ignore_placement)
                 }
                 (Some(cfg), true) => (
-                    self.allow_overlap && cfg.allow_overlap,
+                    match self.overlap {
+                        Overlap::Always => icon_overlap(cfg),
+                        mode => mode,
+                    },
                     self.ignore_placement && cfg.ignore_placement,
                 ),
-                _ => (self.allow_overlap, self.ignore_placement),
+                _ => (self.overlap, self.ignore_placement),
             };
             let paint = TextPaint {
                 size_px: size,
@@ -2325,7 +2337,7 @@ impl TextNode {
                     // The repeat filter is a line-label rule (MapLibre records
                     // anchors along a path); a point label has one anchor.
                     repeat_px: 0.0,
-                    allow_overlap,
+                    overlap,
                     ignore_placement,
                 });
                 draws.push(LabelDraw::Point {
@@ -2602,7 +2614,8 @@ impl Node for TextNode {
         }
         h.update(&[
             self.collide as u8,
-            self.allow_overlap as u8,
+            // `never` / `always` hash as the boolean they replace did.
+            self.overlap as u8,
             self.ignore_placement as u8,
             self.text_optional as u8,
         ]);
@@ -3149,7 +3162,43 @@ fn build_text_node(
     // restores the draw-everything behaviour.
     let collide = read_bool_or(fields, "collide", ctx, true)?;
     let text_optional = read_bool_or(fields, "text-optional", ctx, false)?;
-    let allow_overlap = read_bool_or(fields, "allow-overlap", ctx, false)?;
+    // `overlap` names the three modes; the deprecated boolean
+    // `allow-overlap` maps onto two of them.
+    let overlap = match fields.get("overlap") {
+        Some(_) => {
+            let s = read_string_or(fields, "overlap", ctx, "never")?;
+            let mode = match s.as_str() {
+                "never" => Overlap::Never,
+                "always" => Overlap::Always,
+                "fallback" => Overlap::Fallback,
+                _ => {
+                    return Err(FactoryError::BadField {
+                        field: "overlap".into(),
+                        msg: format!("unknown overlap `{s}` (never|always|fallback)"),
+                    })
+                }
+            };
+            if fields.contains_key("allow-overlap") {
+                ctx.warn("`allow-overlap` ignored: `overlap` sets how the label overlaps");
+            }
+            mode
+        }
+        None => {
+            let allow = read_bool_or(fields, "allow-overlap", ctx, false)?;
+            let mode = if allow {
+                Overlap::Always
+            } else {
+                Overlap::Never
+            };
+            if fields.contains_key("allow-overlap") {
+                let name = if allow { "always" } else { "never" };
+                ctx.warn(format_args!(
+                    "`allow-overlap` is deprecated: write \"overlap\": \"{name}\" instead"
+                ));
+            }
+            mode
+        }
+    };
     let ignore_placement = read_bool_or(fields, "ignore-placement", ctx, false)?;
     let padding_px = read_number_or(fields, "padding-px", ctx, 2.0)? as f32;
     let (padding_expr, padding_expr_src) =
@@ -3271,7 +3320,7 @@ fn build_text_node(
             max_extent_px,
             outline_sdf,
             collide,
-            allow_overlap,
+            overlap,
             ignore_placement,
             padding_px,
             padding_expr,
@@ -3388,8 +3437,10 @@ fn text_schema(stage: Stage) -> Value {
                                  "description": "Render outline-font glyphs through the SDF field-sampling path (maplibre-gl-js style, which draws every glyph from an SDF) instead of a per-glyph vector fill / stroke. The halo then comes from a distance threshold rather than a stroke, matching MapLibre's halo shape and cost. SDF glyph (`glyphs`) stacks are unaffected. Default true." },
                 "collide": { "type": "boolean",
                              "description": "Whether to run deterministic label collision. Default true (MapLibre's default). Set false to draw every label (the pre-collision behaviour)." },
+                "overlap": { "type": "string", "enum": ["never", "always", "fallback"],
+                             "description": "What a label does when it collides with labels placed before it. `never` (default): it tries each of its positions (`anchor-offsets`) and drops if none is free. `always` (MapLibre `text-allow-overlap`): it shows at its first position without trying the others, whatever it overlaps. `fallback`: it tries every position as `never` does, and the symbol's text-only or icon-only fallbacks when `icon-optional` / `text-optional` allow them, and only when all are blocked shows at its first position, overlapping; `label-boxes` marks it `overlapped`. A shown label still reserves its box (blocking later labels) unless `ignore-placement`. On a symbol with an icon, `always` takes effect only with `icon-allow-overlap` set too, while `fallback` applies to the whole symbol." },
                 "allow-overlap": { "type": "boolean",
-                                   "description": "MapLibre `text-allow-overlap`: place the label even if it collides. It still reserves its box (blocking later labels) unless `ignore-placement`. Default false." },
+                                   "description": "Deprecated: use `overlap` (`true` is `\"always\"`, `false` is `\"never\"`). MapLibre `text-allow-overlap`: place the label even if it collides. It still reserves its box (blocking later labels) unless `ignore-placement`. Ignored when `overlap` is set. Default false." },
                 "ignore-placement": { "type": "boolean",
                                       "description": "MapLibre `text-ignore-placement`: don't let this label block later ones (skip inserting its collision box). Default false." },
                 "padding-px": { "type": "number", "minimum": 0.0,
@@ -3435,7 +3486,7 @@ fn text_schema(stage: Stage) -> Value {
                                      "description": "MapLibre `icon-padding`: collision-box inflation around the icon, in px. Default 2." },
                 "icon-padding-expr": { "description": "A MapLibre number expression (px), evaluated per feature group; overrides `icon-padding-px`." },
                 "icon-allow-overlap": { "type": "boolean",
-                                        "description": "MapLibre `icon-allow-overlap`. A symbol carries one overlap decision, so with text present this and `allow-overlap` must both be set for the symbol to ignore collision. Default false." },
+                                        "description": "MapLibre `icon-allow-overlap`. A symbol carries one overlap decision, so with text present this and `overlap: always` must both be set for the symbol to ignore collision. Default false." },
                 "icon-ignore-placement": { "type": "boolean",
                                            "description": "MapLibre `icon-ignore-placement`; with text present it pairs with `ignore-placement` the same way as the overlap flags. Default false." },
                 "icon-optional": { "type": "boolean",

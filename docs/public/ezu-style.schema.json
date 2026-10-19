@@ -3068,7 +3068,7 @@
             "type": "object"
           },
           {
-            "description": "The boxes a `label-placement` node measured its labels by, as polygons — one per box — so any geometry and paint op can draw them: a bordered or rounded badge (`buffer` → `stroke`), an offset shadow (`transform`), or a debug overlay of placement. Reads the decisions already made, so nothing is placed twice and the boxes match what `text-draw` draws; labels placed from a neighbour tile's candidates are included, so boxes continue across tile edges. Each polygon carries the labelled feature's properties plus `part` (`text`, `icon`, `background`, `glyph` or `collision`), `placed` (false for a candidate that lost its collision test, with `include: all`) and `label-id` (shared by every box of one label, the same on every tile). A placed label also carries `overlapped` (true when it overlaps a label placed before it, which only `allow-overlap` permits) and `variant-index`: where the position it took sits in the list it was tried from (`anchor-offsets`, or the anchors of the deprecated `anchor-variants`), 0 for the first position, for a lone one and for a line label, and absent when the variant shown draws no text. A label that did not place carries `drop-reason` instead, `collision` for now. A point label gives its `text` block (no padding), `icon` (rotated by `icon-rotate`), `background` box (with `background-padding` or `background-color`) and the `collision` box or boxes it was tested with, padding included. A line label gives one `glyph` quad per glyph, rotated along the path, and the axis-aligned `collision` box placement tested for each glyph.",
+            "description": "The boxes a `label-placement` node measured its labels by, as polygons — one per box — so any geometry and paint op can draw them: a bordered or rounded badge (`buffer` → `stroke`), an offset shadow (`transform`), or a debug overlay of placement. Reads the decisions already made, so nothing is placed twice and the boxes match what `text-draw` draws; labels placed from a neighbour tile's candidates are included, so boxes continue across tile edges. Each polygon carries the labelled feature's properties plus `part` (`text`, `icon`, `background`, `glyph` or `collision`), `placed` (false for a candidate that lost its collision test, with `include: all`) and `label-id` (shared by every box of one label, the same on every tile). A placed label also carries `overlapped` (true when it overlaps a label placed before it, which only `overlap: always` or `fallback` permits) and `variant-index`: where the position it took sits in the list it was tried from (`anchor-offsets`, or the anchors of the deprecated `anchor-variants`), 0 for the first position, for a lone one and for a line label, and absent when the variant shown draws no text. A label that did not place carries `drop-reason` instead, `collision` for now. A point label gives its `text` block (no padding), `icon` (rotated by `icon-rotate`), `background` box (with `background-padding` or `background-color`) and the `collision` box or boxes it was tested with, padding included. A line label gives one `glyph` quad per glyph, rotated along the path, and the axis-aligned `collision` box placement tested for each glyph.",
             "properties": {
               "extent": {
                 "default": 4096,
@@ -5020,7 +5020,7 @@
             "description": "Text labels (MapLibre `symbol-placement`): `placement: point` (default) labels each feature point, `line` / `line-center` walk each polyline with tangent-rotated glyphs. `font` is an ordered fallback stack of `font` and/or `glyphs` source names; `text` is a literal string or a MapLibre string expression evaluated per feature group. Paint properties have optional `*-expr` siblings; layout knobs are build-time constants in em. Collision is on by default and is deterministic across tiles: candidates come from this tile plus the 8 neighbour tiles (host-bound under `<source>.<layer>@dx,dy`), so borders stay seamless. Set `source`/`layer` (the upstream feature source) to enable neighbour gathering; without them collision is centre-tile-only. `icon-name` / `icon-name-expr` add MapLibre's `icon-image` half: the icon is placed together with the text against the same index, so a symbol shows both or neither unless `icon-optional` / `text-optional` say otherwise. `font` and `text` are required unless the symbol is icon-only.",
             "properties": {
               "allow-overlap": {
-                "description": "MapLibre `text-allow-overlap`: place the label even if it collides. It still reserves its box (blocking later labels) unless `ignore-placement`. Default false.",
+                "description": "Deprecated: use `overlap` (`true` is `\"always\"`, `false` is `\"never\"`). MapLibre `text-allow-overlap`: place the label even if it collides. It still reserves its box (blocking later labels) unless `ignore-placement`. Ignored when `overlap` is set. Default false.",
                 "type": "boolean"
               },
               "anchor": {
@@ -5189,7 +5189,7 @@
                 "description": "A MapLibre number expression (px), evaluated per feature group; overrides the constant `halo-width`."
               },
               "icon-allow-overlap": {
-                "description": "MapLibre `icon-allow-overlap`. A symbol carries one overlap decision, so with text present this and `allow-overlap` must both be set for the symbol to ignore collision. Default false.",
+                "description": "MapLibre `icon-allow-overlap`. A symbol carries one overlap decision, so with text present this and `overlap: always` must both be set for the symbol to ignore collision. Default false.",
                 "type": "boolean"
               },
               "icon-anchor": {
@@ -5388,6 +5388,15 @@
                 "description": "Render outline-font glyphs through the SDF field-sampling path (maplibre-gl-js style, which draws every glyph from an SDF) instead of a per-glyph vector fill / stroke. The halo then comes from a distance threshold rather than a stroke, matching MapLibre's halo shape and cost. SDF glyph (`glyphs`) stacks are unaffected. Default true.",
                 "type": "boolean"
               },
+              "overlap": {
+                "description": "What a label does when it collides with labels placed before it. `never` (default): it tries each of its positions (`anchor-offsets`) and drops if none is free. `always` (MapLibre `text-allow-overlap`): it shows at its first position without trying the others, whatever it overlaps. `fallback`: it tries every position as `never` does, and the symbol's text-only or icon-only fallbacks when `icon-optional` / `text-optional` allow them, and only when all are blocked shows at its first position, overlapping; `label-boxes` marks it `overlapped`. A shown label still reserves its box (blocking later labels) unless `ignore-placement`. On a symbol with an icon, `always` takes effect only with `icon-allow-overlap` set too, while `fallback` applies to the whole symbol.",
+                "enum": [
+                  "never",
+                  "always",
+                  "fallback"
+                ],
+                "type": "string"
+              },
               "padding-expr": {
                 "description": "A MapLibre number expression (MapLibre `text-padding`), evaluated per feature group; overrides the constant `padding-px` for that group's collision boxes."
               },
@@ -5517,7 +5526,7 @@
             "description": "Text labels (MapLibre `symbol-placement`): `placement: point` (default) labels each feature point, `line` / `line-center` walk each polyline with tangent-rotated glyphs. `font` is an ordered fallback stack of `font` and/or `glyphs` source names; `text` is a literal string or a MapLibre string expression evaluated per feature group. Paint properties have optional `*-expr` siblings; layout knobs are build-time constants in em. Collision is on by default and is deterministic across tiles: candidates come from this tile plus the 8 neighbour tiles (host-bound under `<source>.<layer>@dx,dy`), so borders stay seamless. Set `source`/`layer` (the upstream feature source) to enable neighbour gathering; without them collision is centre-tile-only. `icon-name` / `icon-name-expr` add MapLibre's `icon-image` half: the icon is placed together with the text against the same index, so a symbol shows both or neither unless `icon-optional` / `text-optional` say otherwise. `font` and `text` are required unless the symbol is icon-only. Emits placement candidates instead of pixels: wire this node into a `label-placement` node and draw the result with `text-draw`.",
             "properties": {
               "allow-overlap": {
-                "description": "MapLibre `text-allow-overlap`: place the label even if it collides. It still reserves its box (blocking later labels) unless `ignore-placement`. Default false.",
+                "description": "Deprecated: use `overlap` (`true` is `\"always\"`, `false` is `\"never\"`). MapLibre `text-allow-overlap`: place the label even if it collides. It still reserves its box (blocking later labels) unless `ignore-placement`. Ignored when `overlap` is set. Default false.",
                 "type": "boolean"
               },
               "anchor": {
@@ -5686,7 +5695,7 @@
                 "description": "A MapLibre number expression (px), evaluated per feature group; overrides the constant `halo-width`."
               },
               "icon-allow-overlap": {
-                "description": "MapLibre `icon-allow-overlap`. A symbol carries one overlap decision, so with text present this and `allow-overlap` must both be set for the symbol to ignore collision. Default false.",
+                "description": "MapLibre `icon-allow-overlap`. A symbol carries one overlap decision, so with text present this and `overlap: always` must both be set for the symbol to ignore collision. Default false.",
                 "type": "boolean"
               },
               "icon-anchor": {
@@ -5884,6 +5893,15 @@
               "outline-sdf": {
                 "description": "Render outline-font glyphs through the SDF field-sampling path (maplibre-gl-js style, which draws every glyph from an SDF) instead of a per-glyph vector fill / stroke. The halo then comes from a distance threshold rather than a stroke, matching MapLibre's halo shape and cost. SDF glyph (`glyphs`) stacks are unaffected. Default true.",
                 "type": "boolean"
+              },
+              "overlap": {
+                "description": "What a label does when it collides with labels placed before it. `never` (default): it tries each of its positions (`anchor-offsets`) and drops if none is free. `always` (MapLibre `text-allow-overlap`): it shows at its first position without trying the others, whatever it overlaps. `fallback`: it tries every position as `never` does, and the symbol's text-only or icon-only fallbacks when `icon-optional` / `text-optional` allow them, and only when all are blocked shows at its first position, overlapping; `label-boxes` marks it `overlapped`. A shown label still reserves its box (blocking later labels) unless `ignore-placement`. On a symbol with an icon, `always` takes effect only with `icon-allow-overlap` set too, while `fallback` applies to the whole symbol.",
+                "enum": [
+                  "never",
+                  "always",
+                  "fallback"
+                ],
+                "type": "string"
               },
               "padding-expr": {
                 "description": "A MapLibre number expression (MapLibre `text-padding`), evaluated per feature group; overrides the constant `padding-px` for that group's collision boxes."

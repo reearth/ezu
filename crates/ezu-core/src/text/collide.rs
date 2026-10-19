@@ -33,9 +33,10 @@
 //!    anchor; a line label offers one variant holding a box per glyph).
 //!    A variant places only if every box in it is free, and then
 //!    reserves them all; the first free variant wins, and a candidate
-//!    with no free variant drops. `allow_overlap` always places its
-//!    first variant (and still blocks later labels, unless
-//!    `ignore_placement` skips insertion).
+//!    with no free variant drops. [`Overlap`] relaxes that: `Always`
+//!    places the first variant without looking, `Fallback` places it once
+//!    every variant has turned out blocked. Either still blocks later
+//!    labels, unless `ignore_placement` skips insertion.
 //!
 //! Point and line labels share this one index, so a POI label and a
 //! street name compete exactly as they do in MapLibre.
@@ -165,6 +166,26 @@ pub struct PlaceRank {
     pub symbol: u32,
 }
 
+/// What a label does when its boxes collide with labels placed before it.
+///
+/// The discriminants are stable (`Never` 0, `Always` 1, `Fallback` 2), so
+/// a caller can hash the mode as a byte and keep the hash the older boolean
+/// `allow-overlap` gave.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum Overlap {
+    /// Place at the first free variant; with none free, drop. MapLibre's
+    /// default (`*-allow-overlap: false`, `*-overlap: never`).
+    #[default]
+    Never = 0,
+    /// Place at the first variant without trying the others, whatever it
+    /// overlaps (MapLibre `*-allow-overlap: true`, `*-overlap: always`).
+    Always = 1,
+    /// Try every variant as `Never` does; when none is free, place the
+    /// first anyway, overlapping, rather than drop. A label that must show
+    /// but would rather move out of the way first.
+    Fallback = 2,
+}
+
 /// One label placement candidate, in world-space terms only. Point and
 /// line labels share this shape: they differ only in how their
 /// [`variants`](Self::variants) are built.
@@ -212,8 +233,8 @@ pub struct LabelCandidate {
     /// every branch of its own road. Zero disables the check (point
     /// labels).
     pub repeat_px: f32,
-    /// MapLibre `*-allow-overlap`: place regardless of collision.
-    pub allow_overlap: bool,
+    /// What to do when every variant (or, for `Always`, the first) collides.
+    pub overlap: Overlap,
     /// MapLibre `*-ignore-placement`: don't block later labels (skip
     /// inserting this candidate's boxes into the grid).
     pub ignore_placement: bool,
@@ -240,8 +261,9 @@ type RepeatAnchors<'a> = HashMap<(usize, &'a str, u64), Vec<(f32, f32)>>;
 pub struct Placement {
     pub cand: usize,
     pub variant: usize,
-    /// The chosen boxes overlap a label placed earlier: an `allow_overlap`
-    /// label shown where it would otherwise have lost.
+    /// The chosen boxes overlap a label placed earlier: an
+    /// [`Overlap::Always`] or [`Overlap::Fallback`] label shown where it
+    /// would otherwise have lost.
     pub overlapped: bool,
 }
 
@@ -335,13 +357,18 @@ pub fn place_layers_detailed(layers: &[&[LabelCandidate]], cell_px: f32) -> Vec<
             }
             taken.push((c.anchor_x, c.anchor_y));
         }
-        // Collision: the first variant whose every box is free.
-        // allow-overlap always shows at the first variant.
+        // Collision: the first variant whose every box is free. `Always`
+        // shows at the first variant without looking further; `Fallback`
+        // looks, and shows at the first variant when nothing is free.
         let free = |boxes: &Vec<Aabb>| boxes.iter().all(|b| !grid.intersects_any(b));
-        let (variant, overlapped) = if c.allow_overlap {
-            (Some(0), !c.variants.first().is_none_or(free))
-        } else {
-            (c.variants.iter().position(free), false)
+        let first = || (Some(0), !c.variants.first().is_none_or(free));
+        let (variant, overlapped) = match c.overlap {
+            Overlap::Always => first(),
+            Overlap::Never => (c.variants.iter().position(free), false),
+            Overlap::Fallback => match c.variants.iter().position(free) {
+                Some(v) => (Some(v), false),
+                None => first(),
+            },
         };
         let Some(variant) = variant else {
             out[li].rejected.push(i);
@@ -353,7 +380,7 @@ pub fn place_layers_detailed(layers: &[&[LabelCandidate]], cell_px: f32) -> Vec<
             overlapped,
         });
         // Blocking: a shown label reserves its chosen boxes unless it ignores
-        // placement (so an allow-overlap + ignore-placement label neither
+        // placement (so an overlapping + ignore-placement label neither
         // collides nor blocks).
         if !c.ignore_placement {
             for b in c.variants.get(variant).into_iter().flatten() {
@@ -397,7 +424,7 @@ mod tests {
             anchor_x: x,
             anchor_y: y,
             repeat_px: 0.0,
-            allow_overlap: false,
+            overlap: Overlap::Never,
             ignore_placement: false,
         }
     }
@@ -470,10 +497,48 @@ mod tests {
     fn allow_overlap_draws_both() {
         let mut a = cand(0.0, 0, 0, "a", 0.0, 0.0);
         let mut b = cand(1.0, 40, 0, "b", 5.0, 0.0);
-        a.allow_overlap = true;
-        b.allow_overlap = true;
+        a.overlap = Overlap::Always;
+        b.overlap = Overlap::Always;
         let placed = place(&[a, b], COLLISION_CELL_PX);
         assert_eq!(placed.len(), 2);
+    }
+
+    #[test]
+    fn always_never_tries_a_later_variant() {
+        // `b`'s first variant overlaps `a` and its second is clear, but
+        // `Always` shows it at the first, overlapping.
+        let a = cand(0.0, 0, 0, "a", 0.0, 0.0);
+        let mut b = cand(1.0, 40, 0, "b", 5.0, 0.0);
+        b.variants.push(vec![boxed(100.0, 0.0, 10.0)]);
+        b.overlap = Overlap::Always;
+        let placed = place(&[a, b], COLLISION_CELL_PX);
+        let b = placed.iter().find(|p| p.cand == 1).unwrap();
+        assert_eq!((b.variant, b.overlapped), (0, true));
+    }
+
+    #[test]
+    fn fallback_moves_to_a_free_variant_first() {
+        let a = cand(0.0, 0, 0, "a", 0.0, 0.0);
+        let mut b = cand(1.0, 40, 0, "b", 5.0, 0.0);
+        b.variants.push(vec![boxed(100.0, 0.0, 10.0)]);
+        b.overlap = Overlap::Fallback;
+        let placed = place(&[a, b], COLLISION_CELL_PX);
+        let b = placed.iter().find(|p| p.cand == 1).unwrap();
+        assert_eq!((b.variant, b.overlapped), (1, false));
+    }
+
+    #[test]
+    fn fallback_overlaps_at_the_first_variant_when_all_are_blocked() {
+        // Both of `b`'s variants overlap `a`: it places at the first anyway,
+        // and reserves that box, so a later `c` on it drops.
+        let a = cand(0.0, 0, 0, "a", 0.0, 0.0);
+        let mut b = cand(1.0, 40, 0, "b", 5.0, 0.0);
+        b.variants.push(vec![boxed(8.0, 0.0, 10.0)]);
+        b.overlap = Overlap::Fallback;
+        let c = cand(2.0, 80, 0, "c", 20.0, 0.0); // clear of a, on b's first box
+        let placed = place(&[a, b, c], COLLISION_CELL_PX);
+        assert_eq!(idxs(&placed), vec![0, 1]);
+        assert_eq!((placed[1].variant, placed[1].overlapped), (0, true));
     }
 
     #[test]
@@ -511,7 +576,7 @@ mod tests {
         // Same anchor cell but different text is not a duplicate.
         let a = cand(0.0, 1000, 500, "aaa", 0.0, 0.0);
         let mut b = cand(1.0, 1001, 501, "bbb", 100.0, 100.0);
-        b.allow_overlap = true; // avoid collision confusing the count
+        b.overlap = Overlap::Always; // avoid collision confusing the count
         let placed = place(&[a, b], COLLISION_CELL_PX);
         assert_eq!(placed.len(), 2);
     }
@@ -571,7 +636,7 @@ mod tests {
             anchor_x: x,
             anchor_y: y,
             repeat_px,
-            allow_overlap: true,
+            overlap: Overlap::Always,
             ignore_placement: true,
         }
     }
@@ -613,15 +678,15 @@ mod tests {
         // anchor at layout time, before placement runs).
         let blocker = {
             let mut c = line_cand("blocker", 0.0, 0.0, 0.0);
-            c.allow_overlap = false;
+            c.overlap = Overlap::Never;
             c.ignore_placement = false;
             c.sort_key = -1.0;
             c
         };
         let mut a = line_cand("Main St", 0.0, 0.0, 125.0);
-        a.allow_overlap = false;
+        a.overlap = Overlap::Never;
         let mut b = line_cand("Main St", 60.0, 0.0, 125.0);
-        b.allow_overlap = false;
+        b.overlap = Overlap::Never;
         assert_eq!(idxs(&place(&[blocker, a, b], COLLISION_CELL_PX)), vec![0]);
     }
 
@@ -630,7 +695,7 @@ mod tests {
         // A line label is all-or-nothing: one blocked glyph box drops the whole
         // label, and a placed one reserves every box it carries.
         let mut long = line_cand("Main St", 0.0, 0.0, 0.0);
-        long.allow_overlap = false;
+        long.overlap = Overlap::Never;
         long.ignore_placement = false;
         long.variants = vec![vec![boxed(0.0, 0.0, 5.0), boxed(40.0, 0.0, 5.0)]];
         let mut blocker = cand(-1.0, -100, 0, "poi", 40.0, 0.0);
@@ -672,7 +737,7 @@ mod tests {
         // Two layers labelling the same feature are two labels, not a
         // duplicate: with overlap allowed both place.
         let mut a = cand(0.0, 1000, 500, "Shibuya", 0.0, 0.0);
-        a.allow_overlap = true;
+        a.overlap = Overlap::Always;
         let b = [a.clone()];
         let a = [a];
         let placed = place_layers(&[&a, &b], COLLISION_CELL_PX);

@@ -114,6 +114,8 @@ mod text_collision;
 mod text_labels;
 #[path = "paint/text_line_labels.rs"]
 mod text_line_labels;
+#[path = "paint/text_overlap.rs"]
+mod text_overlap;
 #[path = "paint/text_padding_expr.rs"]
 mod text_padding_expr;
 #[path = "paint/text_strikethrough.rs"]

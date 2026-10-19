@@ -17,7 +17,7 @@ mean is spelled out in
   boxes carry `variant-index`, where the position it took sits in the list it
   was tried from (`anchor-offsets`, or the anchors of `anchor-variants`; 0 for
   the first, for a lone anchor and for a line label), and `overlapped`, true
-  when `allow-overlap` showed it over a label placed before it. A label that lost,
+  when `overlap` showed it over a label placed before it. A label that lost,
   with `include: all`, carries `drop-reason: "collision"`. A recipe can now
   pick out the labels that moved off their first anchor, to draw a leader
   line to their feature, say, or the ones left overlapping.
@@ -30,6 +30,14 @@ mean is spelled out in
   to another side. With `anchor-offsets` set, `anchor`, `offset-em`,
   `anchor-variants` and `radial-offset` are ignored for point placement, and
   the build warns which ones it ignored.
+- `text` and `text-labels` take `overlap`: `never` (the default), `always`,
+  or `fallback`. `always` is what `allow-overlap: true` did: the label shows
+  at its first position without trying the others. `fallback` tries every
+  position first, as a label normally does, and only when all of them are
+  blocked shows the label at its first position anyway, overlapping, where
+  `never` would drop it. A label that must appear can now still move out of
+  the way when there is room; `label-boxes` marks the ones that could not as
+  `overlapped`.
 
 ### Deprecated
 
@@ -37,6 +45,9 @@ mean is spelled out in
   still place exactly as before, but the build now warns and spells out the
   `anchor-offsets` list that places the same way. `anchor` with `offset-em`
   stays the way to give a label one fixed position.
+- `allow-overlap` on `text` and `text-labels`, for `overlap`: `true` is
+  `"always"` and `false` is `"never"`. It still works, with a warning naming
+  the replacement; when both are set, `overlap` is used.
 
 ### Fixed
 

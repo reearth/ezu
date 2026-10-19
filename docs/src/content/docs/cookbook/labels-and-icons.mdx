@@ -241,6 +241,13 @@ name underneath it.
 diagram and never what you want for a map. The figure above is the whole
 argument for leaving it on.
 
+For a single layer whose labels must all show, `overlap` loosens the rule
+without turning it off. `"always"` (MapLibre's `text-allow-overlap`) shows each
+label at its first position whatever it covers. `"fallback"` first tries every
+position in `anchor-offsets`, as a normal label does, and shows the label
+overlapping at its first position only when all of them are blocked, so labels
+still spread out where there is room.
+
 ## Drawing the label boxes yourself
 
 `label-boxes` turns the boxes a `label-placement` node measured into ordinary
