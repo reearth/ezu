@@ -396,7 +396,8 @@ fn collision_properties_route_to_the_text_node() {
         serde_json::json!(["==", ["get", "class"], "city"])
     );
     // Overlap knobs.
-    assert_eq!(text["allow-overlap"], true);
+    assert_eq!(text["overlap"], "always");
+    assert!(text.get("allow-overlap").is_none(), "{text}");
     assert_eq!(text["ignore-placement"], true);
     assert_eq!(text["padding-px"], 4.0);
     assert_eq!(text["sort-key-expr"], serde_json::json!(["get", "rank"]));
@@ -446,10 +447,21 @@ fn expression_text_padding_routes_to_padding_expr() {
     ezu_style::Document::from_json(&doc_text).expect("recipe parses as ezu Document");
 }
 
+/// The build-time warnings the translated recipe raises in ezu.
+fn build_warnings(recipe: &serde_json::Value) -> Vec<String> {
+    let doc = ezu_style::Document::from_json(&serde_json::to_string(recipe).unwrap())
+        .expect("recipe parses as ezu Document");
+    ezu_graph::build_graph(&doc, &ezu_paint::nodes::default_registry())
+        .expect("recipe builds")
+        .warnings()
+        .to_vec()
+}
+
 #[test]
-fn text_variable_anchor_routes_to_anchor_variants() {
+fn text_variable_anchor_routes_to_anchor_offsets() {
     // A `text-variable-anchor` list + `text-radial-offset` become the text
-    // node's `anchor-variants` / `radial-offset`, with no unsupported warning.
+    // node's `anchor-offsets`, one `radial-em` entry per anchor, with no
+    // unsupported warning and nothing deprecated for ezu to warn about.
     const STYLE: &str = r##"{
       "version": 8,
       "name": "variable-anchor",
@@ -471,10 +483,17 @@ fn text_variable_anchor_routes_to_anchor_variants() {
 
     let text = &recipe["nodes"]["pois__labels"];
     assert_eq!(
-        text["anchor-variants"],
-        serde_json::json!(["top", "bottom", "left", "right"])
+        text["anchor-offsets"],
+        serde_json::json!([
+            { "anchor": "top", "radial-em": 1.2 },
+            { "anchor": "bottom", "radial-em": 1.2 },
+            { "anchor": "left", "radial-em": 1.2 },
+            { "anchor": "right", "radial-em": 1.2 }
+        ])
     );
-    assert_eq!(text["radial-offset"], 1.2);
+    for old in ["anchor", "anchor-variants", "radial-offset", "offset-em"] {
+        assert!(text.get(old).is_none(), "no `{old}`: {text}");
+    }
     assert!(
         !report
             .warnings
@@ -483,15 +502,157 @@ fn text_variable_anchor_routes_to_anchor_variants() {
         "variable-anchor should not warn: {:?}",
         report.warnings
     );
+    let warnings = build_warnings(&recipe);
+    assert!(warnings.is_empty(), "{warnings:?}");
+}
 
-    let doc_text = serde_json::to_string(&recipe).unwrap();
-    ezu_style::Document::from_json(&doc_text).expect("recipe parses as ezu Document");
+#[test]
+fn text_variable_anchor_mirrors_text_offset_per_anchor() {
+    // Without a radial offset, `text-offset` is taken as magnitudes pointing
+    // away from each anchored edge, less the baseline gap on a top or bottom
+    // anchor (MapLibre's `evaluateVariableOffset`).
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "variable-anchor-offset",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "pois", "type": "symbol", "source": "s", "source-layer": "poi",
+          "layout": {
+            "text-field": "{name}",
+            "text-font": ["F"],
+            "text-variable-anchor": ["top", "right", "center"],
+            "text-offset": [0.5, -1]
+          } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let opts = opts_with_fonts(&[("F", "https://fonts.example/F.ttf")]);
+    let (recipe, _) = convert(&style, &opts).unwrap();
+
+    let entries = recipe["nodes"]["pois__labels"]["anchor-offsets"]
+        .as_array()
+        .expect("anchor-offsets")
+        .clone();
+    let offset = |i: usize| -> [f64; 2] {
+        let xy = entries[i]["offset-em"].as_array().expect("offset-em");
+        [xy[0].as_f64().unwrap(), xy[1].as_f64().unwrap()]
+    };
+    let b = 7.0 / 24.0;
+    let [x, y] = offset(0);
+    assert_eq!(entries[0]["anchor"], "top");
+    assert!(x == 0.0 && (y - (1.0 - b)).abs() < 1e-6, "{:?}", offset(0));
+    let [x, y] = offset(1);
+    assert!(x == -0.5 && y == 0.0, "{:?}", offset(1));
+    let [x, y] = offset(2);
+    assert!(x == 0.0 && y == 0.0, "{:?}", offset(2));
+    let warnings = build_warnings(&recipe);
+    assert!(warnings.is_empty(), "{warnings:?}");
+}
+
+#[test]
+fn text_variable_anchor_offset_routes_to_anchor_offsets() {
+    // `text-variable-anchor-offset` pairs each anchor with its own [x, y] em
+    // offset, right and down positive. It wins over every other anchor
+    // property, and a top or bottom anchor gives up the baseline gap.
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "variable-anchor-offset",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "pois", "type": "symbol", "source": "s", "source-layer": "poi",
+          "layout": {
+            "text-field": "{name}",
+            "text-font": ["F"],
+            "text-anchor": "center",
+            "text-offset": [1, 1],
+            "text-variable-anchor": ["left"],
+            "text-radial-offset": 2,
+            "text-variable-anchor-offset": ["top", [0, 4], "left", [3, 0], "bottom-right", [-1, -1]]
+          } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let opts = opts_with_fonts(&[("F", "https://fonts.example/F.ttf")]);
+    let (recipe, report) = convert(&style, &opts).unwrap();
+
+    let text = &recipe["nodes"]["pois__labels"];
+    let entries = text["anchor-offsets"].as_array().expect("anchor-offsets");
+    let got: Vec<(&str, f64, f64)> = entries
+        .iter()
+        .map(|e| {
+            let xy = e["offset-em"].as_array().expect("offset-em");
+            (
+                e["anchor"].as_str().unwrap(),
+                xy[0].as_f64().unwrap(),
+                xy[1].as_f64().unwrap(),
+            )
+        })
+        .collect();
+    let b = 7.0 / 24.0;
+    let want = [
+        ("top", 0.0, 4.0 - b),
+        ("left", 3.0, 0.0),
+        ("bottom-right", -1.0, -1.0 + b),
+    ];
+    assert_eq!(got.len(), want.len(), "{got:?}");
+    for (g, w) in got.iter().zip(want) {
+        assert!(
+            g.0 == w.0 && (g.1 - w.1).abs() < 1e-6 && (g.2 - w.2).abs() < 1e-6,
+            "{got:?}"
+        );
+    }
+    for old in ["anchor", "anchor-variants", "radial-offset", "offset-em"] {
+        assert!(text.get(old).is_none(), "no `{old}`: {text}");
+    }
+    assert!(
+        !report.warnings.iter().any(|w| w.contains("anchor")),
+        "{:?}",
+        report.warnings
+    );
+    let warnings = build_warnings(&recipe);
+    assert!(warnings.is_empty(), "{warnings:?}");
+}
+
+#[test]
+fn expression_text_variable_anchor_offset_falls_back_to_variable_anchor() {
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "variable-anchor-offset-expr",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "pois", "type": "symbol", "source": "s", "source-layer": "poi",
+          "layout": {
+            "text-field": "{name}",
+            "text-font": ["F"],
+            "text-variable-anchor": ["left"],
+            "text-radial-offset": 2,
+            "text-variable-anchor-offset": ["case", ["get", "big"],
+              ["literal", ["top", [0, 1]]], ["literal", ["bottom", [0, -1]]]]
+          } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let opts = opts_with_fonts(&[("F", "https://fonts.example/F.ttf")]);
+    let (recipe, report) = convert(&style, &opts).unwrap();
+
+    assert_eq!(
+        recipe["nodes"]["pois__labels"]["anchor-offsets"],
+        serde_json::json!([{ "anchor": "left", "radial-em": 2.0 }])
+    );
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("text-variable-anchor-offset")),
+        "{:?}",
+        report.warnings
+    );
 }
 
 #[test]
 fn expression_text_variable_anchor_warns_and_falls_back() {
     // A data-driven `text-variable-anchor` (not a plain string array) can't be
-    // resolved at build time, so it warns and no `anchor-variants` is emitted.
+    // resolved at build time, so it warns and no `anchor-offsets` is emitted.
     const STYLE: &str = r##"{
       "version": 8,
       "name": "variable-anchor-expr",
@@ -511,8 +672,8 @@ fn expression_text_variable_anchor_warns_and_falls_back() {
 
     let text = &recipe["nodes"]["pois__labels"];
     assert!(
-        text.get("anchor-variants").is_none(),
-        "an expression variable-anchor should not emit anchor-variants: {text}"
+        text.get("anchor-offsets").is_none() && text.get("anchor-variants").is_none(),
+        "an expression variable-anchor should not emit anchor-offsets: {text}"
     );
     assert!(
         report
@@ -544,12 +705,12 @@ fn text_overlap_enum_maps_and_cooperative_warns() {
     let (recipe, report) = convert(&style, &opts).unwrap();
 
     let nodes = recipe["nodes"].as_object().unwrap();
-    // `always` → allow-overlap true.
-    assert_eq!(nodes["always__labels"]["allow-overlap"], true);
-    // `never` → collide (no allow-overlap field emitted).
-    assert!(nodes["never__labels"].get("allow-overlap").is_none());
+    // `always` → `overlap: always`.
+    assert_eq!(nodes["always__labels"]["overlap"], "always");
+    // `never` → collide (no overlap field emitted).
+    assert!(nodes["never__labels"].get("overlap").is_none());
     // `cooperative` → treated as never (collide) with a warning.
-    assert!(nodes["coop__labels"].get("allow-overlap").is_none());
+    assert!(nodes["coop__labels"].get("overlap").is_none());
     assert!(
         report
             .warnings

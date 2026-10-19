@@ -38,6 +38,19 @@ mean is spelled out in
   `never` would drop it. A label that must appear can now still move out of
   the way when there is room; `label-boxes` marks the ones that could not as
   `overlapped`.
+- `ezu translate` converts MapLibre's `text-variable-anchor-offset`, which
+  pairs each anchor with its own offset, to `anchor-offsets`. It takes
+  precedence over `text-anchor`, `text-offset`, `text-variable-anchor` and
+  `text-radial-offset`, as in MapLibre. Before, it was dropped and the label
+  fell back to those.
+
+### Changed
+
+- `ezu translate` writes `anchor-offsets` for `text-variable-anchor` and
+  `overlap: "always"` for `text-allow-overlap` / `text-overlap: always`, in
+  place of the now-deprecated `anchor-variants`, `radial-offset` and
+  `allow-overlap`, so a translated style builds without deprecation
+  warnings. The labels land where they did before.
 
 ### Deprecated
 

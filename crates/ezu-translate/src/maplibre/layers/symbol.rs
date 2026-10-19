@@ -640,17 +640,22 @@ fn convert_text(
 
     // Layout constants. The `text` node takes these at build time, so an
     // expression here falls back to the default with a warning.
-    if let Some(anchor) = const_string(get("text-anchor"), "text-anchor", id, report) {
-        spec["anchor"] = Value::from(anchor);
-    }
-    // `text-variable-anchor`: an ordered list of anchors the renderer tries on
-    // collision. Emitted as `anchor-variants`, which overrides `anchor`.
-    if let Some(variants) = const_anchor_list(get("text-variable-anchor"), id, report) {
-        spec["anchor-variants"] = serde_json::json!(variants);
-        // `text-radial-offset` pairs with variable anchors: the em distance
-        // each anchor pushes the label away from the point.
-        if let Some(r) = const_number(get("text-radial-offset"), "text-radial-offset", id, report) {
-            spec["radial-offset"] = Value::from(r);
+    // The positions a point label tries: `text-variable-anchor-offset`, else
+    // `text-variable-anchor` with its offsets, become `anchor-offsets`, which
+    // takes over from `anchor` / `offset-em`. Line placement has no
+    // variable anchor in MapLibre, so it keeps the plain pair.
+    let anchor_offsets = match placement {
+        "point" => text_anchor_offsets(layout, id, report),
+        _ => None,
+    };
+    if let Some(list) = anchor_offsets {
+        spec["anchor-offsets"] = Value::Array(list);
+    } else {
+        if let Some(anchor) = const_string(get("text-anchor"), "text-anchor", id, report) {
+            spec["anchor"] = Value::from(anchor);
+        }
+        if let Some(offset) = const_offset(get("text-offset"), id, report) {
+            spec["offset-em"] = serde_json::json!(offset);
         }
     }
     if let Some(justify) = const_string(get("text-justify"), "text-justify", id, report) {
@@ -658,9 +663,6 @@ fn convert_text(
     }
     if let Some(transform) = const_string(get("text-transform"), "text-transform", id, report) {
         spec["transform"] = Value::from(transform);
-    }
-    if let Some(offset) = const_offset(get("text-offset"), id, report) {
-        spec["offset-em"] = serde_json::json!(offset);
     }
     if let Some(w) = const_number(get("text-max-width"), "text-max-width", id, report) {
         spec["max-width-em"] = Value::from(w);
@@ -720,7 +722,7 @@ fn convert_text(
     );
 
     // `text-allow-overlap` (bool), superseded by the newer `text-overlap`
-    // enum when present: `always` → allow, `never`/absent → collide,
+    // enum when present: `always` → `overlap: always`, `never`/absent → collide,
     // `cooperative` → treated as `never` with a warning (no cooperative
     // fade model here).
     let mut allow_overlap = get("text-allow-overlap").and_then(Value::as_bool);
@@ -739,7 +741,7 @@ fn convert_text(
         None => {}
     }
     if allow_overlap == Some(true) {
-        spec["allow-overlap"] = Value::from(true);
+        spec["overlap"] = Value::from("always");
     }
 
     if get("text-ignore-placement").and_then(Value::as_bool) == Some(true) {
@@ -1068,6 +1070,133 @@ fn const_number(v: Option<&Value>, prop: &str, id: &str, report: &mut Report) ->
             None
         }
     }
+}
+
+/// The gap (em) MapLibre's shaping leaves between a block's edge and the
+/// glyph baseline: 7 px of its 24 px em. MapLibre takes it off a top or
+/// bottom anchor's offset so the visible text keeps the requested distance;
+/// ezu's `offset-em` is taken as written, so the translator applies it.
+const BASELINE_OFFSET_EM: f32 = 7.0 / 24.0;
+
+/// An em value the `text` node reads as an `f32`, written as the shortest
+/// decimal that reads back as exactly `v`. The node computes the offsets of
+/// the older `anchor-variants` fields in `f32`; doing the same arithmetic
+/// here keeps the translated label on the same pixel.
+fn em_value(v: f32) -> Value {
+    Value::from(format!("{v}").parse::<f64>().unwrap_or(f64::from(v)))
+}
+
+/// One `anchor-offsets` entry with an explicit `offset-em`.
+fn offset_entry(anchor: &str, x: f32, y: f32) -> Value {
+    serde_json::json!({ "anchor": anchor, "offset-em": [em_value(x), em_value(y)] })
+}
+
+/// The `anchor-offsets` list for a point label, or `None` when the layer
+/// gives it one fixed position (`text-anchor` + `text-offset`, kept as
+/// `anchor` / `offset-em`).
+///
+/// `text-variable-anchor-offset` takes precedence over every other anchor
+/// property, as in MapLibre. Its offsets are `text-offset`-style [x, y] em,
+/// right and down positive, less the baseline gap on a top or bottom anchor.
+/// Otherwise `text-variable-anchor` lists the anchors: with a positive
+/// `text-radial-offset` each entry is pushed that far from the point
+/// (`radial-em`); without one, `text-offset` is mirrored per anchor, its
+/// magnitude pointing away from the anchored edge, as MapLibre's
+/// `evaluateVariableOffset` does.
+fn text_anchor_offsets(
+    layout: Option<&Map<String, Value>>,
+    id: &str,
+    report: &mut Report,
+) -> Option<Vec<Value>> {
+    let get = |key: &str| layout.and_then(|l| l.get(key));
+    if let Some(v) = get("text-variable-anchor-offset") {
+        match const_anchor_offset_pairs(v) {
+            Some(pairs) => {
+                return Some(
+                    pairs
+                        .into_iter()
+                        .map(|(anchor, [x, y])| {
+                            let y = if anchor.starts_with("top") {
+                                y - BASELINE_OFFSET_EM
+                            } else if anchor.starts_with("bottom") {
+                                y + BASELINE_OFFSET_EM
+                            } else {
+                                y
+                            };
+                            offset_entry(anchor, x, y)
+                        })
+                        .collect(),
+                )
+            }
+            None => report.warn(format!(
+                "layer `{id}`: expression `text-variable-anchor-offset` not supported — using `text-variable-anchor`"
+            )),
+        }
+    }
+    let anchors = const_anchor_list(get("text-variable-anchor"), id, report)?;
+    let radial = const_number(get("text-radial-offset"), "text-radial-offset", id, report)
+        .map(|r| r as f32)
+        .filter(|&r| r > 0.0);
+    let [ox, oy] = match radial {
+        Some(_) => [0.0, 0.0],
+        None => const_offset(get("text-offset"), id, report)
+            .map_or([0.0, 0.0], |[x, y]| [(x as f32).abs(), (y as f32).abs()]),
+    };
+    Some(
+        anchors
+            .iter()
+            .map(|anchor| match radial {
+                Some(r) => serde_json::json!({ "anchor": anchor, "radial-em": em_value(r) }),
+                None if ox == 0.0 && oy == 0.0 => {
+                    // A zero radius applies the same baseline shift a zero
+                    // `text-offset` does, and reads as intended.
+                    serde_json::json!({ "anchor": anchor, "radial-em": 0 })
+                }
+                None => {
+                    let a = anchor.as_str();
+                    let x = match a {
+                        "left" | "top-left" | "bottom-left" => ox,
+                        "right" | "top-right" | "bottom-right" => -ox,
+                        _ => 0.0,
+                    };
+                    let y = match a {
+                        "top" | "top-left" | "top-right" => oy - BASELINE_OFFSET_EM,
+                        "bottom" | "bottom-left" | "bottom-right" => -oy + BASELINE_OFFSET_EM,
+                        _ => 0.0,
+                    };
+                    offset_entry(a, x, y)
+                }
+            })
+            .collect(),
+    )
+}
+
+/// A constant `text-variable-anchor-offset`: a flat array alternating an
+/// anchor name and its `[x, y]` em offset. `None` for anything else (an
+/// expression, an unknown anchor, a malformed pair).
+fn const_anchor_offset_pairs(v: &Value) -> Option<Vec<(&str, [f32; 2])>> {
+    const ANCHORS: [&str; 9] = [
+        "center",
+        "left",
+        "right",
+        "top",
+        "bottom",
+        "top-left",
+        "top-right",
+        "bottom-left",
+        "bottom-right",
+    ];
+    let a = v.as_array()?;
+    if a.is_empty() || a.len() % 2 != 0 {
+        return None;
+    }
+    a.chunks(2)
+        .map(|pair| {
+            let anchor = pair[0].as_str().filter(|s| ANCHORS.contains(s))?;
+            let xy = pair[1].as_array().filter(|xy| xy.len() == 2)?;
+            Some((anchor, [xy[0].as_f64()? as f32, xy[1].as_f64()? as f32]))
+        })
+        .collect()
 }
 
 /// A constant `text-variable-anchor` (an array of anchor-name strings); an
