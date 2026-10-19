@@ -100,7 +100,25 @@ impl Emitter {
             "part".into(),
             maplibre_expr::Value::String(part.name().into()),
         );
-        properties.insert("placed".into(), maplibre_expr::Value::Bool(props.placed));
+        match props.outcome {
+            Outcome::Placed { overlapped } => {
+                properties.insert("placed".into(), maplibre_expr::Value::Bool(true));
+                properties.insert("overlapped".into(), maplibre_expr::Value::Bool(overlapped));
+            }
+            Outcome::Collided => {
+                properties.insert("placed".into(), maplibre_expr::Value::Bool(false));
+                properties.insert(
+                    "drop-reason".into(),
+                    maplibre_expr::Value::String("collision".into()),
+                );
+            }
+        }
+        if let Some(ix) = props.variant_index {
+            properties.insert(
+                "variant-index".into(),
+                maplibre_expr::Value::Number(ix as f64),
+            );
+        }
         properties.insert(
             "label-id".into(),
             maplibre_expr::Value::Number(props.label_id),
@@ -153,8 +171,21 @@ impl Emitter {
 /// What every box of one label carries besides its own part.
 struct Props<'a> {
     source: &'a BTreeMap<String, maplibre_expr::Value>,
-    placed: bool,
+    outcome: Outcome,
+    /// The anchor the text was laid out at, as a position in the label's
+    /// anchor list; `None` when the shown variant draws no text, or the
+    /// label did not place.
+    variant_index: Option<usize>,
     label_id: f64,
+}
+
+/// What placement decided for one label.
+#[derive(Clone, Copy)]
+enum Outcome {
+    /// Shown; `overlapped` when its boxes overlap a label placed earlier.
+    Placed { overlapped: bool },
+    /// Lost its collision test.
+    Collided,
 }
 
 /// A label's identity, the same on every tile that sees it: its layer's
@@ -190,7 +221,7 @@ impl LabelBoxesNode {
         set: &LabelSet,
         cand: usize,
         variant: usize,
-        placed: bool,
+        outcome: Outcome,
     ) {
         let (Some(c), Some(draw)) = (set.candidates.get(cand), set.draws.get(cand)) else {
             return;
@@ -198,9 +229,17 @@ impl LabelBoxesNode {
         let source = match draw {
             LabelDraw::Point { properties, .. } | LabelDraw::Line { properties, .. } => properties,
         };
+        // A point label lays its text out once per anchor, and the block a
+        // variant draws is that anchor's; a line label has the one.
+        let variant_index = match (outcome, draw) {
+            (Outcome::Collided, _) => None,
+            (_, LabelDraw::Point { variants, .. }) => variants.get(variant).and_then(|v| v.block),
+            (_, LabelDraw::Line { .. }) => Some(0),
+        };
         let props = Props {
             source,
-            placed,
+            outcome,
+            variant_index,
             label_id: label_id(layer, c),
         };
         match draw {
@@ -320,12 +359,15 @@ impl Node for LabelBoxesNode {
                 continue;
             }
             for p in &placed.outcome.placed {
-                self.emit_label(&mut out, layer, set, p.cand, p.variant, true);
+                let outcome = Outcome::Placed {
+                    overlapped: p.overlapped,
+                };
+                self.emit_label(&mut out, layer, set, p.cand, p.variant, outcome);
             }
             if self.include_rejected {
                 // A losing candidate is shown as it first tried to place.
                 for &cand in &placed.outcome.rejected {
-                    self.emit_label(&mut out, layer, set, cand, 0, false);
+                    self.emit_label(&mut out, layer, set, cand, 0, Outcome::Collided);
                 }
             }
         }
@@ -421,7 +463,7 @@ impl NodeFactory for LabelBoxesFactory {
                 .into(),
         );
         serde_json::json!({
-            "description": "The boxes a `label-placement` node measured its labels by, as polygons — one per box — so any geometry and paint op can draw them: a bordered or rounded badge (`buffer` → `stroke`), an offset shadow (`transform`), or a debug overlay of placement. Reads the decisions already made, so nothing is placed twice and the boxes match what `text-draw` draws; labels placed from a neighbour tile's candidates are included, so boxes continue across tile edges. Each polygon carries the labelled feature's properties plus `part` (`text`, `icon`, `background`, `glyph` or `collision`), `placed` (false for a candidate that lost its collision test, with `include: all`) and `label-id` (shared by every box of one label, the same on every tile). A point label gives its `text` block (no padding), `icon` (rotated by `icon-rotate`), `background` box (with `background-padding` or `background-color`) and the `collision` box or boxes it was tested with, padding included. A line label gives one `glyph` quad per glyph, rotated along the path, and the axis-aligned `collision` box placement tested for each glyph.",
+            "description": "The boxes a `label-placement` node measured its labels by, as polygons — one per box — so any geometry and paint op can draw them: a bordered or rounded badge (`buffer` → `stroke`), an offset shadow (`transform`), or a debug overlay of placement. Reads the decisions already made, so nothing is placed twice and the boxes match what `text-draw` draws; labels placed from a neighbour tile's candidates are included, so boxes continue across tile edges. Each polygon carries the labelled feature's properties plus `part` (`text`, `icon`, `background`, `glyph` or `collision`), `placed` (false for a candidate that lost its collision test, with `include: all`) and `label-id` (shared by every box of one label, the same on every tile). A placed label also carries `overlapped` (true when it overlaps a label placed before it, which only `allow-overlap` permits) and `variant-index`: where its anchor sits in the list it was tried from (`anchor-variants` / `text-variable-anchor`), 0 for the first anchor, for a lone one and for a line label, and absent when the variant shown draws no text. A label that did not place carries `drop-reason` instead, `collision` for now. A point label gives its `text` block (no padding), `icon` (rotated by `icon-rotate`), `background` box (with `background-padding` or `background-color`) and the `collision` box or boxes it was tested with, padding included. A line label gives one `glyph` quad per glyph, rotated along the path, and the axis-aligned `collision` box placement tested for each glyph.",
             "properties": {
                 "placement": schema_frag::node_ref(),
                 "labels": labels,

@@ -2371,7 +2371,11 @@ impl Node for TextNode {
                     collide::place(&set.candidates, collide::COLLISION_CELL_PX)
                 } else {
                     (0..set.candidates.len())
-                        .map(|cand| collide::Placement { cand, variant: 0 })
+                        .map(|cand| collide::Placement {
+                            cand,
+                            variant: 0,
+                            overlapped: false,
+                        })
                         .collect()
                 };
                 let faces = FaceCache::from_stacks(set.stacks());

@@ -240,6 +240,9 @@ type RepeatAnchors<'a> = HashMap<(usize, &'a str, u64), Vec<(f32, f32)>>;
 pub struct Placement {
     pub cand: usize,
     pub variant: usize,
+    /// The chosen boxes overlap a label placed earlier: an `allow_overlap`
+    /// label shown where it would otherwise have lost.
+    pub overlapped: bool,
 }
 
 /// Deterministically dedup, order, and greedily place every label layer of
@@ -334,18 +337,21 @@ pub fn place_layers_detailed(layers: &[&[LabelCandidate]], cell_px: f32) -> Vec<
         }
         // Collision: the first variant whose every box is free.
         // allow-overlap always shows at the first variant.
-        let variant = if c.allow_overlap {
-            Some(0)
+        let free = |boxes: &Vec<Aabb>| boxes.iter().all(|b| !grid.intersects_any(b));
+        let (variant, overlapped) = if c.allow_overlap {
+            (Some(0), !c.variants.first().is_none_or(free))
         } else {
-            c.variants
-                .iter()
-                .position(|boxes| boxes.iter().all(|b| !grid.intersects_any(b)))
+            (c.variants.iter().position(free), false)
         };
         let Some(variant) = variant else {
             out[li].rejected.push(i);
             continue;
         };
-        out[li].placed.push(Placement { cand: i, variant });
+        out[li].placed.push(Placement {
+            cand: i,
+            variant,
+            overlapped,
+        });
         // Blocking: a shown label reserves its chosen boxes unless it ignores
         // placement (so an allow-overlap + ignore-placement label neither
         // collides nor blocks).

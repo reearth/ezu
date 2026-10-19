@@ -309,6 +309,88 @@ fn padding_alone_gives_the_same_background_part_without_painting_it() {
     );
 }
 
+/// One label's `(name, variant-index, overlapped, drop-reason)`.
+type Outcome = (String, Option<f64>, Option<bool>, Option<String>);
+
+/// Each label's [`Outcome`], read off its `text` box (the collision box
+/// for one that lost).
+fn outcomes(all: &[Box]) -> Vec<Outcome> {
+    let mut v: Vec<_> = all
+        .iter()
+        .filter(|b| b.part() == if b.placed() { "text" } else { "collision" })
+        .map(|b| {
+            let num = |k: &str| match b.props.get(k) {
+                Some(maplibre_expr::Value::Number(n)) => Some(*n),
+                None => None,
+                other => panic!("{k}: {other:?}"),
+            };
+            let flag = |k: &str| match b.props.get(k) {
+                Some(maplibre_expr::Value::Bool(f)) => Some(*f),
+                None => None,
+                other => panic!("{k}: {other:?}"),
+            };
+            let reason = match b.props.get("drop-reason") {
+                Some(maplibre_expr::Value::String(s)) => Some(s.clone()),
+                None => None,
+                other => panic!("drop-reason: {other:?}"),
+            };
+            (
+                b.name().to_string(),
+                num("variant-index"),
+                flag("overlapped"),
+                reason,
+            )
+        })
+        .collect();
+    v.sort_by(|a, b| a.0.cmp(&b.0));
+    v
+}
+
+#[test]
+fn a_placed_label_names_the_anchor_it_took() {
+    // Two labels on one point: the first takes the first anchor, the second
+    // moves to the next free one.
+    let feats = vec![point("A", 2048, 2048), point("B", 2048, 2048)];
+    let all = boxes(&run_centre(
+        &recipe(
+            r#", "anchor-variants": ["top", "bottom"], "radial-offset": 1.0"#,
+            "",
+        ),
+        feats,
+    ));
+    let got = outcomes(&all);
+    let indices: Vec<Option<f64>> = got.iter().map(|o| o.1).collect();
+    let mut sorted = indices.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_eq!(sorted, [Some(0.0), Some(1.0)], "{got:?}");
+    assert!(
+        got.iter().all(|o| o.2 == Some(false) && o.3.is_none()),
+        "{got:?}"
+    );
+}
+
+#[test]
+fn an_allowed_overlap_is_marked_and_a_lost_label_says_why() {
+    let feats = || vec![point("A", 2048, 2048), point("B", 2048, 2048)];
+    let all = boxes(&run_centre(
+        &recipe(r#", "allow-overlap": true"#, ""),
+        feats(),
+    ));
+    let got = outcomes(&all);
+    let overlapped: Vec<Option<bool>> = got.iter().map(|o| o.2).collect();
+    let mut sorted = overlapped.clone();
+    sorted.sort();
+    assert_eq!(sorted, [Some(false), Some(true)], "{got:?}");
+    assert!(got.iter().all(|o| o.1 == Some(0.0)), "{got:?}");
+
+    let all = boxes(&run_centre(&recipe("", r#", "include": "all""#), feats()));
+    let got = outcomes(&all);
+    let lost: Vec<_> = got.iter().filter(|o| o.3.is_some()).collect();
+    assert_eq!(lost.len(), 1, "{got:?}");
+    assert_eq!(lost[0].3.as_deref(), Some("collision"));
+    assert_eq!((lost[0].1, lost[0].2), (None, None), "{got:?}");
+}
+
 #[test]
 fn include_all_adds_the_candidates_that_lost_unplaced() {
     // Two boxed labels close enough that only one places.

@@ -11,6 +11,17 @@ mean is spelled out in
 
 ## Unreleased
 
+### Added
+
+- `label-boxes` says what placement did with each label. A placed label's
+  boxes carry `variant-index`, where the anchor it took sits in the list it
+  was tried from (`anchor-variants` / `text-variable-anchor`; 0 for the first,
+  for a lone anchor and for a line label), and `overlapped`, true when
+  `allow-overlap` showed it over a label placed before it. A label that lost,
+  with `include: all`, carries `drop-reason: "collision"`. A recipe can now
+  pick out the labels that moved off their first anchor, to draw a leader
+  line to their feature, say, or the ones left overlapping.
+
 ### Fixed
 
 - An `mvt` or `pmtiles` source whose `url` was a `file:` path, as `geojson`
