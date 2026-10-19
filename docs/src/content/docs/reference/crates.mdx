@@ -10,7 +10,7 @@ map: what each crate is for, and which one to read.
 
 | Crate | crates.io | docs.rs | Role |
 | --- | --- | --- | --- |
-| [`ezu`](https://github.com/reearth/ezu/tree/main/crates/ezu) | [crates.io](https://crates.io/crates/ezu) | [docs.rs](https://docs.rs/ezu) | Umbrella crate: re-exports plus feature flags. Start here. |
+| [`ezu`](https://github.com/reearth/ezu/tree/main/crates/ezu) | [crates.io](https://crates.io/crates/ezu) | [docs.rs](https://docs.rs/ezu) | Umbrella crate: re-exports plus feature flags, and `ezu::renderer`, the embedding renderer the JS and Go packages wrap. Start here. |
 | [`ezu-core`](https://github.com/reearth/ezu/tree/main/crates/ezu-core) | [crates.io](https://crates.io/crates/ezu-core) | [docs.rs](https://docs.rs/ezu-core) | Tile and world coordinates, deterministic seeding. |
 | [`ezu-features`](https://github.com/reearth/ezu/tree/main/crates/ezu-features) | [crates.io](https://crates.io/crates/ezu-features) | [docs.rs](https://docs.rs/ezu-features) | GIS feature parsing — MVT via `geozero`, GeoJSON. No remote fetch. |
 | [`ezu-style`](https://github.com/reearth/ezu/tree/main/crates/ezu-style) | [crates.io](https://crates.io/crates/ezu-style) | [docs.rs](https://docs.rs/ezu-style) | Style spec parser (`serde`). Pure data, no rendering. |
@@ -18,9 +18,8 @@ map: what each crate is for, and which one to read.
 | [`ezu-paint`](https://github.com/reearth/ezu/tree/main/crates/ezu-paint) | [crates.io](https://crates.io/crates/ezu-paint) | [docs.rs](https://docs.rs/ezu-paint) | Painting primitives, the built-in ops, host glue (PNG/WebP, asset banks, fonts). |
 | [`ezu-translate`](https://github.com/reearth/ezu/tree/main/crates/ezu-translate) | [crates.io](https://crates.io/crates/ezu-translate) | [docs.rs](https://docs.rs/ezu-translate) | Lower other engines' styles into ezu recipes. MapLibre GL is the first frontend. |
 | [`ezu-cli`](https://github.com/reearth/ezu/tree/main/crates/ezu-cli) | [crates.io](https://crates.io/crates/ezu-cli) | [docs.rs](https://docs.rs/ezu-cli) | The `ezu` binary: rendering, `translate`, `check`, `graph`, `schema`, `serve`. |
-| [`ezu-renderer`](https://github.com/reearth/ezu/tree/main/crates/ezu-renderer) | [crates.io](https://crates.io/crates/ezu-renderer) | [docs.rs](https://docs.rs/ezu-renderer) | The embedding renderer, host-neutral: bind a tile's bytes per source, render one tile or a print frame. Re-exported as `ezu::renderer`, and everything the JS and Go packages share. |
-| [`ezu-wasm`](https://github.com/reearth/ezu/tree/main/crates/ezu-wasm) | — | — | WebAssembly bindings over `ezu-renderer`, published to npm as [`@reearth/ezu`](https://www.npmjs.com/package/@reearth/ezu). Not published to crates.io. |
-| [`ezu-cabi`](https://github.com/reearth/ezu/tree/main/crates/ezu-cabi) | — | — | A flat C ABI over `ezu-renderer`, built to wasm and embedded in the Go module. Not published to crates.io. |
+| [`ezu-wasm`](https://github.com/reearth/ezu/tree/main/crates/ezu-wasm) | — | — | WebAssembly bindings over `ezu::renderer`, published to npm as [`@reearth/ezu`](https://www.npmjs.com/package/@reearth/ezu). Not published to crates.io. |
+| [`ezu-cabi`](https://github.com/reearth/ezu/tree/main/crates/ezu-cabi) | — | — | A flat C ABI over `ezu::renderer`, built to wasm and embedded in the Go module. Not published to crates.io. |
 | `ezu-compare` | — | — | Internal benchmark: convert a MapLibre style, render it, pixel-compare against maplibre-gl-js. Not published. |
 
 ## Sister repositories
@@ -40,9 +39,9 @@ ezu-features (MVT/GeoJSON) ─────────────────�
 
 ezu-translate ──> emits ezu-style JSON
 ezu-cli ──> native host
-ezu-renderer (bind + render, host-neutral) ──┬──> ezu-wasm ──> JS host
-                                             ├──> ezu-cabi ──> Go host (wazero)
-                                             └──> ezu::renderer ──> Rust host
+ezu::renderer (bind + render, host-neutral) ──┬──> Rust host
+                                              ├──> ezu-wasm ──> JS host
+                                              └──> ezu-cabi ──> Go host (wazero)
 ```
 
 Three boundaries are worth knowing:
@@ -53,11 +52,12 @@ Three boundaries are worth knowing:
   [custom ops](/ezu/extending/custom-ops/).
 - **`ezu-style` does not evaluate anything.** Parsing gives you a `Document`, which
   is data. `build_graph` turns it into something executable.
-- **An embedding shell holds no rendering logic.** `ezu-renderer` owns the whole
-  bind-then-render flow and names its failures; `ezu-wasm` reads JS option objects,
-  builds JS results, and converts errors, and `ezu-cabi` does the same across a
-  flat C ABI for the [Go module](/ezu/guides/go-package/). An embedding in another
-  language is written against `ezu-renderer` the same way, so the shells cannot
+- **An embedding shell holds no rendering logic.** `ezu::renderer` owns the whole
+  bind-then-render flow and names its failures; a Rust host calls it directly,
+  `ezu-wasm` reads JS option objects, builds JS results, and converts errors, and
+  `ezu-cabi` does the same across a flat C ABI for the
+  [Go module](/ezu/guides/go-package/). An embedding in another language is
+  written against `ezu::renderer` the same way, so the shells cannot
   drift apart — which is why the same style renders to the same bytes in a
   browser and in a Go service, and why a failure carries the same name in both.
 
@@ -68,7 +68,7 @@ On the umbrella crate:
 | Feature | Effect |
 | --- | --- |
 | `parallel` | pulls in Rayon and enables `Evaluator::render_parallel`. Leave off for wasm. |
-| `renderer` (default) | re-exports `ezu-renderer` as `ezu::renderer`: bind each source's bytes, render a tile or a print frame — the calls the JS and Go packages make. |
+| `renderer` (default) | `ezu::renderer`: bind each source's bytes, render a tile or a print frame — the calls the JS and Go packages make. |
 
 `ezu-cli` additionally has `heap-profile`, which writes `dhat-heap.json` for
 allocation-site attribution.

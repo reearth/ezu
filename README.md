@@ -94,7 +94,7 @@ reference: [CLI](https://reearth.github.io/ezu/reference/cli/).
 
 | Crate | crates.io | Description |
 |---|---|---|
-| [`ezu`](https://github.com/reearth/ezu/tree/main/crates/ezu) | [![](https://img.shields.io/crates/v/ezu.svg)](https://crates.io/crates/ezu) | Umbrella crate, re-exports + feature flags |
+| [`ezu`](https://github.com/reearth/ezu/tree/main/crates/ezu) | [![](https://img.shields.io/crates/v/ezu.svg)](https://crates.io/crates/ezu) | Umbrella crate, re-exports + feature flags, and `ezu::renderer` — bind tiles, render one or a print frame, as the JS and Go packages do |
 | [`ezu-core`](https://github.com/reearth/ezu/tree/main/crates/ezu-core) | [![](https://img.shields.io/crates/v/ezu-core.svg)](https://crates.io/crates/ezu-core) | Tile / world coordinates, deterministic seeding |
 | [`ezu-features`](https://github.com/reearth/ezu/tree/main/crates/ezu-features) | [![](https://img.shields.io/crates/v/ezu-features.svg)](https://crates.io/crates/ezu-features) | GIS feature parsing (MVT via `geozero`, GeoJSON) — no remote fetch |
 | [`ezu-style`](https://github.com/reearth/ezu/tree/main/crates/ezu-style) | [![](https://img.shields.io/crates/v/ezu-style.svg)](https://crates.io/crates/ezu-style) | Style spec parser (`serde`) — pure data, no rendering |
@@ -102,7 +102,6 @@ reference: [CLI](https://reearth.github.io/ezu/reference/cli/).
 | [`ezu-paint`](https://github.com/reearth/ezu/tree/main/crates/ezu-paint) | [![](https://img.shields.io/crates/v/ezu-paint.svg)](https://crates.io/crates/ezu-paint) | Painting primitives, the built-in ops, host glue |
 | [`ezu-translate`](https://github.com/reearth/ezu/tree/main/crates/ezu-translate) | [![](https://img.shields.io/crates/v/ezu-translate.svg)](https://crates.io/crates/ezu-translate) | Lower other engines' styles into ezu recipes — MapLibre GL is the first frontend |
 | [`ezu-cli`](https://github.com/reearth/ezu/tree/main/crates/ezu-cli) | [![](https://img.shields.io/crates/v/ezu-cli.svg)](https://crates.io/crates/ezu-cli) | The `ezu` binary — rendering, `translate`, `check`, `graph`, `schema`, `serve` |
-| [`ezu-renderer`](https://github.com/reearth/ezu/tree/main/crates/ezu-renderer) | [![](https://img.shields.io/crates/v/ezu-renderer.svg)](https://crates.io/crates/ezu-renderer) | Host-neutral embedding renderer — bind tiles, render one or a print frame; `ezu::renderer`, and what the JS and Go packages wrap |
 | [`ezu-wasm`](https://github.com/reearth/ezu/tree/main/crates/ezu-wasm) | [npm](https://www.npmjs.com/package/@reearth/ezu) | WebAssembly bindings — scalar / SIMD / threads builds for in-browser rendering |
 
 The expression engine lives in its own repository,
