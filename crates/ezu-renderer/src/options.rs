@@ -24,7 +24,8 @@ pub struct RenderOptions {
     /// Encoding of the returned bytes.
     pub format: OutputFormat,
     /// Override the style's canvas size for this render (hi-DPI,
-    /// previews). `None` keeps the style's `tile-size`.
+    /// previews). `None` keeps the renderer's: the style's `tile-size`, or
+    /// what `Renderer::set_tile_size` set in its place.
     pub tile_size: Option<u32>,
     /// Override the margin rendered outside the tile. `None` takes the
     /// style's `pad`, floored by what the graph's filters reach for.

@@ -55,7 +55,7 @@ use ezu_renderer::{Error, ErrorKind, Renderer};
 /// code's meaning, or an export appearing or leaving. The Go package
 /// checks it at instantiation, which is what catches a committed module
 /// that was not rebuilt.
-pub const ABI_VERSION: u32 = 2;
+pub const ABI_VERSION: u32 = 3;
 
 /// Every function this shell exports, in one list, so a test can compare
 /// it with what the committed module actually carries. The linker's own
@@ -77,6 +77,8 @@ pub const EXPORTS: &[&str] = &[
     "ezu_renderer_free",
     "ezu_set_style",
     "ezu_tile_size",
+    "ezu_set_tile_size",
+    "ezu_compute_frame",
     "ezu_params_schema",
     "ezu_attribution",
     "ezu_legend",
@@ -407,10 +409,99 @@ pub extern "C" fn ezu_set_style(handle: u32, style_ptr: u32, style_len: u32) -> 
     })
 }
 
-/// `tile-size` declared by the current style.
+/// `tile-size` declared by the current style, whatever
+/// [`ezu_set_tile_size`] renders at.
 #[unsafe(no_mangle)]
 pub extern "C" fn ezu_tile_size(handle: u32) -> i64 {
     with_renderer(handle, |r| r.tile_size() as i64)
+}
+
+/// Render every tile at `size` px instead of the style's `tile-size`,
+/// without editing the style; `0` goes back to the style's. Returns the
+/// tile size renders now use.
+///
+/// This is how a print frame renders: [`ezu_compute_frame`] meets a scale
+/// by choosing the tile size, and the tiles must be drawn at exactly that
+/// size. Nothing a host binds depends on it — the neighbour offsets and
+/// source tiles stay as they are — and the intermediate cache, which is
+/// sized by the tile, is dropped when the size changes. `ezu_set_style`
+/// goes back to the new style's own size. A `tileSize` in one render's
+/// options still wins over this.
+#[unsafe(no_mangle)]
+pub extern "C" fn ezu_set_tile_size(handle: u32, size: u32) -> i64 {
+    with_renderer_mut(handle, |r| {
+        match r.set_tile_size((size != 0).then_some(size)) {
+            Ok(()) => r.render_tile_size() as i64,
+            Err(e) => fail_err(e),
+        }
+    })
+}
+
+/// Where a print frame sits on the tile grid, as JSON — the arithmetic
+/// `ezu frame` does before it renders anything.
+///
+/// `req` is JSON:
+///
+/// ```json
+/// {
+///   "centerLon": 139.70, "centerLat": 35.68,
+///   "scale": 1000, "dpi": 200,
+///   "width": 1929, "height": 1370,
+///   "zoom": 19,
+///   "styleTileSize": 512
+/// }
+/// ```
+///
+/// `scale` is the denominator (1000 for 1:1000), `width` and `height` the
+/// output size in pixels. `zoom` is optional; absent picks the zoom whose
+/// tile size is nearest the style's. `styleTileSize` is optional too and
+/// defaults to this renderer's style.
+///
+/// The answer is
+/// `{"zoom", "tileSize", "scale", "width", "height", "left", "top",
+/// "shift": [x, y], "tilesX": [start, end], "tilesY": [start, end]}`:
+/// render tiles `tilesX × tilesY` (end exclusive) at `zoom` with the tile
+/// size set to `tileSize`, and tile `(x, y)` lands in the output with its
+/// top-left at `(x · tileSize − left, y · tileSize − top)`, cropped to
+/// `width × height`. `scale` is the denominator actually met, and `shift`
+/// how far rounding the frame onto whole pixels moved it.
+///
+/// A request out of its domain, or one whose scale needs a tile size
+/// outside what a frame renders at, fails with `InvalidStyle`.
+#[unsafe(no_mangle)]
+pub extern "C" fn ezu_compute_frame(
+    handle: u32,
+    req_ptr: u32,
+    req_len: u32,
+    out_ptr: u32,
+    out_len: u32,
+) -> i64 {
+    let raw = unsafe { input(req_ptr, req_len) };
+    with_renderer(handle, |r| {
+        let req = match options::parse_frame(raw, r.tile_size()) {
+            Ok(req) => req,
+            Err(e) => return fail_err(e),
+        };
+        match r.compute_frame(&req) {
+            Ok(f) => {
+                let json = serde_json::json!({
+                    "zoom": f.zoom,
+                    "tileSize": f.tile_size,
+                    "scale": f.scale,
+                    "width": f.width,
+                    "height": f.height,
+                    "left": f.left,
+                    "top": f.top,
+                    "shift": [f.shift.0, f.shift.1],
+                    "tilesX": [f.tiles_x.start, f.tiles_x.end],
+                    "tilesY": [f.tiles_y.start, f.tiles_y.end],
+                })
+                .to_string();
+                unsafe { reply_json(out_ptr, out_len, json) }
+            }
+            Err(e) => fail_err(e),
+        }
+    })
 }
 
 // --- queries ---------------------------------------------------------------

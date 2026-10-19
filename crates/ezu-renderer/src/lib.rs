@@ -60,6 +60,10 @@ pub use error::{Error, ErrorKind};
 pub use options::{BindOptions, OutputFormat, RenderOptions};
 pub use sources::{SourceInfo, SourceKind};
 
+/// Print-frame geometry, re-exported so a shell needs this crate and
+/// nothing under it. See [`Renderer::compute_frame`].
+pub use ezu_core::frame::{Frame, FrameRequest};
+
 /// Effort the PNG encoder spends, named by
 /// [`RenderOptions::png_compression`]. Re-exported so a shell needs this
 /// crate and nothing under it.
@@ -162,6 +166,9 @@ pub struct Renderer {
     /// Ceiling on resident glyph bytes per fontstack, applied after each
     /// render. `None` (the default) keeps every bound range.
     glyph_budget: Option<usize>,
+    /// Tile size every render uses in place of the style's `tile-size`,
+    /// set by [`Renderer::set_tile_size`]. `None` renders at the style's.
+    tile_size_override: Option<u32>,
 }
 
 impl Renderer {
@@ -175,11 +182,15 @@ impl Renderer {
             assets: BrushBankLoader::new(),
             bindings: HashMap::new(),
             glyph_budget: None,
+            tile_size_override: None,
         })
     }
 
     /// Replace the active style. Returns the new node count. Invalidates
-    /// the intermediate cache and drops any pending source bindings.
+    /// the intermediate cache, drops any pending source bindings, and
+    /// clears a tile size set with [`set_tile_size`](Self::set_tile_size):
+    /// such a size is derived from the style's own (a print frame's is),
+    /// so it does not carry over to another style.
     pub fn set_style(&mut self, style_json: &str) -> Result<usize, Error> {
         let (doc, graph) = parse_and_build(style_json)?;
         let n = doc.nodes.len();
@@ -187,12 +198,65 @@ impl Renderer {
         self.graph = Arc::new(graph);
         self.cache = Arc::new(Cache::new());
         self.bindings.clear();
+        self.tile_size_override = None;
         Ok(n)
     }
 
-    /// `tile-size` declared by the current style.
+    /// `tile-size` declared by the current style, whatever
+    /// [`set_tile_size`](Self::set_tile_size) renders at.
     pub fn tile_size(&self) -> u32 {
         self.doc.tile_size
+    }
+
+    /// The tile size renders use: the one
+    /// [`set_tile_size`](Self::set_tile_size) set, or else the style's.
+    pub fn render_tile_size(&self) -> u32 {
+        self.tile_size_override.unwrap_or(self.doc.tile_size)
+    }
+
+    /// Render every tile at `size` px instead of the style's `tile-size`,
+    /// without editing the style. `None` goes back to the style's.
+    ///
+    /// This is how a print frame renders: [`Frame::compute`] meets a map
+    /// scale by choosing the tile size, and the tiles must then be drawn at
+    /// exactly that size. It renders what a copy of the style with its
+    /// `tile-size` changed would. Nothing else read from the style depends
+    /// on the tile size: the graph, the pad, the neighbour offsets and the
+    /// source tiles a host binds stay as they are, and the canvas — through
+    /// it raster and DEM stitching, GeoJSON projection and label placement —
+    /// follows the new size.
+    ///
+    /// The intermediate cache is sized by the tile, so it is dropped when
+    /// the size actually changes; the asset banks and pending bindings are
+    /// kept. A [`RenderOptions::tile_size`] on one render still wins over
+    /// this.
+    ///
+    /// Fails with [`ErrorKind::InvalidStyle`] for a size of zero.
+    pub fn set_tile_size(&mut self, size: Option<u32>) -> Result<(), Error> {
+        if size == Some(0) {
+            return Err(err(InvalidStyle, "tile size must be at least 1 px"));
+        }
+        let before = self.render_tile_size();
+        self.tile_size_override = size;
+        if self.render_tile_size() != before {
+            self.cache = Arc::new(Cache::new());
+        }
+        Ok(())
+    }
+
+    /// Where a print frame sits on the tile grid: the zoom and tile size
+    /// that meet `req`'s scale, and the tiles that cover it. See
+    /// [`ezu_core::frame`].
+    ///
+    /// `req.style_tile_size` is what the default zoom aims the tile size
+    /// at; pass [`tile_size`](Self::tile_size) for this renderer's style,
+    /// which is what `ezu frame` does. Render the result with
+    /// [`set_tile_size`](Self::set_tile_size) set to [`Frame::tile_size`].
+    ///
+    /// Fails with [`ErrorKind::InvalidStyle`] when the request is out of
+    /// its domain or the scale cannot be met at a usable tile size.
+    pub fn compute_frame(&self, req: &FrameRequest) -> Result<Frame, Error> {
+        Frame::compute(req).map_err(|e| err(InvalidStyle, e))
     }
 
     /// JSON Schema for the current style's `params` — types, defaults,
@@ -732,7 +796,7 @@ impl Renderer {
         y: u32,
         opts: RenderOptions,
     ) -> Result<Vec<u8>, Error> {
-        let tile_size = opts.tile_size.unwrap_or(self.doc.tile_size);
+        let tile_size = opts.tile_size.unwrap_or(self.render_tile_size());
         // `opts.pad` is an explicit override. Otherwise the style's `pad`
         // acts as a floor under what the graph actually reaches, so a
         // margin too narrow for the filters cannot silently clamp the
@@ -1410,6 +1474,68 @@ mod tests {
             "the floor itself is in range"
         );
         assert_eq!(ink(r#", "min-zoom": 15"#), 0);
+    }
+
+    #[test]
+    fn a_set_tile_size_renders_what_the_edited_style_does() {
+        // A blur reaches past the tile, so the pad and the neighbour-bleed
+        // crop are part of what has to come out the same.
+        let style = |tile_size: u32| {
+            format!(
+                r##"{{
+                    "name": "test",
+                    "tile-size": {tile_size},
+                    "sources": {{ "basemap": {{ "type": "mvt", "url": "https://x/{{z}}/{{x}}/{{y}}.mvt" }} }},
+                    "nodes": {{
+                        "f": {{ "op": "features", "source": "basemap", "layer": "earth" }},
+                        "fill": {{ "op": "fill-solid", "features": "@f", "fill": "#204080" }},
+                        "out": {{ "op": "blur", "input": "@fill", "sigma": 3.0 }}
+                    }},
+                    "output": "out"
+                }}"##
+            )
+        };
+        let render = |r: &mut Renderer| {
+            r.bind_source("basemap", BASEMAP_Z14.to_vec(), &BindOptions::default())
+                .expect("binds");
+            let opts = RenderOptions {
+                format: OutputFormat::Rgba,
+                ..RenderOptions::default()
+            };
+            let px = r.render_tile(14, 14554, 6454, opts).expect("renders");
+            r.clear_sources();
+            px
+        };
+
+        let mut edited = Renderer::new(&style(93)).expect("builds");
+        let want = render(&mut edited);
+        assert_eq!(want.len(), 93 * 93 * 4);
+
+        let mut r = Renderer::new(&style(64)).expect("builds");
+        let at_style = render(&mut r);
+        r.set_tile_size(Some(93)).expect("a real size");
+        assert_eq!((r.tile_size(), r.render_tile_size()), (64, 93));
+        assert!(
+            render(&mut r) == want,
+            "rendering at 93 px differs from the style edited to 93 px"
+        );
+
+        // Back to the style's, and the cache dropped on the way there and
+        // back holds nothing that changes the answer.
+        r.set_tile_size(None).expect("clearing");
+        assert_eq!(r.render_tile_size(), 64);
+        assert!(render(&mut r) == at_style);
+
+        // A new style starts at its own size.
+        r.set_tile_size(Some(93)).expect("a real size");
+        r.set_style(&style(64)).expect("builds");
+        assert_eq!(r.render_tile_size(), 64);
+
+        assert_eq!(
+            r.set_tile_size(Some(0)).unwrap_err().kind(),
+            ErrorKind::InvalidStyle
+        );
+        assert_eq!(r.render_tile_size(), 64, "a refused size changes nothing");
     }
 
     #[test]

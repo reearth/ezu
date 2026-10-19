@@ -9,7 +9,9 @@
 //! host. Values that are present but wrong are refused: silently answering
 //! PNG to `"format": "jpeg"` hands back bytes the caller was not expecting.
 
-use ezu_renderer::{BindOptions, Error, ErrorKind, OutputFormat, PngCompression, RenderOptions};
+use ezu_renderer::{
+    BindOptions, Error, ErrorKind, FrameRequest, OutputFormat, PngCompression, RenderOptions,
+};
 use serde_json::Value;
 
 fn err(kind: ErrorKind, message: impl std::fmt::Display) -> Error {
@@ -177,4 +179,53 @@ fn parse_u32(value: Option<&Value>, label: &str) -> Result<Option<u32>, Error> {
             )
         })?;
     Ok(Some(n))
+}
+
+/// `{"centerLon": …, "centerLat": …, "scale": …, "dpi": …, "width": …,
+/// "height": …, "zoom": …, "styleTileSize": …}`.
+///
+/// The first six are required: a frame without a centre or a scale has no
+/// sensible default. `zoom` is optional, and absent picks the zoom whose
+/// tile size is nearest the style's. `styleTileSize` is optional too, and
+/// absent takes `style_tile_size` — the renderer's own style, which is
+/// what a host wants unless it computes frames for a style it has not
+/// loaded. Every refusal is `InvalidStyle`, as for the render options.
+pub fn parse_frame(raw: &[u8], style_tile_size: u32) -> Result<FrameRequest, Error> {
+    let obj = object(raw, "the frame request")?;
+    let number = |label: &str| -> Result<f64, Error> {
+        obj.get(label).and_then(Value::as_f64).ok_or_else(|| {
+            err(
+                ErrorKind::InvalidStyle,
+                format!("the frame request needs {label} as a number"),
+            )
+        })
+    };
+    let size = |label: &str| -> Result<u32, Error> {
+        parse_u32(obj.get(label), label)?.ok_or_else(|| {
+            err(
+                ErrorKind::InvalidStyle,
+                format!("the frame request needs {label} in pixels"),
+            )
+        })
+    };
+    let zoom = match obj.get("zoom").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v) => Some(v.as_u64().filter(|z| *z <= 31).ok_or_else(|| {
+            err(
+                ErrorKind::InvalidStyle,
+                format!("zoom must be a whole zoom level in 0..=31, got {v}"),
+            )
+        })? as u8),
+    };
+    Ok(FrameRequest {
+        center_lon: number("centerLon")?,
+        center_lat: number("centerLat")?,
+        scale: number("scale")?,
+        dpi: number("dpi")?,
+        width: size("width")?,
+        height: size("height")?,
+        zoom,
+        style_tile_size: parse_u32(obj.get("styleTileSize"), "styleTileSize")?
+            .unwrap_or(style_tile_size),
+    })
 }

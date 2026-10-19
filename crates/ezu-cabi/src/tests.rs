@@ -51,7 +51,7 @@ fn every_error_kind_has_its_own_code() {
 }
 
 mod options {
-    use crate::options::{parse_bind, parse_render};
+    use crate::options::{parse_bind, parse_frame, parse_render};
     use ezu_renderer::{OutputFormat, PngCompression};
 
     #[test]
@@ -135,6 +135,49 @@ mod options {
             &br#"[1,2]"#[..],
         ] {
             let e = parse_render(payload).expect_err("refused");
+            assert_eq!(
+                e.name(),
+                "InvalidStyle",
+                "for {}",
+                String::from_utf8_lossy(payload)
+            );
+        }
+    }
+
+    #[test]
+    fn a_frame_request_takes_the_style_tile_size_unless_it_names_one() {
+        let req = parse_frame(
+            br#"{"centerLon":139.7,"centerLat":35.68,"scale":1000,"dpi":200,
+                 "width":1929,"height":1370}"#,
+            512,
+        )
+        .expect("parses");
+        assert_eq!((req.center_lon, req.center_lat), (139.7, 35.68));
+        assert_eq!((req.scale, req.dpi), (1000.0, 200.0));
+        assert_eq!((req.width, req.height), (1929, 1370));
+        assert_eq!(req.zoom, None);
+        assert_eq!(req.style_tile_size, 512);
+
+        let req = parse_frame(
+            br#"{"centerLon":0,"centerLat":0,"scale":1000,"dpi":96,
+                 "width":10,"height":10,"zoom":18,"styleTileSize":256}"#,
+            512,
+        )
+        .expect("parses");
+        assert_eq!(req.zoom, Some(18));
+        assert_eq!(req.style_tile_size, 256);
+    }
+
+    #[test]
+    fn a_frame_request_without_a_scale_or_a_size_is_refused() {
+        for payload in [
+            &br#"{}"#[..],
+            &br#"{"centerLon":0,"centerLat":0,"dpi":200,"width":1,"height":1}"#[..],
+            &br#"{"centerLon":0,"centerLat":0,"scale":1000,"dpi":200,"width":1}"#[..],
+            &br#"{"centerLon":0,"centerLat":0,"scale":1000,"dpi":200,
+                  "width":1,"height":1,"zoom":-1}"#[..],
+        ] {
+            let e = parse_frame(payload, 512).expect_err("refused");
             assert_eq!(
                 e.name(),
                 "InvalidStyle",
