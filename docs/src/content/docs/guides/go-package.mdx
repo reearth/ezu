@@ -191,6 +191,46 @@ of tiles that are wrong rather than missing:
   can assemble its own PBF; on CJK labels that is the difference between a few
   thousand glyphs and tens of megabytes.
 
+## A page at a print scale
+
+A printed page is asked for as "1:1000 at 200 dpi, 245 × 174 mm, centred
+here", not as a zoom. [`ezu frame`](/ezu/guides/bbox-and-pyramids/#a-page-at-a-print-scale)
+meets the scale by choosing the tile size, renders the tiles the page covers at
+that size and crops them to the page. The Go package does the same, with the
+same code, so a page rendered here is the CLI's pixel for pixel:
+
+```go
+f, err := r.ComputeFrame(ctx, ezu.FrameRequest{
+    CenterLon: 139.70, CenterLat: 35.68,
+    Scale:     1000, DPI: 200,
+    Width:     ezu.MillimetresToPixels(245, 200), // 1929
+    Height:    ezu.MillimetresToPixels(174, 200), // 1370
+})
+// f.Zoom 19, f.TileSize 489, f.TilesX/f.TilesY: the 5 × 4 tiles to render
+
+img, err := r.RenderFrame(ctx, f, func(ctx context.Context, tile ezu.Tile) error {
+    return bindTile(ctx, r, tile) // the bind loop above, for this tile
+}, ezu.Render{})
+// img is a 1929 × 1370 *image.NRGBA; png.Encode it, or draw it into a PDF page
+```
+
+`ComputeFrame` changes nothing on the renderer; it aims the tile size at the
+style's own unless `StyleTileSize` names another, and `ezu.AtZoom(z)` fixes the
+zoom as the CLI's `--zoom` does. `RenderFrame` renders the tiles one after
+another, calling your function before each to bind it — the same bind loop as a
+single tile, so neighbours, overzoom and glyphs work as above, and the tile size
+changes nothing about what you fetch. It draws at `f.TileSize` per render, so
+the renderer's own tile size is untouched.
+
+To render a frame's tiles yourself — to spread them over a `Pool`, say — draw
+each at `f.TileSize` (`ezu.Render{TileSize: f.TileSize}`, or `SetTileSize` on
+the renderer) and copy it into the page at `f.TileOffset(tile)`, cropping the
+tiles along the border. `ClearTileSize` goes back to the style's size, and so
+does `SetStyle`.
+
+The CLI's `--features` export of a node's features over the page has no
+counterpart here yet.
+
 ## Hearing that a tile came out wrong
 
 The failures above do not fail. A DEM bound without the neighbours its style

@@ -39,6 +39,14 @@
 // is the expensive artefact; instantiating from it is a fresh linear memory
 // and little else. It is safe for concurrent use.
 //
+// # Print pages
+//
+// A page asked for by scale, dpi and paper size rather than by zoom is a
+// frame: [Renderer.ComputeFrame] picks the zoom and tile size that meet the
+// scale, and [Renderer.RenderFrame] renders the tiles it covers, calling you
+// back to bind each one, and crops them into one image — what `ezu frame`
+// writes, pixel for pixel.
+//
 // # The module
 //
 // ezu_cabi.wasm, embedded, is built from crates/ezu-cabi, whose src/lib.rs
@@ -69,7 +77,7 @@ var wasmModule []byte
 // The ABI this package was written against. ezu_abi_version must agree or
 // the embedded module is stale — which is the cost of committing a built
 // artefact, and the check that keeps the cost cheap.
-const abiVersion = 2
+const abiVersion = 3
 
 // The host module the wasm side imports its out-of-memory report from. See
 // oomHandler and crates/ezu-cabi/src/oom.rs.
@@ -835,7 +843,8 @@ type Render struct {
 	// Format of the returned bytes. Empty means [FormatPNG].
 	Format Format
 	// TileSize and Pad override the style's canvas for this render — a
-	// hi-DPI tile, or a cheap preview. Zero keeps the style's own, with pad
+	// hi-DPI tile, or a cheap preview. Zero keeps the renderer's own — the
+	// style's tile-size, or what [Renderer.SetTileSize] set — with pad
 	// floored by whatever the graph's filters reach for.
 	TileSize, Pad uint32
 	// PNGCompression is the encoder effort. Empty means
@@ -877,7 +886,8 @@ func (o Render) json() ([]byte, error) {
 // invalidates the intermediate cache and drops every pending source
 // binding, but keeps the persistent banks — brushes, fonts, sprites,
 // glyphs, images — so a style swap on a live renderer does not re-fetch
-// them.
+// them. A tile size set with [Renderer.SetTileSize] is cleared: it was
+// derived from the old style's.
 func (r *Renderer) SetStyle(ctx context.Context, styleJSON []byte) (int, error) {
 	n, err := r.call(ctx, func(ctx context.Context) (int64, error) {
 		ptr, err := r.writeBytes(ctx, styleJSON)
@@ -891,7 +901,8 @@ func (r *Renderer) SetStyle(ctx context.Context, styleJSON []byte) (int, error) 
 	return int(n), err
 }
 
-// TileSize is the tile-size declared by the current style.
+// TileSize is the tile-size declared by the current style, whatever
+// [Renderer.SetTileSize] renders at.
 func (r *Renderer) TileSize(ctx context.Context) (uint32, error) {
 	n, err := r.call(ctx, func(ctx context.Context) (int64, error) {
 		return r.call1(ctx, "ezu_tile_size", uint64(r.handle))

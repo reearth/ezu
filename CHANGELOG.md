@@ -13,6 +13,14 @@ mean is spelled out in
 
 ### Added
 
+- The Go package renders print pages the way `ezu frame` does.
+  `Renderer.ComputeFrame` works out the zoom, tile size and covered tiles for a
+  scale, dpi, page size and centre, with the CLI's own arithmetic, and
+  `Renderer.RenderFrame` renders those tiles, calling the host back to bind each
+  one, and crops them into one image that matches the CLI's page pixel for
+  pixel. `Renderer.SetTileSize` and `ClearTileSize` render at another tile size
+  without editing the style, for a host that renders a frame's tiles itself.
+  The wasm module's ABI version is now 3.
 - `text` and `text-labels` take `anchor-expr`, a MapLibre expression that
   names a point label's anchor per feature, so one layer can put some labels
   left of their points and others right of them, or switch sides with zoom.
