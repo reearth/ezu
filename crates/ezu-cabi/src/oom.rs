@@ -14,7 +14,7 @@
 //! wazero, by panicking out of the host function), which is what turns an
 //! opaque `unreachable` into "this instance asked for N bytes and could not
 //! have them". The Go package does exactly that and reports
-//! [`ErrorKind::OutOfMemory`](ezu_renderer::ErrorKind::OutOfMemory), the
+//! [`ErrorKind::OutOfMemory`](ezu::renderer::ErrorKind::OutOfMemory), the
 //! same name a browser caller sees.
 //!
 //! The constraint that shapes this: it runs **inside the allocator**, so it

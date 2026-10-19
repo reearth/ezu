@@ -693,22 +693,23 @@ dependencies = [
  "ezu-features",
  "ezu-graph",
  "ezu-paint",
- "ezu-renderer",
  "ezu-style",
  "ezu-translate",
  "hokusai",
  "pmtiles",
  "reqwest",
+ "serde_json",
  "tiny-skia",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
 name = "ezu-cabi"
 version = "0.12.0"
 dependencies = [
+ "ezu",
  "ezu-paint",
- "ezu-renderer",
  "serde_json",
  "tracing",
  "tracing-subscriber",
@@ -832,20 +833,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ezu-renderer"
-version = "0.12.0"
-dependencies = [
- "ezu-core",
- "ezu-features",
- "ezu-graph",
- "ezu-paint",
- "ezu-style",
- "hokusai",
- "serde_json",
- "tracing",
-]
-
-[[package]]
 name = "ezu-style"
 version = "0.12.0"
 dependencies = [
@@ -877,7 +864,7 @@ name = "ezu-wasm"
 version = "0.12.0"
 dependencies = [
  "console_error_panic_hook",
- "ezu-renderer",
+ "ezu",
  "js-sys",
  "tracing",
  "tracing-subscriber",

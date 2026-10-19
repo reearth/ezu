@@ -1,6 +1,6 @@
 //! What a style declares, for a host that has to go and fetch it.
 //!
-//! [`Renderer::bound_sources`](crate::Renderer::bound_sources) answers what
+//! [`Renderer::bound_sources`](super::Renderer::bound_sources) answers what
 //! is already bound; this answers the question that comes first — what the
 //! style asks for, of which kind, and where from. A host driving the bind
 //! loop needs that before it can bind anything, and the alternative is for
@@ -12,7 +12,7 @@ use std::borrow::Cow;
 use ezu_style::{SourceDecl, SpriteIndex};
 
 /// The kind a style declares a source as: the `type` field, and what
-/// [`bind_source`](crate::Renderer::bind_source) dispatches on.
+/// [`bind_source`](super::Renderer::bind_source) dispatches on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceKind {
     /// Vector tiles from an XYZ template or a TileJSON document.
@@ -57,7 +57,7 @@ impl SourceKind {
     }
 
     /// Whether a binding of this kind belongs to one tile, and so is dropped
-    /// by [`clear_sources`](crate::Renderer::clear_sources) and rebound for
+    /// by [`clear_sources`](super::Renderer::clear_sources) and rebound for
     /// the next tile. The rest go into the persistent banks and are bound
     /// once for the life of the renderer.
     pub const fn is_tile_scoped(self) -> bool {
@@ -92,7 +92,7 @@ pub struct SourceInfo<'a> {
     pub url: Option<Cow<'a, str>>,
     /// A `sprite` source's index document, when the style gives a URL for
     /// it rather than inlining it. Fetch it and pass the text as
-    /// [`BindOptions::index`](crate::BindOptions::index) alongside the
+    /// [`BindOptions::index`](super::BindOptions::index) alongside the
     /// atlas image. `None` for every other kind, and for an inline index.
     pub index_url: Option<&'a str>,
 }

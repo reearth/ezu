@@ -14,7 +14,10 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-ezu-renderer = { workspace = true }
+# The embedding renderer only: the default features would pull the MapLibre
+# translator into the module, which this shell has no use for. A path rather
+# than the workspace entry, which keeps the umbrella crate's defaults on.
+ezu = { path = "../ezu", default-features = false, features = ["renderer"] }
 wasm-bindgen = "0.2"
 js-sys = "0.3"
 # `renderFrame` awaits the host's per-tile bind, which is usually a fetch.
@@ -41,7 +44,7 @@ panic-hook = ["dep:console_error_panic_hook"]
 # renderer uses the parallel evaluator once the pool is initialized.
 threads = [
     "dep:wasm-bindgen-rayon",
-    "ezu-renderer/parallel",
+    "ezu/parallel",
 ]
 
 [package.metadata.wasm-pack.profile.release]

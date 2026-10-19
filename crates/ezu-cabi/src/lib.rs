@@ -3,10 +3,10 @@
 //!
 //! This is the second of ezu's embedding shells. The first is
 //! `ezu-wasm`, the wasm-bindgen module a browser loads; both are thin
-//! translation layers over the same [`ezu_renderer::Renderer`], and both
+//! translation layers over the same [`ezu::renderer::Renderer`], and both
 //! expose the same surface. What lives here is the translation: reading
 //! options out of JSON, writing answers back into linear memory, turning
-//! an [`ezu_renderer::Error`] into a code plus a name the host branches
+//! an [`ezu::renderer::Error`] into a code plus a name the host branches
 //! on, reporting a failed allocation, and buffering `tracing` events for
 //! the host to drain.
 //!
@@ -29,7 +29,7 @@
 //! # Errors
 //!
 //! [`ezu_last_error`] answers with `"<Name>\n<message>"`: the first line is
-//! [`ezu_renderer::ErrorKind::name`], the rest is the human-readable
+//! [`ezu::renderer::ErrorKind::name`], the rest is the human-readable
 //! detail. The names are a public contract shared with the JS shell, where
 //! they arrive as a thrown `Error`'s `.name` — a Go caller branches on the
 //! same string a browser caller does. The numeric code is a cheaper copy of
@@ -49,7 +49,7 @@ mod options;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use ezu_renderer::{Error, ErrorKind, Renderer};
+use ezu::renderer::{Error, ErrorKind, Renderer};
 
 /// Incremented whenever the surface changes — a signature, a format, a
 /// code's meaning, or an export appearing or leaving. The Go package
@@ -267,7 +267,7 @@ pub extern "C" fn ezu_free(ptr: u32, len: u32) {
 
 /// The most recent failure as `"<Name>\n<message>"`, cleared by reading.
 ///
-/// The first line is [`ezu_renderer::ErrorKind::name`] — the same string
+/// The first line is [`ezu::renderer::ErrorKind::name`] — the same string
 /// the JS shell puts on a thrown `Error`'s `.name` — or [`BAD_HANDLE`].
 /// The remainder is the detail, which may itself contain newlines. An
 /// empty buffer means nothing has failed since the last read.

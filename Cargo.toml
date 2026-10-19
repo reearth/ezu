@@ -10,7 +10,6 @@ members = [
     "crates/ezu-features",
     "crates/ezu-translate",
     "crates/ezu-paint",
-    "crates/ezu-renderer",
     "crates/ezu-style",
     "crates/ezu-wasm",
 ]
@@ -31,7 +30,6 @@ ezu-graph = { version = "0.12.0", path = "crates/ezu-graph" }
 ezu-features = { version = "0.12.0", path = "crates/ezu-features" }
 ezu-translate = { version = "0.12.0", path = "crates/ezu-translate" }
 ezu-paint = { version = "0.12.0", path = "crates/ezu-paint" }
-ezu-renderer = { version = "0.12.0", path = "crates/ezu-renderer" }
 ezu-style = { version = "0.12.0", path = "crates/ezu-style" }
 ezu = { version = "0.12.0", path = "crates/ezu" }
 

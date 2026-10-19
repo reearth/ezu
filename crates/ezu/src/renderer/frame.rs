@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::{
+use super::{
     BindOptions, Error, ErrorKind, Frame, OutputFormat, RenderOptions, Renderer, SourceInfo, TileId,
 };
 
@@ -199,10 +199,10 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::FrameRequest;
+    use crate::renderer::FrameRequest;
 
-    const STAINED_GLASS: &str = include_str!("../../ezu/examples/styles/stained-glass.json");
-    const BASEMAP_Z13: &[u8] = include_bytes!("../../../go/testdata/basemap-13-7277-3227.mvt");
+    const STAINED_GLASS: &str = include_str!("../../examples/styles/stained-glass.json");
+    const BASEMAP_Z13: &[u8] = include_bytes!("../../../../go/testdata/basemap-13-7277-3227.mvt");
 
     /// A 500 × 400 px frame on the corner where four z14 tiles meet, so
     /// every tile is cropped on two sides, at a tile size (391) that is

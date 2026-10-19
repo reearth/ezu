@@ -16,7 +16,7 @@ import (
 //
 // The counterpart on the JavaScript side is the list in
 // crates/ezu-wasm/src/lib.rs, and the kinds themselves are
-// ezu_renderer::ErrorKind, whose own test pins the strings.
+// ezu::renderer::ErrorKind, whose own test pins the strings.
 func TestFailuresCarryTheirNames(t *testing.T) {
 	ctx := context.Background()
 	rt, err := NewRuntime(ctx)

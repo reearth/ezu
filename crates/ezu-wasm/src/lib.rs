@@ -5,10 +5,10 @@
 //! its built graph, an in-memory brush bank, and a per-tile binding
 //! buffer that mirrors the style's `sources` block.
 //!
-//! The renderer itself is [`ezu_renderer`], which knows nothing about
+//! The renderer itself is [`ezu::renderer`], which knows nothing about
 //! JavaScript. What lives here is the translation: reading option
 //! objects, building result objects, turning an
-//! [`ezu_renderer::Error`] into a JS `Error`, throwing on a failed
+//! [`ezu::renderer::Error`] into a JS `Error`, throwing on a failed
 //! allocation, and routing `tracing` into the console.
 //!
 //! ## Source bindings
@@ -76,7 +76,7 @@
 //! `MvtDecode`, `DemDecode`, `RasterDecode`, `GeoJsonDecode`,
 //! `SpriteDecode`, `FontParse`, `GlyphDecode`, `RenderFailed`,
 //! `PngEncode`, `WebpEncode`, `UnknownSource`. They are
-//! [`ezu_renderer::ErrorKind`]'s names, so a Rust host and a JS host
+//! [`ezu::renderer::ErrorKind`]'s names, so a Rust host and a JS host
 //! see the same name for the same failure.
 //!
 //! Two names are this shell's own: `FrameInProgress`, for a call that would change a
@@ -93,7 +93,7 @@ pub use log::LogSink;
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
-use ezu_renderer::{
+use ezu::renderer::{
     BindOptions, Error, ErrorKind, Frame, FrameRequest, OutputFormat, PngCompression, RenderOptions,
 };
 use wasm_bindgen::prelude::*;
@@ -203,7 +203,7 @@ static ALLOC: oom::ThrowOnOom = oom::ThrowOnOom;
 /// frame's promise keeps alive between tiles.
 #[wasm_bindgen]
 pub struct Renderer {
-    inner: Rc<RefCell<ezu_renderer::Renderer>>,
+    inner: Rc<RefCell<ezu::renderer::Renderer>>,
     frame: Rc<FrameState>,
 }
 
@@ -233,7 +233,7 @@ impl Renderer {
         #[cfg(feature = "panic-hook")]
         console_error_panic_hook::set_once();
 
-        let inner = ezu_renderer::Renderer::new(style_json).map_err(js_err)?;
+        let inner = ezu::renderer::Renderer::new(style_json).map_err(js_err)?;
         Ok(Self {
             inner: Rc::new(RefCell::new(inner)),
             frame: Rc::default(),
@@ -820,7 +820,7 @@ impl Renderer {
 #[wasm_bindgen]
 pub struct FrameBinder {
     /// Weak, so a binder the host keeps does not keep the renderer alive.
-    renderer: Weak<RefCell<ezu_renderer::Renderer>>,
+    renderer: Weak<RefCell<ezu::renderer::Renderer>>,
     frame: Rc<FrameState>,
     tile: u64,
 }
@@ -853,7 +853,7 @@ impl FrameBinder {
 }
 
 fn bind_into(
-    renderer: &RefCell<ezu_renderer::Renderer>,
+    renderer: &RefCell<ezu::renderer::Renderer>,
     name: &str,
     bytes: Vec<u8>,
     opts: Option<&js_sys::Object>,
@@ -867,7 +867,7 @@ fn bind_into(
 
 /// The tile loop of `renderFrame`, which owns the renderer while it runs.
 async fn render_frame_tiles(
-    inner: &Rc<RefCell<ezu_renderer::Renderer>>,
+    inner: &Rc<RefCell<ezu::renderer::Renderer>>,
     state: &Rc<FrameState>,
     frame: &js_sys::Object,
     bind: Option<js_sys::Function>,

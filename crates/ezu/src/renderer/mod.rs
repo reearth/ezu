@@ -1,10 +1,13 @@
-//! The host-neutral body of ezu's embedding shells.
+//! The embedding renderer: the host fetches, binds each source's bytes,
+//! and renders a tile or a print frame.
 //!
-//! An embedding shell — the wasm-bindgen module, a C ABI for a wazero
-//! host — owns all I/O and speaks its host's dialect: JS objects,
-//! JSON strings, C pointers. Everything underneath that is the same
-//! renderer, and it lives here, so a second shell is a translation
-//! layer rather than a second renderer.
+//! An embedding is ezu running somewhere that owns its own I/O: a Rust
+//! service with its own HTTP client and tile cache, a browser tab, a Go
+//! process driving a wasm runtime. A Rust host uses this module directly.
+//! The JS package (`ezu-wasm`) and the Go package (through `ezu-cabi`)
+//! are shells over it that speak their host's dialect — JS objects, JSON
+//! strings, C pointers — so the three offer the same calls, render the
+//! same bytes, and name the same failure the same way.
 //!
 //! [`Renderer`] holds a parsed style document, its built graph, an
 //! in-memory asset bank, and a per-tile binding buffer that mirrors the
@@ -14,9 +17,9 @@
 //! without reading the style itself.
 //!
 //! ```no_run
-//! # use ezu_renderer::{BindOptions, RenderOptions, Renderer};
+//! # use ezu::renderer::{BindOptions, RenderOptions, Renderer};
 //! # fn fetch_mvt(z: u8, x: u32, y: u32) -> Vec<u8> { unimplemented!() }
-//! # fn main() -> Result<(), ezu_renderer::Error> {
+//! # fn main() -> Result<(), ezu::renderer::Error> {
 //! # let style_json = "";
 //! let mut r = Renderer::new(style_json)?;
 //! r.bind_source("basemap", fetch_mvt(12, 1, 2), &BindOptions::default())?;
@@ -1447,7 +1450,7 @@ mod tests {
         )
     }
 
-    const BASEMAP_Z14: &[u8] = include_bytes!("../../../go/testdata/basemap-14-14554-6454.mvt");
+    const BASEMAP_Z14: &[u8] = include_bytes!("../../../../go/testdata/basemap-14-14554-6454.mvt");
 
     #[test]
     fn a_vector_source_overzooms_past_its_declared_max_zoom() {

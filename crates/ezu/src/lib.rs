@@ -24,4 +24,4 @@ pub use ezu_translate as translate;
 /// and renders a tile or a print frame — the same calls the JS and Go
 /// packages make.
 #[cfg(feature = "renderer")]
-pub use ezu_renderer as renderer;
+pub mod renderer;

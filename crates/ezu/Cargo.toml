@@ -20,9 +20,17 @@ style-json = ["dep:ezu-style"]
 translate = ["dep:ezu-translate"]
 # The embedding renderer: bind each source's bytes, render a tile or a
 # print frame. What the JS and Go packages are shells over.
-renderer = ["dep:ezu-renderer", "features", "paint", "style-json"]
+renderer = [
+    "features",
+    "paint",
+    "style-json",
+    "ezu-core/text",
+    "dep:hokusai",
+    "dep:serde_json",
+    "dep:tracing",
+]
 # Pull-through to ezu-graph's parallel within-tile evaluation.
-parallel = ["ezu-graph/parallel", "ezu-paint?/parallel", "ezu-renderer?/parallel"]
+parallel = ["ezu-graph/parallel", "ezu-paint?/parallel"]
 # Pull-through to ezu-paint's URL-fetch helpers (`reqwest`-based).
 http = ["ezu-paint?/http"]
 
@@ -31,9 +39,13 @@ ezu-core = { workspace = true }
 ezu-graph = { workspace = true }
 ezu-features = { workspace = true, optional = true }
 ezu-paint = { workspace = true, optional = true }
-ezu-renderer = { workspace = true, optional = true }
 ezu-style = { workspace = true, optional = true }
 ezu-translate = { workspace = true, optional = true }
+# For the renderer: brushes bound as `.myb` JSON, the JSON it answers
+# queries with, and its warnings.
+hokusai = { workspace = true, optional = true, features = ["myb-json"] }
+serde_json = { workspace = true, optional = true }
+tracing = { version = "0.1", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "fs"] }
