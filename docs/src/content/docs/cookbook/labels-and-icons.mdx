@@ -248,8 +248,8 @@ position in `anchor-offsets`, as a normal label does, and shows the label
 overlapping at its first position only when all of them are blocked, so labels
 still spread out where there is room.
 
-Where neighbouring features carry the same name, such as the parcels of one
-building complex, `dedupe-key-expr` shows the name once. It gives each label a
+Where neighbouring features carry the same name, `dedupe-key-expr` shows the
+name once. It gives each label a
 key, and once a label has placed, later labels in the same layer with an equal
 key whose anchor is within `dedupe-distance-px` of it are dropped:
 
@@ -336,8 +336,8 @@ so they never show as losers.
 A label that `anchor-offsets` pushed off its first position can sit some way from
 what it names. `segment-to` draws a leader from the labelled feature to its box,
 stopping at the box's edge rather than running under the text. It needs the
-feature's own position as longitude and latitude properties (`rep_lng` and
-`rep_lat` here), which the boxes carry along with the rest of the feature's
+feature's own position as longitude and latitude properties (`lng` and `lat`
+here), which the boxes carry along with the rest of the feature's
 properties. A placed label's boxes also carry `variant-index`, 0 at the first
 position, so `filter-expr` on `label-boxes` keeps only the labels that moved:
 
@@ -353,7 +353,7 @@ position, so `filter-expr` on `label-boxes` keeps only the labels that moved:
 "moved":   { "op": "label-boxes", "placement": "@place", "parts": ["text"],
              "filter-expr": [">", ["coalesce", ["get", "variant-index"], 0], 0] },
 "leaders": { "op": "segment-to", "features": "@moved",
-             "lng-field": "rep_lng", "lat-field": "rep_lat", "gap-px": 2 },
+             "lng-field": "lng", "lat-field": "lat", "gap-px": 2 },
 "leader_d": { "op": "stroke", "features": "@leaders", "color": "#555555",
               "width-px": 0.75 },
 "names_d": { "op": "text-draw", "labels": "@names", "placement": "@place" },

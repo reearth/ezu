@@ -246,7 +246,8 @@ pub struct LabelCandidate {
     /// This is not the dedup of identical copies (see
     /// [`place_layers_detailed`]): those are one label seen from several
     /// tiles, while this drops distinct labels that would repeat the same
-    /// information, such as one building name on each parcel of a complex.
+    /// information, such as one name on each of several neighbouring
+    /// features that share it.
     /// The key is computed from the feature itself, so every tile that sees
     /// a candidate gives it the same key and the decision stays
     /// deterministic across tiles.

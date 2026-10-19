@@ -217,8 +217,8 @@ fn a_leader_runs_from_the_feature_to_the_edge_of_its_moved_label() {
     let label = |name: &str| {
         let mut properties = HashMap::new();
         properties.insert("name".to_string(), Value::String(name.to_string()));
-        properties.insert("rep_lng".to_string(), Value::Double(lng));
-        properties.insert("rep_lat".to_string(), Value::Double(lat));
+        properties.insert("lng".to_string(), Value::Double(lng));
+        properties.insert("lat".to_string(), Value::Double(lat));
         let mut geometry = Geometry::default();
         geometry.points.push(at);
         Feature {
@@ -256,7 +256,7 @@ fn a_leader_runs_from_the_feature_to_the_edge_of_its_moved_label() {
         "boxes":   {{ "op": "label-boxes", "placement": "@placed", "parts": ["text"],
                       "filter-expr": [">", ["coalesce", ["get", "variant-index"], 0], 0] }},
         "leaders": {{ "op": "segment-to", "features": "@boxes",
-                      "lng-field": "rep_lng", "lat-field": "rep_lat" }},
+                      "lng-field": "lng", "lat-field": "lat" }},
         "draw":    {{ "op": "stroke", "features": "@leaders", "color": "#000000", "width-px": 1 }},
         "text":    {{ "op": "text-draw", "labels": "@labels", "placement": "@placed" }},
         "out":     {{ "op": "stack", "layers": ["@draw", "@text"] }}

@@ -44,7 +44,7 @@ mean is spelled out in
 - `text` and `text-labels` take `dedupe-key-expr` and `dedupe-distance-px`,
   to show a repeated name once. Once a point label has placed, later labels in
   the same layer whose key is equal and whose anchor is within the distance are
-  dropped, so the parcels of one building complex carry its name once. Only
+  dropped, so a name that several neighbouring features share shows once. Only
   placed labels count, so a label that loses its collision never hides its
   duplicates, and the decision is the same on every tile. `label-boxes` with
   `include: "all"` reports a dropped label with `drop-reason: "dedupe"`.
@@ -89,8 +89,8 @@ mean is spelled out in
   `ezu::core::frame` for hosts that render pages themselves.
 - `ezu frame --features NODE=PATH` writes a features node, gathered over
   every tile of the page, as a GeoJSON FeatureCollection beside the image:
-  with `label-boxes`, a list of every label and what placement did to it, for
-  an attribute list of the dropped ones, say. `--features-key
+  with `label-boxes`, a list of every label and what placement did to it, to
+  report the dropped ones somewhere other than the map, say. `--features-key
   NODE=PROP[,PROP…]` lists features whose properties are equal once, where
   neighbouring tiles each see them, and sorts by those properties; for
   `label-boxes` that is `label-id,part`. `--features-coords` writes WGS84
