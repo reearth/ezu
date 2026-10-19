@@ -107,6 +107,11 @@ mean is spelled out in
   place of the now-deprecated `anchor-variants`, `radial-offset` and
   `allow-overlap`, so a translated style builds without deprecation
   warnings. The labels land where they did before.
+- `ezu translate` carries a data-driven `text-anchor` on a point-placed
+  layer, such as a `match` on a property or a `step` on zoom, as the `text`
+  node's `anchor-expr`, so each label takes the anchor MapLibre gives it. It
+  used to warn and fall back to `center`. `text-variable-anchor` still takes
+  precedence, and a line-placed layer still warns and uses the default.
 
 ### Deprecated
 

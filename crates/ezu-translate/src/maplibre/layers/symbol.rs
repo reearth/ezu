@@ -17,7 +17,7 @@ use crate::maplibre::filter;
 use crate::maplibre::layers::fill::{resolve_number, resolve_paint_color};
 use crate::maplibre::layers::paint_of;
 use crate::maplibre::sources::{features_node, resolve_layer_source, Sources};
-use crate::maplibre::{Report, ZoomRange};
+use crate::maplibre::{is_expr, Report, ZoomRange};
 
 /// MapLibre's default `text-font` stack, used when a layer omits it.
 const DEFAULT_TEXT_FONT: [&str; 2] = ["Open Sans Regular", "Arial Unicode MS Regular"];
@@ -651,8 +651,19 @@ fn convert_text(
     if let Some(list) = anchor_offsets {
         spec["anchor-offsets"] = Value::Array(list);
     } else {
-        if let Some(anchor) = const_string(get("text-anchor"), "text-anchor", id, report) {
-            spec["anchor"] = Value::from(anchor);
+        // A data-driven `text-anchor` (a `match` on a property, a zoom
+        // `step`) picks the anchor per feature through `anchor-expr`. The
+        // `text` node honours it on point placement only; a line label is
+        // centred on its path, so there the constant-or-default rule stays.
+        match get("text-anchor") {
+            Some(v) if placement == "point" && is_expr(v) => {
+                spec["anchor-expr"] = v.clone();
+            }
+            v => {
+                if let Some(anchor) = const_string(v, "text-anchor", id, report) {
+                    spec["anchor"] = Value::from(anchor);
+                }
+            }
         }
         if let Some(offset) = const_offset(get("text-offset"), id, report) {
             spec["offset-em"] = serde_json::json!(offset);

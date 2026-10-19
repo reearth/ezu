@@ -686,6 +686,103 @@ fn expression_text_variable_anchor_warns_and_falls_back() {
 }
 
 #[test]
+fn expression_text_anchor_routes_to_anchor_expr() {
+    // A data-driven `text-anchor` — a `match` on a property, a zoom `step` —
+    // becomes the text node's `anchor-expr`, with `text-offset` kept as
+    // `offset-em`. A line-placed layer keeps the old warning and default,
+    // and `text-variable-anchor` still wins over `text-anchor`.
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "anchor-expr",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "annos", "type": "symbol", "source": "s", "source-layer": "anno",
+          "layout": {
+            "text-field": "{name}",
+            "text-font": ["F"],
+            "text-anchor": ["match", ["get", "side"], "east", "left", "west", "right", "center"],
+            "text-offset": [0.5, 0]
+          } },
+        { "id": "peaks", "type": "symbol", "source": "s", "source-layer": "peak",
+          "layout": {
+            "text-field": "{name}",
+            "text-font": ["F"],
+            "text-anchor": ["step", ["zoom"], "bottom", 14, "left"]
+          } },
+        { "id": "streets", "type": "symbol", "source": "s", "source-layer": "street",
+          "layout": {
+            "text-field": "{name}",
+            "text-font": ["F"],
+            "symbol-placement": "line",
+            "text-anchor": ["step", ["zoom"], "bottom", 14, "left"]
+          } },
+        { "id": "pois", "type": "symbol", "source": "s", "source-layer": "poi",
+          "layout": {
+            "text-field": "{name}",
+            "text-font": ["F"],
+            "text-anchor": ["step", ["zoom"], "bottom", 14, "left"],
+            "text-variable-anchor": ["top", "bottom"]
+          } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let opts = opts_with_fonts(&[("F", "https://fonts.example/F.ttf")]);
+    let (recipe, report) = convert(&style, &opts).unwrap();
+
+    let nodes = recipe["nodes"].as_object().unwrap();
+    let annos = &nodes["annos__labels"];
+    assert_eq!(
+        annos["anchor-expr"],
+        serde_json::json!([
+            "match",
+            ["get", "side"],
+            "east",
+            "left",
+            "west",
+            "right",
+            "center"
+        ])
+    );
+    assert_eq!(annos["offset-em"], serde_json::json!([0.5, 0.0]));
+    assert!(annos.get("anchor").is_none(), "no constant anchor: {annos}");
+    assert_eq!(
+        nodes["peaks__labels"]["anchor-expr"],
+        serde_json::json!(["step", ["zoom"], "bottom", 14, "left"])
+    );
+    for id in ["annos", "peaks"] {
+        assert!(
+            !report
+                .warnings
+                .iter()
+                .any(|w| w.contains(&format!("`{id}`")) && w.contains("text-anchor")),
+            "{id}: {:?}",
+            report.warnings
+        );
+    }
+
+    let streets = &nodes["streets__labels"];
+    assert!(
+        streets.get("anchor-expr").is_none() && streets.get("anchor").is_none(),
+        "{streets}"
+    );
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("`streets`") && w.contains("expression `text-anchor`")),
+        "{:?}",
+        report.warnings
+    );
+
+    let pois = &nodes["pois__labels"];
+    assert!(pois.get("anchor-expr").is_none(), "{pois}");
+    assert!(pois.get("anchor-offsets").is_some(), "{pois}");
+
+    let warnings = build_warnings(&recipe);
+    assert!(warnings.is_empty(), "{warnings:?}");
+}
+
+#[test]
 fn text_overlap_enum_maps_and_cooperative_warns() {
     const STYLE: &str = r##"{
       "version": 8,
