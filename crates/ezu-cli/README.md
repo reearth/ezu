@@ -23,6 +23,7 @@ for one-off swaps.
 |---|---|
 | `ezu tile` | Render a single `z/x/y` tile to PNG (or lossless WebP via `--out tile.webp` / `--format`) |
 | `ezu bbox` | Stitch the tiles covering a lon/lat box at one zoom into a single image |
+| `ezu frame` | Render a map at a print scale and paper size (`--scale 1000 --dpi 200 --size-mm 245x174`), cropped exactly to that frame |
 | `ezu tiles` | Bulk-render an XYZ pyramid into `<out>/<z>/<x>/<y>.png` over a zoom range, `--concurrency` tiles at a time |
 | `ezu check` | Validate a style — parse + build graph + resolve assets. Exits non-zero on error, so it drops into a pre-commit hook or CI step. `--no-fetch` stays offline (parse + graph only) |
 | `ezu translate` | Lower a MapLibre GL style into an ezu recipe via [`ezu-translate`](../ezu-translate). `--font "NAME=SOURCE"` maps a fontstack entry to a real font; skipped or approximated layers are reported on stderr |
@@ -44,6 +45,10 @@ ezu tile --style crates/ezu/examples/styles/watercolor.json \
 
 ezu bbox --style URL_OR_PATH \
   --bbox 139.74,35.65,139.78,35.69 --zoom 13 --out tokyo.png
+
+# A 1:1000 page, 245 × 174 mm at 200 dpi.
+ezu frame --style URL_OR_PATH \
+  --center 139.70,35.66 --scale 1000 --dpi 200 --size-mm 245x174 --out page.png
 
 ezu tiles --style URL_OR_PATH \
   --bbox 139.74,35.65,139.78,35.69 --min-zoom 10 --max-zoom 14 --out pyramid

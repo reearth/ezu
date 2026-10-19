@@ -43,6 +43,15 @@ mean is spelled out in
   precedence over `text-anchor`, `text-offset`, `text-variable-anchor` and
   `text-radial-offset`, as in MapLibre. Before, it was dropped and the label
   fell back to those.
+- `ezu frame` renders a map at a print scale and paper size, cropped exactly
+  to the page: `--center 139.70,35.66 --scale 1000 --dpi 200 --size-mm
+  245x174` (or `--size-px`). It picks the zoom whose tile size comes nearest
+  the style's `tile-size`, renders at the tile size that meets the scale
+  (`--zoom` fixes the zoom instead), and logs the scale it reached. Each tile
+  is copied straight into the page as it finishes, so the whole tile mosaic is
+  never held in memory, as it is with `ezu bbox`. `--dpi` only sets the
+  scale; the style's pixel sizes are not enlarged. The geometry is
+  `ezu::core::frame` for hosts that render pages themselves.
 
 ### Changed
 

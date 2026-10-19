@@ -21,6 +21,7 @@ Usage: ezu [OPTIONS] <COMMAND>
 Commands:
   tile       Render a single z/x/y tile to PNG
   bbox       Render the tile mosaic covering a lon/lat bounding box at a fixed zoom
+  frame      Render a map at a print scale and paper size, cropped to that frame
   tiles      Bulk-render an XYZ tile pyramid into `<out>/<z>/<x>/<y>.png`
   check      Validate an Ezu Style document without rendering — exits non-zero on parse / graph / asset errors. Suitable for CI + pre-commit hooks
   graph      Emit a Mermaid `graph LR` diagram of the style's node dependencies — or, with `--tile`, an HTML page of the same graph with each node's own intermediate tile drawn on it
@@ -102,6 +103,52 @@ Options:
           Output path. Format is sniffed from the extension (`.png` / `.webp`); use `--format` to override [default: out.png]
       --format <FORMAT>
           Output format. Defaults to whatever `--out`'s extension implies [possible values: png, webp]
+  -h, --help
+          Print help
+```
+
+## `ezu frame`
+
+```text
+Render a map at a print scale and paper size, cropped to that frame
+
+Usage: ezu frame [OPTIONS] --style <STYLE> --center <CENTER> --scale <SCALE> --dpi <DPI>
+
+Options:
+      --style <STYLE>
+          Ezu Style JSON document — local path or http(s):// URL
+  -v, --verbose
+          Emit per-node debug logs from the graph evaluator (op name, cache hit/miss, output shape, eval duration). Overrides `RUST_LOG` for this run
+      --assets-dir <ASSETS_DIR>
+          Base directory for resolving asset `src` paths. Defaults to the style file's parent directory (or the current directory when `--style` is a URL)
+      --pmtiles <PMTILES>
+          PMTiles archive — local path or http(s):// URL. Stands in for the first `mvt`/`pmtiles` source the style declares; any others keep their own URLs
+      --mvt <MVT>
+          Templated MVT tile source containing `{z}`, `{x}`, `{y}` placeholders. Accepts an http(s):// URL or a local path template (e.g. `/tiles/{z}/{x}/{y}.pbf`). Stands in for the first `mvt`/`pmtiles` source the style declares; any others keep their own URLs
+      --overzoom-levels <OVERZOOM_LEVELS>
+          When a requested tile is missing, fall back to a parent tile up to this many zoom levels up and re-project its geometry onto the requested tile (MVT "overzoom"). `0` disables. A source past its declared `max-zoom` overzooms from that zoom regardless [default: 4]
+      --param <NAME=VALUE>
+          Override a document parameter, as `name=value` (repeatable). Values are validated against the style's `params` declarations: numbers respect `min`/`max`, colors are `#rrggbb[aa]`, bools are `true`/`false`
+      --strict
+          Refuse to render a style that raises build warnings — an unnamed `source`, a `$param` baked in at build time. For CI, where a warning is a style that will surprise someone later
+      --center <CENTER>
+          Centre of the frame as `lng,lat` (WGS84). The scale is matched at this latitude
+      --scale <SCALE>
+          Scale denominator: `1000` for 1:1000
+      --dpi <DPI>
+          Output resolution in dots per inch. Always required: with the scale it fixes how many ground metres one pixel covers. It does not enlarge the style's own pixel sizes (line widths, text)
+      --size-mm <SIZE_MM>
+          Paper size as `WIDTHxHEIGHT` in millimetres, converted to pixels at `--dpi`
+      --size-px <SIZE_PX>
+          Output size as `WIDTHxHEIGHT` in pixels, in place of `--size-mm`
+      --zoom <ZOOM>
+          Render at this zoom, deriving the tile size from it. By default the zoom is the one whose tile size comes nearest the style's `tile-size`
+      --out <OUT>
+          Output path. Format is sniffed from the extension (`.png` / `.webp`); use `--format` to override [default: out.png]
+      --format <FORMAT>
+          Output format. Defaults to whatever `--out`'s extension implies [possible values: png, webp]
+      --concurrency <CONCURRENCY>
+          Number of tiles rendered in parallel. Defaults to the number of logical CPU cores
   -h, --help
           Print help
 ```

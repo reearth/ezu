@@ -5,8 +5,8 @@ sidebar:
   order: 4
 ---
 
-`ezu tile` renders one tile. Two other commands render many, and they share every
-flag with `tile` — `--style`, `--assets-dir`, `--param`, source overrides.
+`ezu tile` renders one tile. Three other commands render many, and they share
+every flag with `tile` — `--style`, `--assets-dir`, `--param`, source overrides.
 
 ## One image over a bounding box
 
@@ -21,7 +21,45 @@ ezu bbox --style watercolor.json \
 
 The box is `min-lng,min-lat,max-lng,max-lat`. The result is tile-aligned: it
 covers *at least* the box, snapped outward to tile edges. This is the command for
-a figure in a slide deck or a print export.
+a figure in a slide deck.
+
+## A page at a print scale
+
+`ezu frame` renders a map at a scale and paper size, cropped exactly to the page:
+
+```sh
+ezu frame --style watercolor.json \
+  --center 139.70,35.66 --scale 1000 --dpi 200 \
+  --size-mm 245x174 --out page.png
+```
+
+That is 1:1000 on a 245 × 174 mm page at 200 dpi: a 1929 × 1370 px image
+centred on the given point. `--size-px 1929x1370` gives the size in pixels
+instead. `--dpi` is required either way, because the scale is a ratio of paper to
+ground and the dpi is what turns paper into pixels.
+
+A tile renderer draws whole tiles at integer zooms, so ezu reaches the scale
+through the tile size instead. It picks the zoom whose tile size comes nearest
+the style's own `tile-size`, renders at that size for this run, then copies each
+tile's share straight into the page — the full tile mosaic is never held in
+memory. The log says what it settled on:
+
+```text
+frame: 1929×1370 px at z=19, tile-size 489 (style: 512), scale 1:1000.0 (+0.002% vs 1:1000), …
+```
+
+The tile size is a whole number of pixels, so the scale can be off by up to half a
+pixel in a tile's width: at most about 0.1 % for a tile size near 512, 0.2 % near
+256. `--zoom`
+fixes the zoom and derives the tile size from it, for a style whose zoom-dependent
+choices (which layers draw, which labels appear) you want pinned. The scale is
+matched at the centre's latitude, and Web Mercator drifts from it towards the top
+and bottom of a tall page.
+
+`--dpi` only sets the scale. A style's sizes are in pixels — a 2 px road edge,
+14 px text — and stay that many pixels at any dpi, so at 200 dpi they print
+smaller than at 96. Make lines and labels heavier in the style, or with a
+[param](/ezu/concepts/params-and-functions/), when a page needs them bigger.
 
 ## A whole pyramid
 

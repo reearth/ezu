@@ -4,6 +4,8 @@
 //! ezu tile --style STYLE.json --pmtiles URL_OR_PATH --tile Z/X/Y [--out FILE]
 //! ezu bbox --style STYLE.json --mvt-url 'https://.../{z}/{x}/{y}.pbf' \
 //!          --bbox MIN_LNG,MIN_LAT,MAX_LNG,MAX_LAT --zoom Z [--out FILE]
+//! ezu frame --style STYLE.json --center LNG,LAT --scale 1000 --dpi 200 \
+//!           --size-mm 245x174 [--out FILE]
 //! ```
 
 mod graph_view;
@@ -14,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use ezu::core::frame::{Frame, FrameRequest};
 use ezu::core::TileId as CoreTileId;
 use ezu::features::mvt;
 use ezu::graph::{
@@ -30,7 +33,7 @@ use ezu::paint::nodes::default_registry;
 use ezu::style::{Document, SourceDecl};
 use futures::future::try_join_all;
 use futures::stream::{StreamExt, TryStreamExt};
-use tiny_skia::{Pixmap, PixmapPaint, Transform};
+use tiny_skia::Pixmap;
 use tracing_subscriber::EnvFilter;
 
 use crate::source::{FeatureSources, SourceSpec};
@@ -53,6 +56,8 @@ enum Cmd {
     Tile(TileCmd),
     /// Render the tile mosaic covering a lon/lat bounding box at a fixed zoom.
     Bbox(BboxCmd),
+    /// Render a map at a print scale and paper size, cropped to that frame.
+    Frame(FrameCmd),
     /// Bulk-render an XYZ tile pyramid into `<out>/<z>/<x>/<y>.png`.
     Tiles(TilesCmd),
     /// Validate an Ezu Style document without rendering — exits non-zero
@@ -339,6 +344,47 @@ struct BboxCmd {
 }
 
 #[derive(Args, Debug)]
+struct FrameCmd {
+    #[command(flatten)]
+    common: CommonArgs,
+    /// Centre of the frame as `lng,lat` (WGS84). The scale is matched at
+    /// this latitude.
+    #[arg(long, value_parser = parse_lnglat)]
+    center: (f64, f64),
+    /// Scale denominator: `1000` for 1:1000.
+    #[arg(long)]
+    scale: f64,
+    /// Output resolution in dots per inch. Always required: with the scale
+    /// it fixes how many ground metres one pixel covers. It does not
+    /// enlarge the style's own pixel sizes (line widths, text).
+    #[arg(long)]
+    dpi: f64,
+    /// Paper size as `WIDTHxHEIGHT` in millimetres, converted to pixels at
+    /// `--dpi`.
+    #[arg(long, value_parser = parse_size_mm, required_unless_present = "size_px", conflicts_with = "size_px")]
+    size_mm: Option<(f64, f64)>,
+    /// Output size as `WIDTHxHEIGHT` in pixels, in place of `--size-mm`.
+    #[arg(long, value_parser = parse_wxh)]
+    size_px: Option<(u32, u32)>,
+    /// Render at this zoom, deriving the tile size from it. By default the
+    /// zoom is the one whose tile size comes nearest the style's
+    /// `tile-size`.
+    #[arg(long)]
+    zoom: Option<u8>,
+    /// Output path. Format is sniffed from the extension (`.png` /
+    /// `.webp`); use `--format` to override.
+    #[arg(long, default_value = "out.png")]
+    out: PathBuf,
+    /// Output format. Defaults to whatever `--out`'s extension implies.
+    #[arg(long, value_enum)]
+    format: Option<OutputFormat>,
+    /// Number of tiles rendered in parallel. Defaults to the number of
+    /// logical CPU cores.
+    #[arg(long)]
+    concurrency: Option<usize>,
+}
+
+#[derive(Args, Debug)]
 struct TilesCmd {
     #[command(flatten)]
     common: CommonArgs,
@@ -437,6 +483,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     match cli.cmd {
         Cmd::Tile(args) => run_tile(args).await,
         Cmd::Bbox(args) => run_bbox(args).await,
+        Cmd::Frame(args) => run_frame(args).await,
         Cmd::Tiles(args) => run_tiles(args).await,
         Cmd::Check(args) => run_check(args).await,
         Cmd::Graph(args) => run_graph(args).await,
@@ -471,6 +518,18 @@ struct Prepared {
 async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Error>> {
     let style_text = fetch_text(&common.style).await?;
     let doc = Document::from_json(&style_text)?;
+    prepare_doc(common, doc).await
+}
+
+/// [`prepare`] for a document already read, which a caller may have
+/// adjusted first — `ezu frame` sets its `tile_size`. Everything sized by
+/// the tile (the canvas, and through it raster and DEM stitching, GeoJSON
+/// projection and label placement) is derived from the document here, so
+/// an override made before this call reaches all of it.
+async fn prepare_doc(
+    common: &CommonArgs,
+    doc: Document,
+) -> Result<Prepared, Box<dyn std::error::Error>> {
     tracing::info!(
         "style: {} v{} ({} nodes, tile={})",
         doc.name,
@@ -1253,8 +1312,8 @@ async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
         Pixmap::new(nx * prep.canvas.tile_w, ny * prep.canvas.tile_w).ok_or("mosaic alloc")?;
     for handle in try_join_all(tasks).await? {
         let (tile, raster) = handle.map_err(|e| e.to_string())?;
-        let dx = ((tile.x - x_range.start) * prep.canvas.tile_w) as i32;
-        let dy = ((tile.y - y_range.start) * prep.canvas.tile_w) as i32;
+        let dx = (tile.x - x_range.start) as i64 * prep.canvas.tile_w as i64;
+        let dy = (tile.y - y_range.start) as i64 * prep.canvas.tile_w as i64;
         blit_padded_into(
             &mut mosaic,
             &raster,
@@ -1262,7 +1321,7 @@ async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
             dy,
             prep.canvas.tile_w,
             prep.canvas.pad,
-        )?;
+        );
     }
     let bytes = match format {
         OutputFormat::Png => mosaic.encode_png().map_err(|e| e.to_string())?,
@@ -1271,6 +1330,126 @@ async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::write(&args.out, &bytes)?;
     tracing::info!("wrote {} ({} bytes)", args.out.display(), bytes.len());
     Ok(())
+}
+
+async fn run_frame(args: FrameCmd) -> Result<(), Box<dyn std::error::Error>> {
+    let concurrency = args.concurrency.unwrap_or_else(default_concurrency);
+    if concurrency == 0 {
+        return Err("--concurrency must be ≥ 1".into());
+    }
+    if !(args.dpi.is_finite() && args.dpi > 0.0) {
+        return Err(format!("--dpi must be a positive number, got {}", args.dpi).into());
+    }
+    let format = args
+        .format
+        .unwrap_or_else(|| OutputFormat::from_path(&args.out));
+    let (width, height) = match (args.size_px, args.size_mm) {
+        (Some(px), _) => px,
+        (None, Some((w, h))) => (mm_to_px(w, args.dpi), mm_to_px(h, args.dpi)),
+        (None, None) => return Err("one of --size-mm or --size-px is required".into()),
+    };
+
+    // The frame's tile size depends on the style's own, so the document is
+    // read before `prepare` builds anything sized from it.
+    let mut doc = Document::from_json(&fetch_text(&args.common.style).await?)?;
+    let frame = Frame::compute(&FrameRequest {
+        center_lon: args.center.0,
+        center_lat: args.center.1,
+        scale: args.scale,
+        dpi: args.dpi,
+        width,
+        height,
+        zoom: args.zoom,
+        style_tile_size: doc.tile_size,
+    })?;
+    tracing::info!(
+        "frame: {}×{} px at z={}, tile-size {} (style: {}), scale 1:{:.1} ({:+.3}% vs 1:{}), \
+         shift ({:+.2}, {:+.2}) px, {} tiles ({}..{}, {}..{})",
+        frame.width,
+        frame.height,
+        frame.zoom,
+        frame.tile_size,
+        doc.tile_size,
+        frame.scale,
+        (frame.scale / args.scale - 1.0) * 100.0,
+        args.scale,
+        frame.shift.0,
+        frame.shift.1,
+        frame.tile_count(),
+        frame.tiles_x.start,
+        frame.tiles_x.end,
+        frame.tiles_y.start,
+        frame.tiles_y.end,
+    );
+    doc.tile_size = frame.tile_size;
+    let prep = prepare_doc(&args.common, doc).await?;
+
+    let image = render_frame(&prep, &frame, concurrency).await?;
+    let bytes = match format {
+        OutputFormat::Png => image.encode_png().map_err(|e| e.to_string())?,
+        OutputFormat::Webp => pixmap_to_webp(&image).map_err(|e| e.to_string())?,
+    };
+    std::fs::write(&args.out, &bytes)?;
+    tracing::info!("wrote {} ({} bytes)", args.out.display(), bytes.len());
+    Ok(())
+}
+
+/// Render every tile `frame` touches and copy each one's share straight
+/// into a frame-sized image.
+///
+/// Only the frame is ever allocated, never the mosaic of whole tiles
+/// around it, and at most `concurrency` rendered tiles are held at once:
+/// each is copied in as it finishes and dropped.
+async fn render_frame(
+    prep: &Prepared,
+    frame: &Frame,
+    concurrency: usize,
+) -> Result<Pixmap, Box<dyn std::error::Error>> {
+    let mut image = Pixmap::new(frame.width, frame.height)
+        .ok_or_else(|| format!("cannot allocate a {}×{} image", frame.width, frame.height))?;
+    let xr = frame.tiles_x.clone();
+    let coords = frame
+        .tiles_y
+        .clone()
+        .flat_map(move |ty| xr.clone().map(move |tx| (tx, ty)));
+    let mut rendered = futures::stream::iter(coords)
+        .map(|(tx, ty)| async move {
+            let raster = render_one(
+                Arc::clone(&prep.graph),
+                Arc::clone(&prep.cache),
+                Arc::clone(&prep.loader),
+                Arc::clone(&prep.feature_sources),
+                Arc::clone(&prep.dem_sources),
+                Arc::clone(&prep.raster_sources),
+                Arc::clone(&prep.geojson_sources),
+                prep.canvas,
+                CoreTileId::new(frame.zoom, tx, ty),
+                prep.overzoom_levels,
+                Arc::clone(&prep.params),
+                None,
+            )
+            .await?;
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>((tx, ty, raster))
+        })
+        .buffer_unordered(concurrency);
+    while let Some(done) = rendered.next().await {
+        let (tx, ty, raster) = done.map_err(|e| e.to_string())?;
+        let (dx, dy) = frame.tile_offset(tx, ty);
+        blit_padded_into(
+            &mut image,
+            &raster,
+            dx,
+            dy,
+            prep.canvas.tile_w,
+            prep.canvas.pad,
+        );
+    }
+    Ok(image)
+}
+
+/// Millimetres of paper to whole pixels at `dpi`.
+fn mm_to_px(mm: f64, dpi: f64) -> u32 {
+    (mm / 25.4 * dpi).round() as u32
 }
 
 async fn run_tiles(args: TilesCmd) -> Result<(), Box<dyn std::error::Error>> {
@@ -1582,38 +1761,41 @@ fn is_url(s: &str) -> bool {
 }
 
 /// Copy the central `tile_size × tile_size` region of `raster` (which
-/// is `pad`-padded on every side) into `mosaic` at `(dx, dy)`.
+/// is `pad`-padded on every side) into `dst` with its top-left at
+/// `(dx, dy)`, keeping only the part that falls inside `dst`.
+///
+/// The offset may be negative or run past the far edge: a print frame
+/// takes just a corner of the tiles along its border. Rows are copied
+/// straight across rather than composited, so `dst` gets exactly the
+/// visible tile pixels and nothing of the neighbour-bleed pad; tiles never
+/// overlap, so there is nothing underneath to blend with.
 fn blit_padded_into(
-    mosaic: &mut Pixmap,
+    dst: &mut Pixmap,
     raster: &RasterBuf,
-    dx: i32,
-    dy: i32,
+    dx: i64,
+    dy: i64,
     tile_size: u32,
     pad: u32,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Hand-crop the central tile region out of the padded raster so we
-    // can paste with no clip-mask gymnastics. The mosaic gets exactly
-    // the visible tile pixels and nothing of the neighbour-bleed pad.
-    let mut tile = Pixmap::new(tile_size, tile_size).ok_or("tile pixmap alloc")?;
-    let stride = (raster.width * 4) as usize;
-    let row_bytes = (tile_size * 4) as usize;
-    let dst = tile.data_mut();
-    for row in 0..tile_size {
-        let src_y = pad + row;
-        let src_off = src_y as usize * stride + (pad as usize) * 4;
-        let dst_off = row as usize * row_bytes;
-        dst[dst_off..dst_off + row_bytes]
+) {
+    let t = tile_size as i64;
+    let (dw, dh) = (dst.width() as i64, dst.height() as i64);
+    let (x0, x1) = (dx.max(0), (dx + t).min(dw));
+    let (y0, y1) = (dy.max(0), (dy + t).min(dh));
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+    let src_stride = raster.width as usize * 4;
+    let dst_stride = dw as usize * 4;
+    let row_bytes = (x1 - x0) as usize * 4;
+    let src_x = (x0 - dx) as usize + pad as usize;
+    let data = dst.data_mut();
+    for y in y0..y1 {
+        let src_y = (y - dy) as usize + pad as usize;
+        let src_off = src_y * src_stride + src_x * 4;
+        let dst_off = y as usize * dst_stride + x0 as usize * 4;
+        data[dst_off..dst_off + row_bytes]
             .copy_from_slice(&raster.pixels[src_off..src_off + row_bytes]);
     }
-    mosaic.draw_pixmap(
-        dx,
-        dy,
-        tile.as_ref(),
-        &PixmapPaint::default(),
-        Transform::identity(),
-        None,
-    );
-    Ok(())
 }
 
 /// Convert a lon/lat bounding box to an inclusive-min, exclusive-max
@@ -1648,6 +1830,33 @@ fn parse_zxy(s: &str) -> Result<CoreTileId, String> {
     let x: u32 = parts[1].parse().map_err(|e| format!("bad x: {e}"))?;
     let y: u32 = parts[2].parse().map_err(|e| format!("bad y: {e}"))?;
     Ok(CoreTileId::new(z, x, y))
+}
+
+/// Parse `lng,lat`.
+fn parse_lnglat(s: &str) -> Result<(f64, f64), String> {
+    let (lng, lat) = s
+        .split_once(',')
+        .ok_or_else(|| format!("expected `lng,lat`, got `{s}`"))?;
+    let num = |p: &str| {
+        p.trim()
+            .parse::<f64>()
+            .map_err(|e| format!("bad number `{p}`: {e}"))
+    };
+    Ok((num(lng)?, num(lat)?))
+}
+
+/// Parse `WIDTHxHEIGHT` in millimetres; fractions allowed.
+fn parse_size_mm(s: &str) -> Result<(f64, f64), String> {
+    let (w, h) = s
+        .split_once(['x', 'X'])
+        .ok_or_else(|| format!("`{s}`: expected WIDTHxHEIGHT in millimetres"))?;
+    let num = |p: &str| match p.trim().parse::<f64>() {
+        Ok(v) if v.is_finite() && v > 0.0 => Ok(v),
+        _ => Err(format!(
+            "`{s}`: `{p}` is not a positive number of millimetres"
+        )),
+    };
+    Ok((num(w)?, num(h)?))
 }
 
 fn parse_bbox(s: &str) -> Result<BBox, String> {
@@ -1691,4 +1900,182 @@ fn tile_seed(tile: CoreTileId) -> u64 {
         .wrapping_mul(0x9E37_79B9_7F4A_7C15)
         .wrapping_add(tile.y as u64);
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A network-free style: a translucent polygon, blurred so it reads
+    /// across tile edges, over a translucent paper.
+    fn style(tile_size: u32) -> String {
+        format!(
+            r##"{{
+              "name": "frame-test",
+              "tile-size": {tile_size},
+              "pad": 8,
+              "sources": {{
+                "shapes": {{ "type": "geojson", "data": {{ "type": "FeatureCollection", "features": [
+                  {{ "type": "Feature", "properties": {{}}, "geometry": {{ "type": "Polygon",
+                    "coordinates": [[[139.698, 35.658], [139.703, 35.659],
+                                     [139.701, 35.663], [139.698, 35.658]]] }} }}
+                ] }} }}
+              }},
+              "nodes": {{
+                "bg":   {{ "op": "solid", "color": "#fbf6e680" }},
+                "feat": {{ "op": "features", "source": "shapes", "layer": "shapes" }},
+                "fill": {{ "op": "fill-solid", "features": "@feat", "fill": "#33669980" }},
+                "soft": {{ "op": "blur", "input": "@fill", "sigma": 3 }},
+                "out":  {{ "op": "blend", "base": "@bg", "over": "@soft" }}
+              }},
+              "output": "@out"
+            }}"##
+        )
+    }
+
+    fn common(style: &Path) -> CommonArgs {
+        CommonArgs {
+            style: style.to_string_lossy().into_owned(),
+            assets_dir: None,
+            pmtiles: None,
+            mvt: None,
+            overzoom_levels: 4,
+            params: Vec::new(),
+            strict: false,
+        }
+    }
+
+    /// `ezu frame` writes exactly the pixels `ezu bbox` draws for the same
+    /// tiles, cropped to the frame.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_frame_is_the_matching_crop_of_the_bbox_mosaic() {
+        let dir = std::env::temp_dir().join(format!("ezu-frame-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let frame_style = dir.join("frame.json");
+        std::fs::write(&frame_style, style(256)).unwrap();
+
+        // 1:5000 at 96 dpi needs tiles of ~188 px at z=17: not the
+        // style's 256, and the frame straddles tiles on every side.
+        let request = FrameRequest {
+            center_lon: 139.70,
+            center_lat: 35.66,
+            scale: 5000.0,
+            dpi: 96.0,
+            width: 300,
+            height: 200,
+            zoom: None,
+            style_tile_size: 256,
+        };
+        let frame = Frame::compute(&request).unwrap();
+        assert_ne!(frame.tile_size, 256);
+        assert!(frame.tiles_x.len() >= 2 && frame.tiles_y.len() >= 2);
+
+        let frame_out = dir.join("frame.png");
+        run_frame(FrameCmd {
+            common: common(&frame_style),
+            center: (request.center_lon, request.center_lat),
+            scale: request.scale,
+            dpi: request.dpi,
+            size_mm: None,
+            size_px: Some((request.width, request.height)),
+            zoom: None,
+            out: frame_out.clone(),
+            format: None,
+            concurrency: Some(2),
+        })
+        .await
+        .unwrap();
+
+        // The same tiles through `bbox`, from the style at the frame's
+        // tile size, with a box just inside the frame's outer tiles.
+        let bbox_style = dir.join("bbox.json");
+        std::fs::write(&bbox_style, style(frame.tile_size)).unwrap();
+        let n = (1u64 << frame.zoom) as f64;
+        let lon = |x: f64| ezu::core::coord::world_x_to_lon(x / n);
+        let lat = |y: f64| ezu::core::coord::world_y_to_lat(y / n);
+        let bbox_out = dir.join("bbox.png");
+        run_bbox(BboxCmd {
+            common: common(&bbox_style),
+            bbox: BBox {
+                min_lng: lon(frame.tiles_x.start as f64 + 0.5),
+                max_lng: lon(frame.tiles_x.end as f64 - 0.5),
+                max_lat: lat(frame.tiles_y.start as f64 + 0.5),
+                min_lat: lat(frame.tiles_y.end as f64 - 0.5),
+            },
+            zoom: frame.zoom,
+            out: bbox_out.clone(),
+            format: None,
+        })
+        .await
+        .unwrap();
+
+        let got = Pixmap::load_png(&frame_out).unwrap();
+        let mosaic = Pixmap::load_png(&bbox_out).unwrap();
+        let t = frame.tile_size;
+        assert_eq!(mosaic.width(), frame.tiles_x.len() as u32 * t);
+        assert_eq!(mosaic.height(), frame.tiles_y.len() as u32 * t);
+        assert_eq!((got.width(), got.height()), (frame.width, frame.height));
+
+        // The frame's corner inside the mosaic.
+        let (ox, oy) = frame.tile_offset(frame.tiles_x.start, frame.tiles_y.start);
+        let (ox, oy) = ((-ox) as usize, (-oy) as usize);
+        let stride = mosaic.width() as usize * 4;
+        let row = frame.width as usize * 4;
+        for y in 0..frame.height as usize {
+            let want = &mosaic.data()[(oy + y) * stride + ox * 4..][..row];
+            let have = &got.data()[y * row..][..row];
+            assert!(want == have, "row {y} differs");
+        }
+        // The polygon and its blur reach the frame, so a misplaced tile
+        // could not pass by comparing two blank images.
+        assert!(got.pixels().windows(2).any(|p| p[0] != p[1]));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_tile_partly_outside_the_destination_copies_only_its_overlap() {
+        // A 4×4 tile with 1 px of pad, every pixel distinct.
+        let mut raster = RasterBuf::new(6, 6);
+        for (i, px) in raster.pixels.chunks_mut(4).enumerate() {
+            px.copy_from_slice(&[i as u8, 0, 0, 255]);
+        }
+        let interior = |x: usize, y: usize| ((y + 1) * 6 + x + 1) as u8;
+
+        let mut dst = Pixmap::new(5, 3).unwrap();
+        blit_padded_into(&mut dst, &raster, -2, -1, 4, 1);
+        for y in 0..3usize {
+            for x in 0..5usize {
+                let got = dst.pixel(x as u32, y as u32).unwrap();
+                if x < 2 && y < 3 {
+                    assert_eq!(got.red(), interior(x + 2, y + 1), "({x}, {y})");
+                    assert_eq!(got.alpha(), 255);
+                } else {
+                    assert_eq!(got.alpha(), 0, "({x}, {y}) is outside the tile");
+                }
+            }
+        }
+
+        // Past the far edge, and entirely outside, are both fine.
+        let mut dst = Pixmap::new(5, 3).unwrap();
+        blit_padded_into(&mut dst, &raster, 3, 2, 4, 1);
+        assert_eq!(dst.pixel(3, 2).unwrap().red(), interior(0, 0));
+        assert_eq!(dst.pixel(4, 2).unwrap().red(), interior(1, 0));
+        blit_padded_into(&mut dst, &raster, -4, 0, 4, 1);
+        blit_padded_into(&mut dst, &raster, 5, 0, 4, 1);
+        assert_eq!(dst.pixel(0, 0).unwrap().alpha(), 0);
+    }
+
+    #[test]
+    fn frame_size_and_centre_parse() {
+        assert_eq!(parse_lnglat("139.7, 35.66"), Ok((139.7, 35.66)));
+        assert!(parse_lnglat("139.7").is_err());
+        assert_eq!(parse_size_mm("245x174.5"), Ok((245.0, 174.5)));
+        assert!(parse_size_mm("245").is_err());
+        assert!(parse_size_mm("0x10").is_err());
+        // A4 landscape at 200 dpi.
+        assert_eq!(
+            (mm_to_px(297.0, 200.0), mm_to_px(210.0, 200.0)),
+            (2339, 1654)
+        );
+    }
 }

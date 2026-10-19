@@ -84,7 +84,8 @@ ezu serve crates/ezu/examples/styles/pencil-sketch.json
 # → http://127.0.0.1:8080
 ```
 
-`ezu bbox` stitches a lon/lat box into one image, `ezu tiles` bulk-renders
+`ezu bbox` stitches a lon/lat box into one image, `ezu frame` renders a page
+at a print scale and paper size, `ezu tiles` bulk-renders
 an XYZ pyramid, `ezu translate` converts a MapLibre style, `ezu check`
 validates one, and `ezu schema` prints the style JSON Schema. Full
 reference: [CLI](https://reearth.github.io/ezu/reference/cli/).
