@@ -1370,7 +1370,7 @@ mod tests {
         let tile: Vec<u8> = (0..2 * 2 * 4).map(|i| i as u8 + 1).collect();
         let mut dst = vec![0u8; 3 * 3 * 4];
         blit(&mut dst, 3, 3, &tile, 2, 1, 1);
-        assert_eq!(dst[(1 * 3 + 1) * 4..][..8], tile[..8]);
+        assert_eq!(dst[(3 + 1) * 4..][..8], tile[..8]);
         assert_eq!(dst[(2 * 3 + 1) * 4..][..8], tile[8..16]);
         assert!(dst[..(3 + 1) * 4].iter().all(|b| *b == 0));
     }
