@@ -231,6 +231,143 @@ fn anchor_offset_em(anchor: Anchor, offset: [f32; 2], radial: f32) -> [f32; 2] {
     [x, y]
 }
 
+/// One position a point label may take: the anchor that sits on the point and
+/// the block shift (em, y down) that goes with it. A label tries its positions
+/// in order and takes the first free one; the index into that list is the
+/// label's `variant-index`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct AnchorOffset {
+    anchor: Anchor,
+    offset_em: [f32; 2],
+}
+
+/// The style name of an anchor, as `anchor` and `anchor-offsets` spell it.
+fn anchor_name(anchor: Anchor) -> &'static str {
+    match anchor {
+        Anchor::Center => "center",
+        Anchor::Left => "left",
+        Anchor::Right => "right",
+        Anchor::Top => "top",
+        Anchor::Bottom => "bottom",
+        Anchor::TopLeft => "top-left",
+        Anchor::TopRight => "top-right",
+        Anchor::BottomLeft => "bottom-left",
+        Anchor::BottomRight => "bottom-right",
+    }
+}
+
+/// Parse `anchor-offsets`: a non-empty list of `{ anchor, offset-em }` or
+/// `{ anchor, radial-em }` entries (or a bare `{ anchor }`, no shift).
+/// `radial-em` resolves through [`anchor_offset_em`] here, so a radial entry
+/// lands exactly where `radial-offset` puts the same anchor.
+fn parse_anchor_offsets(v: &Value) -> Result<Vec<AnchorOffset>, FactoryError> {
+    let bad = |msg: String| FactoryError::BadField {
+        field: "anchor-offsets".into(),
+        msg,
+    };
+    let arr = v.as_array().ok_or_else(|| {
+        bad("expected an array of `{ anchor, offset-em | radial-em }` objects".into())
+    })?;
+    if arr.is_empty() {
+        return Err(bad("expected at least one entry".into()));
+    }
+    arr.iter()
+        .enumerate()
+        .map(|(i, e)| {
+            let obj = e
+                .as_object()
+                .ok_or_else(|| bad(format!("entry {i}: expected an object")))?;
+            if let Some(k) = obj
+                .keys()
+                .find(|k| !matches!(k.as_str(), "anchor" | "offset-em" | "radial-em"))
+            {
+                return Err(bad(format!(
+                    "entry {i}: unknown key `{k}` (anchor|offset-em|radial-em)"
+                )));
+            }
+            let name = obj
+                .get("anchor")
+                .ok_or_else(|| bad(format!("entry {i}: missing `anchor`")))?
+                .as_str()
+                .ok_or_else(|| bad(format!("entry {i}: `anchor` must be a string")))?;
+            let anchor = Anchor::parse(name)
+                .ok_or_else(|| bad(format!("entry {i}: unknown anchor `{name}`")))?;
+            let offset_em = match (obj.get("offset-em"), obj.get("radial-em")) {
+                (Some(_), Some(_)) => {
+                    return Err(bad(format!(
+                        "entry {i}: give `offset-em` or `radial-em`, not both"
+                    )))
+                }
+                (Some(o), None) => {
+                    let xy = o
+                        .as_array()
+                        .filter(|a| a.len() == 2)
+                        .and_then(|a| Some([a[0].as_f64()? as f32, a[1].as_f64()? as f32]));
+                    xy.ok_or_else(|| bad(format!("entry {i}: `offset-em` must be [x, y] numbers")))?
+                }
+                (None, Some(r)) => {
+                    let r = r
+                        .as_f64()
+                        .ok_or_else(|| bad(format!("entry {i}: `radial-em` must be a number")))?;
+                    anchor_offset_em(anchor, [0.0, 0.0], r as f32)
+                }
+                (None, None) => [0.0, 0.0],
+            };
+            Ok(AnchorOffset { anchor, offset_em })
+        })
+        .collect()
+}
+
+/// The positions the older `anchor` / `offset-em` / `anchor-variants` /
+/// `radial-offset` fields describe. A plain anchor takes `offset-em` as
+/// written; `anchor-variants` or a positive `radial-offset` re-evaluates the
+/// offset per anchor through [`anchor_offset_em`], as MapLibre's
+/// `text-variable-anchor` does.
+fn legacy_anchor_offsets(
+    anchor: Anchor,
+    offset_em: [f32; 2],
+    variants: &[Anchor],
+    radial_em: f32,
+) -> Vec<AnchorOffset> {
+    if variants.is_empty() && radial_em <= 0.0 {
+        return vec![AnchorOffset { anchor, offset_em }];
+    }
+    let anchors = if variants.is_empty() {
+        std::slice::from_ref(&anchor)
+    } else {
+        variants
+    };
+    anchors
+        .iter()
+        .map(|&a| AnchorOffset {
+            anchor: a,
+            offset_em: anchor_offset_em(a, offset_em, radial_em),
+        })
+        .collect()
+}
+
+/// The `anchor-offsets` value equivalent to the older fields, spelled out for
+/// the deprecation warning: `radial-em` where the offset is radial (a zero
+/// radius included, since it still applies the baseline correction), else the
+/// resolved `offset-em`.
+fn legacy_replacement(cands: &[AnchorOffset], radial_em: f32) -> String {
+    let entries: Vec<String> = cands
+        .iter()
+        .map(|c| {
+            let name = anchor_name(c.anchor);
+            if radial_em > 0.0 {
+                format!(r#"{{ "anchor": "{name}", "radial-em": {radial_em} }}"#)
+            } else if anchor_offset_em(c.anchor, [0.0, 0.0], 0.0) == c.offset_em {
+                format!(r#"{{ "anchor": "{name}", "radial-em": 0 }}"#)
+            } else {
+                let [x, y] = c.offset_em;
+                format!(r#"{{ "anchor": "{name}", "offset-em": [{x}, {y}] }}"#)
+            }
+        })
+        .collect();
+    format!("\"anchor-offsets\": [{}]", entries.join(", "))
+}
+
 /// Neighbour prefilter band width, in multiples of the node's widest label
 /// reach. A label reaches at most one reach from its anchor, so a chain of
 /// colliding labels advances one reach per hop; this many hops is the depth at
@@ -988,12 +1125,21 @@ struct TextNode {
     keep_upright: bool,
     /// Build-time layout constants (em units except where noted).
     anchor: Anchor,
-    /// MapLibre `text-variable-anchor`: ordered anchor candidates tried on
-    /// collision, the first free one placed. Empty → the fixed `anchor`.
+    /// The positions a point label tries in order, the first free one
+    /// placed: `anchor-offsets`, or the one-or-more positions the older
+    /// anchor fields resolve to. Never empty.
+    anchor_offsets: Vec<AnchorOffset>,
+    /// Whether `anchor_offsets` came from the `anchor-offsets` field. Only
+    /// then is the list folded into the param hash: the older fields hash as
+    /// written, so styles using them keep their hashes.
+    explicit_anchor_offsets: bool,
+    /// The deprecated `anchor-variants` / `radial-offset` as written (empty
+    /// and 0 when `anchor-offsets` is set). Hashed only; placement reads
+    /// `anchor_offsets`.
     anchor_variants: Vec<Anchor>,
-    /// MapLibre `text-radial-offset`: distance in em each variable anchor
-    /// pushes the block away from the point, in the anchor's direction.
     radial_offset_em: f32,
+    /// The widest shift (em) any position applies, for [`Self::label_reach`].
+    reach_offset_em: f32,
     justify: Justify,
     transform: TextTransform,
     offset_em: [f32; 2],
@@ -1059,22 +1205,19 @@ impl TextNode {
         }
     }
 
-    /// Layout params for one anchor candidate: the block is re-anchored and
-    /// shifted away from the point in that anchor's direction. A layer with
-    /// `text-variable-anchor` (or any `text-radial-offset`) re-evaluates its
-    /// offset per anchor, so the label always sits on the far side of the
-    /// point; a plain fixed anchor takes `text-offset` as written.
+    /// Layout params for one position: the block is re-anchored and shifted
+    /// by that position's offset, already resolved at build time (see
+    /// [`AnchorOffset`]).
     ///
     /// With a background box the anchor positions the box, so the text moves
     /// inward by the padding on the anchored side: under `top-left` the box's
     /// top-left corner stays on the point and the text starts `left` px right
     /// of it and `top` px below. `size` converts that px shift to em.
-    fn variant_layout_params(&self, anchor: Anchor, size: f32) -> LayoutParams {
-        let mut offset_em = if self.anchor_variants.is_empty() && self.radial_offset_em <= 0.0 {
-            self.offset_em
-        } else {
-            anchor_offset_em(anchor, self.offset_em, self.radial_offset_em)
-        };
+    fn variant_layout_params(&self, cand: AnchorOffset, size: f32) -> LayoutParams {
+        let AnchorOffset {
+            anchor,
+            mut offset_em,
+        } = cand;
         if self.background_box && size > 0.0 {
             let [top, right, bottom, left] = self.background_padding;
             let (fx, fy) = anchor.fraction();
@@ -1088,22 +1231,12 @@ impl TextNode {
         }
     }
 
-    /// The anchors to try for a label: the `text-variable-anchor` list, or the
-    /// single fixed `anchor` when none is set.
-    fn anchors(&self) -> &[Anchor] {
-        if self.anchor_variants.is_empty() {
-            std::slice::from_ref(&self.anchor)
-        } else {
-            &self.anchor_variants
-        }
-    }
-
     /// Upper bound (px) on how far a label reaches from its anchor, estimated
     /// before shaping. The widest an unshaped label can lay out is 2 em of
     /// advance per char — above any real glyph advance, ligatures and wide
     /// scripts included. Added on top: the collision `padding`, the halo (drawn
     /// beyond the collision box), and the widest shift an anchor candidate can
-    /// apply (`radial-offset` or `offset-em`).
+    /// apply.
     ///
     /// `cap` bounds the advance by `max-extent-px` for point placement, where
     /// labels reaching past it are culled; line placement passes `false`, since
@@ -1126,10 +1259,7 @@ impl TextNode {
         } else {
             advance
         };
-        let offset = self
-            .radial_offset_em
-            .max(self.offset_em[0].abs().max(self.offset_em[1].abs()));
-        advance + padding + halo + offset * size
+        advance + padding + halo + self.reach_offset_em * size
     }
 
     /// Resolve a feature group's evaluated `text` into label sections against
@@ -1829,10 +1959,10 @@ impl TextNode {
         // neighbour candidates share the cache (identical exprs → identical
         // layout across tiles) while differently-styled same-text labels stay
         // distinct.
-        // A label is laid out once per (content, size, anchor); a
-        // `text-variable-anchor` label shares every non-anchor input across its
-        // anchor candidates, so only the anchor varies the layout.
-        let mut blocks: HashMap<(u64, u32, u8), Arc<TextBlock>> = HashMap::new();
+        // A label is laid out once per (content, size, position); a label with
+        // several positions shares every other input across them, so only the
+        // position (its index in `anchor_offsets`) varies the layout.
+        let mut blocks: HashMap<(u64, u32, usize), Arc<TextBlock>> = HashMap::new();
         let mut culled = 0usize;
         let mut dropped_chars = 0usize;
         let mut missing_range_chars = 0usize;
@@ -1977,21 +2107,22 @@ impl TextNode {
             }
 
             let (flat_fonts, ranges, hash) = assemble_stacks(sections, registry);
-            // Lay out one block per anchor candidate (a single fixed anchor,
-            // or the `text-variable-anchor` list). Each is cached by anchor so
-            // repeated points/neighbours reuse it. An icon-only symbol has no
-            // sections and lays nothing out.
+            // Lay out one block per position in `anchor_offsets`. Each is
+            // cached by its index in that list — the same anchor may appear
+            // twice at different offsets — so repeated points/neighbours reuse
+            // it. An icon-only symbol has no sections and lays nothing out.
             let mut text_blocks: Vec<Arc<TextBlock>> = if sections.is_empty() {
                 Vec::new()
             } else {
-                self.anchors()
+                self.anchor_offsets
                     .iter()
-                    .map(|&anchor| {
-                        let pkey = (hash, size.to_bits(), anchor as u8);
+                    .enumerate()
+                    .map(|(ci, &cand)| {
+                        let pkey = (hash, size.to_bits(), ci);
                         if let Some(b) = blocks.get(&pkey) {
                             return b.clone();
                         }
-                        let params = self.variant_layout_params(anchor, size);
+                        let params = self.variant_layout_params(cand, size);
                         let build = || {
                             let specs: Vec<SectionSpec<'_>> = sections
                                 .iter()
@@ -2446,6 +2577,16 @@ impl Node for TextNode {
             h.update(&[*a as u8]);
         }
         h.update(&self.radial_offset_em.to_le_bytes());
+        // `anchor-offsets` — folded only when set, so styles on the older
+        // fields keep their hashes.
+        if self.explicit_anchor_offsets {
+            h.update(b"anchoroffsets");
+            for c in &self.anchor_offsets {
+                h.update(&[c.anchor as u8]);
+                h.update(&c.offset_em[0].to_le_bytes());
+                h.update(&c.offset_em[1].to_le_bytes());
+            }
+        }
         for v in [
             self.offset_em[0],
             self.offset_em[1],
@@ -2897,7 +3038,8 @@ fn build_text_node(
         msg: format!("unknown anchor `{anchor_s}`"),
     })?;
     // `anchor-variants` (MapLibre `text-variable-anchor`): an ordered list
-    // of anchors tried on collision. Absent → the fixed `anchor`.
+    // of anchors tried on collision. Absent → the fixed `anchor`. Deprecated
+    // for `anchor-offsets`, resolved below.
     let anchor_variants = match fields.get("anchor-variants") {
         Some(v) => {
             let arr = v.as_array().ok_or_else(|| FactoryError::BadField {
@@ -2931,6 +3073,70 @@ fn build_text_node(
         msg: format!("unknown transform `{transform_s}` (none|uppercase|lowercase)"),
     })?;
     let offset_em = read_xy(fields, "offset-em", ctx, [0.0, 0.0])?;
+    // The positions a point label tries. `anchor-offsets` lists them
+    // outright and takes over from every older anchor field; without it they
+    // follow from `anchor` / `offset-em` and the deprecated
+    // `anchor-variants` / `radial-offset`, exactly as those always placed.
+    let (anchor_offsets, explicit_anchor_offsets, anchor_variants, radial_offset_em) =
+        match fields.get("anchor-offsets") {
+            Some(v) => {
+                let cands = parse_anchor_offsets(v)?;
+                if placement == Placement::Point {
+                    let ignored: Vec<String> =
+                        ["anchor", "offset-em", "anchor-variants", "radial-offset"]
+                            .into_iter()
+                            .filter(|k| fields.contains_key(*k))
+                            .map(|k| format!("`{k}`"))
+                            .collect();
+                    if !ignored.is_empty() {
+                        ctx.warn(format_args!(
+                            "{} ignored: `anchor-offsets` sets the label's positions",
+                            ignored.join(", ")
+                        ));
+                    }
+                } else {
+                    ctx.warn("`anchor-offsets` applies to point placement only — ignored");
+                }
+                (cands, true, Vec::new(), 0.0)
+            }
+            None => {
+                let cands =
+                    legacy_anchor_offsets(anchor, offset_em, &anchor_variants, radial_offset_em);
+                let deprecated: Vec<&str> = ["anchor-variants", "radial-offset"]
+                    .into_iter()
+                    .filter(|k| fields.contains_key(*k))
+                    .collect();
+                if !deprecated.is_empty() {
+                    let fix = if anchor_variants.is_empty() && radial_offset_em <= 0.0 {
+                        "drop `radial-offset`, which has no effect here".to_string()
+                    } else {
+                        format!(
+                            "write {} instead",
+                            legacy_replacement(&cands, radial_offset_em)
+                        )
+                    };
+                    let names: Vec<String> = deprecated.iter().map(|k| format!("`{k}`")).collect();
+                    ctx.warn(format_args!(
+                        "{} {} deprecated: {fix}",
+                        names.join(" and "),
+                        if names.len() == 1 { "is" } else { "are" },
+                    ));
+                }
+                (cands, false, anchor_variants, radial_offset_em)
+            }
+        };
+    // How far any position may shift a label, for the neighbour band. The
+    // older fields keep the bound they always had; `offset-em` stays in it
+    // for line placement, which still reads it.
+    let reach_offset_em = if explicit_anchor_offsets {
+        anchor_offsets
+            .iter()
+            .flat_map(|c| c.offset_em)
+            .chain(offset_em)
+            .fold(0.0f32, |m, v| m.max(v.abs()))
+    } else {
+        radial_offset_em.max(offset_em[0].abs().max(offset_em[1].abs()))
+    };
     let max_width_em = read_number_or(fields, "max-width-em", ctx, 10.0)? as f32;
     let line_height = read_number_or(fields, "line-height", ctx, 1.2)? as f32;
     let letter_spacing_em = read_number_or(fields, "letter-spacing-em", ctx, 0.0)? as f32;
@@ -3051,8 +3257,11 @@ fn build_text_node(
             max_angle_deg,
             keep_upright,
             anchor,
+            anchor_offsets,
+            explicit_anchor_offsets,
             anchor_variants,
             radial_offset_em,
+            reach_offset_em,
             justify,
             transform,
             offset_em,
@@ -3146,13 +3355,23 @@ fn text_schema(stage: Stage) -> Value {
                 "keep-upright": { "type": "boolean",
                                   "description": "Flip a right-to-left label so it reads upright (MapLibre `text-keep-upright`). Line placement only. Default true." },
                 "anchor": { "type": "string", "enum": ["center", "left", "right", "top", "bottom", "top-left", "top-right", "bottom-left", "bottom-right"],
-                            "description": "Which part of the label block sits on the point (point placement). Default `center`." },
+                            "description": "Which part of the label block sits on the point (point placement). Default `center`. Ignored when `anchor-offsets` is set." },
+                "anchor-offsets": { "type": "array", "minItems": 1,
+                                    "items": { "type": "object",
+                                               "properties": {
+                                                   "anchor": { "type": "string", "enum": ["center", "left", "right", "top", "bottom", "top-left", "top-right", "bottom-left", "bottom-right"] },
+                                                   "offset-em": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+                                                   "radial-em": { "type": "number" }
+                                               },
+                                               "required": ["anchor"],
+                                               "additionalProperties": false },
+                                    "description": "The positions a point label tries, in order: on collision it moves to the next, and takes the first whose box is free (MapLibre `text-variable-anchor-offset`). Each entry names the `anchor` that sits on the point and how far the block shifts from there: `offset-em` [x, y] in em, right and down positive, or `radial-em`, an em distance pushed away from the point in the anchor's direction (corners split it across both axes, and `top` / `bottom` measure it to the visible text, as MapLibre's `text-radial-offset` does). Give one of the two, or neither for no shift. The same anchor may appear more than once, so a label can try a near spot and then a farther one. `label-boxes` reports the position taken as `variant-index`. When set, `anchor`, `offset-em`, `anchor-variants` and `radial-offset` are ignored for point placement. Point placement only." },
                 "anchor-variants": { "type": "array", "items": { "type": "string", "enum": ["center", "left", "right", "top", "bottom", "top-left", "top-right", "bottom-left", "bottom-right"] },
-                            "description": "MapLibre `text-variable-anchor`: anchors tried in order on collision, the first free one placed (point placement). Overrides `anchor` when set." },
+                            "description": "Deprecated: use `anchor-offsets`, with `{ \"anchor\": …, \"radial-em\": … }` entries for a `radial-offset`. MapLibre `text-variable-anchor`: anchors tried in order on collision, the first free one placed (point placement). Overrides `anchor` when set." },
                 "radial-offset": { "type": "number",
-                            "description": "MapLibre `text-radial-offset`: em distance each `anchor-variants` entry pushes the block away from the point in its direction. Default 0." },
+                            "description": "Deprecated: use `anchor-offsets` entries with `radial-em`. MapLibre `text-radial-offset`: em distance each `anchor-variants` entry pushes the block away from the point in its direction. Default 0." },
                 "offset-em": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2,
-                               "description": "Block shift [x, y] in em, applied after anchoring. Default [0, 0]." },
+                               "description": "Block shift [x, y] in em, applied after anchoring. Default [0, 0]. For point placement, ignored when `anchor-offsets` is set." },
                 "justify": { "type": "string", "enum": ["auto", "left", "center", "right"],
                              "description": "Line alignment within the wrapped block. Default `auto` (follows the anchor's horizontal side)." },
                 "max-width-em": { "type": "number", "minimum": 0.0,

@@ -124,10 +124,23 @@ Line placement ignores `max-width-em`: a line label is always one line.
 
 For point labels, `max-width-em` (default 10) sets the wrap target in em, `0`
 disables wrapping, and `line-height` is baseline-to-baseline in em. `anchor` puts a
-part of the block on the point; `anchor-variants` is MapLibre's
-`text-variable-anchor` — a list tried in order, first free one wins, with
-`radial-offset` pushing each variant away from the point in its own direction.
-That is much better behaved in dense areas than a single fixed anchor.
+part of the block on the point, and `offset-em` shifts it from there.
+`anchor-offsets` gives a label several positions to try instead, in order, the
+first free one winning:
+
+```json
+"anchor-offsets": [
+  { "anchor": "bottom", "offset-em": [0, -0.8] },
+  { "anchor": "bottom", "offset-em": [0, -2.4] },
+  { "anchor": "left",   "radial-em": 1 }
+]
+```
+
+Each entry is an anchor plus its own shift: `offset-em` as written, or
+`radial-em`, a distance pushed away from the point in the anchor's direction.
+The same anchor can appear twice, so a label crowded out of its usual spot can
+move a little further off before trying another side. That is much better
+behaved in dense areas than a single fixed anchor.
 
 ## Labelling areas
 

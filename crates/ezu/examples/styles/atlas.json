@@ -100,8 +100,14 @@
                      "size-expr": ["interpolate", ["linear"], ["zoom"], 8, 12, 14, 17],
                      "color": "$accent",
                      "halo-color": "#f6f3eccc", "halo-width": 2.0,
-                     "anchor-variants": ["center", "top", "bottom", "left", "right"],
-                     "radial-offset": 0.4, "padding-px": 3 },
+                     "anchor-offsets": [
+                       { "anchor": "center" },
+                       { "anchor": "top",    "radial-em": 0.4 },
+                       { "anchor": "bottom", "radial-em": 0.4 },
+                       { "anchor": "left",   "radial-em": 0.4 },
+                       { "anchor": "right",  "radial-em": 0.4 }
+                     ],
+                     "padding-px": 3 },
 
     "neigh_f":     { "op": "features", "source": "basemap", "layer": "places",
                      "min-zoom-field": "min_zoom", "min-zoom": 13,

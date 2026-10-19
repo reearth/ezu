@@ -3068,7 +3068,7 @@
             "type": "object"
           },
           {
-            "description": "The boxes a `label-placement` node measured its labels by, as polygons — one per box — so any geometry and paint op can draw them: a bordered or rounded badge (`buffer` → `stroke`), an offset shadow (`transform`), or a debug overlay of placement. Reads the decisions already made, so nothing is placed twice and the boxes match what `text-draw` draws; labels placed from a neighbour tile's candidates are included, so boxes continue across tile edges. Each polygon carries the labelled feature's properties plus `part` (`text`, `icon`, `background`, `glyph` or `collision`), `placed` (false for a candidate that lost its collision test, with `include: all`) and `label-id` (shared by every box of one label, the same on every tile). A placed label also carries `overlapped` (true when it overlaps a label placed before it, which only `allow-overlap` permits) and `variant-index`: where its anchor sits in the list it was tried from (`anchor-variants` / `text-variable-anchor`), 0 for the first anchor, for a lone one and for a line label, and absent when the variant shown draws no text. A label that did not place carries `drop-reason` instead, `collision` for now. A point label gives its `text` block (no padding), `icon` (rotated by `icon-rotate`), `background` box (with `background-padding` or `background-color`) and the `collision` box or boxes it was tested with, padding included. A line label gives one `glyph` quad per glyph, rotated along the path, and the axis-aligned `collision` box placement tested for each glyph.",
+            "description": "The boxes a `label-placement` node measured its labels by, as polygons — one per box — so any geometry and paint op can draw them: a bordered or rounded badge (`buffer` → `stroke`), an offset shadow (`transform`), or a debug overlay of placement. Reads the decisions already made, so nothing is placed twice and the boxes match what `text-draw` draws; labels placed from a neighbour tile's candidates are included, so boxes continue across tile edges. Each polygon carries the labelled feature's properties plus `part` (`text`, `icon`, `background`, `glyph` or `collision`), `placed` (false for a candidate that lost its collision test, with `include: all`) and `label-id` (shared by every box of one label, the same on every tile). A placed label also carries `overlapped` (true when it overlaps a label placed before it, which only `allow-overlap` permits) and `variant-index`: where the position it took sits in the list it was tried from (`anchor-offsets`, or the anchors of the deprecated `anchor-variants`), 0 for the first position, for a lone one and for a line label, and absent when the variant shown draws no text. A label that did not place carries `drop-reason` instead, `collision` for now. A point label gives its `text` block (no padding), `icon` (rotated by `icon-rotate`), `background` box (with `background-padding` or `background-color`) and the `collision` box or boxes it was tested with, padding included. A line label gives one `glyph` quad per glyph, rotated along the path, and the axis-aligned `collision` box placement tested for each glyph.",
             "properties": {
               "extent": {
                 "default": 4096,
@@ -5024,7 +5024,7 @@
                 "type": "boolean"
               },
               "anchor": {
-                "description": "Which part of the label block sits on the point (point placement). Default `center`.",
+                "description": "Which part of the label block sits on the point (point placement). Default `center`. Ignored when `anchor-offsets` is set.",
                 "enum": [
                   "center",
                   "left",
@@ -5038,8 +5038,47 @@
                 ],
                 "type": "string"
               },
+              "anchor-offsets": {
+                "description": "The positions a point label tries, in order: on collision it moves to the next, and takes the first whose box is free (MapLibre `text-variable-anchor-offset`). Each entry names the `anchor` that sits on the point and how far the block shifts from there: `offset-em` [x, y] in em, right and down positive, or `radial-em`, an em distance pushed away from the point in the anchor's direction (corners split it across both axes, and `top` / `bottom` measure it to the visible text, as MapLibre's `text-radial-offset` does). Give one of the two, or neither for no shift. The same anchor may appear more than once, so a label can try a near spot and then a farther one. `label-boxes` reports the position taken as `variant-index`. When set, `anchor`, `offset-em`, `anchor-variants` and `radial-offset` are ignored for point placement. Point placement only.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "anchor": {
+                      "enum": [
+                        "center",
+                        "left",
+                        "right",
+                        "top",
+                        "bottom",
+                        "top-left",
+                        "top-right",
+                        "bottom-left",
+                        "bottom-right"
+                      ],
+                      "type": "string"
+                    },
+                    "offset-em": {
+                      "items": {
+                        "type": "number"
+                      },
+                      "maxItems": 2,
+                      "minItems": 2,
+                      "type": "array"
+                    },
+                    "radial-em": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "anchor"
+                  ],
+                  "type": "object"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
               "anchor-variants": {
-                "description": "MapLibre `text-variable-anchor`: anchors tried in order on collision, the first free one placed (point placement). Overrides `anchor` when set.",
+                "description": "Deprecated: use `anchor-offsets`, with `{ \"anchor\": …, \"radial-em\": … }` entries for a `radial-offset`. MapLibre `text-variable-anchor`: anchors tried in order on collision, the first free one placed (point placement). Overrides `anchor` when set.",
                 "items": {
                   "enum": [
                     "center",
@@ -5316,7 +5355,7 @@
                 "type": "string"
               },
               "offset-em": {
-                "description": "Block shift [x, y] in em, applied after anchoring. Default [0, 0].",
+                "description": "Block shift [x, y] in em, applied after anchoring. Default [0, 0]. For point placement, ignored when `anchor-offsets` is set.",
                 "items": {
                   "type": "number"
                 },
@@ -5375,7 +5414,7 @@
                 "type": "string"
               },
               "radial-offset": {
-                "description": "MapLibre `text-radial-offset`: em distance each `anchor-variants` entry pushes the block away from the point in its direction. Default 0.",
+                "description": "Deprecated: use `anchor-offsets` entries with `radial-em`. MapLibre `text-radial-offset`: em distance each `anchor-variants` entry pushes the block away from the point in its direction. Default 0.",
                 "type": "number"
               },
               "size": {
@@ -5482,7 +5521,7 @@
                 "type": "boolean"
               },
               "anchor": {
-                "description": "Which part of the label block sits on the point (point placement). Default `center`.",
+                "description": "Which part of the label block sits on the point (point placement). Default `center`. Ignored when `anchor-offsets` is set.",
                 "enum": [
                   "center",
                   "left",
@@ -5496,8 +5535,47 @@
                 ],
                 "type": "string"
               },
+              "anchor-offsets": {
+                "description": "The positions a point label tries, in order: on collision it moves to the next, and takes the first whose box is free (MapLibre `text-variable-anchor-offset`). Each entry names the `anchor` that sits on the point and how far the block shifts from there: `offset-em` [x, y] in em, right and down positive, or `radial-em`, an em distance pushed away from the point in the anchor's direction (corners split it across both axes, and `top` / `bottom` measure it to the visible text, as MapLibre's `text-radial-offset` does). Give one of the two, or neither for no shift. The same anchor may appear more than once, so a label can try a near spot and then a farther one. `label-boxes` reports the position taken as `variant-index`. When set, `anchor`, `offset-em`, `anchor-variants` and `radial-offset` are ignored for point placement. Point placement only.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "anchor": {
+                      "enum": [
+                        "center",
+                        "left",
+                        "right",
+                        "top",
+                        "bottom",
+                        "top-left",
+                        "top-right",
+                        "bottom-left",
+                        "bottom-right"
+                      ],
+                      "type": "string"
+                    },
+                    "offset-em": {
+                      "items": {
+                        "type": "number"
+                      },
+                      "maxItems": 2,
+                      "minItems": 2,
+                      "type": "array"
+                    },
+                    "radial-em": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "anchor"
+                  ],
+                  "type": "object"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
               "anchor-variants": {
-                "description": "MapLibre `text-variable-anchor`: anchors tried in order on collision, the first free one placed (point placement). Overrides `anchor` when set.",
+                "description": "Deprecated: use `anchor-offsets`, with `{ \"anchor\": …, \"radial-em\": … }` entries for a `radial-offset`. MapLibre `text-variable-anchor`: anchors tried in order on collision, the first free one placed (point placement). Overrides `anchor` when set.",
                 "items": {
                   "enum": [
                     "center",
@@ -5774,7 +5852,7 @@
                 "type": "string"
               },
               "offset-em": {
-                "description": "Block shift [x, y] in em, applied after anchoring. Default [0, 0].",
+                "description": "Block shift [x, y] in em, applied after anchoring. Default [0, 0]. For point placement, ignored when `anchor-offsets` is set.",
                 "items": {
                   "type": "number"
                 },
@@ -5833,7 +5911,7 @@
                 "type": "string"
               },
               "radial-offset": {
-                "description": "MapLibre `text-radial-offset`: em distance each `anchor-variants` entry pushes the block away from the point in its direction. Default 0.",
+                "description": "Deprecated: use `anchor-offsets` entries with `radial-em`. MapLibre `text-radial-offset`: em distance each `anchor-variants` entry pushes the block away from the point in its direction. Default 0.",
                 "type": "number"
               },
               "size": {
