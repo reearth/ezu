@@ -4504,12 +4504,27 @@
             "type": "object"
           },
           {
-            "description": "Turn each point into a two-vertex polyline from a position its feature's properties give in longitude and latitude to the point itself: a leader from a label anchor to what it labels, a connector from a building's representative point to its entrance. Each line keeps its point's properties; dash it with `dash` and paint it with `stroke`. Lines and polygons are ignored, as are features whose fields are missing, not numbers (or numeric strings), or out of range, and points that coincide with their other end. A connector can cross a tile from a point outside it, beyond the tile's thin buffer; set `stitch: \"pieces\"` on the upstream `features` node to bring in the neighbouring tiles' points too.",
+            "description": "Turn each point into a two-vertex polyline from a position its feature's properties give in longitude and latitude to the point itself: a leader from a label anchor to what it labels, a connector from a building's representative point to its entrance. A polygon gets a line from that position towards its centroid that stops where it first meets the polygon's outer edge, so a leader to a label box from `label-boxes` ends at the box instead of running under the text; one line per polygon, and none when the position lies inside or on the polygon (holes count as inside). Each line keeps its feature's properties; dash it with `dash` and paint it with `stroke`. Lines are ignored, as are features whose fields are missing, not numbers (or numeric strings), or out of range, and points that coincide with their other end. A connector can cross a tile from a point outside it, beyond the tile's thin buffer; set `stitch: \"pieces\"` on the upstream `features` node to bring in the neighbouring tiles' points too.",
             "properties": {
               "features": {
                 "description": "Reference to another node (`@name`).",
                 "pattern": "^@?[A-Za-z_][A-Za-z0-9_-]*$",
                 "type": "string"
+              },
+              "gap-px": {
+                "oneOf": [
+                  {
+                    "default": 0.0,
+                    "description": "Pixels taken off the feature end of each line, at the point or the polygon's edge, to leave air between the line and what it reaches. The other end stays put; a line no longer than the gap is dropped.",
+                    "minimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "lat-field": {
                 "description": "Property holding the other end's latitude, in WGS84 degrees.",

@@ -330,6 +330,40 @@ A losing candidate is shown at its first anchor, overlapping the box that blocke
 it. Copies of one label from neighbouring tiles are not candidates of their own,
 so they never show as losers.
 
+### Leader lines for moved labels
+
+A label that `anchor-offsets` pushed off its first position can sit some way from
+what it names. `segment-to` draws a leader from the labelled feature to its box,
+stopping at the box's edge rather than running under the text. It needs the
+feature's own position as longitude and latitude properties (`rep_lng` and
+`rep_lat` here), which the boxes carry along with the rest of the feature's
+properties. A placed label's boxes also carry `variant-index`, 0 at the first
+position, so the stroke shows only the leaders of labels that moved:
+
+```json
+"names":   { "op": "text-labels", "features": "@shops", "font": ["sans"],
+             "text": ["get", "name"],
+             "anchor-offsets": [
+               { "anchor": "bottom", "offset-em": [0, -0.8] },
+               { "anchor": "bottom", "offset-em": [0, -2.4] },
+               { "anchor": "left",   "radial-em": 1.5 }
+             ] },
+"place":   { "op": "label-placement", "labels": ["@names"] },
+"boxes":   { "op": "label-boxes", "placement": "@place", "parts": ["text"] },
+"leaders": { "op": "segment-to", "features": "@boxes",
+             "lng-field": "rep_lng", "lat-field": "rep_lat", "gap-px": 2 },
+"leader_d": { "op": "stroke", "features": "@leaders", "color": "#555555",
+              "width-px": 0.75,
+              "opacity-expr": ["case", [">", ["coalesce", ["get", "variant-index"], 0], 0], 1, 0] },
+"names_d": { "op": "text-draw", "labels": "@names", "placement": "@place" },
+"out":     { "op": "stack", "layers": ["@base", "@leader_d", "@names_d"] }
+```
+
+Each line heads for the centre of the box and ends where it first meets the
+edge; `gap-px` leaves that many pixels of air before it. A label whose box covers
+its feature's position gets no leader. With `background-padding` set, take
+`parts: ["background"]` instead, so the leader stops at the padded box.
+
 ## Glyphs without font files
 
 Instead of a `font` source, point at a MapLibre glyph endpoint:

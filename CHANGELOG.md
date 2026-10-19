@@ -13,6 +13,14 @@ mean is spelled out in
 
 ### Added
 
+- `segment-to` draws to polygons too. The line runs from the longitude and
+  latitude the feature names towards the polygon's centroid and stops where it
+  first meets the polygon's edge, so a leader to a label box from `label-boxes`
+  ends at the box instead of running under the text; there is no line when the
+  position lies inside the polygon. `gap-px` takes that many pixels off the
+  feature end of every line, at a polygon's edge or a point, to leave some air
+  between the leader and what it reaches. Polygons were ignored before, and
+  the gap defaults to 0, so existing styles draw as they did.
 - `text` and `text-labels` take `dedupe-key-expr` and `dedupe-distance-px`,
   to show a repeated name once. Once a point label has placed, later labels in
   the same layer whose key is equal and whose anchor is within the distance are
