@@ -149,6 +149,12 @@ Options:
           Output format. Defaults to whatever `--out`'s extension implies [possible values: png, webp]
       --concurrency <CONCURRENCY>
           Number of tiles rendered in parallel. Defaults to the number of logical CPU cores
+      --features <NODE=PATH>
+          Write the features node NODE, gathered over every tile the frame renders, as a GeoJSON FeatureCollection at PATH. Features whose bounding box lies wholly outside the frame are left out; the rest are written whole, not clipped. Without `--features-key`, a feature several tiles see is written once per tile, and a shape cut at tile edges as its pieces. Repeatable
+      --features-key <NODE=PROP[,PROP...]>
+          Treat features of NODE whose listed properties are all equal as one feature, keeping the first in tile order (rows top to bottom, then left to right), and sort the file by those properties. For `label-boxes`: `--features-key boxes=label-id,part`. Repeatable, once per node
+      --features-coords <FEATURES_COORDS>
+          Coordinates of the `--features` files: `lonlat` (WGS84, 7 decimals) or `px`, pixels of the output image from its top-left corner, y down (2 decimals) [default: lonlat] [possible values: lonlat, px]
   -h, --help
           Print help
 ```

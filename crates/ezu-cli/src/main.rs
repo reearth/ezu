@@ -8,6 +8,7 @@
 //!           --size-mm 245x174 [--out FILE]
 //! ```
 
+mod frame_features;
 mod graph_view;
 mod serve;
 pub(crate) mod source;
@@ -382,6 +383,26 @@ struct FrameCmd {
     /// logical CPU cores.
     #[arg(long)]
     concurrency: Option<usize>,
+    /// Write the features node NODE, gathered over every tile the frame
+    /// renders, as a GeoJSON FeatureCollection at PATH. Features whose
+    /// bounding box lies wholly outside the frame are left out; the rest
+    /// are written whole, not clipped. Without `--features-key`, a feature
+    /// several tiles see is written once per tile, and a shape cut at tile
+    /// edges as its pieces. Repeatable.
+    #[arg(long = "features", value_name = "NODE=PATH", value_parser = frame_features::parse_node_path)]
+    features: Vec<(String, PathBuf)>,
+    /// Treat features of NODE whose listed properties are all equal as one
+    /// feature, keeping the first in tile order (rows top to bottom, then
+    /// left to right), and sort the file by those properties. For
+    /// `label-boxes`: `--features-key boxes=label-id,part`. Repeatable,
+    /// once per node.
+    #[arg(long, value_name = "NODE=PROP[,PROP...]", value_parser = frame_features::parse_node_key)]
+    features_key: Vec<(String, Vec<String>)>,
+    /// Coordinates of the `--features` files: `lonlat` (WGS84, 7 decimals)
+    /// or `px`, pixels of the output image from its top-left corner, y
+    /// down (2 decimals).
+    #[arg(long, value_enum, default_value_t = frame_features::FeatureCoords::Lonlat)]
+    features_coords: frame_features::FeatureCoords,
 }
 
 #[derive(Args, Debug)]
@@ -1383,14 +1404,31 @@ async fn run_frame(args: FrameCmd) -> Result<(), Box<dyn std::error::Error>> {
     );
     doc.tile_size = frame.tile_size;
     let prep = prepare_doc(&args.common, doc).await?;
+    let (exports, watched) =
+        frame_features::resolve(&prep.graph, &args.features, &args.features_key)?;
 
-    let image = render_frame(&prep, &frame, concurrency).await?;
+    let (image, mut captures) = render_frame(&prep, &frame, concurrency, &watched).await?;
     let bytes = match format {
         OutputFormat::Png => image.encode_png().map_err(|e| e.to_string())?,
         OutputFormat::Webp => pixmap_to_webp(&image).map_err(|e| e.to_string())?,
     };
     std::fs::write(&args.out, &bytes)?;
     tracing::info!("wrote {} ({} bytes)", args.out.display(), bytes.len());
+    for export in &exports {
+        let text = frame_features::feature_collection(
+            &frame,
+            &mut captures,
+            export,
+            args.features_coords,
+        )?;
+        std::fs::write(&export.path, &text)?;
+        tracing::info!(
+            "wrote {} (features of `{}`, {} bytes)",
+            export.path.display(),
+            export.node,
+            text.len()
+        );
+    }
     Ok(())
 }
 
@@ -1400,13 +1438,18 @@ async fn run_frame(args: FrameCmd) -> Result<(), Box<dyn std::error::Error>> {
 /// Only the frame is ever allocated, never the mosaic of whole tiles
 /// around it, and at most `concurrency` rendered tiles are held at once:
 /// each is copied in as it finishes and dropped.
+///
+/// The values of the `watched` nodes are kept from every tile, in the order
+/// the tiles finished.
 async fn render_frame(
     prep: &Prepared,
     frame: &Frame,
     concurrency: usize,
-) -> Result<Pixmap, Box<dyn std::error::Error>> {
+    watched: &[ezu::graph::NodeIx],
+) -> Result<(Pixmap, Vec<frame_features::TileCapture>), Box<dyn std::error::Error>> {
     let mut image = Pixmap::new(frame.width, frame.height)
         .ok_or_else(|| format!("cannot allocate a {}×{} image", frame.width, frame.height))?;
+    let mut captures = Vec::new();
     let xr = frame.tiles_x.clone();
     let coords = frame
         .tiles_y
@@ -1414,6 +1457,11 @@ async fn render_frame(
         .flat_map(move |ty| xr.clone().map(move |tx| (tx, ty)));
     let mut rendered = futures::stream::iter(coords)
         .map(|(tx, ty)| async move {
+            let capture = (!watched.is_empty())
+                .then(|| Arc::new(frame_features::Capture::new(watched.to_vec())));
+            let observer = capture
+                .clone()
+                .map(|c| c as Arc<dyn NodeObserver + Send + Sync>);
             let raster = render_one(
                 Arc::clone(&prep.graph),
                 Arc::clone(&prep.cache),
@@ -1426,14 +1474,22 @@ async fn render_frame(
                 CoreTileId::new(frame.zoom, tx, ty),
                 prep.overzoom_levels,
                 Arc::clone(&prep.params),
-                None,
+                observer,
             )
             .await?;
-            Ok::<_, Box<dyn std::error::Error + Send + Sync>>((tx, ty, raster))
+            let values = capture.map(|c| c.take());
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>((tx, ty, raster, values))
         })
         .buffer_unordered(concurrency);
     while let Some(done) = rendered.next().await {
-        let (tx, ty, raster) = done.map_err(|e| e.to_string())?;
+        let (tx, ty, raster, values) = done.map_err(|e| e.to_string())?;
+        if let Some(values) = values {
+            captures.push(frame_features::TileCapture {
+                x: tx,
+                y: ty,
+                values,
+            });
+        }
         let (dx, dy) = frame.tile_offset(tx, ty);
         blit_padded_into(
             &mut image,
@@ -1444,7 +1500,7 @@ async fn render_frame(
             prep.canvas.pad,
         );
     }
-    Ok(image)
+    Ok((image, captures))
 }
 
 /// Millimetres of paper to whole pixels at `dpi`.
@@ -1982,6 +2038,9 @@ mod tests {
             out: frame_out.clone(),
             format: None,
             concurrency: Some(2),
+            features: Vec::new(),
+            features_key: Vec::new(),
+            features_coords: frame_features::FeatureCoords::Lonlat,
         })
         .await
         .unwrap();

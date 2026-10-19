@@ -49,7 +49,7 @@ mod scalar;
 mod source;
 mod util;
 
-pub use common::{BrushPayload, FilteredFeatures};
+pub use common::{BrushPayload, FeatureGroup, FilteredFeatures};
 
 /// Build a registry of every built-in op, collected from
 /// `ezu_graph::submit_node!` submissions across the linked crates.

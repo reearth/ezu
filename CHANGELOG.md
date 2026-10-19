@@ -52,6 +52,16 @@ mean is spelled out in
   never held in memory, as it is with `ezu bbox`. `--dpi` only sets the
   scale; the style's pixel sizes are not enlarged. The geometry is
   `ezu::core::frame` for hosts that render pages themselves.
+- `ezu frame --features NODE=PATH` writes a features node, gathered over
+  every tile of the page, as a GeoJSON FeatureCollection beside the image:
+  with `label-boxes`, a list of every label and what placement did to it, for
+  an attribute list of the dropped ones, say. `--features-key
+  NODE=PROP[,PROP…]` lists features whose properties are equal once, where
+  neighbouring tiles each see them, and sorts by those properties; for
+  `label-boxes` that is `label-id,part`. `--features-coords` writes WGS84
+  lon/lat (the default) or pixels of the output image. Features wholly
+  outside the page are left out, and the file is byte-identical across runs
+  of the same input.
 
 ### Changed
 

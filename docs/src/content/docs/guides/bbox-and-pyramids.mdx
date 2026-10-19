@@ -61,6 +61,52 @@ and bottom of a tall page.
 smaller than at 96. Make lines and labels heavier in the style, or with a
 [param](/ezu/concepts/params-and-functions/), when a page needs them bigger.
 
+### The page's features as GeoJSON
+
+`--features NODE=PATH` writes what a features node produced across the page as
+a GeoJSON FeatureCollection, next to the image. The node can be any node in the
+style whose output is features, wired to the output or not. The usual one is
+[`label-boxes`](/ezu/style/nodes/paint/), which lists every label with what
+placement did to it: placed, moved off its first position (`variant-index`),
+left overlapping (`overlapped`) or dropped (`placed: false` with
+`drop-reason`, given `include: all`). A print pipeline can read the dropped
+ones from it and put their names in a list beside the map.
+
+```sh
+ezu frame --style labels.json \
+  --center 139.70,35.66 --scale 1000 --dpi 200 --size-mm 245x174 \
+  --out page.png \
+  --features boxes=labels.geojson --features-key boxes=label-id,part
+```
+
+The node is evaluated tile by tile, and a label near a tile edge is seen by
+every tile it reaches, so without a key the same label appears once per tile.
+A shape cut at tile edges, such as a polygon read from a vector tile, appears
+as its pieces. `--features-key NODE=PROP[,PROP…]` makes features whose listed
+properties are all equal one feature: the first in tile order (rows top to
+bottom, then left to right, and each tile's features in their own order) is
+kept, and the file is sorted by those properties, numbers numerically, text
+alphabetically, a missing property first. A label's boxes share its
+`label-id` on every tile, so `label-id,part` lists each box once.
+
+A line label has one `glyph` box per glyph, and a label with an icon has
+more than one `collision` box, all with the same `label-id` and `part`; the
+key keeps only the first of them. For a list of labels, ask `label-boxes`
+for the parts that come one to a label, `"parts": ["text", "icon",
+"background"]`.
+
+Features whose bounding box lies wholly outside the page are left out. The
+rest are written whole, not clipped to the page. `--features-coords` picks
+the coordinates:
+
+- `lonlat` (the default): WGS84 longitude and latitude, as RFC 7946 asks,
+  to 7 decimal places.
+- `px`: pixels of the output image, from its top-left corner with y down, to
+  2 decimal places, for drawing over the page.
+
+The same style, data and flags give a byte-identical file on every run, so a
+diff of two runs shows whether anything on the page changed.
+
 ## A whole pyramid
 
 `ezu tiles` bulk-renders `<out>/<z>/<x>/<y>.png` across a zoom range:
