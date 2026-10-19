@@ -248,6 +248,24 @@ position in `anchor-offsets`, as a normal label does, and shows the label
 overlapping at its first position only when all of them are blocked, so labels
 still spread out where there is room.
 
+Where neighbouring features carry the same name, such as the parcels of one
+building complex, `dedupe-key-expr` shows the name once. It gives each label a
+key, and once a label has placed, later labels in the same layer with an equal
+key whose anchor is within `dedupe-distance-px` of it are dropped:
+
+```json
+"names": { "op": "text-labels", "features": "@buildings", "font": ["sans"],
+           "text": ["get", "name"],
+           "dedupe-key-expr": ["get", "name"], "dedupe-distance-px": 120 }
+```
+
+Only a label that actually placed hides its duplicates, so if the first one loses
+its collision the next one still gets its turn and the name is not lost. A label
+with a null or empty key never dedupes. `label-boxes` with `include: "all"`
+reports a dropped label with `placed: false` and `drop-reason: "dedupe"`, which is
+enough to list the omitted names elsewhere on the sheet. The rule applies to
+point labels; line labels already keep apart by `spacing-px`.
+
 ## Drawing the label boxes yourself
 
 `label-boxes` turns the boxes a `label-placement` node measured into ordinary
@@ -259,7 +277,7 @@ properties, plus:
 | Property | Value |
 |---|---|
 | `part` | `text`: the laid-out text block, no padding. `icon`: the icon, turned by `icon-rotate`. `background`: the label's background box, set by `background-padding` or `background-color`, painted or not. `glyph`: one glyph of a line label. `collision`: a box placement tested, `padding-px` included. |
-| `placed` | `true`, or `false` for a candidate that lost its collision test (only with `include: "all"`). |
+| `placed` | `true`, or `false` for a candidate that did not place (only with `include: "all"`); its `drop-reason` says why: `collision` or `dedupe`. |
 | `label-id` | Shared by every box of one label, and the same on every tile. |
 
 `parts` picks which kinds to emit (default: all of them), and `labels` limits the

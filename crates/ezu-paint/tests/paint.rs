@@ -110,6 +110,8 @@ mod text_anchor_offsets;
 mod text_background;
 #[path = "paint/text_collision.rs"]
 mod text_collision;
+#[path = "paint/text_dedupe.rs"]
+mod text_dedupe;
 #[path = "paint/text_labels.rs"]
 mod text_labels;
 #[path = "paint/text_line_labels.rs"]

@@ -13,6 +13,13 @@ mean is spelled out in
 
 ### Added
 
+- `text` and `text-labels` take `dedupe-key-expr` and `dedupe-distance-px`,
+  to show a repeated name once. Once a point label has placed, later labels in
+  the same layer whose key is equal and whose anchor is within the distance are
+  dropped, so the parcels of one building complex carry its name once. Only
+  placed labels count, so a label that loses its collision never hides its
+  duplicates, and the decision is the same on every tile. `label-boxes` with
+  `include: "all"` reports a dropped label with `drop-reason: "dedupe"`.
 - `label-boxes` says what placement did with each label. A placed label's
   boxes carry `variant-index`, where the position it took sits in the list it
   was tried from (`anchor-offsets`, or the anchors of `anchor-variants`; 0 for

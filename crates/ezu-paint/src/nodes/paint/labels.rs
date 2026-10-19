@@ -276,6 +276,13 @@ pub(super) fn set_id(param_hash: u64, candidates: &[LabelCandidate]) -> u64 {
         h.update(&c.rank.tile.1.to_le_bytes());
         h.update(&c.rank.feature.to_le_bytes());
         h.update(&c.rank.symbol.to_le_bytes());
+        // The dedupe key comes from the feature's properties, which nothing
+        // above covers; folded only when set, so other sets keep their ids.
+        if let Some((key, _)) = &c.dedupe {
+            h.update(b"dedupe");
+            h.update(key.as_bytes());
+            h.update(&[0]);
+        }
     }
     h.digest()
 }
@@ -292,7 +299,8 @@ pub(super) struct PlacedLabels {
 /// One label layer as `label-placement` decided it.
 pub(super) struct PlacedLayer {
     pub set: Arc<LabelSet>,
-    /// The layer's winners and the candidates that lost their collision.
+    /// The layer's winners, the candidates that lost their collision, and
+    /// those dropped by the same-value dedupe.
     pub outcome: collide::LayerOutcome,
 }
 

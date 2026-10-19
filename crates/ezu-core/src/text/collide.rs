@@ -16,6 +16,9 @@
 //!    neighbours). The key is `(layer, text, quantized world anchor)`;
 //!    one candidate survives per key. Layers dedup separately: two
 //!    layers labelling the same feature are two labels in MapLibre.
+//!    This only folds copies of one label together; dropping *different*
+//!    labels that say the same thing is the separate, opt-in
+//!    [`LabelCandidate::dedupe`] rule.
 //! 3. **Total order** — `(layer ↑, sort-key ↑, place rank ↑, quantized
 //!    anchor y, quantized anchor x, text)`. `layer` is the cross-layer
 //!    priority rank: MapLibre walks the style's symbol layers
@@ -233,6 +236,21 @@ pub struct LabelCandidate {
     /// every branch of its own road. Zero disables the check (point
     /// labels).
     pub repeat_px: f32,
+    /// Same-value dedupe: `(key, distance px)`. A candidate is dropped when
+    /// a label of the same layer with an equal key has already been
+    /// *placed* nearer than the distance (anchor to anchor, in the shared
+    /// world-pixel frame). Labels that are dropped or lose their collision
+    /// suppress nothing, so one of a run of equal labels always gets its
+    /// chance to show. `None` opts out.
+    ///
+    /// This is not the dedup of identical copies (see
+    /// [`place_layers_detailed`]): those are one label seen from several
+    /// tiles, while this drops distinct labels that would repeat the same
+    /// information, such as one building name on each parcel of a complex.
+    /// The key is computed from the feature itself, so every tile that sees
+    /// a candidate gives it the same key and the decision stays
+    /// deterministic across tiles.
+    pub dedupe: Option<(String, f32)>,
     /// What to do when every variant (or, for `Always`, the first) collides.
     pub overlap: Overlap,
     /// MapLibre `*-ignore-placement`: don't block later labels (skip
@@ -254,6 +272,10 @@ impl LabelCandidate {
 /// Anchors already taken by each `(layer, text, style)` label, in the shared
 /// world-pixel frame — the state the line-label repeat filter consults.
 type RepeatAnchors<'a> = HashMap<(usize, &'a str, u64), Vec<(f32, f32)>>;
+
+/// Anchors of the labels placed so far under each `(layer, dedupe key)`, in
+/// the shared world-pixel frame — the state the same-value dedupe consults.
+type DedupeAnchors<'a> = HashMap<(usize, &'a str), Vec<(f32, f32)>>;
 
 /// One placed label: which candidate it came from, and which of its
 /// variants was chosen (an index into [`LabelCandidate::variants`]).
@@ -286,11 +308,17 @@ pub struct Placement {
 /// No tile-local input enters. Variants are tried in declaration order
 /// (identical on every tile), so the seam stays seamless.
 ///
-/// Between the dedup and the collision step comes MapLibre's repeat
-/// filter: a candidate within [`LabelCandidate::repeat_px`] of an earlier
-/// same-label anchor is dropped. Like the reference it consumes the
-/// anchor whether or not the label goes on to win its collision, so a
-/// blocked candidate still keeps its neighbours away.
+/// Between the dedup of identical copies and the collision step comes
+/// MapLibre's repeat filter: a candidate within
+/// [`LabelCandidate::repeat_px`] of an earlier same-label anchor is
+/// dropped. Like the reference it consumes the anchor whether or not the
+/// label goes on to win its collision, so a blocked candidate still keeps
+/// its neighbours away.
+///
+/// After it, still before the collision step, comes the same-value dedupe
+/// ([`LabelCandidate::dedupe`]). Unlike the repeat filter it counts only
+/// labels that were placed, so a dropped or blocked label never hides its
+/// duplicates, and a deduped label takes no space.
 pub fn place_layers(layers: &[&[LabelCandidate]], cell_px: f32) -> Vec<Vec<Placement>> {
     place_layers_detailed(layers, cell_px)
         .into_iter()
@@ -306,13 +334,19 @@ pub struct LayerOutcome {
     pub placed: Vec<Placement>,
     /// Candidates (indices into the layer's list) that reached the
     /// collision test and found no free variant, in placement order.
-    /// Duplicates dropped by the dedup and line labels dropped by the
-    /// repeat filter are not listed: neither ever competed for space.
+    /// Copies folded by the dedup of identical copies and line labels
+    /// dropped by the repeat filter are not listed: neither ever competed
+    /// for space.
     pub rejected: Vec<usize>,
+    /// Candidates dropped by the same-value dedupe
+    /// ([`LabelCandidate::dedupe`]) because an equal-keyed label had
+    /// already placed nearby, in placement order.
+    pub deduped: Vec<usize>,
 }
 
 /// [`place_layers`], also reporting the candidates that lost their
-/// collision test, for callers that show what placement turned down.
+/// collision test or were dropped by the same-value dedupe, for callers
+/// that show what placement turned down.
 pub fn place_layers_detailed(layers: &[&[LabelCandidate]], cell_px: f32) -> Vec<LayerOutcome> {
     // Total order: layer ↑, sort-key ↑, quantized anchor (y, x), text.
     let mut order: Vec<(usize, usize)> = layers
@@ -336,10 +370,13 @@ pub fn place_layers_detailed(layers: &[&[LabelCandidate]], cell_px: f32) -> Vec<
     let mut seen: HashSet<(usize, i64, i64, &str, u64)> = HashSet::new();
     // Anchors already taken by each label, for the repeat filter.
     let mut anchors: RepeatAnchors<'_> = HashMap::new();
+    // Anchors of placed labels per dedupe key, for the same-value dedupe.
+    let mut shown: DedupeAnchors<'_> = HashMap::new();
     let mut out: Vec<LayerOutcome> = vec![LayerOutcome::default(); layers.len()];
     for (li, i) in order {
         let c = at((li, i));
-        // Dedup: keep the first candidate (in total order) per key.
+        // Dedup of identical copies (one label seen from several tiles):
+        // keep the first candidate (in total order) per key.
         let (qx, qy) = c.quant();
         if !seen.insert((li, qx, qy, c.text.as_str(), c.style_id)) {
             continue;
@@ -356,6 +393,25 @@ pub fn place_layers_detailed(layers: &[&[LabelCandidate]], cell_px: f32) -> Vec<
                 continue;
             }
             taken.push((c.anchor_x, c.anchor_y));
+        }
+        // Same-value dedupe: only labels already shown count, so it is
+        // checked here but recorded after the label places.
+        let dedupe = c
+            .dedupe
+            .as_ref()
+            .filter(|(k, px)| !k.is_empty() && *px > 0.0);
+        if let Some((key, px)) = dedupe {
+            let r2 = px * px;
+            let near = shown.get(&(li, key.as_str())).is_some_and(|placed| {
+                placed.iter().any(|&(x, y)| {
+                    let (dx, dy) = (c.anchor_x - x, c.anchor_y - y);
+                    dx * dx + dy * dy < r2
+                })
+            });
+            if near {
+                out[li].deduped.push(i);
+                continue;
+            }
         }
         // Collision: the first variant whose every box is free. `Always`
         // shows at the first variant without looking further; `Fallback`
@@ -379,6 +435,12 @@ pub fn place_layers_detailed(layers: &[&[LabelCandidate]], cell_px: f32) -> Vec<
             variant,
             overlapped,
         });
+        if let Some((key, _)) = dedupe {
+            shown
+                .entry((li, key.as_str()))
+                .or_default()
+                .push((c.anchor_x, c.anchor_y));
+        }
         // Blocking: a shown label reserves its chosen boxes unless it ignores
         // placement (so an overlapping + ignore-placement label neither
         // collides nor blocks).
@@ -424,6 +486,7 @@ mod tests {
             anchor_x: x,
             anchor_y: y,
             repeat_px: 0.0,
+            dedupe: None,
             overlap: Overlap::Never,
             ignore_placement: false,
         }
@@ -636,6 +699,7 @@ mod tests {
             anchor_x: x,
             anchor_y: y,
             repeat_px,
+            dedupe: None,
             overlap: Overlap::Always,
             ignore_placement: true,
         }
@@ -688,6 +752,79 @@ mod tests {
         let mut b = line_cand("Main St", 60.0, 0.0, 125.0);
         b.overlap = Overlap::Never;
         assert_eq!(idxs(&place(&[blocker, a, b], COLLISION_CELL_PX)), vec![0]);
+    }
+
+    /// A point candidate carrying a same-value dedupe key.
+    fn keyed(sort_key: f64, key: &str, x: f32, px: f32) -> LabelCandidate {
+        let mut c = cand(sort_key, x as i64 * 10, 0, "Hall", x, 0.0);
+        c.dedupe = Some((key.into(), px));
+        c
+    }
+
+    #[test]
+    fn same_key_within_the_distance_is_deduped() {
+        let out = place_layers_detailed(
+            &[&[
+                keyed(0.0, "Hall", 0.0, 100.0),
+                keyed(1.0, "Hall", 50.0, 100.0),
+            ]],
+            COLLISION_CELL_PX,
+        );
+        assert_eq!(idxs(&out[0].placed), vec![0]);
+        assert_eq!(out[0].deduped, vec![1]);
+        assert!(out[0].rejected.is_empty());
+    }
+
+    #[test]
+    fn same_key_beyond_the_distance_places_both() {
+        let out = place_layers_detailed(
+            &[&[
+                keyed(0.0, "Hall", 0.0, 100.0),
+                keyed(1.0, "Hall", 150.0, 100.0),
+            ]],
+            COLLISION_CELL_PX,
+        );
+        assert_eq!(idxs(&out[0].placed), vec![0, 1]);
+        assert!(out[0].deduped.is_empty());
+    }
+
+    #[test]
+    fn a_label_that_loses_its_collision_does_not_suppress_its_duplicate() {
+        // The first `Hall` is blocked, so the second, within the distance of
+        // it, must still show: otherwise the name would vanish entirely.
+        let blocker = cand(-1.0, -10, 0, "blocker", 0.0, 0.0);
+        let first = keyed(0.0, "Hall", 5.0, 100.0);
+        let second = keyed(1.0, "Hall", 60.0, 100.0);
+        let out = place_layers_detailed(&[&[blocker, first, second]], COLLISION_CELL_PX);
+        assert_eq!(idxs(&out[0].placed), vec![0, 2]);
+        assert_eq!(out[0].rejected, vec![1]);
+        assert!(out[0].deduped.is_empty());
+    }
+
+    #[test]
+    fn different_or_empty_keys_and_other_layers_are_not_deduped() {
+        let out = place_layers_detailed(
+            &[&[
+                keyed(0.0, "Hall", 0.0, 100.0),
+                keyed(1.0, "Annex", 50.0, 100.0),
+            ]],
+            COLLISION_CELL_PX,
+        );
+        assert_eq!(idxs(&out[0].placed), vec![0, 1]);
+        // An empty key never dedupes.
+        let out = place_layers_detailed(
+            &[&[keyed(0.0, "", 0.0, 100.0), keyed(1.0, "", 50.0, 100.0)]],
+            COLLISION_CELL_PX,
+        );
+        assert_eq!(idxs(&out[0].placed), vec![0, 1]);
+        // The same key in another layer is that layer's own business.
+        let top = [keyed(0.0, "Hall", 0.0, 100.0)];
+        let below = [keyed(0.0, "Hall", 50.0, 100.0)];
+        let out = place_layers_detailed(&[&top, &below], COLLISION_CELL_PX);
+        assert_eq!(
+            (idxs(&out[0].placed), idxs(&out[1].placed)),
+            (vec![0], vec![0])
+        );
     }
 
     #[test]

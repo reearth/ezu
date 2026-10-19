@@ -3068,7 +3068,7 @@
             "type": "object"
           },
           {
-            "description": "The boxes a `label-placement` node measured its labels by, as polygons — one per box — so any geometry and paint op can draw them: a bordered or rounded badge (`buffer` → `stroke`), an offset shadow (`transform`), or a debug overlay of placement. Reads the decisions already made, so nothing is placed twice and the boxes match what `text-draw` draws; labels placed from a neighbour tile's candidates are included, so boxes continue across tile edges. Each polygon carries the labelled feature's properties plus `part` (`text`, `icon`, `background`, `glyph` or `collision`), `placed` (false for a candidate that lost its collision test, with `include: all`) and `label-id` (shared by every box of one label, the same on every tile). A placed label also carries `overlapped` (true when it overlaps a label placed before it, which only `overlap: always` or `fallback` permits) and `variant-index`: where the position it took sits in the list it was tried from (`anchor-offsets`, or the anchors of the deprecated `anchor-variants`), 0 for the first position, for a lone one and for a line label, and absent when the variant shown draws no text. A label that did not place carries `drop-reason` instead, `collision` for now. A point label gives its `text` block (no padding), `icon` (rotated by `icon-rotate`), `background` box (with `background-padding` or `background-color`) and the `collision` box or boxes it was tested with, padding included. A line label gives one `glyph` quad per glyph, rotated along the path, and the axis-aligned `collision` box placement tested for each glyph.",
+            "description": "The boxes a `label-placement` node measured its labels by, as polygons — one per box — so any geometry and paint op can draw them: a bordered or rounded badge (`buffer` → `stroke`), an offset shadow (`transform`), or a debug overlay of placement. Reads the decisions already made, so nothing is placed twice and the boxes match what `text-draw` draws; labels placed from a neighbour tile's candidates are included, so boxes continue across tile edges. Each polygon carries the labelled feature's properties plus `part` (`text`, `icon`, `background`, `glyph` or `collision`), `placed` (false for a candidate that did not place, with `include: all`) and `label-id` (shared by every box of one label, the same on every tile). A placed label also carries `overlapped` (true when it overlaps a label placed before it, which only `overlap: always` or `fallback` permits) and `variant-index`: where the position it took sits in the list it was tried from (`anchor-offsets`, or the anchors of the deprecated `anchor-variants`), 0 for the first position, for a lone one and for a line label, and absent when the variant shown draws no text. A label that did not place carries `drop-reason` instead: `collision` when it lost its collision test, `dedupe` when its layer's `dedupe-key-expr` dropped it because a label with the same key had already placed within `dedupe-distance-px`. A point label gives its `text` block (no padding), `icon` (rotated by `icon-rotate`), `background` box (with `background-padding` or `background-color`) and the `collision` box or boxes it was tested with, padding included. A line label gives one `glyph` quad per glyph, rotated along the path, and the axis-aligned `collision` box placement tested for each glyph.",
             "properties": {
               "extent": {
                 "default": 4096,
@@ -3078,7 +3078,7 @@
               },
               "include": {
                 "default": "placed",
-                "description": "`placed` emits the labels that placed; `all` adds the candidates that lost their collision test, with `placed: false`, at their first anchor. Duplicate copies of one label are never emitted.",
+                "description": "`placed` emits the labels that placed; `all` adds the candidates that lost their collision test or were dropped by `dedupe-key-expr`, with `placed: false`, at their first anchor. Duplicate copies of one label are never emitted.",
                 "enum": [
                   "placed",
                   "all"
@@ -5135,6 +5135,14 @@
               "color-expr": {
                 "description": "A MapLibre color expression, evaluated per feature group; overrides the constant `color`."
               },
+              "dedupe-distance-px": {
+                "description": "The distance in px, anchor to anchor, within which a placed label hides later labels with the same `dedupe-key-expr` key. Required with `dedupe-key-expr`; must be greater than 0.",
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              "dedupe-key-expr": {
+                "description": "A MapLibre expression, evaluated per feature group, giving the key that marks labels as duplicates of each other: once a label of this layer has placed, a later label with an equal key whose anchor is nearer than `dedupe-distance-px` to it is dropped, so a name shared by several neighbouring features (one complex split into parcels) is shown once. Labels are visited in placement order (`sort-key-expr`, then feature order), and only labels that actually placed count, so a label that lost its collision never hides its duplicates. A deduped label takes no space, and `label-boxes` with `include: all` reports it with `drop-reason: dedupe`. A null or empty result never dedupes; other values compare by their text. Applies within this layer only, needs `dedupe-distance-px` and collision on, and works the same across tiles as long as the distance stays within the 8 neighbour tiles. Point placement only — line labels have `spacing-px`."
+              },
               "features": {
                 "description": "Reference to another node (`@name`).",
                 "pattern": "^@?[A-Za-z_][A-Za-z0-9_-]*$",
@@ -5640,6 +5648,14 @@
               },
               "color-expr": {
                 "description": "A MapLibre color expression, evaluated per feature group; overrides the constant `color`."
+              },
+              "dedupe-distance-px": {
+                "description": "The distance in px, anchor to anchor, within which a placed label hides later labels with the same `dedupe-key-expr` key. Required with `dedupe-key-expr`; must be greater than 0.",
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              "dedupe-key-expr": {
+                "description": "A MapLibre expression, evaluated per feature group, giving the key that marks labels as duplicates of each other: once a label of this layer has placed, a later label with an equal key whose anchor is nearer than `dedupe-distance-px` to it is dropped, so a name shared by several neighbouring features (one complex split into parcels) is shown once. Labels are visited in placement order (`sort-key-expr`, then feature order), and only labels that actually placed count, so a label that lost its collision never hides its duplicates. A deduped label takes no space, and `label-boxes` with `include: all` reports it with `drop-reason: dedupe`. A null or empty result never dedupes; other values compare by their text. Applies within this layer only, needs `dedupe-distance-px` and collision on, and works the same across tiles as long as the distance stays within the 8 neighbour tiles. Point placement only — line labels have `spacing-px`."
               },
               "features": {
                 "description": "Reference to another node (`@name`).",

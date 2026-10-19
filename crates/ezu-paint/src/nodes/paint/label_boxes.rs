@@ -76,7 +76,8 @@ impl Part {
 struct LabelBoxesNode {
     /// Bit set of the [`Part`]s to emit.
     parts: u8,
-    /// Also emit the candidates that lost their collision test.
+    /// Also emit the candidates that lost their collision test or were
+    /// dropped by the same-value dedupe.
     include_rejected: bool,
     extent: u32,
     ports: Vec<PortSpec>,
@@ -108,11 +109,15 @@ impl Emitter {
                 properties.insert("placed".into(), maplibre_expr::Value::Bool(true));
                 properties.insert("overlapped".into(), maplibre_expr::Value::Bool(overlapped));
             }
-            Outcome::Collided => {
+            Outcome::Collided | Outcome::Deduped => {
+                let reason = match props.outcome {
+                    Outcome::Deduped => "dedupe",
+                    _ => "collision",
+                };
                 properties.insert("placed".into(), maplibre_expr::Value::Bool(false));
                 properties.insert(
                     "drop-reason".into(),
-                    maplibre_expr::Value::String("collision".into()),
+                    maplibre_expr::Value::String(reason.into()),
                 );
             }
         }
@@ -189,6 +194,9 @@ enum Outcome {
     Placed { overlapped: bool },
     /// Lost its collision test.
     Collided,
+    /// Dropped because a label with the same dedupe key had already placed
+    /// nearby (`dedupe-key-expr`).
+    Deduped,
 }
 
 /// A label's identity, the same on every tile that sees it: its layer's
@@ -237,7 +245,7 @@ impl LabelBoxesNode {
         // A point label lays its text out once per position, and the block a
         // variant draws is that position's; a line label has the one.
         let variant_index = match (outcome, draw) {
-            (Outcome::Collided, _) => None,
+            (Outcome::Collided | Outcome::Deduped, _) => None,
             (_, LabelDraw::Point { variants, .. }) => variants.get(variant).and_then(|v| v.block),
             (_, LabelDraw::Line { .. }) => Some(0),
         };
@@ -374,6 +382,9 @@ impl Node for LabelBoxesNode {
                 for &cand in &placed.outcome.rejected {
                     self.emit_label(&mut out, layer, set, cand, 0, Outcome::Collided);
                 }
+                for &cand in &placed.outcome.deduped {
+                    self.emit_label(&mut out, layer, set, cand, 0, Outcome::Deduped);
+                }
             }
         }
         Ok(features_value_culled(ctx, self.extent, 0, out.groups))
@@ -468,7 +479,7 @@ impl NodeFactory for LabelBoxesFactory {
                 .into(),
         );
         serde_json::json!({
-            "description": "The boxes a `label-placement` node measured its labels by, as polygons — one per box — so any geometry and paint op can draw them: a bordered or rounded badge (`buffer` → `stroke`), an offset shadow (`transform`), or a debug overlay of placement. Reads the decisions already made, so nothing is placed twice and the boxes match what `text-draw` draws; labels placed from a neighbour tile's candidates are included, so boxes continue across tile edges. Each polygon carries the labelled feature's properties plus `part` (`text`, `icon`, `background`, `glyph` or `collision`), `placed` (false for a candidate that lost its collision test, with `include: all`) and `label-id` (shared by every box of one label, the same on every tile). A placed label also carries `overlapped` (true when it overlaps a label placed before it, which only `overlap: always` or `fallback` permits) and `variant-index`: where the position it took sits in the list it was tried from (`anchor-offsets`, or the anchors of the deprecated `anchor-variants`), 0 for the first position, for a lone one and for a line label, and absent when the variant shown draws no text. A label that did not place carries `drop-reason` instead, `collision` for now. A point label gives its `text` block (no padding), `icon` (rotated by `icon-rotate`), `background` box (with `background-padding` or `background-color`) and the `collision` box or boxes it was tested with, padding included. A line label gives one `glyph` quad per glyph, rotated along the path, and the axis-aligned `collision` box placement tested for each glyph.",
+            "description": "The boxes a `label-placement` node measured its labels by, as polygons — one per box — so any geometry and paint op can draw them: a bordered or rounded badge (`buffer` → `stroke`), an offset shadow (`transform`), or a debug overlay of placement. Reads the decisions already made, so nothing is placed twice and the boxes match what `text-draw` draws; labels placed from a neighbour tile's candidates are included, so boxes continue across tile edges. Each polygon carries the labelled feature's properties plus `part` (`text`, `icon`, `background`, `glyph` or `collision`), `placed` (false for a candidate that did not place, with `include: all`) and `label-id` (shared by every box of one label, the same on every tile). A placed label also carries `overlapped` (true when it overlaps a label placed before it, which only `overlap: always` or `fallback` permits) and `variant-index`: where the position it took sits in the list it was tried from (`anchor-offsets`, or the anchors of the deprecated `anchor-variants`), 0 for the first position, for a lone one and for a line label, and absent when the variant shown draws no text. A label that did not place carries `drop-reason` instead: `collision` when it lost its collision test, `dedupe` when its layer's `dedupe-key-expr` dropped it because a label with the same key had already placed within `dedupe-distance-px`. A point label gives its `text` block (no padding), `icon` (rotated by `icon-rotate`), `background` box (with `background-padding` or `background-color`) and the `collision` box or boxes it was tested with, padding included. A line label gives one `glyph` quad per glyph, rotated along the path, and the axis-aligned `collision` box placement tested for each glyph.",
             "properties": {
                 "placement": schema_frag::node_ref(),
                 "labels": labels,
@@ -480,7 +491,7 @@ impl NodeFactory for LabelBoxesFactory {
                 "include": {
                     "enum": ["placed", "all"],
                     "default": "placed",
-                    "description": "`placed` emits the labels that placed; `all` adds the candidates that lost their collision test, with `placed: false`, at their first anchor. Duplicate copies of one label are never emitted."
+                    "description": "`placed` emits the labels that placed; `all` adds the candidates that lost their collision test or were dropped by `dedupe-key-expr`, with `placed: false`, at their first anchor. Duplicate copies of one label are never emitted."
                 },
                 "extent": { "type": "integer", "minimum": 1, "default": DEFAULT_EXTENT,
                             "description": "Coordinate extent of the emitted geometry, matching the features it is combined with." }

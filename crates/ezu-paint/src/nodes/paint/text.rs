@@ -61,8 +61,9 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    downcast_features, neighbor_feature_groups, read_bool_or, read_number_or, read_optional_string,
-    read_optional_zoom, read_string_or, read_xy, FeatureGroup, NeighborGroups,
+    downcast_features, neighbor_feature_groups, read_bool_or, read_number, read_number_or,
+    read_optional_string, read_optional_zoom, read_string_or, read_xy, FeatureGroup,
+    NeighborGroups,
 };
 use ezu_core::text::{
     clip_line,
@@ -397,6 +398,19 @@ fn bbox_within_band(
     max_x + band >= 0.0 && min_x - band <= tile_w && max_y + band >= 0.0 && min_y - band <= tile_h
 }
 
+/// A `dedupe-key-expr` result as the key placement compares, or `None` for
+/// a label that never dedupes: a null result or an empty string. Other
+/// values compare by their text, so the number `1` and the string `"1"` are
+/// the same key.
+fn dedupe_key(v: maplibre_expr::Value) -> Option<String> {
+    let key = match v {
+        maplibre_expr::Value::Null => return None,
+        maplibre_expr::Value::String(s) => s,
+        v => v.to_string(),
+    };
+    (!key.is_empty()).then_some(key)
+}
+
 /// Evaluate a `Color` expression for a group into straight RGBA (`0..=1`
 /// components, the repo color convention), falling back to `fallback`
 /// when absent or non-color.
@@ -603,6 +617,9 @@ struct GroupPrep<'g> {
     icon: Option<GroupIcon>,
     size: f32,
     sort_key: f64,
+    /// The group's `dedupe-key-expr` result; `None` when unset, null or
+    /// empty, so the label never dedupes.
+    dedupe_key: Option<String>,
     opacity: f32,
     padding: f32,
     color: [f32; 4],
@@ -1173,6 +1190,13 @@ struct TextNode {
     /// first. Absent = 0.
     sort_key_expr: Option<maplibre_expr::Expr>,
     sort_key_expr_src: Option<String>,
+    /// Same-value dedupe: a MapLibre expression giving each feature group a
+    /// key, and the distance (px) within which a placed label hides later
+    /// labels of the same key in this layer. Both set or both `None`; point
+    /// placement only (line labels have their repeat distance instead).
+    dedupe_key_expr: Option<maplibre_expr::Expr>,
+    dedupe_key_expr_src: Option<String>,
+    dedupe_distance_px: Option<f32>,
     /// The upstream `<source>.<layer>` asset name, used only to spell the
     /// neighbour binding names in [`Node::asset_inputs`] (the translator
     /// always sets `source`/`layer`; hand-written recipes may omit them →
@@ -1342,6 +1366,11 @@ impl TextNode {
             },
             None => 0.0,
         };
+        let dedupe_key = self
+            .dedupe_key_expr
+            .as_ref()
+            .and_then(|e| maplibre_expr::evaluate(e, &ectx).ok())
+            .and_then(dedupe_key);
         let opacity = eval_number(&self.opacity_expr, &ectx, const_opacity).clamp(0.0, 1.0);
         let padding = eval_number(&self.padding_expr, &ectx, self.padding_px).max(0.0);
         let mut color = eval_color(&self.color_expr, &ectx, const_color);
@@ -1383,6 +1412,7 @@ impl TextNode {
             icon,
             size,
             sort_key,
+            dedupe_key,
             opacity,
             padding,
             color,
@@ -1857,6 +1887,9 @@ impl TextNode {
                             anchor_x: anchor.x,
                             anchor_y: anchor.y,
                             repeat_px,
+                            // Same-value dedupe is a point-placement rule;
+                            // line labels have the repeat distance.
+                            dedupe: None,
                             overlap: self.overlap,
                             ignore_placement: self.ignore_placement,
                         });
@@ -2068,8 +2101,9 @@ impl TextNode {
         // Neighbour prefilter band: this many multiples of the widest label
         // reach — a collision chain advances one reach per hop. A neighbour
         // feature whose geometry stays outside this band of the tile cannot
-        // change what it draws, so shaping it is wasted; skip it.
-        let band = NEIGHBOR_BAND_HOPS * reach_max;
+        // change what it draws, so shaping it is wasted; skip it. A same-value
+        // dedupe reaches its distance per hop, so it widens the band to match.
+        let band = NEIGHBOR_BAND_HOPS * reach_max.max(self.dedupe_distance_px.unwrap_or(0.0));
         // One cropped image per icon name, shared by every symbol using it.
         let mut crops: HashMap<String, Option<(Arc<ezu_graph::RasterBuf>, f32)>> = HashMap::new();
 
@@ -2337,6 +2371,7 @@ impl TextNode {
                     // The repeat filter is a line-label rule (MapLibre records
                     // anchors along a path); a point label has one anchor.
                     repeat_px: 0.0,
+                    dedupe: prep.dedupe_key.clone().zip(self.dedupe_distance_px),
                     overlap,
                     ignore_placement,
                 });
@@ -2570,11 +2605,18 @@ impl Node for TextNode {
             (b"paddingexpr".as_slice(), &self.padding_expr_src),
             (b"sortkeyexpr".as_slice(), &self.sort_key_expr_src),
             (b"filterexpr".as_slice(), &self.filter_expr_src),
+            (b"dedupekeyexpr".as_slice(), &self.dedupe_key_expr_src),
         ] {
             if let Some(s) = src {
                 h.update(tag);
                 h.update(s.as_bytes());
             }
+        }
+        // Same-value dedupe distance — folded only when set, so existing
+        // recipes keep their hashes.
+        if let Some(px) = self.dedupe_distance_px {
+            h.update(b"dedupedistance");
+            h.update(&px.to_le_bytes());
         }
         h.update(&[
             self.anchor as u8,
@@ -3205,6 +3247,42 @@ fn build_text_node(
         parse_expr_field(fields, "padding-expr", &maplibre_expr::Type::Number)?;
     let (sort_key_expr, sort_key_expr_src) =
         parse_expr_field(fields, "sort-key-expr", &maplibre_expr::Type::Number)?;
+    // Same-value dedupe: the key expression needs a distance to act within.
+    let (mut dedupe_key_expr, mut dedupe_key_expr_src) =
+        parse_expr_field(fields, "dedupe-key-expr", &maplibre_expr::Type::Value)?;
+    let mut dedupe_distance_px = match fields.contains_key("dedupe-distance-px") {
+        true => {
+            let px = read_number(fields, "dedupe-distance-px", ctx)?;
+            if !(px.is_finite() && px > 0.0) {
+                return Err(FactoryError::BadField {
+                    field: "dedupe-distance-px".into(),
+                    msg: format!("must be a number greater than 0, got {px}"),
+                });
+            }
+            Some(px as f32)
+        }
+        false => None,
+    };
+    match (&dedupe_key_expr, dedupe_distance_px) {
+        (Some(_), None) => {
+            return Err(FactoryError::BadField {
+                field: "dedupe-distance-px".into(),
+                msg: "required when `dedupe-key-expr` is set".into(),
+            })
+        }
+        (None, Some(_)) => {
+            ctx.warn("`dedupe-distance-px` ignored: it needs `dedupe-key-expr`");
+            dedupe_distance_px = None;
+        }
+        _ => {}
+    }
+    if placement != Placement::Point && dedupe_key_expr.is_some() {
+        ctx.warn(
+            "`dedupe-key-expr` applies to point placement only — ignored \
+             (line labels use `spacing-px`)",
+        );
+        (dedupe_key_expr, dedupe_key_expr_src, dedupe_distance_px) = (None, None, None);
+    }
     // Neighbour candidate gathering: the upstream `<source>.<layer>`
     // (used only to name the neighbour bindings in `asset_inputs`) plus
     // the upstream feature filter, so neighbours are filtered exactly
@@ -3327,6 +3405,9 @@ fn build_text_node(
             padding_expr_src,
             sort_key_expr,
             sort_key_expr_src,
+            dedupe_key_expr,
+            dedupe_key_expr_src,
+            dedupe_distance_px,
             neighbor_base,
             filter_expr,
             filter_expr_src,
@@ -3451,6 +3532,11 @@ fn text_schema(stage: Stage) -> Value {
                 "sort-key-expr": {
                     "description": "A MapLibre number expression (MapLibre `symbol-sort-key`), evaluated per feature group; lower values place first under collision. Absent = 0.",
                 },
+                "dedupe-key-expr": {
+                    "description": "A MapLibre expression, evaluated per feature group, giving the key that marks labels as duplicates of each other: once a label of this layer has placed, a later label with an equal key whose anchor is nearer than `dedupe-distance-px` to it is dropped, so a name shared by several neighbouring features (one complex split into parcels) is shown once. Labels are visited in placement order (`sort-key-expr`, then feature order), and only labels that actually placed count, so a label that lost its collision never hides its duplicates. A deduped label takes no space, and `label-boxes` with `include: all` reports it with `drop-reason: dedupe`. A null or empty result never dedupes; other values compare by their text. Applies within this layer only, needs `dedupe-distance-px` and collision on, and works the same across tiles as long as the distance stays within the 8 neighbour tiles. Point placement only — line labels have `spacing-px`.",
+                },
+                "dedupe-distance-px": { "type": "number", "exclusiveMinimum": 0.0,
+                                        "description": "The distance in px, anchor to anchor, within which a placed label hides later labels with the same `dedupe-key-expr` key. Required with `dedupe-key-expr`; must be greater than 0." },
                 "source": { "type": "string",
                             "description": "Upstream feature source name (matches the `features` node). Used only to name the neighbour tile bindings for cross-tile collision. Omit to collide within this tile only." },
                 "layer": { "type": "string",
