@@ -12,8 +12,8 @@ use xxhash_rust::xxh3::Xxh3;
 
 use crate::color_interp::InterpSpace;
 use crate::nodes::common::{
-    anchor_schema, hash_stops, read_space, read_xy, resolve_stops, sample_stops, space_schema,
-    Anchor, StopsIn, ANCHORS,
+    anchor_schema, color_at, hash_stops, interpolation_schema, read_space, read_xy, resolve_stops,
+    space_schema, Anchor, StopInterpolation, StopsIn, ANCHORS, STOP_INTERPOLATIONS,
 };
 use crate::nodes::raster::generator_kind::{
     generator_kind_schema, parse_generator_kind, GeneratorKind,
@@ -26,6 +26,7 @@ struct GradientRadialNode {
     aspect: In<f64>,
     stops: StopsIn,
     space: InEnum<InterpSpace>,
+    interpolation: InEnum<StopInterpolation>,
     anchor: InEnum<Anchor>,
     out_kind: GeneratorKind,
     ports: Vec<PortSpec>,
@@ -69,7 +70,8 @@ impl Node for GradientRadialNode {
             let dy = uy - center[1];
             (dx * dx + dy * dy).sqrt() / r
         };
-        let color = |t: f32| sample_stops(stops, t, space);
+        let interpolation = self.interpolation.get(ctx)?;
+        let color = |t: f32| color_at(stops, t, space, interpolation);
         Ok(render_gradient(ctx, self.out_kind, anchor, position, color))
     }
     fn param_hash(&self, h: &mut Xxh3) {
@@ -80,6 +82,7 @@ impl Node for GradientRadialNode {
         self.aspect.param_hash(h);
         self.anchor.param_hash(h);
         self.space.param_hash(h);
+        self.interpolation.param_hash(h);
         hash_stops(&self.stops, h);
         let (tag, dims) = self.out_kind.hash_tag();
         h.update(&tag);
@@ -107,6 +110,11 @@ impl NodeFactory for GradientRadialFactory {
         let out_kind = parse_generator_kind(fields, ctx)?;
         let mut r = InReader::new(fields, ctx, 0);
         let space = read_space(&mut r, fields)?;
+        let interpolation = r.enum_or(
+            "interpolation",
+            StopInterpolation::Linear,
+            STOP_INTERPOLATIONS,
+        )?;
         let anchor = r.enum_or("anchor", Anchor::Tile, ANCHORS)?;
         let stops = read_gradient_stops(fields, ctx, &mut r, out_kind)?;
         let radius = r.number_or("radius", 0.5)?;
@@ -119,6 +127,7 @@ impl NodeFactory for GradientRadialFactory {
                 aspect,
                 stops,
                 space,
+                interpolation,
                 anchor,
                 out_kind,
                 ports: parts.ports,
@@ -140,6 +149,7 @@ impl NodeFactory for GradientRadialFactory {
                            "description": "`[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order." },
                 "anchor": anchor_schema("tile", None),
                 "space": space_schema("Colour space the stops interpolate in; hue-based spaces take the shortest path."),
+                "interpolation": interpolation_schema(),
                 "kind": generator_kind_schema(),
                 "width-px": { "type": "integer", "minimum": 1 },
                 "height-px": { "type": "integer", "minimum": 1 },

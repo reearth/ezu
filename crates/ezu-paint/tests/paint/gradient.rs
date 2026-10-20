@@ -114,3 +114,71 @@ fn gradient_diamond_has_axis_aligned_corners() {
         "axial half should be grey, got {half}"
     );
 }
+
+/// `interpolation: step` paints flat bands, each the colour of the stop at
+/// or below the position, as `color-ramp`'s `step` does; and a `string`
+/// param can switch it per render.
+#[test]
+fn gradient_step_paints_the_stop_at_or_below() {
+    let json = |op: &str, interpolation: &str| {
+        format!(
+            r##"{{
+              "name": "step",
+              "tile-size": 16,
+              "params": {{ "i": {{ "type": "string", "enum": ["linear", "step"], "default": "linear" }} }},
+              "nodes": {{
+                "out": {{ "op": "{op}", "start": [0, 0], "end": [1, 0],
+                         "center": [0.5, 0.5], "radius": 0.6,
+                         "stops": [[0.25, "#ff0000"], [0.5, "#00ff00"], [0.75, "#0000ff"]],
+                         "interpolation": {interpolation} }}
+              }},
+              "output": "@out"
+            }}"##
+        )
+    };
+    const STOPS: [[u8; 4]; 3] = [[0xff, 0, 0, 0xff], [0, 0xff, 0, 0xff], [0, 0, 0xff, 0xff]];
+    let linear_step = render(&json("gradient-linear", r#""step""#), 16, 0);
+    // A linear gradient's positions run (x + 0.5) / 16 across.
+    for x in 0..16 {
+        let t = (x as f32 + 0.5) / 16.0;
+        // Below the first stop, its colour too.
+        let want = STOPS[if t < 0.5 {
+            0
+        } else if t < 0.75 {
+            1
+        } else {
+            2
+        }];
+        assert_eq!(linear_step.pixel(x, 8), want, "x {x}");
+    }
+    for op in [
+        "gradient-linear",
+        "gradient-radial",
+        "gradient-conic",
+        "gradient-diamond",
+    ] {
+        let r = render(&json(op, r#""step""#), 16, 0);
+        // Nothing is blended: every pixel is one stop's colour.
+        assert!(
+            r.pixels.chunks(4).all(|p| STOPS.iter().any(|s| s == p)),
+            "{op}"
+        );
+        // Linear blends between the stops instead.
+        let linear = render(&json(op, r#""linear""#), 16, 0);
+        assert_ne!(linear.pixels, r.pixels, "{op}");
+        // The param form follows the override.
+        let by_param = crate::common::render_with_params(
+            &json(op, r#""$i""#),
+            16,
+            0,
+            ezu_graph::TileId { z: 0, x: 0, y: 0 },
+            &[("i", ezu_graph::ScalarValue::String("step".into()))],
+        );
+        assert_eq!(by_param.pixels, r.pixels, "{op}");
+        assert_eq!(
+            render(&json(op, r#""$i""#), 16, 0).pixels,
+            linear.pixels,
+            "{op}"
+        );
+    }
+}

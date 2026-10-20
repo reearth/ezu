@@ -341,6 +341,11 @@ mean is spelled out in
   `kind: sprite` with `width-px` / `height-px`, coloured as in raster mode
   and sampled in the sprite's own pixels, with a fixed default seed, so
   each copy is the same image.
+- `gradient-linear`, `gradient-radial`, `gradient-conic` and
+  `gradient-diamond` take `interpolation: "step"`, as `color-ramp` does:
+  each position takes the colour of the stop at or below it (the first
+  stop's below them all), so the gradient paints flat bands. `linear`
+  stays the default.
 
 ### Changed
 

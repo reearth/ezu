@@ -2656,6 +2656,24 @@
                 "minimum": 1,
                 "type": "integer"
               },
+              "interpolation": {
+                "oneOf": [
+                  {
+                    "default": "linear",
+                    "description": "`linear` (default) blends the colours of the two stops around a position. `step` gives a position the colour of the stop at or below it (the first stop's below them all), as `color-ramp` and MapLibre's `step` do, so the gradient paints flat bands. Ignored with `kind: scalar`.",
+                    "enum": [
+                      "linear",
+                      "step"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
               "kind": {
                 "oneOf": [
                   {
@@ -2803,6 +2821,24 @@
               "height-px": {
                 "minimum": 1,
                 "type": "integer"
+              },
+              "interpolation": {
+                "oneOf": [
+                  {
+                    "default": "linear",
+                    "description": "`linear` (default) blends the colours of the two stops around a position. `step` gives a position the colour of the stop at or below it (the first stop's below them all), as `color-ramp` and MapLibre's `step` do, so the gradient paints flat bands. Ignored with `kind: scalar`.",
+                    "enum": [
+                      "linear",
+                      "step"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "kind": {
                 "oneOf": [
@@ -2953,6 +2989,24 @@
               "height-px": {
                 "minimum": 1,
                 "type": "integer"
+              },
+              "interpolation": {
+                "oneOf": [
+                  {
+                    "default": "linear",
+                    "description": "`linear` (default) blends the colours of the two stops around a position. `step` gives a position the colour of the stop at or below it (the first stop's below them all), as `color-ramp` and MapLibre's `step` do, so the gradient paints flat bands. Ignored with `kind: scalar`.",
+                    "enum": [
+                      "linear",
+                      "step"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "kind": {
                 "oneOf": [
@@ -3115,6 +3169,24 @@
               "height-px": {
                 "minimum": 1,
                 "type": "integer"
+              },
+              "interpolation": {
+                "oneOf": [
+                  {
+                    "default": "linear",
+                    "description": "`linear` (default) blends the colours of the two stops around a position. `step` gives a position the colour of the stop at or below it (the first stop's below them all), as `color-ramp` and MapLibre's `step` do, so the gradient paints flat bands. Ignored with `kind: scalar`.",
+                    "enum": [
+                      "linear",
+                      "step"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "kind": {
                 "oneOf": [

@@ -594,6 +594,54 @@ pub(super) fn read_space(
     }
 }
 
+/// How a gradient colours a position between two stops — the choice
+/// `color-ramp`'s `interpolation` offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StopInterpolation {
+    /// Blend the two stops' colours in the gradient's `space`.
+    Linear,
+    /// Take the colour of the stop at or below the position, as MapLibre's
+    /// `step` does, so the gradient paints flat bands.
+    Step,
+}
+
+pub(super) const STOP_INTERPOLATIONS: EnumTable<StopInterpolation> = &[
+    ("linear", StopInterpolation::Linear),
+    ("step", StopInterpolation::Step),
+];
+
+/// The schema of a gradient's `interpolation` field.
+pub(super) fn interpolation_schema() -> Value {
+    ezu_graph::schema_frag::in_enum(serde_json::json!({
+        "type": "string",
+        "enum": ["linear", "step"],
+        "default": "linear",
+        "description": "`linear` (default) blends the colours of the two stops around a position. `step` gives a position the colour of the stop at or below it (the first stop's below them all), as `color-ramp` and MapLibre's `step` do, so the gradient paints flat bands. Ignored with `kind: scalar`.",
+    }))
+}
+
+/// The colour of the last stop at or below `t`, or the first stop's
+/// below them all. Stops must be sorted by ascending `t`.
+pub(super) fn step_stops(stops: &[GradientStop], t: f32) -> [f32; 4] {
+    match stops.iter().rev().find(|s| s.t <= t).or(stops.first()) {
+        Some(s) => s.rgba,
+        None => [0.0; 4],
+    }
+}
+
+/// A gradient's colour at `t`, by `interpolation`.
+pub(super) fn color_at(
+    stops: &[GradientStop],
+    t: f32,
+    space: crate::color_interp::InterpSpace,
+    interpolation: StopInterpolation,
+) -> [f32; 4] {
+    match interpolation {
+        StopInterpolation::Linear => sample_stops(stops, t, space),
+        StopInterpolation::Step => step_stops(stops, t),
+    }
+}
+
 /// Linearly interpolate gradient stops at parameter `t`, in colour `space`.
 /// Stops must be non-empty and sorted by ascending `t`. Out-of-range `t`
 /// clamps to the endpoint colors.

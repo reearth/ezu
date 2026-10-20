@@ -300,6 +300,7 @@ Conic (sweep) gradient around `center`. Gradient parameter is the clockwise angl
 | `anchor` | `tile` \| `world` \| `$param` | no | — |
 | `center` | array of number | no | — |
 | `height-px` | integer (1…∞) | no | — |
+| `interpolation` | `linear` \| `step` \| `$param` | no | `linear` (default) blends the colours of the two stops around a position. `step` gives a position the colour of the stop at or below it (the first stop's below them all), as `color-ramp` and MapLibre's `step` do, so the gradient paints flat bands. Ignored with `kind: scalar`. |
 | `kind` | `raster` \| `sprite` \| `scalar` \| `$param` | no | — |
 | `space` | `rgb` \| `hsl` \| `hsv` \| `hcl` \| `lab` \| `$param` | no | Colour space the stops interpolate in; hue-based spaces take the shortest path. |
 | `start-angle` | number \| `$param` \| `@node` | no | — |
@@ -322,6 +323,7 @@ Diamond gradient from `center`. Gradient parameter is Manhattan (|dx| + |dy|) di
 | `anchor` | `tile` \| `world` \| `$param` | no | — |
 | `center` | array of number | no | — |
 | `height-px` | integer (1…∞) | no | — |
+| `interpolation` | `linear` \| `step` \| `$param` | no | `linear` (default) blends the colours of the two stops around a position. `step` gives a position the colour of the stop at or below it (the first stop's below them all), as `color-ramp` and MapLibre's `step` do, so the gradient paints flat bands. Ignored with `kind: scalar`. |
 | `kind` | `raster` \| `sprite` \| `scalar` \| `$param` | no | — |
 | `radius` | number (0…∞) \| `$param` \| `@node` | no | — |
 | `space` | `rgb` \| `hsl` \| `hsv` \| `hcl` \| `lab` \| `$param` | no | Colour space the stops interpolate in; hue-based spaces take the shortest path. |
@@ -344,6 +346,7 @@ Linear gradient from `start` to `end` (fractional coords). `kind: raster` (defau
 | `anchor` | `tile` \| `world` \| `$param` | no | — |
 | `end` | array of number | no | — |
 | `height-px` | integer (1…∞) | no | — |
+| `interpolation` | `linear` \| `step` \| `$param` | no | `linear` (default) blends the colours of the two stops around a position. `step` gives a position the colour of the stop at or below it (the first stop's below them all), as `color-ramp` and MapLibre's `step` do, so the gradient paints flat bands. Ignored with `kind: scalar`. |
 | `kind` | `raster` \| `sprite` \| `scalar` \| `$param` | no | — |
 | `space` | `rgb` \| `hsl` \| `hsv` \| `hcl` \| `lab` \| `$param` | no | Colour space the stops interpolate in; hue-based spaces take the shortest path. |
 | `start` | array of number | no | — |
@@ -367,6 +370,7 @@ Radial gradient from `center` outward. Gradient parameter is Euclidean distance 
 | `aspect` | number (0…∞) \| `$param` \| `@node` | no | — |
 | `center` | array of number | no | — |
 | `height-px` | integer (1…∞) | no | — |
+| `interpolation` | `linear` \| `step` \| `$param` | no | `linear` (default) blends the colours of the two stops around a position. `step` gives a position the colour of the stop at or below it (the first stop's below them all), as `color-ramp` and MapLibre's `step` do, so the gradient paints flat bands. Ignored with `kind: scalar`. |
 | `kind` | `raster` \| `sprite` \| `scalar` \| `$param` | no | — |
 | `radius` | number (0…∞) \| `$param` \| `@node` | no | — |
 | `space` | `rgb` \| `hsl` \| `hsv` \| `hcl` \| `lab` \| `$param` | no | Colour space the stops interpolate in; hue-based spaces take the shortest path. |
