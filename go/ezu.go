@@ -631,8 +631,6 @@ func IsKind(err error, name string) bool {
 
 // --- calling --------------------------------------------------------------
 
-// call runs one ABI interaction under the concurrency guard, and converts a
-// trap into a typed error.
 // idle refuses, with [ErrFrameInProgress], a call that would change what
 // the renderer draws while [Renderer.RenderFrame] holds it.
 func (r *Renderer) idle() error {
@@ -642,6 +640,8 @@ func (r *Renderer) idle() error {
 	return nil
 }
 
+// call runs one ABI interaction under the concurrency guard, and converts a
+// trap into a typed error.
 func (r *Renderer) call(ctx context.Context, f func(context.Context) (int64, error)) (int64, error) {
 	if r.dead.Load() {
 		return 0, ErrRendererDead

@@ -1617,8 +1617,6 @@ fn tile_object(z: u8, x: u32, y: u32) -> Result<JsValue, JsValue> {
     Ok(out.into())
 }
 
-/// `obj[key]` as a number, `None` when it is absent (`undefined` or
-/// `null`), and `InvalidStyle` when it is something else.
 /// Read `renderFrameWithFeatures`'s `{ nodes: [{ node, key? }], coords? }`,
 /// with the names and refusals the C ABI's `ezu_frame_features_new` has.
 fn parse_frame_features(obj: &js_sys::Object) -> Result<FrameFeatures, JsValue> {
@@ -1669,6 +1667,8 @@ fn parse_frame_features(obj: &js_sys::Object) -> Result<FrameFeatures, JsValue> 
     Ok(FrameFeatures { nodes, coords })
 }
 
+/// `obj[key]` as a number, `None` when it is absent (`undefined` or
+/// `null`), and `InvalidStyle` when it is something else.
 fn number_field(obj: &js_sys::Object, key: &str) -> Result<Option<f64>, JsValue> {
     let value = js_sys::Reflect::get(obj, &key.into())?;
     if value.is_undefined() || value.is_null() {
