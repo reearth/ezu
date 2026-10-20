@@ -112,7 +112,7 @@ use std::rc::{Rc, Weak};
 
 use ezu::renderer::{
     BindOptions, Error, ErrorKind, FeatureCoords, Frame, FrameFeatureNode, FrameFeatures,
-    FrameRequest, OutputFormat, PngCompression, RenderOptions,
+    FrameRequest, OutputFormat, PngCompression, RenderOptions, TileFeatureCoords,
 };
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -1026,9 +1026,15 @@ impl Renderer {
     /// computed on its way to the pixels, so this costs no second
     /// evaluation.
     ///
+    /// `nodes` is an array of ids, or `{ nodes, coords }` to write the
+    /// geometry in other coordinates: `coords` is `"tile"` (the default,
+    /// tile units as above), `"lonlat"` (WGS84, seven decimals) or `"px"`
+    /// (the rendered tile's pixels from its top-left corner, two decimals,
+    /// at the tile size the render drew at).
+    ///
     /// Throws `InvalidStyle` before anything renders when a name is not a
     /// node of the style, or names one that produces something other than
-    /// features.
+    /// features, and for a `coords` it does not know.
     #[wasm_bindgen(js_name = renderTileWithFeatures, unchecked_return_type = "TileWithFeatures")]
     pub fn render_tile_with_features(
         &self,
@@ -1036,10 +1042,11 @@ impl Renderer {
         x: u32,
         y: u32,
         set: &SourceSet,
-        nodes: Vec<String>,
+        #[wasm_bindgen(unchecked_param_type = "string[] | TileFeatures")] nodes: JsValue,
         opts: Option<js_sys::Object>,
     ) -> Result<JsValue, JsValue> {
         let parsed = parse_render_options(opts.as_ref())?;
+        let (nodes, coords) = parse_tile_features(&nodes)?;
         let names: Vec<&str> = nodes.iter().map(String::as_str).collect();
         let (image, features) = self
             .inner
@@ -1055,7 +1062,7 @@ impl Renderer {
             if let Some(value) = f.features() {
                 js_sys::Reflect::set(&entry, &"extent".into(), &value.extent.into())?;
             }
-            js_sys::Reflect::set(&entry, &"geojson".into(), &f.to_geojson().into())?;
+            js_sys::Reflect::set(&entry, &"geojson".into(), &f.to_geojson_in(coords).into())?;
             list.push(&entry);
         }
         let out = js_sys::Object::new();
@@ -1451,8 +1458,16 @@ export interface NodeFeatures {
   node: string;
   /** The tile's size in geometry units: coordinates run 0..extent, x right and y down. Absent when the render never reached the node. */
   extent?: number;
-  /** A GeoJSON FeatureCollection as text, in those units, with `node` and `extent` members of its own. */
+  /** A GeoJSON FeatureCollection as text, in the coordinates asked for (tile units by default), with `node` and `extent` members of its own. */
   geojson: string;
+}
+
+/** Which features nodes `renderTileWithFeatures` reports on, and the coordinates it writes them in. */
+export interface TileFeatures {
+  /** Node ids, in the order the collections come back. */
+  nodes: string[];
+  /** Tile units (the default), WGS84 longitude and latitude, or the rendered tile's pixels. */
+  coords?: "tile" | "lonlat" | "px";
 }
 
 /** What `renderTileWithFeatures` hands back. */
@@ -1753,6 +1768,48 @@ fn parse_frame_features(obj: &js_sys::Object) -> Result<FrameFeatures, JsValue> 
             })?
     };
     Ok(FrameFeatures { nodes, coords })
+}
+
+/// What `renderTileWithFeatures` reports on: an array of node ids, or
+/// `{ nodes, coords }`, read with the names and refusals the C ABI's
+/// `ezu_render_tile_with_features` has.
+fn parse_tile_features(value: &JsValue) -> Result<(Vec<String>, TileFeatureCoords), JsValue> {
+    let bad = || {
+        named_err(
+            ErrorKind::InvalidStyle,
+            "the nodes must be an array of node ids, or { nodes: [id, …], coords? }",
+        )
+    };
+    let ids = |list: JsValue| -> Result<Vec<String>, JsValue> {
+        list.dyn_into::<js_sys::Array>()
+            .map_err(|_| bad())?
+            .iter()
+            .map(|id| id.as_string().ok_or_else(bad))
+            .collect()
+    };
+    if js_sys::Array::is_array(value) {
+        return Ok((ids(value.clone())?, TileFeatureCoords::default()));
+    }
+    if !value.is_object() {
+        return Err(bad());
+    }
+    let nodes = ids(js_sys::Reflect::get(value, &"nodes".into())?)?;
+    let coords = js_sys::Reflect::get(value, &"coords".into())?;
+    let coords = if coords.is_undefined() || coords.is_null() {
+        TileFeatureCoords::default()
+    } else {
+        coords
+            .as_string()
+            .as_deref()
+            .and_then(TileFeatureCoords::from_name)
+            .ok_or_else(|| {
+                named_err(
+                    ErrorKind::InvalidStyle,
+                    "coords must be \"tile\", \"lonlat\" or \"px\"",
+                )
+            })?
+    };
+    Ok((nodes, coords))
 }
 
 /// `obj[key]` as a number, `None` when it is absent (`undefined` or

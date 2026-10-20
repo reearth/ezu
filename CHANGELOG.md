@@ -266,6 +266,14 @@ mean is spelled out in
   `interval-y-deg` (between parallels), as `point-grid` takes `spacing-x`
   and `spacing-y`. `interval-deg` fills whichever is unset, and an axis
   with neither still follows the zoom.
+- A tile's features can be written in longitude and latitude or in the
+  rendered tile's pixels, as well as in tile units, in Rust, Go and JS:
+  `NodeFeatures::to_geojson_in` with a `TileFeatureCoords`, the
+  `FeaturesIn` option to `RenderTileWithFeatures`, and
+  `renderTileWithFeatures(z, x, y, set, { nodes, coords })`. The positions
+  are written as a print page's are, so a tile's longitudes are the ones a
+  page holding it writes; tile units stay the default, byte for byte. The
+  wasm module's ABI version is now 8.
 
 ### Changed
 

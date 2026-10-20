@@ -321,7 +321,15 @@ does `SetStyle`.
 `RenderTileWithFeatures` renders a tile as `RenderTileWith` does and also hands
 back what the named features nodes held — the labels and the boxes placement
 gave them, say — each as a GeoJSON FeatureCollection in tile units: `x` right
-and `y` down from the tile's top-left corner, `0..Extent` across it.
+and `y` down from the tile's top-left corner, `0..Extent` across it. The
+`FeaturesIn` option writes them in other coordinates: `TileFeatureLonLat` in
+WGS84, the numbers a page holding the tile writes, or `TileFeaturePx` in the
+rendered tile's pixels, at the tile size the render drew at.
+
+```go
+img, features, err := r.RenderTileWithFeatures(ctx, tile, set, []string{"boxes"},
+	ezu.Render{}, ezu.FeaturesIn(ezu.TileFeatureLonLat))
+```
 
 `RenderFrameWithFeatures` gathers those values over a page, as the CLI's
 `--features` does, and hands back each node's page as the file the CLI writes,

@@ -403,7 +403,12 @@ impl Bounds {
 }
 
 /// From one tile's geometry units to the written coordinates.
-struct Projection {
+///
+/// A page and a lone tile differ only in where the tile sits: on a page its
+/// origin is wherever the frame puts it, and alone it is the origin itself.
+/// Both write through here, so a tile's features in longitude and latitude
+/// are the numbers a page holding that tile writes for them.
+pub(super) struct Projection {
     /// Tile origin in page pixels.
     origin: (f64, f64),
     /// Page pixels per geometry unit.
@@ -425,6 +430,25 @@ impl Projection {
             left: frame.left as f64,
             top: frame.top as f64,
             world: t * (1u64 << frame.zoom) as f64,
+            coords,
+        }
+    }
+
+    /// For `tile` drawn alone at `tile_size` px: [`FeatureCoords::Px`] is
+    /// then the tile's own pixels, from its top-left corner.
+    pub(super) fn for_tile(
+        tile: TileId,
+        tile_size: u32,
+        extent: u32,
+        coords: FeatureCoords,
+    ) -> Self {
+        let t = tile_size as f64;
+        Projection {
+            origin: (0.0, 0.0),
+            per_unit: t / extent.max(1) as f64,
+            left: tile.x as f64 * t,
+            top: tile.y as f64 * t,
+            world: t * (1u64 << tile.z) as f64,
             coords,
         }
     }
@@ -458,7 +482,7 @@ impl Projection {
     }
 
     /// One position as GeoJSON text.
-    fn position(&self, out: &mut String, c: (i32, i32)) {
+    pub(super) fn position(&self, out: &mut String, c: (i32, i32)) {
         let (x, y) = self.px(c);
         let (a, b, decimals) = match self.coords {
             FeatureCoords::Px => (x, y, PX_DECIMALS),
@@ -526,6 +550,8 @@ mod tests {
                 groups,
                 overzoom: 0,
             })),
+            tile: TileId::new(0, 0, 0),
+            tile_size: 256,
         }]
     }
 

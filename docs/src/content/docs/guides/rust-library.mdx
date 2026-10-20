@@ -166,6 +166,16 @@ let (png, features) = r.render_tile_with_features(z, x, y, &set, RenderOptions::
 let geojson = features[0].to_geojson(); // x right, y down, 0..extent across the tile
 ```
 
+`to_geojson_in` writes the same collection in other coordinates:
+`TileFeatureCoords::LonLat` in WGS84, the numbers a page holding the tile
+writes, or `TileFeatureCoords::Px` in the rendered tile's pixels, at the tile
+size the render drew at. `TileFeatureCoords::Tile` is `to_geojson` itself.
+
+```rust
+use ezu::renderer::TileFeatureCoords;
+let geojson = features[0].to_geojson_in(TileFeatureCoords::LonLat);
+```
+
 `render_frame_with_features` does the same over a page: it gathers each node's
 features from every tile, drops the ones wholly off the page, and, given a key —
 properties that identify a feature, `label-id` and `part` for `label-boxes` —

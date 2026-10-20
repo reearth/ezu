@@ -171,9 +171,12 @@ class Renderer {
 
   // renderTileWith, also handing back what the named features nodes held:
   // one { node, extent, geojson } per node, geojson being a GeoJSON
-  // FeatureCollection as text in tile units (0..extent).
+  // FeatureCollection as text in tile units (0..extent). Pass
+  // { nodes, coords: "lonlat" | "px" } for WGS84 or the tile's pixels.
   renderTileWithFeatures(z: number, x: number, y: number, set: SourceSet,
-                         nodes: string[], opts?: object): TileWithFeatures;
+                         nodes: string[] | { nodes: string[];
+                                             coords?: "tile" | "lonlat" | "px" },
+                         opts?: object): TileWithFeatures;
 
   // neededCodepoints / neededGlyphRanges for the features in a set.
   neededCodepointsIn(set: SourceSet): Record<string, number[]>;

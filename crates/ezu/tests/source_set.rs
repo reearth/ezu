@@ -486,6 +486,51 @@ fn a_render_hands_back_the_features_a_node_held() {
     assert!(refused(&["fill"]).contains("`fill` produces raster"));
 }
 
+/// A tile's features in its pixels follow the size the render drew at, and
+/// in longitude and latitude land on the tile itself.
+#[test]
+fn a_tiles_features_write_in_its_pixels_or_on_the_globe() {
+    use ezu::renderer::{TileFeatureCoords, TileId};
+    let tile = (14, 14554, 6454);
+    let r = Renderer::new(STITCHED).expect("builds");
+    let data = r.load_source("basemap", BASEMAP_Z14).expect("loads");
+    let mut set = SourceSet::new();
+    set.bind(&data, &BindOptions::default()).expect("binds");
+    let opts = RenderOptions {
+        tile_size: Some(200),
+        ..rgba()
+    };
+    let (_, features) = r
+        .render_tile_with_features(tile.0, tile.1, tile.2, &set, opts, &["f"])
+        .expect("renders");
+    let f = &features[0];
+    assert_eq!(
+        (f.tile(), f.tile_size()),
+        (TileId::new(14, 14554, 6454), 200)
+    );
+    let first = |coords| {
+        let doc: serde_json::Value =
+            serde_json::from_str(&f.to_geojson_in(coords)).expect("valid JSON");
+        let mut g = &doc["features"][0]["geometry"]["coordinates"];
+        while g[0].is_array() {
+            g = &g[0];
+        }
+        (g[0].as_f64().unwrap(), g[1].as_f64().unwrap())
+    };
+    let (u, v) = first(TileFeatureCoords::Tile);
+    let (px, py) = first(TileFeatureCoords::Px);
+    let scale = 200.0 / f.features().unwrap().extent as f64;
+    assert!((px - u * scale).abs() < 0.006 && (py - v * scale).abs() < 0.006);
+    let (lon, lat) = first(TileFeatureCoords::LonLat);
+    let n = (1u32 << tile.0) as f64;
+    let x = ezu::core::coord::lon_to_world_x(lon) * n - tile.1 as f64;
+    let y = ezu::core::coord::lat_to_world_y(lat) * n - tile.2 as f64;
+    assert!(
+        (x * 200.0 - px).abs() < 0.01 && (y * 200.0 - py).abs() < 0.01,
+        "{lon},{lat}"
+    );
+}
+
 #[test]
 fn an_observed_render_shows_every_node_and_draws_the_same_tile() {
     use std::sync::Mutex;

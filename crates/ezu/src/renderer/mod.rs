@@ -93,7 +93,7 @@ mod source_set;
 mod sources;
 
 pub use error::{Error, ErrorKind};
-pub use features::{FeatureGroup, FilteredFeatures, NodeFeatures};
+pub use features::{FeatureGroup, FilteredFeatures, NodeFeatures, TileFeatureCoords};
 pub use frame::{FrameBinder, RenderFrameError};
 pub use frame_features::{
     FeatureCoords, FrameFeatureCollector, FrameFeatureNode, FrameFeatures, PageFeatures,
@@ -844,8 +844,10 @@ impl Renderer {
     /// The values are the ones the render computed on its way to the
     /// pixels, so this costs no second evaluation, and the image is the
     /// one `render_tile_with` returns. Each is in the tile's own units; see
-    /// [`NodeFeatures`]. A node the render never reached comes back with no
-    /// features.
+    /// [`NodeFeatures`], whose
+    /// [`to_geojson_in`](NodeFeatures::to_geojson_in) writes them in
+    /// longitude and latitude or in the rendered tile's pixels instead. A
+    /// node the render never reached comes back with no features.
     ///
     /// Fails with [`ErrorKind::InvalidStyle`] when a name is not a node of
     /// the style, or names a node that produces something other than
@@ -864,6 +866,7 @@ impl Renderer {
             .map(|node| self.features_node(node))
             .collect::<Result<Vec<_>, _>>()?;
         let capture = features::Capture::new(ixs);
+        let tile_size = opts.tile_size.unwrap_or(self.render_tile_size());
         let image = self.render_from(z, x, y, set, opts, Some(&capture))?;
         let features = nodes
             .iter()
@@ -871,6 +874,8 @@ impl Renderer {
             .map(|(node, features)| NodeFeatures {
                 node: node.to_string(),
                 features,
+                tile: CoreTileId::new(z, x, y),
+                tile_size,
             })
             .collect();
         Ok((image, features))

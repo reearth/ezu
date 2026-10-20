@@ -288,12 +288,45 @@ type NodeFeatures struct {
 	// when the render never reached the node — a branch a switch did not
 	// take — in which case there are no features either.
 	Extent uint32
-	// GeoJSON is the value as a GeoJSON FeatureCollection in those units,
-	// one Feature per feature the node held, with Node and Extent repeated
-	// as its "node" and "extent" members. Rings are closed and wound as RFC
-	// 7946 asks, as drawn on the map; property values JSON has no form for,
-	// such as colours, are written as their text.
+	// GeoJSON is the value as a GeoJSON FeatureCollection, one Feature per
+	// feature the node held, with Node and Extent repeated as its "node" and
+	// "extent" members. Its positions are in tile units unless
+	// [FeaturesIn] asked for others. Rings are closed and wound as RFC 7946
+	// asks, as drawn on the map; property values JSON has no form for, such
+	// as colours, are written as their text.
 	GeoJSON json.RawMessage
+}
+
+// TileFeatureCoords is the coordinates [Renderer.RenderTileWithFeatures]
+// writes a tile's features in.
+type TileFeatureCoords string
+
+const (
+	// TileFeatureUnits is the tile's own geometry units, as the node saw
+	// them: whole numbers, 0..Extent across the tile from its top-left
+	// corner, y down. It is the default.
+	TileFeatureUnits TileFeatureCoords = "tile"
+	// TileFeatureLonLat is WGS84 longitude and latitude, as RFC 7946 GeoJSON
+	// expects, to seven decimal places: the numbers a page holding the tile
+	// writes.
+	TileFeatureLonLat TileFeatureCoords = "lonlat"
+	// TileFeaturePx is the rendered tile's pixels: origin at its top-left
+	// corner, y down, to two decimal places, at the tile size the render
+	// drew at.
+	TileFeaturePx TileFeatureCoords = "px"
+)
+
+// TileFeaturesOption adjusts how [Renderer.RenderTileWithFeatures] writes
+// what it hands back.
+type TileFeaturesOption func(*tileFeaturesOptions)
+
+type tileFeaturesOptions struct {
+	coords TileFeatureCoords
+}
+
+// FeaturesIn writes the features in coords rather than in tile units.
+func FeaturesIn(coords TileFeatureCoords) TileFeaturesOption {
+	return func(o *tileFeaturesOptions) { o.coords = coords }
 }
 
 // RenderTileWithFeatures is [Renderer.RenderTileWith], also handing back
@@ -304,8 +337,12 @@ type NodeFeatures struct {
 // this costs no second evaluation, and the image is the one RenderTileWith
 // returns. A name that is not a node of the style, or names one that
 // produces something other than features, fails with [KindInvalidStyle]
-// before anything renders.
-func (r *Renderer) RenderTileWithFeatures(ctx context.Context, tile Tile, set SourceSet, nodes []string, opts Render) ([]byte, []NodeFeatures, error) {
+// before anything renders, and so does a [FeaturesIn] it does not know.
+func (r *Renderer) RenderTileWithFeatures(ctx context.Context, tile Tile, set SourceSet, nodes []string, opts Render, features ...TileFeaturesOption) ([]byte, []NodeFeatures, error) {
+	var cfg tileFeaturesOptions
+	for _, opt := range features {
+		opt(&cfg)
+	}
 	setJSON, err := set.json(r)
 	if err != nil {
 		return nil, nil, err
@@ -317,11 +354,17 @@ func (r *Renderer) RenderTileWithFeatures(ctx context.Context, tile Tile, set So
 	if nodes == nil {
 		nodes = []string{}
 	}
-	nodesJSON, err := json.Marshal(nodes)
+	// The bare array unless other coordinates are asked for, so a call
+	// without the option sends what it always did.
+	var nodesPayload any = nodes
+	if cfg.coords != "" {
+		nodesPayload = map[string]any{"nodes": nodes, "coords": string(cfg.coords)}
+	}
+	nodesJSON, err := json.Marshal(nodesPayload)
 	if err != nil {
 		return nil, nil, fmt.Errorf("ezu: encoding the node ids: %w", err)
 	}
-	var image, features []byte
+	var image, collections []byte
 	_, err = r.call(ctx, func(ctx context.Context) (int64, error) {
 		// Two pairs of out-slots: the image, then the features.
 		slots, err := r.alloc(ctx, 16)
@@ -349,14 +392,14 @@ func (r *Renderer) RenderTileWithFeatures(ctx context.Context, tile Tile, set So
 		if image, err = r.takeReply(ctx, slots); err != nil {
 			return 0, err
 		}
-		features, err = r.takeReply(ctx, slots+8)
+		collections, err = r.takeReply(ctx, slots+8)
 		return code, err
 	})
 	if err != nil {
 		return nil, nil, err
 	}
 	var wire []json.RawMessage
-	if err := json.Unmarshal(features, &wire); err != nil {
+	if err := json.Unmarshal(collections, &wire); err != nil {
 		return nil, nil, fmt.Errorf("ezu: reading the node features: %w", err)
 	}
 	out := make([]NodeFeatures, len(wire))

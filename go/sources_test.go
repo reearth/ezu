@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -354,5 +355,77 @@ func TestRenderTileWithFeaturesHandsBackANodesFeatures(t *testing.T) {
 	// No nodes is a plain render.
 	if image, features, err := renderer.RenderTileWithFeatures(ctx, tile, set, nil, Render{}); err != nil || len(features) != 0 || !bytes.Equal(image, plain) {
 		t.Errorf("no nodes gave %d features, %v", len(features), err)
+	}
+}
+
+// FeaturesIn writes the same features in the rendered tile's pixels, at the
+// size the render drew at, or in longitude and latitude on the tile itself;
+// without it the GeoJSON is in tile units, byte for byte as before.
+func TestRenderTileWithFeaturesWritesInOtherCoords(t *testing.T) {
+	stylePath := filepath.Join(t.TempDir(), "stitched.json")
+	if err := os.WriteFile(stylePath, []byte(stitchedStyle), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, renderer := open(t, stylePath)
+	tile := Tile{Z: 14, X: 14554, Y: 6454}
+	data, err := renderer.LoadSource(ctx, "basemap", readFile(t, "testdata/basemap-14-14554-6454.mvt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer data.Release(ctx)
+	var set SourceSet
+	if err := set.Bind(data); err != nil {
+		t.Fatal(err)
+	}
+	first := func(opts Render, features ...TileFeaturesOption) (json.RawMessage, [2]float64) {
+		t.Helper()
+		_, got, err := renderer.RenderTileWithFeatures(ctx, tile, set, []string{"f"}, opts, features...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Features []struct {
+				Geometry struct {
+					Coordinates json.RawMessage `json:"coordinates"`
+				} `json:"geometry"`
+			} `json:"features"`
+		}
+		if err := json.Unmarshal(got[0].GeoJSON, &doc); err != nil || len(doc.Features) == 0 {
+			t.Fatalf("%s: %v", got[0].GeoJSON, err)
+		}
+		// Down to the first position, however deep the geometry nests.
+		c := doc.Features[0].Geometry.Coordinates
+		for {
+			var inner []json.RawMessage
+			if err := json.Unmarshal(c, &inner); err != nil || len(inner) == 0 {
+				t.Fatalf("coordinates %s: %v", c, err)
+			}
+			var pos [2]float64
+			if json.Unmarshal(c, &pos) == nil {
+				return got[0].GeoJSON, pos
+			}
+			c = inner[0]
+		}
+	}
+	plain, units := first(Render{})
+	if tiled, _ := first(Render{}, FeaturesIn(TileFeatureUnits)); !bytes.Equal(tiled, plain) {
+		t.Error("tile units asked for by name differ from the default")
+	}
+	_, px := first(Render{TileSize: 200}, FeaturesIn(TileFeaturePx))
+	for i := range px {
+		if want := units[i] * 200 / 4096; math.Abs(px[i]-want) > 0.006 {
+			t.Errorf("pixel %d is %v, want %v", i, px[i], want)
+		}
+	}
+	_, ll := first(Render{}, FeaturesIn(TileFeatureLonLat))
+	n := math.Exp2(14)
+	x := (ll[0]+180)/360*n - 14554
+	s := math.Sin(ll[1] * math.Pi / 180)
+	y := (0.5-math.Log((1+s)/(1-s))/(4*math.Pi))*n - 6454
+	if math.Abs(x*4096-units[0]) > 0.5 || math.Abs(y*4096-units[1]) > 0.5 {
+		t.Errorf("%v is not on the tile at %v", ll, units)
+	}
+	if _, _, err := renderer.RenderTileWithFeatures(ctx, tile, set, []string{"f"}, Render{}, FeaturesIn("page")); !IsKind(err, KindInvalidStyle) {
+		t.Errorf("an unknown coords gave %v, want %s", err, KindInvalidStyle)
 	}
 }

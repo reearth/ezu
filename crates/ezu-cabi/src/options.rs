@@ -11,7 +11,7 @@
 
 use ezu::renderer::{
     BindOptions, Error, ErrorKind, FeatureCoords, Frame, FrameFeatureNode, FrameFeatures,
-    FrameRequest, OutputFormat, PngCompression, RenderOptions,
+    FrameRequest, OutputFormat, PngCompression, RenderOptions, TileFeatureCoords,
 };
 use serde_json::Value;
 
@@ -114,26 +114,53 @@ pub fn parse_set(raw: &[u8]) -> Result<Vec<SetEntry>, Error> {
         .collect()
 }
 
-/// Read the node ids `ezu_render_tile_with_features` reports on: a JSON
-/// array of strings. Empty means none.
-pub fn parse_nodes(raw: &[u8]) -> Result<Vec<String>, Error> {
+/// Read what `ezu_render_tile_with_features` reports on: a JSON array of
+/// node ids, or `{"nodes": [<id>, …], "coords": "tile" | "lonlat" | "px"}`
+/// to write them in other coordinates. Empty means no nodes, in tile units.
+pub fn parse_nodes(raw: &[u8]) -> Result<(Vec<String>, TileFeatureCoords), Error> {
     if raw.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), TileFeatureCoords::default()));
     }
     let bad = |got: &dyn std::fmt::Display| {
         err(
             ErrorKind::InvalidStyle,
-            format!("the nodes must be a JSON array of node ids, got {got}"),
+            format!(
+                "the nodes must be a JSON array of node ids, or {{\"nodes\": [id, …], \"coords\": …}}, got {got}"
+            ),
         )
     };
-    match serde_json::from_slice::<Value>(raw).map_err(|e| err(ErrorKind::InvalidStyle, e))? {
-        Value::Array(items) => items
+    let ids = |items: Vec<Value>| -> Result<Vec<String>, Error> {
+        items
             .into_iter()
             .map(|v| match v {
                 Value::String(s) => Ok(s),
                 other => Err(bad(&other)),
             })
-            .collect(),
+            .collect()
+    };
+    match serde_json::from_slice::<Value>(raw).map_err(|e| err(ErrorKind::InvalidStyle, e))? {
+        Value::Array(items) => Ok((ids(items)?, TileFeatureCoords::default())),
+        Value::Object(mut obj) => {
+            // Required in this form: an object without it is more likely
+            // a mistake than a request for no nodes.
+            let nodes = match obj.remove("nodes") {
+                Some(Value::Array(items)) => ids(items)?,
+                _ => return Err(bad(&Value::Object(obj))),
+            };
+            let coords = match obj.get("coords").filter(|v| !v.is_null()) {
+                None => TileFeatureCoords::default(),
+                Some(v) => v
+                    .as_str()
+                    .and_then(TileFeatureCoords::from_name)
+                    .ok_or_else(|| {
+                        err(
+                            ErrorKind::InvalidStyle,
+                            format!("coords must be \"tile\", \"lonlat\" or \"px\", got {v}"),
+                        )
+                    })?,
+            };
+            Ok((nodes, coords))
+        }
         other => Err(bad(&other)),
     }
 }

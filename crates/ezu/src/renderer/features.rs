@@ -12,10 +12,51 @@ use std::sync::{Arc, Mutex};
 
 use ezu_graph::{NodeIx, NodeObserver, OpaqueValue, PortValue};
 
+use super::frame_features::{FeatureCoords, Projection};
+use super::TileId;
+
 /// The value a `Features` port carries: one [`FeatureGroup`] per feature,
 /// in tile units. Re-exported so a shell reading
 /// [`NodeFeatures::features`] needs this crate and nothing under it.
 pub use ezu_paint::nodes::{FeatureGroup, FilteredFeatures};
+
+/// The coordinates [`NodeFeatures::to_geojson_in`] writes one tile's
+/// features in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TileFeatureCoords {
+    /// The tile's own geometry units, as the node saw them: whole numbers,
+    /// `0..extent` across the tile from its top-left corner, `y` down.
+    #[default]
+    Tile,
+    /// WGS84 longitude and latitude, as RFC 7946 GeoJSON expects, to seven
+    /// decimal places: the numbers a page holding the tile writes.
+    LonLat,
+    /// Pixels of the rendered tile: origin at its top-left corner, `y`
+    /// down, to two decimal places, at the tile size the render drew at.
+    Px,
+}
+
+impl TileFeatureCoords {
+    /// The name the JS and Go packages spell it with: `"tile"`, `"lonlat"`
+    /// or `"px"`.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Tile => "tile",
+            Self::LonLat => "lonlat",
+            Self::Px => "px",
+        }
+    }
+
+    /// The coordinates [`name`](Self::name) spells, or `None`.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "tile" => Some(Self::Tile),
+            "lonlat" => Some(Self::LonLat),
+            "px" => Some(Self::Px),
+            _ => None,
+        }
+    }
+}
 
 /// What one features node held when a render finished.
 ///
@@ -27,12 +68,26 @@ pub use ezu_paint::nodes::{FeatureGroup, FilteredFeatures};
 pub struct NodeFeatures {
     pub(super) node: String,
     pub(super) features: Option<Arc<FilteredFeatures>>,
+    /// The tile the render drew, and at what size: what turns tile units
+    /// into longitude and latitude, or into the tile's pixels.
+    pub(super) tile: TileId,
+    pub(super) tile_size: u32,
 }
 
 impl NodeFeatures {
     /// The node's id, as the caller named it.
     pub fn node(&self) -> &str {
         &self.node
+    }
+
+    /// The tile the render drew.
+    pub fn tile(&self) -> TileId {
+        self.tile
+    }
+
+    /// The tile size, in pixels, the render drew at.
+    pub fn tile_size(&self) -> u32 {
+        self.tile_size
     }
 
     /// The node's value, or `None` when the render never reached the node —
@@ -54,19 +109,39 @@ impl NodeFeatures {
     /// JSON has no form for — colours, formatted text — are written as
     /// their text.
     pub fn to_geojson(&self) -> String {
+        self.to_geojson_in(TileFeatureCoords::Tile)
+    }
+
+    /// [`to_geojson`](Self::to_geojson) with its positions written in
+    /// `coords`. [`TileFeatureCoords::Tile`] is `to_geojson` itself, byte
+    /// for byte; the other two write each position the way
+    /// [`PageFeatures`](super::PageFeatures) does, at its fixed precision,
+    /// and leave everything else as it is — `extent` still says what the
+    /// node's own units were. Nothing is dropped or merged: a tile holds
+    /// one copy of each feature, so there is no key to tell copies apart.
+    pub fn to_geojson_in(&self, coords: TileFeatureCoords) -> String {
         let mut out = String::from(r#"{"type":"FeatureCollection","node":"#);
         out.push_str(&serde_json::Value::from(self.node.as_str()).to_string());
         let Some(features) = &self.features else {
             out.push_str(r#","features":[]}"#);
             return out;
         };
+        let projection = match coords {
+            TileFeatureCoords::Tile => None,
+            TileFeatureCoords::LonLat => Some(FeatureCoords::LonLat),
+            TileFeatureCoords::Px => Some(FeatureCoords::Px),
+        }
+        .map(|c| Projection::for_tile(self.tile, self.tile_size, features.extent, c));
         let _ = write!(out, r#","extent":{},"features":["#, features.extent);
         for (i, group) in features.groups.iter().enumerate() {
             if i > 0 {
                 out.push(',');
             }
             out.push_str(r#"{"type":"Feature","geometry":"#);
-            out.push_str(&geometry(group, &tile_position));
+            match &projection {
+                None => out.push_str(&geometry(group, &tile_position)),
+                Some(p) => out.push_str(&geometry(group, &|s: &mut String, c| p.position(s, c))),
+            }
             out.push_str(r#","properties":"#);
             let props: serde_json::Map<String, serde_json::Value> = group
                 .properties
@@ -344,6 +419,8 @@ mod tests {
         let nf = NodeFeatures {
             node: "boxes".into(),
             features: Some(Arc::new(features)),
+            tile: TileId::new(14, 14554, 6454),
+            tile_size: 512,
         };
         assert_eq!(
             nf.to_geojson(),
@@ -356,13 +433,60 @@ mod tests {
                 r#"{"type":"Feature","geometry":null,"properties":{}}]}"#,
             )
         );
+        assert_eq!(nf.to_geojson_in(TileFeatureCoords::Tile), nf.to_geojson());
         let unreached = NodeFeatures {
             node: "x".into(),
             features: None,
+            tile: TileId::new(0, 0, 0),
+            tile_size: 256,
         };
         assert_eq!(
             unreached.to_geojson(),
             r#"{"type":"FeatureCollection","node":"x","features":[]}"#
         );
+        for coords in [TileFeatureCoords::LonLat, TileFeatureCoords::Px] {
+            assert_eq!(unreached.to_geojson_in(coords), unreached.to_geojson());
+        }
+    }
+
+    /// The tile's pixels scale its units by the tile size, and longitude
+    /// and latitude put the tile where it sits on the world: its corner is
+    /// the tile's own corner, whatever size it was drawn at.
+    #[test]
+    fn a_tile_writes_in_its_pixels_or_on_the_globe() {
+        let features = Arc::new(FilteredFeatures {
+            extent: 4096,
+            groups: vec![group(&[], vec![], vec![], vec![(0, 0), (2048, 4096)])],
+            overzoom: 0,
+        });
+        let nf = |tile_size| NodeFeatures {
+            node: "pts".into(),
+            features: Some(Arc::clone(&features)),
+            tile: TileId::new(1, 1, 0),
+            tile_size,
+        };
+        let coords = |text: String| {
+            let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(doc["extent"], 4096, "{text}");
+            doc["features"][0]["geometry"]["coordinates"].clone()
+        };
+        assert_eq!(
+            coords(nf(512).to_geojson_in(TileFeatureCoords::Px)),
+            serde_json::json!([[0.0, 0.0], [256.0, 512.0]])
+        );
+        assert!(nf(512)
+            .to_geojson_in(TileFeatureCoords::Px)
+            .contains("[[0.00,0.00],[256.00,512.00]]"));
+        // z1/1/0 is the north-east quarter of the world: its top-left is
+        // the prime meridian at the Mercator edge, its bottom the equator.
+        for size in [256, 512] {
+            let at = coords(nf(size).to_geojson_in(TileFeatureCoords::LonLat));
+            assert_eq!(at[0][0], 0.0);
+            assert!(
+                (at[0][1].as_f64().unwrap() - 85.0511288).abs() < 1e-6,
+                "{at}"
+            );
+            assert_eq!(at[1], serde_json::json!([90.0, 0.0]));
+        }
     }
 }

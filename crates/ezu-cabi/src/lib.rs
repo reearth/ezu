@@ -57,7 +57,7 @@ use ezu::renderer::{Error, ErrorKind, FrameFeatureCollector, Renderer, SourceDat
 /// code's meaning, or an export appearing or leaving. The Go package
 /// checks it at instantiation, which is what catches a committed module
 /// that was not rebuilt.
-pub const ABI_VERSION: u32 = 7;
+pub const ABI_VERSION: u32 = 8;
 
 /// Every function this shell exports, in one list, so a test can compare
 /// it with what the committed module actually carries. The linker's own
@@ -1151,14 +1151,20 @@ pub extern "C" fn ezu_render_tile_with(
 /// [`ezu_render_tile_with`], also handing back what the named
 /// features-producing nodes held when the render finished.
 ///
-/// `nodes` is a JSON array of node ids, `["boxes", "roads"]`. The image goes
-/// into the first pair of out-slots, exactly as `ezu_render_tile_with`
-/// writes it, and a JSON array into the second: one GeoJSON
-/// FeatureCollection per name, in the order given, each with the node's id
-/// as `node` and its geometry in tile units — `x` right and `y` down from
-/// the tile's top-left corner, `0..extent` across the tile, `extent` given
-/// alongside. A node the render never reached has no `extent` and no
+/// `nodes` is a JSON array of node ids, `["boxes", "roads"]`, or an object
+/// `{"nodes": ["boxes"], "coords": "lonlat"}` that also says what the
+/// geometry is written in. The image goes into the first pair of out-slots,
+/// exactly as `ezu_render_tile_with` writes it, and a JSON array into the
+/// second: one GeoJSON FeatureCollection per name, in the order given, each
+/// with the node's id as `node` and the tile's size in geometry units as
+/// `extent`. A node the render never reached has no `extent` and no
 /// features.
+///
+/// `coords` is `"tile"` (the default): tile units, `x` right and `y` down
+/// from the tile's top-left corner, `0..extent` across the tile. `"lonlat"`
+/// is WGS84 to seven decimals, and `"px"` the rendered tile's pixels from
+/// its top-left corner to two, at the tile size the render drew at. Any
+/// other name fails with `InvalidStyle`.
 ///
 /// A name that is not a node of the style, or names one that produces
 /// something other than features, fails with `InvalidStyle` before anything
@@ -1185,7 +1191,7 @@ pub extern "C" fn ezu_render_tile_with_features(
         Ok(o) => o,
         Err(e) => return fail_err(e),
     };
-    let nodes = match options::parse_nodes(unsafe { input(nodes_ptr, nodes_len) }) {
+    let (nodes, coords) = match options::parse_nodes(unsafe { input(nodes_ptr, nodes_len) }) {
         Ok(n) => n,
         Err(e) => return fail_err(e),
     };
@@ -1203,7 +1209,7 @@ pub extern "C" fn ezu_render_tile_with_features(
                     if i > 0 {
                         json.push(',');
                     }
-                    json.push_str(&f.to_geojson());
+                    json.push_str(&f.to_geojson_in(coords));
                 }
                 json.push(']');
                 unsafe {

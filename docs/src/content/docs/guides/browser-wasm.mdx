@@ -229,6 +229,15 @@ top-left corner, `0..extent` across it. A node the render never reached has no
 `extent` and no features, and a name that is not a features node of the style
 throws `InvalidStyle` before anything renders.
 
+Pass `{ nodes, coords }` in place of the list for other coordinates:
+`"lonlat"` writes WGS84 to seven decimals, the numbers a page holding the tile
+would write, and `"px"` the rendered tile's pixels from its top-left corner, at
+the tile size the render drew at (`tileSize` in `opts`, if you gave one).
+
+```js
+const { features } = r.renderTileWithFeatures(z, x, y, set, { nodes: ['boxes'], coords: 'lonlat' });
+```
+
 ## A page at a print scale
 
 A printed page is asked for as "1:1000 at 200 dpi, 245 × 174 mm, centred

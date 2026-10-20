@@ -155,12 +155,31 @@ mod options {
 
     #[test]
     fn feature_nodes_are_a_list_of_ids() {
-        assert!(parse_nodes(b"").expect("empty is []").is_empty());
+        use ezu::renderer::TileFeatureCoords;
+        let (nodes, coords) = parse_nodes(b"").expect("empty is []");
+        assert!(nodes.is_empty());
+        assert_eq!(coords, TileFeatureCoords::Tile);
         assert_eq!(
             parse_nodes(br#"["boxes","roads","boxes"]"#).expect("parses"),
-            ["boxes", "roads", "boxes"]
+            (
+                vec!["boxes".into(), "roads".into(), "boxes".into()],
+                TileFeatureCoords::Tile
+            )
         );
-        for payload in [&br#"{"boxes":1}"#[..], &br#"["a",1]"#[..], &br#"["#[..]] {
+        assert_eq!(
+            parse_nodes(br#"{"nodes":["boxes"],"coords":"lonlat"}"#).expect("parses"),
+            (vec!["boxes".into()], TileFeatureCoords::LonLat)
+        );
+        assert_eq!(
+            parse_nodes(br#"{"nodes":[],"coords":null}"#).expect("parses"),
+            (vec![], TileFeatureCoords::Tile)
+        );
+        for payload in [
+            &br#"{"boxes":1}"#[..],
+            &br#"["a",1]"#[..],
+            &br#"["#[..],
+            &br#"{"nodes":["a"],"coords":"page"}"#[..],
+        ] {
             let e = parse_nodes(payload).expect_err("refused");
             assert_eq!(
                 e.name(),

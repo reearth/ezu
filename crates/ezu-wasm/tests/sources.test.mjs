@@ -144,11 +144,39 @@ test("renderTileWithFeatures hands back a node's features next to the image", ()
   assert.equal(collection.extent, 4096);
   assert.ok(collection.features.length > 0, "the tile has water");
 
-  for (const nodes of [["nope"], ["fill"]]) {
+  for (const nodes of [["nope"], ["fill"], [1], { nodes: ["f"], coords: "page" }, { coords: "px" }]) {
     assert.throws(() => r.renderTileWithFeatures(14, 14554, 6454, set, nodes), {
       name: "InvalidStyle",
     });
   }
+});
+
+test("renderTileWithFeatures writes a tile's features in its pixels or on the globe", () => {
+  const r = new Renderer(stitched);
+  const set = new SourceSet();
+  set.bind(r.loadSource("basemap", centreBytes));
+  const at = (coords, opts) => {
+    const { features } = r.renderTileWithFeatures(14, 14554, 6454, set, { nodes: ["f"], coords }, opts);
+    let c = JSON.parse(features[0].geojson).features[0].geometry.coordinates;
+    while (Array.isArray(c[0])) c = c[0];
+    return [features[0].geojson, c];
+  };
+  const [plain] = at(undefined);
+  const [tile, [u, v]] = at("tile");
+  assert.equal(tile, plain, "tile units are the default, byte for byte");
+  assert.equal(r.renderTileWithFeatures(14, 14554, 6454, set, ["f"]).features[0].geojson, plain);
+
+  // Pixels follow the size the render drew at.
+  const [, [px, py]] = at("px", { tileSize: 200 });
+  assert.ok(Math.abs(px - (u * 200) / 4096) < 0.006 && Math.abs(py - (v * 200) / 4096) < 0.006);
+  // And longitude and latitude land on the tile.
+  const [, [lon, lat]] = at("lonlat");
+  const n = 2 ** 14;
+  const x = ((lon + 180) / 360) * n - 14554;
+  const s = Math.sin((lat * Math.PI) / 180);
+  const y = (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * n - 6454;
+  assert.ok(Math.abs(x * 4096 - u) < 0.5 && Math.abs(y * 4096 - v) < 0.5, `${lon},${lat}`);
+  r.free();
 });
 
 test("the cache budget is the host's and outlives a new style", () => {
