@@ -97,6 +97,28 @@ fn channel_shuffle_constant_one_fills_channel() {
 }
 
 #[test]
+fn channel_shuffle_luminance_greys_with_pick_channels_weights() {
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 8,
+      "nodes": {
+        "base": { "op": "solid", "color": "#3366cc" },
+        "out":  { "op": "channel-shuffle", "input": "@base",
+                  "r": "luminance", "g": "luma", "b": "y" }
+      },
+      "output": "@out"
+    }"##;
+    let r = render(json, 8, 0);
+    let (cr, cg, cb) = (
+        0x33 as f32 / 255.0,
+        0x66 as f32 / 255.0,
+        0xcc as f32 / 255.0,
+    );
+    let y = ((0.299 * cr + 0.587 * cg + 0.114 * cb) * 255.0).round() as u8;
+    assert_eq!(r.pixel(4, 4), [y, y, y, 0xff]);
+}
+
+#[test]
 fn sharpen_amplifies_edge_contrast() {
     // A disk edge: sharpen should make the dark side darker and the
     // bright side brighter at the rim, compared to the plain disk.

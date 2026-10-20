@@ -72,7 +72,7 @@ Linear brightness shift and contrast slope around mid-gray. Both in [-1, 1], 0 =
 
 ### `channel-shuffle`
 
-Rearrange RGBA channels. Each output (`r`/`g`/`b`/`a`) names which input channel feeds it, or a constant (`0`/`1`). Identity by default. Operates in non-premultiplied sRGB.
+Rearrange RGBA channels. Each output (`r`/`g`/`b`/`a`) names which input channel feeds it, the input's `luminance` (Rec. 601 luma, as `pick-channel` reads it), or a constant (`0`/`1`). Identity by default. Operates in non-premultiplied sRGB.
 
 <figure class="op-demo op-demo--pair">
   <div class="op-demo__images">
@@ -84,11 +84,11 @@ Rearrange RGBA channels. Each output (`r`/`g`/`b`/`a`) names which input channel
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `a` | `r` \| `g` \| `b` \| `a` \| `0` \| `1` | no | — |
-| `b` | `r` \| `g` \| `b` \| `a` \| `0` \| `1` | no | — |
-| `g` | `r` \| `g` \| `b` \| `a` \| `0` \| `1` | no | — |
+| `a` | `r` \| `g` \| `b` \| `a` \| `luminance` \| `0` \| `1` | no | — |
+| `b` | `r` \| `g` \| `b` \| `a` \| `luminance` \| `0` \| `1` | no | — |
+| `g` | `r` \| `g` \| `b` \| `a` \| `luminance` \| `0` \| `1` | no | — |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
-| `r` | `r` \| `g` \| `b` \| `a` \| `0` \| `1` | no | — |
+| `r` | `r` \| `g` \| `b` \| `a` \| `luminance` \| `0` \| `1` | no | — |
 
 ### `circle`
 

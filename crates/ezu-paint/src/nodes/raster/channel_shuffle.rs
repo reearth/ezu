@@ -1,7 +1,9 @@
 //! `channel-shuffle` — `Raster|Sprite` pass-through. Rearrange (or
 //! synthesise) the four output channels. Each output channel is
-//! sourced by name from one of the input's channels (`r`/`g`/`b`/`a`)
-//! or set to a constant (`0`/`1`). Shuffling happens in
+//! sourced by name from one of the input's channels (`r`/`g`/`b`/`a`),
+//! from its `luminance`, or set to a constant (`0`/`1`). Luminance is
+//! the Rec. 601 luma `pick-channel` reads, so a grey made here and a
+//! field picked there agree. Shuffling happens in
 //! non-premultiplied sRGB so the result reads as colour swaps rather
 //! than weird premultiplied artefacts.
 //!
@@ -28,6 +30,7 @@ enum Src {
     G,
     B,
     A,
+    Luminance,
     Zero,
     One,
 }
@@ -39,6 +42,7 @@ impl Src {
             "g" | "G" => Some(Src::G),
             "b" | "B" => Some(Src::B),
             "a" | "A" => Some(Src::A),
+            "luminance" | "luma" | "y" => Some(Src::Luminance),
             "0" => Some(Src::Zero),
             "1" => Some(Src::One),
             _ => None,
@@ -50,6 +54,8 @@ impl Src {
             Src::G => rgba[1],
             Src::B => rgba[2],
             Src::A => rgba[3],
+            // The same weights, in the same order, as `pick-channel`.
+            Src::Luminance => 0.299 * rgba[0] + 0.587 * rgba[1] + 0.114 * rgba[2],
             Src::Zero => 0.0,
             Src::One => 1.0,
         }
@@ -62,6 +68,7 @@ impl Src {
             Src::A => 3,
             Src::Zero => 4,
             Src::One => 5,
+            Src::Luminance => 6,
         }
     }
 }
@@ -146,7 +153,7 @@ impl NodeFactory for ChannelShuffleFactory {
                 None => Ok(default),
                 Some(s) => Src::parse(&s).ok_or_else(|| FactoryError::BadField {
                     field: name.into(),
-                    msg: format!("expected one of r/g/b/a/0/1, got `{s}`"),
+                    msg: format!("expected one of r/g/b/a/luminance/0/1, got `{s}`"),
                 }),
             }
         };
@@ -167,10 +174,10 @@ impl NodeFactory for ChannelShuffleFactory {
     fn schema(&self) -> Value {
         let choice = serde_json::json!({
             "type": "string",
-            "enum": ["r", "g", "b", "a", "0", "1"],
+            "enum": ["r", "g", "b", "a", "luminance", "0", "1"],
         });
         serde_json::json!({
-            "description": "Rearrange RGBA channels. Each output (`r`/`g`/`b`/`a`) names which input channel feeds it, or a constant (`0`/`1`). Identity by default. Operates in non-premultiplied sRGB.",
+            "description": "Rearrange RGBA channels. Each output (`r`/`g`/`b`/`a`) names which input channel feeds it, the input's `luminance` (Rec. 601 luma, as `pick-channel` reads it), or a constant (`0`/`1`). Identity by default. Operates in non-premultiplied sRGB.",
             "properties": {
                 "input": schema_frag::node_ref(),
                 "r": choice.clone(),

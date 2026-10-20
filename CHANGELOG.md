@@ -254,6 +254,8 @@ mean is spelled out in
   same bytes on every host.
 - `flow-smear` takes `sides: "backward"`, which smears only against the
   field, so a speck trails upstream where `forward` trails it downstream.
+- `channel-shuffle` can feed a channel from the input's `luminance`, the
+  same Rec. 601 luma `pick-channel` reads.
 
 ### Changed
 
