@@ -171,6 +171,43 @@ life.
 `system:` font sources do not work here — there are no installed fonts in wasm.
 Use a font file URL or a `glyphs` endpoint.
 
+## Decoding a tile once for several renders
+
+`bindSource` decodes the bytes each time they are bound, and a block of tiles
+reads most of its tiles more than once: the centre of one render is a neighbour
+of the next eight. `loadSource` decodes a tile-scoped payload once into a
+`SourceData`, a `SourceSet` says which of them one render reads and where, and
+`renderTileWith` renders from the set and from nothing that is bound:
+
+```js
+import { SourceSet } from '@reearth/ezu';
+
+const loaded = new Map(); // each fetched tile, decoded once
+const load = async (z, x, y) => {
+  const key = `${z}/${x}/${y}`;
+  if (!loaded.has(key)) loaded.set(key, r.loadSource('basemap', await fetchMvt(z, x, y)));
+  return loaded.get(key);
+};
+
+for (const { z, x, y } of block) {
+  const set = new SourceSet();
+  set.bind(await load(z, x, y));
+  for (const [dx, dy] of r.requestedNeighborOffsets('basemap')) {
+    set.bind(await load(z, x + dx, y + dy), { coord: [dx, dy] });
+  }
+  const png = r.renderTileWith(z, x, y, set);
+  set.free();
+}
+for (const data of loaded.values()) data.free();
+```
+
+A set takes the `coord` and `sourceZoom` a bind does, and draws the same bytes
+as binding the same data in the same places; there is nothing to clear between
+tiles. Glyphs, fonts and sprites are still bound with `bindSource`, and
+`neededCodepointsIn(set)` names what a set needs. `renderTileWith` leaves a
+glyph budget for `trimGlyphs()` to apply after the batch. A set shares the data
+it holds, so freeing a `SourceData` once its sets have it is safe.
+
 ## A page at a print scale
 
 A printed page is asked for as "1:1000 at 200 dpi, 245 × 174 mm, centred
@@ -190,8 +227,11 @@ const f = r.computeFrame({
 // f.zoom 19, f.tileSize 489, f.tilesX × f.tilesY: the 5 × 4 tiles to render
 
 const rgba = await r.renderFrame(f, async ({ z, x, y }, binder) => {
-  // Bind this tile as under "Binding sources" above, but through the binder.
-  binder.bindSource('basemap', await fetchMvt(z, x, y));
+  // The set loop above, for this tile, with `load` keeping what it decodes
+  // for the tiles around it.
+  const set = new SourceSet();
+  set.bind(await load(z, x, y));
+  return set;
 });
 // 1929 × 1370 straight RGBA: putImageData it, or encode it as a PNG
 ```
@@ -199,20 +239,24 @@ const rgba = await r.renderFrame(f, async ({ z, x, y }, binder) => {
 `computeFrame` changes nothing on the renderer; it aims the tile size at the
 style's own unless `styleTileSize` names another, and `zoom` fixes the zoom as
 the CLI's `--zoom` does. `renderFrame` renders the tiles one after another,
-clearing the tile-scoped sources and awaiting your function before each — the
-same binding as for a single tile, so neighbours, overzoom and glyphs work as
-above. It draws at `f.tileSize` per render, so the renderer's own tile size is
-untouched.
+awaiting your function before each for the `SourceSet` it renders from — the
+same set as for a single tile, so neighbours and overzoom work as above. A
+page's tiles border each other, so keeping each `SourceData` for the tiles
+around it decodes every fetched tile once. The frame reads the set and leaves it
+yours. It draws at `f.tileSize` per render, so the renderer's own tile size is
+untouched, and trims glyphs to a budget after each tile.
 
-Until the promise settles the renderer is the frame's. Your function binds
-through the `binder` it is handed, which works for that tile only and only until
-the function returns or settles; used later it throws `StaleBinder`. Anything
-else that would change the renderer — `bindSource`, `clearSources`,
-`renderTile`, another `renderFrame`, `setStyle`, `setTileSize` — throws `FrameInProgress`,
-so a request that runs while your function awaits its fetch cannot slip its
-bindings into the frame. Queries that only read, such as `sourceTile` and
-`neededCodepoints`, still answer, and the renderer is given back however the
-frame ends.
+Until the promise settles the renderer is the frame's. Glyphs a set needs are
+bound through the `binder` your function is handed, which works for that tile
+only and only until the function returns or settles; used later it throws
+`StaleBinder`, and a tile-scoped source bound through it throws `UnknownSource`,
+since the frame never reads bound tile data. Anything else that would change
+the renderer — `bindSource`, `clearSources`, `renderTile`, `trimGlyphs`,
+another `renderFrame`, `setStyle`, `setTileSize` — throws `FrameInProgress`, so
+a request that runs while your function awaits its fetch cannot change the
+frame's tiles under it. `loadSource`, `renderTileWith` and the queries that
+only read, such as `sourceTile` and `neededCodepointsIn`, still work, and the
+renderer is given back however the frame ends.
 
 To render a frame's tiles yourself — spread over several renderers, say — draw
 each at `f.tileSize` (`renderTile(z, x, y, { format: "rgba", tileSize: f.tileSize })`,

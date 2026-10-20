@@ -17,32 +17,38 @@ mean is spelled out in
   the way `ezu frame` does. `compute_frame` (`ComputeFrame`, `computeFrame`)
   works out the zoom, tile size and covered tiles for a scale, dpi, page size
   and centre, with the CLI's own arithmetic, and `render_frame`
-  (`RenderFrame`, `renderFrame`) renders those tiles, calling the host back to
-  bind each one, and crops them into one RGBA page that matches the CLI's
-  pixel for pixel; from JS the bind may return a promise, so it can fetch.
-  The bind binds through a `FrameBinder` that works only for its own tile.
-  While the frame renders nothing else can change the renderer: in Rust the
-  borrow checker forbids it, and in Go and JS such a call fails with
-  `ErrFrameInProgress` (`FrameInProgress`), so another request cannot land
-  its bindings in the page. `set_tile_size` (`SetTileSize`, `setTileSize`)
-  and its clearing counterpart render at another tile size without editing
-  the style, for a host that renders a frame's tiles itself. The wasm
-  module's ABI version is now 3.
+  (`RenderFrame`, `renderFrame`) renders those tiles, asking the host for
+  the source set each one renders from, and crops them into one RGBA page
+  that matches the CLI's pixel for pixel; from JS the callback may return a
+  promise, so it can fetch. A host that keeps the tiles it loads puts each
+  into the set of every page tile that reads it and decodes it once. What a
+  set needs bound into the renderer, such as glyphs, goes through a
+  `FrameBinder` that works only for its own tile. While the frame renders
+  nothing else can change the renderer: in Rust the borrow checker forbids
+  it, and in Go and JS such a call fails with `ErrFrameInProgress`
+  (`FrameInProgress`). `set_tile_size` (`SetTileSize`, `setTileSize`) and
+  its clearing counterpart render at another tile size without editing the
+  style, for a host that renders a frame's tiles itself.
 - `ezu::renderer` is the embedding renderer the JS and Go packages wrap, now
   part of the umbrella crate (the `renderer` feature, on by default), so a
   Rust host that does its own fetching can bind and render — a tile or a
   print page — with the same calls.
-- In Rust, the renderer can render a tile from data handed to the call
-  instead of from what is bound to it. `load_source` decodes a vector, DEM,
-  imagery or GeoJSON payload once into a `SourceData`; a `SourceSet` holds
-  the payloads one render reads, each at its neighbour offset; and
-  `render_tile_with` renders from a set and nothing else that is
+- The renderer can render a tile from data handed to the call instead of
+  from what is bound to it, in Rust, Go and JS. `load_source` (`LoadSource`,
+  `loadSource`) decodes a vector, DEM, imagery or GeoJSON payload once into a
+  `SourceData`; a `SourceSet` holds the payloads one render reads, each at
+  its neighbour offset; and `render_tile_with` (`RenderTileWith`,
+  `renderTileWith`) renders from a set and nothing else that is
   tile-scoped. A tile loaded once can sit in the set of every tile it
   borders, so a block of tiles decodes each tile once instead of once per
-  render it appears in, and renders on several threads can share one
-  renderer. `bind_source` and `render_tile` work as before, and a vector
-  tile bound with `bind_source` is now decoded once rather than at both the
-  bind and the render.
+  render it appears in, and in Rust renders on several threads can share
+  one renderer. `needed_codepoints_in` and `needed_glyph_ranges_in` answer
+  for a set, and `trim_glyphs` applies a glyph budget, which a render from a
+  set leaves to the host. In Go a `SourceData` belongs to the renderer that
+  loaded it and is freed with `Release`; in JS with `free()`. `bind_source`
+  and `render_tile` work as before, and a vector tile bound with
+  `bind_source` is now decoded once rather than at both the bind and the
+  render. The wasm module's ABI version is now 4.
 - `text` and `text-labels` take `anchor-expr`, a MapLibre expression that
   names a point label's anchor per feature, so one layer can put some labels
   left of their points and others right of them, or switch sides with zoom.

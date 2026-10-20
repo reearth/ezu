@@ -50,6 +50,22 @@
 //!   everything the styled text will need *before* rendering — text
 //!   whose glyphs are missing drops them with a warning.
 //!
+//! ## Rendering from loaded data
+//!
+//! Binding is state to reset between tiles, and it decodes the bytes each
+//! time they are bound. `loadSource` decodes a tile once into a
+//! `SourceData`; a `SourceSet` says which of them one render reads, and
+//! where; `renderTileWith` renders from it and from nothing that is bound.
+//! A tile several renders read — the centre of one, a neighbour of the next
+//! — is loaded once and put into each of their sets:
+//!
+//! ```js
+//! const data = r.loadSource("basemap", await fetchMvt(z, x, y));
+//! const set = new SourceSet();
+//! set.bind(data);                        // takes bindSource's { coord, sourceZoom }
+//! const png = r.renderTileWith(z, x, y, set);
+//! ```
+//!
 //! ## Output
 //!
 //! `renderTile(z, x, y, opts?)` returns bytes in one of three formats
@@ -62,10 +78,11 @@
 //!
 //! `computeFrame(req)` turns a scale, dpi, page size and centre into the
 //! zoom, tile size and tiles `ezu frame` would render, and
-//! `renderFrame(frame, bind)` renders them — awaiting `bind` for each tile
-//! — into one straight-RGBA page, the CLI's pixel for pixel. While it runs
-//! the renderer is the frame's: `bind` binds through the binder it is
-//! handed, and changing the renderer from anywhere else throws `FrameInProgress`.
+//! `renderFrame(frame, sources)` renders them — awaiting from `sources` the
+//! `SourceSet` each tile renders from — into one straight-RGBA page, the
+//! CLI's pixel for pixel. While it runs the renderer is the frame's:
+//! glyphs a tile needs are bound through the binder `sources` is handed,
+//! and changing the renderer from anywhere else throws `FrameInProgress`.
 //! `setTileSize` / `clearTileSize` render at another tile size for a host
 //! that renders a frame's tiles itself.
 //!
@@ -81,7 +98,7 @@
 //!
 //! Two names are this shell's own: `FrameInProgress`, for a call that would change a
 //! renderer a `renderFrame` holds, and `StaleBinder`, for a frame's binder
-//! used after its tile's bind has finished.
+//! used after its tile's `sources` has finished.
 //!
 //! `OutOfMemory` is thrown from wherever the heap ran out — see
 //! [`oom`] for what the host may and may not do afterwards.
@@ -197,8 +214,9 @@ static ALLOC: oom::ThrowOnOom = oom::ThrowOnOom;
 ///
 /// Every method takes `&self` and borrows the renderer inside, rather than
 /// letting wasm-bindgen hold a borrow for the length of the call:
-/// `renderFrame` awaits JS between its tiles, and the read-only queries a
-/// bind makes (`sourceTile`, `neededCodepoints`, …) have to reach the same
+/// `renderFrame` awaits JS between its tiles, and the loads and read-only
+/// queries a tile's `sources` makes (`loadSource`, `sourceTile`, …) have to
+/// reach the same
 /// renderer while the frame is still rendering. The `Rc` is what the
 /// frame's promise keeps alive between tiles.
 #[wasm_bindgen]
@@ -209,17 +227,17 @@ pub struct Renderer {
 
 /// Who may change the renderer while `renderFrame` runs.
 ///
-/// A frame awaits its bind between tiles, and other JS runs during that
-/// await — another request on the same Worker, a timer — so a `bindSource`
-/// arriving then could be the frame's or anybody's, and the call stack no
-/// longer says which. The frame therefore takes the renderer for itself
-/// (`busy`) and hands each tile's bind a [`FrameBinder`] carrying that
-/// tile's number; only a binder whose number is the one `open_tile` holds
-/// binds anything.
+/// A frame awaits its `sources` between tiles, and other JS runs during
+/// that await — another request on the same Worker, a timer — so a
+/// `bindSource` arriving then could be the frame's or anybody's, and the
+/// call stack no longer says which. The frame therefore takes the renderer
+/// for itself (`busy`) and hands each tile's `sources` a [`FrameBinder`]
+/// carrying that tile's number; only a binder whose number is the one
+/// `open_tile` holds binds anything.
 #[derive(Default)]
 struct FrameState {
     busy: Cell<bool>,
-    /// The tile whose bind is running, or 0 between and outside them.
+    /// The tile whose `sources` is running, or 0 between and outside them.
     open_tile: Cell<u64>,
     /// Tile numbers handed out so far, so no two binders ever share one.
     issued: Cell<u64>,
@@ -340,29 +358,41 @@ impl Renderer {
     /// (un-premultiplied) RGBA, `width × height × 4` bytes, as
     /// `format: "rgba"` is.
     ///
-    /// Binding stays yours, tile by tile, as for `renderTile`, but it goes
-    /// through the binder the frame hands you. Before each tile the
-    /// tile-scoped sources are cleared and `bind({ z, x, y }, binder)` is
-    /// called with the tile about to render; it binds what that tile needs
-    /// — the tile itself, the neighbours `requestedNeighborOffsets` names,
-    /// the ancestor `sourceTile` answers past a source's max-zoom, the
-    /// glyphs `neededCodepoints` lists — with `binder.bindSource`, which
-    /// takes what `bindSource` does. It may return a promise, which is
-    /// awaited, so it can fetch. A bind that throws or rejects stops the
-    /// frame with that error. `bind` may be `null` for a style that needs
-    /// nothing bound per tile. Persistent sources (fonts, sprites, brushes,
-    /// images) are bound once, before the call, as usual.
+    /// The tile data stays yours to fetch, tile by tile, but it is handed
+    /// over as a value rather than bound: before each tile
+    /// `sources({ z, x, y }, binder)` is called with the tile about to
+    /// render, and the tile renders from the `SourceSet` it returns, as
+    /// `renderTileWith` does — the tile itself, the neighbours
+    /// `requestedNeighborOffsets` names, the ancestor `sourceTile` answers
+    /// past a source's max-zoom. A frame's tiles border each other, so keep
+    /// the `SourceData` `loadSource` gives you and put each one into the set
+    /// of every tile that reads it: each fetched tile is then decoded once,
+    /// not once per tile around it. The frame reads the set and leaves it
+    /// yours; returning one set for several tiles is fine.
+    ///
+    /// `sources` may return a promise, which is awaited, so it can fetch.
+    /// One that throws or rejects stops the frame with that error. It may
+    /// be `null` for a style that needs no tile data. The binder binds into
+    /// the renderer what a set turns out to need — the glyphs
+    /// `neededCodepointsIn` lists for it — with `binder.bindSource`, which
+    /// takes what `bindSource` does but refuses a tile-scoped source with
+    /// `UnknownSource`, since the frame never reads bound tile data.
+    /// Persistent sources (fonts, sprites, brushes, images) can equally be
+    /// bound once, before the call. After each tile the glyph banks are
+    /// trimmed to `setGlyphBudget`'s budget, as `renderTile` does.
     ///
     /// Until the promise settles the renderer is the frame's: everything
     /// that would change what it draws — `bindSource`, `clearSources`,
-    /// `renderTile`, `renderFrame`, `setStyle`, `setTileSize`,
-    /// `clearTileSize`, `setGlyphBudget` — throws `FrameInProgress`, so a request
-    /// running while the bind awaits cannot land its bindings in the
-    /// frame's tiles. Queries that only read (`sourceTile`,
-    /// `requestedNeighborOffsets`, `neededCodepoints`, `boundSources`, …)
-    /// still answer. A binder binds only for its own tile and only while
-    /// that tile's bind runs; kept and used later, it throws
-    /// `StaleBinder`. The renderer is given back however the frame ends.
+    /// `renderTile`, `trimGlyphs`, `renderFrame`, `setStyle`,
+    /// `setTileSize`, `clearTileSize`, `setGlyphBudget` — throws
+    /// `FrameInProgress`, so a request running while `sources` awaits
+    /// cannot change the frame's tiles under it. `loadSource`,
+    /// `renderTileWith` and the queries that only read (`sourceTile`,
+    /// `requestedNeighborOffsets`, `neededCodepointsIn`, `boundSources`, …)
+    /// still work. A binder binds only for its own tile and only while that
+    /// tile's `sources` runs; kept and used later, it throws `StaleBinder`.
+    /// The renderer is given back however the frame ends, and the frame
+    /// binds no tile data, so it leaves none bound.
     ///
     /// The tiles render at `frame.tileSize` per render, so the renderer's
     /// own tile size is left as it was. `opts` takes `renderTile`'s
@@ -375,9 +405,9 @@ impl Renderer {
         &self,
         #[wasm_bindgen(unchecked_param_type = "Frame")] frame: js_sys::Object,
         #[wasm_bindgen(
-            unchecked_param_type = "((tile: { z: number; x: number; y: number }, binder: FrameBinder) => void | Promise<void>) | null | undefined"
+            unchecked_param_type = "((tile: { z: number; x: number; y: number }, binder: FrameBinder) => SourceSet | Promise<SourceSet>) | null | undefined"
         )]
-        bind: Option<js_sys::Function>,
+        sources: Option<js_sys::Function>,
         opts: Option<js_sys::Object>,
     ) -> js_sys::Promise {
         if let Err(e) = self.idle() {
@@ -388,11 +418,9 @@ impl Renderer {
         self.frame.busy.set(true);
         let (inner, state) = (Rc::clone(&self.inner), Rc::clone(&self.frame));
         wasm_bindgen_futures::future_to_promise(async move {
-            let result = render_frame_tiles(&inner, &state, &frame, bind, opts).await;
-            // Leave nothing of the last tile bound, as a tile loop would,
-            // and give the renderer back, whether or not the frame made it.
+            let result = render_frame_tiles(&inner, &state, &frame, sources, opts).await;
+            // Give the renderer back whether or not the frame made it.
             state.open_tile.set(0);
-            inner.borrow_mut().clear_sources();
             state.busy.set(false);
             result
         })
@@ -799,6 +827,171 @@ impl Renderer {
             .render_tile(z, x, y, parsed)
             .map_err(js_err)
     }
+
+    /// Decode a tile-scoped source's bytes — `mvt`, `pmtiles`, `dem`,
+    /// `raster`, or a remote `geojson` document — once, into a
+    /// `SourceData` that any number of `SourceSet`s can hold without
+    /// decoding it again.
+    ///
+    /// A host rendering a block of tiles loads each tile it fetched once
+    /// and binds it into the set of every tile it borders, rather than
+    /// decoding it as the centre of one tile and again as a neighbour of
+    /// each of the others. Nothing about what the renderer draws changes,
+    /// so this works while a `renderFrame` holds the renderer, which is
+    /// where a frame's callback loads its tiles.
+    ///
+    /// Throws `UnknownSource` if `name` is not declared, or is a kind bound
+    /// into the renderer itself with `bindSource` (brush, image, sprite,
+    /// font, glyphs), and the matching decode kind if the bytes do not
+    /// parse. Unlike `bindSource`, a DEM or imagery tile is decoded here,
+    /// so its decode error is thrown here and not from the render.
+    #[wasm_bindgen(js_name = loadSource)]
+    pub fn load_source(&self, name: &str, bytes: &[u8]) -> Result<SourceData, JsValue> {
+        let inner = self
+            .inner
+            .borrow()
+            .load_source(name, bytes)
+            .map_err(js_err)?;
+        Ok(SourceData { inner })
+    }
+
+    /// Render a single tile from the tile data in `set`, as `renderTile`
+    /// does from what is bound. Nothing tile-scoped that `bindSource` bound
+    /// is read; the fonts, sprites, brushes, images and glyphs bound into
+    /// the renderer are. `opts` is `renderTile`'s.
+    ///
+    /// It changes nothing a later render depends on, so it needs no
+    /// `clearSources` and works while a `renderFrame` holds the renderer.
+    /// It does not bring the glyph banks back under a budget set with
+    /// `setGlyphBudget`, as `renderTile` does after each render; call
+    /// `trimGlyphs()` when a batch of renders is done.
+    #[wasm_bindgen(js_name = renderTileWith)]
+    pub fn render_tile_with(
+        &self,
+        z: u8,
+        x: u32,
+        y: u32,
+        set: &SourceSet,
+        opts: Option<js_sys::Object>,
+    ) -> Result<Vec<u8>, JsValue> {
+        let parsed = parse_render_options(opts.as_ref())?;
+        self.inner
+            .borrow()
+            .render_tile_with(z, x, y, &set.inner, parsed)
+            .map_err(js_err)
+    }
+
+    /// `neededCodepoints` for the features in `set` rather than the ones
+    /// bound to the renderer: what to bind into the glyphs sources before
+    /// rendering from it.
+    #[wasm_bindgen(js_name = neededCodepointsIn)]
+    pub fn needed_codepoints_in(&self, set: &SourceSet) -> Result<js_sys::Object, JsValue> {
+        glyph_units_object(self.inner.borrow().needed_codepoints_in(&set.inner))
+    }
+
+    /// `neededGlyphRanges` for the features in `set` rather than the ones
+    /// bound to the renderer.
+    #[wasm_bindgen(js_name = neededGlyphRangesIn)]
+    pub fn needed_glyph_ranges_in(&self, set: &SourceSet) -> Result<js_sys::Object, JsValue> {
+        glyph_units_object(self.inner.borrow().needed_glyph_ranges_in(&set.inner))
+    }
+
+    /// Bring every bound fontstack back under the budget `setGlyphBudget`
+    /// set; a no-op without one. `renderTile` does this after each render;
+    /// after `renderTileWith`, call it yourself once a batch is done.
+    /// Trimming can drop glyphs a frame bound for its next tile, so it
+    /// throws `FrameInProgress` while a `renderFrame` holds the renderer,
+    /// which trims after each of its tiles itself.
+    #[wasm_bindgen(js_name = trimGlyphs)]
+    pub fn trim_glyphs(&self) -> Result<(), JsValue> {
+        self.idle()?;
+        self.inner.borrow().trim_glyphs();
+        Ok(())
+    }
+}
+
+/// One tile-scoped payload — a vector tile, a DEM or imagery tile, a
+/// GeoJSON document — decoded once by `Renderer.loadSource` and ready to
+/// sit in any number of `SourceSet`s.
+///
+/// A set keeps what it holds alive, so `free()` once the sets that need it
+/// have it, or leave it to the garbage collector. It is not tied to the
+/// renderer that loaded it: renderers in one module share a heap, and a
+/// render checks that its style declares the source the way the data was
+/// loaded for.
+#[wasm_bindgen]
+pub struct SourceData {
+    inner: ezu::renderer::SourceData,
+}
+
+#[wasm_bindgen]
+impl SourceData {
+    /// The `sources.<name>` entry the data was loaded for.
+    #[wasm_bindgen(getter)]
+    pub fn source(&self) -> String {
+        self.inner.source().to_string()
+    }
+}
+
+/// Every tile-scoped payload one render reads, each at its place in the
+/// 3×3 neighbourhood: the binding table `bindSource` fills, as a value you
+/// build per tile and hand to `renderTileWith`.
+///
+/// A set says nothing about the tile it is for — offsets are relative — so
+/// pairing each tile with its neighbourhood is yours to do. Fonts, sprites,
+/// brushes, images and glyphs are not here: they belong to the renderer,
+/// bound once with `bindSource` and read by every render.
+#[wasm_bindgen]
+#[derive(Default)]
+pub struct SourceSet {
+    inner: ezu::renderer::SourceSet,
+}
+
+#[wasm_bindgen]
+impl SourceSet {
+    /// An empty set: a render from it draws what the style draws with no
+    /// tile data at all.
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> SourceSet {
+        SourceSet::default()
+    }
+
+    /// Put `data` at `opts.coord` for its source, replacing what was
+    /// there. `opts` is `bindSource`'s `{ coord?: [dx, dy], sourceZoom? }`:
+    /// `sourceZoom` says the data is an ancestor's, to be resampled or
+    /// reprojected into the tile. The set shares the data rather than
+    /// copying it.
+    ///
+    /// Throws `UnknownSource` when the source already holds data of
+    /// another kind, and for the `coord` and `sourceZoom` `bindSource`
+    /// refuses.
+    pub fn bind(&mut self, data: &SourceData, opts: Option<js_sys::Object>) -> Result<(), JsValue> {
+        let parsed = parse_bind_options(opts.as_ref())?;
+        self.inner
+            .bind(&data.inner, &parsed)
+            .map(|_| ())
+            .map_err(js_err)
+    }
+
+    /// Whether anything is bound for `source`.
+    pub fn contains(&self, source: &str) -> bool {
+        self.inner.contains(source)
+    }
+
+    /// Whether nothing is bound at all.
+    #[wasm_bindgen(js_name = isEmpty)]
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// A copy of the set. It holds the same data, which is shared rather
+    /// than copied, so this costs a few references per entry.
+    #[wasm_bindgen(js_name = clone)]
+    pub fn copy(&self) -> SourceSet {
+        SourceSet {
+            inner: self.inner.clone(),
+        }
+    }
 }
 
 impl Renderer {
@@ -808,15 +1001,16 @@ impl Renderer {
             return Err(shell_err(
                 "FrameInProgress",
                 "the renderer is rendering a frame; wait for renderFrame to settle, \
-                 and bind the frame's tiles through the binder it passes",
+                 and bind what its tiles need through the binder it passes",
             ));
         }
         Ok(())
     }
 }
 
-/// What `renderFrame` hands each tile's bind: `bindSource` for that tile,
-/// on the renderer the frame has taken for itself.
+/// What `renderFrame` hands each tile's `sources`: `bindSource` into the
+/// renderer the frame has taken for itself, for what that tile's set needs
+/// bound there.
 #[wasm_bindgen]
 pub struct FrameBinder {
     /// Weak, so a binder the host keeps does not keep the renderer alive.
@@ -827,9 +1021,12 @@ pub struct FrameBinder {
 
 #[wasm_bindgen]
 impl FrameBinder {
-    /// `Renderer.bindSource`, for the tile this binder was handed with.
-    /// Throws `StaleBinder` once that tile's bind has returned (or its
-    /// promise settled).
+    /// `Renderer.bindSource`, for the sources bound into the renderer
+    /// itself: the glyphs a tile turns out to need, or a font, sprite,
+    /// brush or image. Throws `UnknownSource` for a tile-scoped source,
+    /// which the frame renders from the returned set and would never read
+    /// here, and `StaleBinder` once this tile's `sources` has returned (or
+    /// its promise settled).
     #[wasm_bindgen(js_name = bindSource)]
     pub fn bind_source(
         &self,
@@ -840,14 +1037,28 @@ impl FrameBinder {
         let stale = || {
             shell_err(
                 "StaleBinder",
-                "this binder's tile is no longer being bound; bind only from inside \
-                 that tile's bind, before it returns or settles",
+                "this binder's tile is no longer being rendered; bind only from inside \
+                 that tile's sources, before it returns or settles",
             )
         };
         if self.frame.open_tile.get() != self.tile {
             return Err(stale());
         }
         let renderer = self.renderer.upgrade().ok_or_else(stale)?;
+        let tile_scoped = renderer
+            .borrow()
+            .sources()
+            .iter()
+            .any(|s| s.name == name && s.kind.is_tile_scoped());
+        if tile_scoped {
+            return Err(named_err(
+                ErrorKind::UnknownSource,
+                format!(
+                    "source `{name}` is tile-scoped; load it and put it in the set \
+                     the tile's sources returns"
+                ),
+            ));
+        }
         bind_into(&renderer, name, bytes, opts.as_ref())
     }
 }
@@ -870,7 +1081,7 @@ async fn render_frame_tiles(
     inner: &Rc<RefCell<ezu::renderer::Renderer>>,
     state: &Rc<FrameState>,
     frame: &js_sys::Object,
-    bind: Option<js_sys::Function>,
+    sources: Option<js_sys::Function>,
     opts: Option<js_sys::Object>,
 ) -> Result<JsValue, JsValue> {
     let frame = parse_frame(frame)?;
@@ -882,8 +1093,8 @@ async fn render_frame_tiles(
     let t = frame.tile_size;
     for y in frame.tiles_y.clone() {
         for x in frame.tiles_x.clone() {
-            inner.borrow_mut().clear_sources();
-            if let Some(bind) = &bind {
+            let mut set = ezu::renderer::SourceSet::new();
+            if let Some(sources) = &sources {
                 let tile = state.issued.get() + 1;
                 state.issued.set(tile);
                 state.open_tile.set(tile);
@@ -894,19 +1105,20 @@ async fn render_frame_tiles(
                 };
                 // Resolving whatever came back awaits a promise and lets a
                 // plain return through after one microtask.
-                let ret = bind.call2(
+                let ret = sources.call2(
                     &JsValue::NULL,
                     &tile_object(frame.zoom, x, y)?,
                     &binder.into(),
                 )?;
                 let settled = JsFuture::from(js_sys::Promise::resolve(&ret)).await;
                 state.open_tile.set(0);
-                settled?;
+                set = returned_set(&settled?)?;
             }
             let px = inner
                 .borrow()
-                .render_tile(frame.zoom, x, y, opts.clone())
-                .map_err(js_err)?;
+                .render_tile_with(frame.zoom, x, y, &set, opts.clone());
+            inner.borrow().trim_glyphs();
+            let px = px.map_err(js_err)?;
             let want = t as usize * t as usize * 4;
             if px.len() != want {
                 return Err(named_err(
@@ -925,6 +1137,32 @@ async fn render_frame_tiles(
         }
     }
     Ok(out.into())
+}
+
+/// The set a frame's `sources` returned, read without taking it from the
+/// host.
+///
+/// wasm-bindgen turns a JS object back into its Rust struct only by moving
+/// it out, which would leave the host holding a freed set — and a host may
+/// well return one set for several tiles. So the frame asks the set for a
+/// copy through its own `clone()`, which shares the data, and takes that.
+fn returned_set(value: &JsValue) -> Result<ezu::renderer::SourceSet, JsValue> {
+    use wasm_bindgen::convert::TryFromJsValue;
+    let not_a_set = || -> JsValue {
+        js_sys::TypeError::new("a frame's sources must return a SourceSet (or a promise of one)")
+            .into()
+    };
+    if value.is_undefined() || value.is_null() {
+        return Err(not_a_set());
+    }
+    let copy = js_sys::Reflect::get(value, &"clone".into())
+        .ok()
+        .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+        .ok_or_else(not_a_set)?
+        .call0(value)?;
+    SourceSet::try_from_js_value(copy)
+        .map(|set| set.inner)
+        .map_err(|_| not_a_set())
 }
 
 /// `{ [glyphsSourceName]: number[] }` from the prepass's answer.
@@ -1150,7 +1388,7 @@ fn frame_render_options(
     Ok(opts)
 }
 
-/// `{ z, x, y }` for the tile a frame's `bind` is about to bind.
+/// `{ z, x, y }` for the tile a frame is about to render.
 fn tile_object(z: u8, x: u32, y: u32) -> Result<JsValue, JsValue> {
     let out = js_sys::Object::new();
     js_sys::Reflect::set(&out, &"z".into(), &JsValue::from(z))?;

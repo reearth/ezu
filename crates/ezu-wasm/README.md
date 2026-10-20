@@ -140,6 +140,22 @@ class Renderer {
                                              // once initThreadPool is up)
   }): Uint8Array;
 
+  // Decode a tile-scoped payload (mvt, pmtiles, dem, raster, remote
+  // geojson) once — see "Decoding a tile once" below.
+  loadSource(name: string, bytes: Uint8Array): SourceData;
+
+  // renderTile, from a set of loaded data instead of what is bound. Does
+  // not trim glyphs to the budget; call trimGlyphs() after a batch.
+  renderTileWith(z: number, x: number, y: number, set: SourceSet,
+                 opts?: object /* renderTile's opts */): Uint8Array;
+
+  // neededCodepoints / neededGlyphRanges for the features in a set.
+  neededCodepointsIn(set: SourceSet): Record<string, number[]>;
+  neededGlyphRangesIn(set: SourceSet): Record<string, number[]>;
+
+  // Bring the glyph banks back under setGlyphBudget's budget.
+  trimGlyphs(): void;
+
   // Render every tile at `size` px instead of the style's tile-size,
   // without editing the style. `tileSize` keeps reporting the style's;
   // a per-render `opts.tileSize` still wins. `setStyle` clears it too.
@@ -150,8 +166,8 @@ class Renderer {
   computeFrame(req: FrameRequest): Frame;
   renderFrame(
     frame: Frame,
-    bind: ((tile: { z: number; x: number; y: number },
-            binder: FrameBinder) => void | Promise<void>)
+    sources: ((tile: { z: number; x: number; y: number },
+               binder: FrameBinder) => SourceSet | Promise<SourceSet>)
       | null | undefined,
     opts?: { pad?: number; params?: Record<string, number | boolean | string> },
   ): Promise<Uint8Array>;                    // straight RGBA, width × height
@@ -159,8 +175,26 @@ class Renderer {
   free(): void;
 }
 
-// Handed to renderFrame's bind: bindSource for that tile only, and only
-// until that tile's bind returns or settles (then it throws StaleBinder).
+// One decoded tile. Sets that hold it keep it alive.
+class SourceData {
+  readonly source: string;                   // the sources.<name> it is for
+  free(): void;
+}
+
+// The tile data one render reads, each at its place in the 3×3.
+class SourceSet {
+  constructor();
+  bind(data: SourceData,
+       opts?: { coord?: [number, number]; sourceZoom?: number }): void;
+  contains(source: string): boolean;
+  isEmpty(): boolean;
+  clone(): SourceSet;                        // shares the data
+  free(): void;
+}
+
+// Handed to renderFrame's sources: bindSource into the renderer (glyphs,
+// fonts, sprites — not tile data, which goes in the set) for that tile
+// only, until its sources returns or settles (then it throws StaleBinder).
 class FrameBinder {
   bindSource(name: string, bytes: Uint8Array,
              opts?: { coord?: [number, number]; sourceZoom?: number }): void;
@@ -211,6 +245,41 @@ geometry for that call. Useful for hi-DPI preview rendering without
 mutating the style. `setTileSize(size)` does the same for every render
 until `clearTileSize()` or `setStyle`.
 
+### Decoding a tile once
+
+Binding decodes the bytes each time they are bound, and a block of tiles
+reads most of its tiles more than once: the centre of one render is a
+neighbour of the next eight. `loadSource` decodes a tile once into a
+`SourceData`, a `SourceSet` says which of them one render reads and where,
+and `renderTileWith` renders from the set and from nothing that is bound:
+
+```js
+const loaded = new Map();                    // each fetched tile, decoded once
+const load = async (z, x, y) => {
+  const key = `${z}/${x}/${y}`;
+  if (!loaded.has(key)) loaded.set(key, r.loadSource("basemap", await fetchMvt(z, x, y)));
+  return loaded.get(key);
+};
+
+for (const { z, x, y } of block) {
+  const set = new SourceSet();
+  set.bind(await load(z, x, y));
+  for (const [dx, dy] of r.requestedNeighborOffsets("basemap")) {
+    set.bind(await load(z, x + dx, y + dy), { coord: [dx, dy] });
+  }
+  const png = r.renderTileWith(z, x, y, set);
+  set.free();
+}
+for (const data of loaded.values()) data.free();
+```
+
+A set takes the `coord` and `sourceZoom` `bindSource` does and draws the
+same bytes as binding the same data in the same places; there is nothing to
+clear between tiles. Glyphs, fonts and sprites are still bound into the
+renderer with `bindSource`, and `neededCodepointsIn(set)` names the glyphs a
+set needs. A set shares the data it holds, so freeing a `SourceData` once
+its sets have it is safe.
+
 ### A page at a print scale
 
 A printed page is asked for as "1:1000 at 200 dpi, 245 × 174 mm, centred
@@ -230,7 +299,9 @@ const f = r.computeFrame({
 // f.zoom 19, f.tileSize 489, f.tilesX × f.tilesY: the 5 × 4 tiles to render
 
 const rgba = await r.renderFrame(f, async ({ z, x, y }, binder) => {
-  binder.bindSource("basemap", await fetchMvt(z, x, y)); // the per-tile bind, as for renderTile
+  const set = new SourceSet();
+  set.bind(await load(z, x, y));             // `load` keeps each tile for its neighbours
+  return set;
 });
 // 1929 × 1370 straight RGBA: putImageData it, or encode it as a PNG
 ```
@@ -238,22 +309,28 @@ const rgba = await r.renderFrame(f, async ({ z, x, y }, binder) => {
 `computeFrame` changes nothing on the renderer. It aims the tile size at
 the style's own unless `styleTileSize` names another, and `zoom` fixes the
 zoom as the CLI's `--zoom` does; a request it cannot meet throws
-`InvalidStyle`. `renderFrame` clears the tile-scoped sources before each
-tile, awaits your `bind` for it, renders it at `f.tileSize` and copies its
-share into the page, so neighbours, overzoom and glyphs work as they do
-for a single tile, and the renderer's own tile size is untouched.
+`InvalidStyle`. `renderFrame` awaits your `sources` for each tile, renders
+the tile from the `SourceSet` it returns at `f.tileSize` and copies its
+share into the page, so neighbours and overzoom work as they do for a
+single tile, and the renderer's own tile size is untouched. A page's tiles
+border each other, so keeping each `SourceData` for the tiles around it
+decodes every fetched tile once. The frame reads the set and leaves it
+yours, and trims glyphs to a budget after each tile.
 
-Until the promise settles the renderer is the frame's. Your `bind` binds
-through the `binder` it is handed, which works for that tile only and only
-until that bind returns or settles; used later it throws `StaleBinder`.
-Anything else that would change the renderer — `bindSource`,
-`clearSources`, `renderTile`, another `renderFrame`, `setStyle`,
-`setTileSize`, `clearTileSize`, `setGlyphBudget` — throws `FrameInProgress`, so a
-request that runs while a bind awaits its fetch cannot slip its bindings
-into the frame's tiles. Queries that only read (`sourceTile`,
-`requestedNeighborOffsets`, `neededCodepoints`, `boundSources`, …) still
-answer. The renderer is given back however the frame ends, with nothing
-left bound.
+Until the promise settles the renderer is the frame's. What a set needs
+bound into the renderer — glyphs, typically — goes through the `binder`
+your `sources` is handed, which works for that tile only and only until
+that call returns or settles; used later it throws `StaleBinder`, and a
+tile-scoped source bound through it throws `UnknownSource`, since the frame
+never reads bound tile data. Anything else that would change the renderer —
+`bindSource`, `clearSources`, `renderTile`, `trimGlyphs`, another
+`renderFrame`, `setStyle`, `setTileSize`, `clearTileSize`, `setGlyphBudget`
+— throws `FrameInProgress`, so a request that runs while `sources` awaits
+its fetch cannot change the frame's tiles under it. `loadSource`,
+`renderTileWith` and the queries that only read (`sourceTile`,
+`requestedNeighborOffsets`, `neededCodepointsIn`, `boundSources`, …) still
+work. The renderer is given back however the frame ends, and the frame
+binds no tile data, so it leaves none bound.
 
 To render a frame's tiles yourself — spread over several renderers, say —
 draw each at `f.tileSize` (`renderTile(..., { tileSize: f.tileSize })`, or
@@ -520,7 +597,7 @@ discriminates the failure kind:
 | `WebpEncode`   | WebP encoding failed |
 | `OutOfMemory`  | The wasm heap could not grow — the render needs more memory than the host allows |
 | `FrameInProgress` | A call would change a renderer that a `renderFrame` holds until its promise settles |
-| `StaleBinder`  | A frame's `binder` was used after its tile's bind returned or settled |
+| `StaleBinder`  | A frame's `binder` was used after its tile's `sources` returned or settled |
 
 `OutOfMemory` is thrown from wherever the allocation failed, which means
 **the module instance is finished**: the exception unwinds the wasm
