@@ -2,7 +2,7 @@
 //! overrides, min/max clamping, `@node` scalar ports (`math`, `zoom`),
 //! and cache invalidation across param changes.
 
-use crate::common::{render, render_tile, render_with_params};
+use crate::common::{assert_number_field_drivable_plain, render, render_tile, render_with_params};
 
 use ezu_graph::{
     build_graph, Cache, CanvasInfo, Evaluator, NoAssets, ParamValues, PortValue, ScalarValue,
@@ -531,4 +531,52 @@ fn param_drives_a_dash_length() {
         ink(&short),
         ink(&long)
     );
+}
+
+/// A lattice drawn as dots, `%V%` in the given field of the source node.
+fn lattice_doc(op: &str, field: &str) -> String {
+    format!(
+        r##"{{
+      "name": "demo",
+      "tile-size": 32,
+      %PARAMS%
+      "nodes": {{
+        %NODES%
+        "pts":  {{ "op": "{op}", "{field}": %V% }},
+        "dots": {{ "op": "circles", "features": "@pts", "radius": 2, "color": "#000000" }}
+      }},
+      "output": "@dots"
+    }}"##
+    )
+}
+
+#[test]
+fn lattice_spacing_takes_a_param_or_a_node() {
+    for op in ["point-grid", "point-scatter"] {
+        assert_number_field_drivable_plain(&lattice_doc(op, "spacing"), 32, 0, 1024.0, 512.0);
+    }
+}
+
+/// `spacing` only fills in an axis that is not given its own, so a node
+/// with both `spacing-x` and `spacing-y` builds without it.
+#[test]
+fn lattice_spacing_may_be_left_out_when_both_axes_are_given() {
+    for op in ["point-grid", "point-scatter"] {
+        let shared = lattice_doc(op, "spacing").replace("%V%", "512");
+        let per_axis = lattice_doc(op, "spacing-x").replace("%V%", r#"512, "spacing-y": 512"#);
+        let clean = |s: &str| s.replace("%PARAMS%", "").replace("%NODES%", "");
+        assert_eq!(
+            render(&clean(&shared), 32, 0).pixels,
+            render(&clean(&per_axis), 32, 0).pixels,
+            "{op}"
+        );
+
+        let one_axis = clean(&lattice_doc(op, "spacing-x").replace("%V%", "512"));
+        let doc = Document::from_json(&one_axis).expect("parse");
+        let err = build_graph(&doc, &default_registry())
+            .err()
+            .unwrap_or_else(|| panic!("{op}: one axis alone should not build"))
+            .to_string();
+        assert!(err.contains("spacing"), "{op}: {err}");
+    }
 }

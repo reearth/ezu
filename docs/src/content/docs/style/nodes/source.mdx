@@ -104,9 +104,9 @@ Regular lattice of points covering the tile.
 | `extent` | integer (1…∞) | no | — |
 | `offset-x` | number \| `$param` \| `@node` | no | — |
 | `offset-y` | number \| `$param` \| `@node` | no | — |
-| `spacing` | number (0…∞) \| `$param` \| `@node` | yes | Grid pitch in *extent* units, not pixels — `extent` below is the coordinate space (4096 by default), so a 512 px tile fits 8 points at `spacing: 512`. Paint ops downstream take pixels, so the two do not match. |
-| `spacing-x` | number (0…∞) \| `$param` \| `@node` | no | — |
-| `spacing-y` | number (0…∞) \| `$param` \| `@node` | no | — |
+| `spacing` | number (0…∞) \| `$param` \| `@node` | no | Grid pitch in *extent* units, not pixels — `extent` below is the coordinate space (4096 by default), so a 512 px tile fits 8 points at `spacing: 512`. Paint ops downstream take pixels, so the two do not match. Required unless both `spacing-x` and `spacing-y` are given. |
+| `spacing-x` | number (0…∞) \| `$param` \| `@node` | no | Spacing along x in extent units, overriding `spacing` on that axis. |
+| `spacing-y` | number (0…∞) \| `$param` \| `@node` | no | Spacing along y in extent units, overriding `spacing` on that axis. |
 | `stagger` | number \| `$param` \| `@node` | no | Shift every other row sideways by this fraction of `spacing-x`. `0.5` puts each row's points halfway between the row above's — the centres of a running brick bond, or a triangular lattice. |
 
 ### `point-scatter`
@@ -118,9 +118,9 @@ Random points at a given mean spacing, covering the tile. Where `point-grid` put
 | `anchor` | `tile` \| `world` | no | `world` indexes the cells off global (0, 0), so adjacent tiles agree on the points they share and the scatter is seamless — the usual choice. `tile` indexes off the tile's own corner, giving every tile the same point set and a visible seam. |
 | `extent` | integer (1…∞) | no | — |
 | `seed` | integer (0…∞) | no | Optional explicit u32 seed. Change it to get a different scatter at the same spacing, or to keep two `point-scatter` nodes from landing on each other. Default: a fixed constant, so the pattern is stable across tiles and runs. |
-| `spacing` | number (0…∞) \| `$param` \| `@node` | yes | Mean spacing in *extent* units, not pixels — one point per `spacing` × `spacing` cell on average. `extent` below is the coordinate space (4096 by default), so a 512 px tile averages 8 points across at `spacing: 512`. Paint ops downstream take pixels, so the two do not match. |
-| `spacing-x` | number (0…∞) \| `$param` \| `@node` | no | — |
-| `spacing-y` | number (0…∞) \| `$param` \| `@node` | no | — |
+| `spacing` | number (0…∞) \| `$param` \| `@node` | no | Mean spacing in *extent* units, not pixels — one point per `spacing` × `spacing` cell on average. `extent` below is the coordinate space (4096 by default), so a 512 px tile averages 8 points across at `spacing: 512`. Paint ops downstream take pixels, so the two do not match. Required unless both `spacing-x` and `spacing-y` are given. |
+| `spacing-x` | number (0…∞) \| `$param` \| `@node` | no | Spacing along x in extent units, overriding `spacing` on that axis. |
+| `spacing-y` | number (0…∞) \| `$param` \| `@node` | no | Spacing along y in extent units, overriding `spacing` on that axis. |
 
 ### `raster`
 

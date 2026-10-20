@@ -19,7 +19,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{features_value, read_number, read_optional_string, FeatureGroup};
+use crate::nodes::common::{features_value, read_optional_string, FeatureGroup};
 
 const DEFAULT_EXTENT: u32 = 4096;
 
@@ -152,9 +152,6 @@ impl NodeFactory for PointGridFactory {
             .and_then(Value::as_u64)
             .map(|v| v as u32)
             .unwrap_or(DEFAULT_EXTENT);
-        // `spacing` is the build-time default for the per-axis spacings;
-        // it is never stored on the node, so it stays a static literal.
-        let spacing = read_number(fields, "spacing", ctx)?;
         let anchor = match read_optional_string(fields, "anchor")?.as_deref() {
             None | Some("tile") => Anchor::Tile,
             Some("world") => Anchor::World,
@@ -167,8 +164,7 @@ impl NodeFactory for PointGridFactory {
         };
 
         let mut r = InReader::new(fields, ctx, 0);
-        let spacing_x = r.number_or("spacing-x", spacing)?;
-        let spacing_y = r.number_or("spacing-y", spacing)?;
+        let (spacing_x, spacing_y) = super::read_spacing(&mut r, fields)?;
         let offset_x = r.number_or("offset-x", 0.0)?;
         let offset_y = r.number_or("offset-y", 0.0)?;
         let stagger = r.number_or("stagger", 0.0)?;
@@ -210,10 +206,10 @@ impl NodeFactory for PointGridFactory {
                 "extent": { "type": "integer", "minimum": 1, "default": DEFAULT_EXTENT },
                 "spacing": schema_frag::in_number(serde_json::json!({
                     "type": "number", "minimum": 0.0,
-                    "description": "Grid pitch in *extent* units, not pixels — `extent` below is the coordinate space (4096 by default), so a 512 px tile fits 8 points at `spacing: 512`. Paint ops downstream take pixels, so the two do not match."
+                    "description": "Grid pitch in *extent* units, not pixels — `extent` below is the coordinate space (4096 by default), so a 512 px tile fits 8 points at `spacing: 512`. Paint ops downstream take pixels, so the two do not match. Required unless both `spacing-x` and `spacing-y` are given."
                 })),
-                "spacing-x": schema_frag::px_number(),
-                "spacing-y": schema_frag::px_number(),
+                "spacing-x": super::spacing_axis_schema("x"),
+                "spacing-y": super::spacing_axis_schema("y"),
                 "offset-x": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 0.0 })),
                 "offset-y": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 0.0 })),
                 "stagger": schema_frag::in_number(serde_json::json!({
@@ -222,7 +218,7 @@ impl NodeFactory for PointGridFactory {
                 })),
                 "anchor": { "type": "string", "enum": ["tile", "world"], "default": "tile" },
             },
-            "required": ["spacing"],
+            "anyOf": super::spacing_any_of(),
         })
     }
 }

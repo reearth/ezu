@@ -4182,6 +4182,19 @@
             "type": "object"
           },
           {
+            "anyOf": [
+              {
+                "required": [
+                  "spacing"
+                ]
+              },
+              {
+                "required": [
+                  "spacing-x",
+                  "spacing-y"
+                ]
+              }
+            ],
             "description": "Regular lattice of points covering the tile.",
             "properties": {
               "anchor": {
@@ -4230,7 +4243,7 @@
               "spacing": {
                 "oneOf": [
                   {
-                    "description": "Grid pitch in *extent* units, not pixels — `extent` below is the coordinate space (4096 by default), so a 512 px tile fits 8 points at `spacing: 512`. Paint ops downstream take pixels, so the two do not match.",
+                    "description": "Grid pitch in *extent* units, not pixels — `extent` below is the coordinate space (4096 by default), so a 512 px tile fits 8 points at `spacing: 512`. Paint ops downstream take pixels, so the two do not match. Required unless both `spacing-x` and `spacing-y` are given.",
                     "minimum": 0.0,
                     "type": "number"
                   },
@@ -4244,6 +4257,7 @@
               "spacing-x": {
                 "oneOf": [
                   {
+                    "description": "Spacing along x in extent units, overriding `spacing` on that axis.",
                     "minimum": 0.0,
                     "type": "number"
                   },
@@ -4257,6 +4271,7 @@
               "spacing-y": {
                 "oneOf": [
                   {
+                    "description": "Spacing along y in extent units, overriding `spacing` on that axis.",
                     "minimum": 0.0,
                     "type": "number"
                   },
@@ -4283,13 +4298,25 @@
               }
             },
             "required": [
-              "op",
-              "spacing"
+              "op"
             ],
             "title": "op: point-grid",
             "type": "object"
           },
           {
+            "anyOf": [
+              {
+                "required": [
+                  "spacing"
+                ]
+              },
+              {
+                "required": [
+                  "spacing-x",
+                  "spacing-y"
+                ]
+              }
+            ],
             "description": "Random points at a given mean spacing, covering the tile. Where `point-grid` puts exactly one point in the middle of every cell, this one draws a *count* per cell — 0 to 3, averaging 1 — and places each point at a random spot inside it, so the set has the clumps and gaps of a real random scatter and no residual pitch. Reach for `point-grid` when the regularity is the point (a halftone screen, a tiling of panes to fracture) and for `point-scatter` when it is the enemy (stipple, foliage, grain, scattered symbols). Jittering a `point-grid` is not a substitute: one point per cell means an even density, and the lattice frequency stays plainly visible.",
             "properties": {
               "anchor": {
@@ -4318,7 +4345,7 @@
               "spacing": {
                 "oneOf": [
                   {
-                    "description": "Mean spacing in *extent* units, not pixels — one point per `spacing` × `spacing` cell on average. `extent` below is the coordinate space (4096 by default), so a 512 px tile averages 8 points across at `spacing: 512`. Paint ops downstream take pixels, so the two do not match.",
+                    "description": "Mean spacing in *extent* units, not pixels — one point per `spacing` × `spacing` cell on average. `extent` below is the coordinate space (4096 by default), so a 512 px tile averages 8 points across at `spacing: 512`. Paint ops downstream take pixels, so the two do not match. Required unless both `spacing-x` and `spacing-y` are given.",
                     "minimum": 0.0,
                     "type": "number"
                   },
@@ -4332,6 +4359,7 @@
               "spacing-x": {
                 "oneOf": [
                   {
+                    "description": "Spacing along x in extent units, overriding `spacing` on that axis.",
                     "minimum": 0.0,
                     "type": "number"
                   },
@@ -4345,6 +4373,7 @@
               "spacing-y": {
                 "oneOf": [
                   {
+                    "description": "Spacing along y in extent units, overriding `spacing` on that axis.",
                     "minimum": 0.0,
                     "type": "number"
                   },
@@ -4357,8 +4386,7 @@
               }
             },
             "required": [
-              "op",
-              "spacing"
+              "op"
             ],
             "title": "op: point-scatter",
             "type": "object"

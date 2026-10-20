@@ -240,6 +240,10 @@ mean is spelled out in
 - `icon-opacity` on `text` and `text-labels` takes a `$param` or an `@node`
   as its schema always said. A `@node` was rejected at build time and a
   `$param` stayed at its declared default whatever the render passed.
+- `spacing` on `point-grid` and `point-scatter` takes an `@node` and follows
+  a `$param` set at render time, as its schema said; it used to reject the
+  one and keep the other at its default. It may now be left out when both
+  `spacing-x` and `spacing-y` are given.
 
 ## 0.12.0 — 2026-10-12
 

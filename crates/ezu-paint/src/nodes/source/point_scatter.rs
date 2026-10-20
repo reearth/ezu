@@ -29,7 +29,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{features_value, read_number, read_optional_string, FeatureGroup};
+use crate::nodes::common::{features_value, read_optional_string, FeatureGroup};
 
 const DEFAULT_EXTENT: u32 = 4096;
 
@@ -187,9 +187,6 @@ impl NodeFactory for PointScatterFactory {
             .and_then(Value::as_u64)
             .map(|v| v as u32)
             .unwrap_or(DEFAULT_EXTENT);
-        // `spacing` is the build-time default for the per-axis spacings;
-        // it is never stored on the node, so it stays a static literal.
-        let spacing = read_number(fields, "spacing", ctx)?;
         let anchor = match read_optional_string(fields, "anchor")?.as_deref() {
             None | Some("world") => Anchor::World,
             Some("tile") => Anchor::Tile,
@@ -206,8 +203,7 @@ impl NodeFactory for PointScatterFactory {
         };
 
         let mut r = InReader::new(fields, ctx, 0);
-        let spacing_x = r.number_or("spacing-x", spacing)?;
-        let spacing_y = r.number_or("spacing-y", spacing)?;
+        let (spacing_x, spacing_y) = super::read_spacing(&mut r, fields)?;
         let parts = r.finish();
 
         // Spacing must be > 0; check the static bounds (literal, or a
@@ -244,16 +240,16 @@ impl NodeFactory for PointScatterFactory {
                 "extent": { "type": "integer", "minimum": 1, "default": DEFAULT_EXTENT },
                 "spacing": schema_frag::in_number(serde_json::json!({
                     "type": "number", "minimum": 0.0,
-                    "description": "Mean spacing in *extent* units, not pixels — one point per `spacing` × `spacing` cell on average. `extent` below is the coordinate space (4096 by default), so a 512 px tile averages 8 points across at `spacing: 512`. Paint ops downstream take pixels, so the two do not match."
+                    "description": "Mean spacing in *extent* units, not pixels — one point per `spacing` × `spacing` cell on average. `extent` below is the coordinate space (4096 by default), so a 512 px tile averages 8 points across at `spacing: 512`. Paint ops downstream take pixels, so the two do not match. Required unless both `spacing-x` and `spacing-y` are given."
                 })),
-                "spacing-x": schema_frag::px_number(),
-                "spacing-y": schema_frag::px_number(),
+                "spacing-x": super::spacing_axis_schema("x"),
+                "spacing-y": super::spacing_axis_schema("y"),
                 "anchor": { "type": "string", "enum": ["tile", "world"], "default": "world",
                             "description": "`world` indexes the cells off global (0, 0), so adjacent tiles agree on the points they share and the scatter is seamless — the usual choice. `tile` indexes off the tile's own corner, giving every tile the same point set and a visible seam." },
                 "seed": { "type": "integer", "minimum": 0,
                           "description": "Optional explicit u32 seed. Change it to get a different scatter at the same spacing, or to keep two `point-scatter` nodes from landing on each other. Default: a fixed constant, so the pattern is stable across tiles and runs." },
             },
-            "required": ["spacing"],
+            "anyOf": super::spacing_any_of(),
         })
     }
 }
