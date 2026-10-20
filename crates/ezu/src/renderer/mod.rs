@@ -120,7 +120,8 @@ pub use ezu_core::TileId;
 pub use ezu_paint::host::PngCompression;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
 
 use ezu_core::TileId as CoreTileId;
 use ezu_graph::{
@@ -189,6 +190,13 @@ pub struct Renderer {
     /// [`Renderer::set_cache_budget`]. `None` keeps the graph cache's own
     /// default.
     cache_budget: Option<usize>,
+    /// Held shared by every render while it runs, and exclusively by a
+    /// glyph trim, so a trim never drops glyphs a render on another thread
+    /// was bound with.
+    glyph_gate: RwLock<()>,
+    /// A trim that met a render in flight, owed by the last render to
+    /// finish.
+    trim_pending: AtomicBool,
 }
 
 impl Renderer {
@@ -204,6 +212,8 @@ impl Renderer {
             glyph_budget: None,
             tile_size_override: None,
             cache_budget: None,
+            glyph_gate: RwLock::new(()),
+            trim_pending: AtomicBool::new(false),
         })
     }
 
@@ -783,6 +793,12 @@ impl Renderer {
     }
 
     /// Render a single tile using whatever sources are currently bound.
+    ///
+    /// Afterwards it trims the glyph banks to the
+    /// [glyph budget](Self::set_glyph_budget), as
+    /// [`trim_glyphs`](Self::trim_glyphs) does: at once, or, when renders
+    /// from sets are running on other threads, as the last of them
+    /// finishes, so it never takes glyphs one of them is drawing with.
     pub fn render_tile(
         &self,
         z: u8,
@@ -805,10 +821,11 @@ impl Renderer {
     /// It reads `set` and the renderer's style and asset banks and changes
     /// nothing but the render cache, which is locked internally, so renders
     /// of different tiles can run on several threads over one `&Renderer`.
-    /// It does not apply [`set_glyph_budget`](Self::set_glyph_budget):
-    /// trimming while another thread is rendering could drop glyphs that
-    /// render was bound with, so a host with a budget calls
-    /// [`trim_glyphs`](Self::trim_glyphs) once its renders are done.
+    /// It does not apply [`set_glyph_budget`](Self::set_glyph_budget) after
+    /// itself, so a host with a budget calls
+    /// [`trim_glyphs`](Self::trim_glyphs) when it wants the banks trimmed;
+    /// a trim waits for the renders running alongside to finish rather
+    /// than drop glyphs from under them.
     pub fn render_tile_with(
         &self,
         z: u8,
@@ -925,12 +942,31 @@ impl Renderer {
     /// [glyph budget](Self::set_glyph_budget). A no-op until a host sets
     /// one. [`render_tile`](Self::render_tile) does this after each
     /// render; a host rendering with
-    /// [`render_tile_with`](Self::render_tile_with) calls it when no render
-    /// is running.
+    /// [`render_tile_with`](Self::render_tile_with) calls it when it likes.
+    ///
+    /// It never drops glyphs from under a render: called while renders run
+    /// on other threads, it leaves the trim to the last of them to finish,
+    /// so the banks shrink once nothing is reading them.
     pub fn trim_glyphs(&self) {
         if self.glyph_budget.is_none() {
             return;
         }
+        let trimming = match self.glyph_gate.try_write() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                // Say a trim is owed, then look again: a render that
+                // finished in between did not see the flag, but its lock
+                // is gone; one still running will see it when it ends.
+                self.trim_pending.store(true, Ordering::SeqCst);
+                match self.glyph_gate.try_write() {
+                    Ok(guard) => guard,
+                    Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
+                    Err(std::sync::TryLockError::WouldBlock) => return,
+                }
+            }
+        };
+        self.trim_pending.store(false, Ordering::SeqCst);
         for stack in self
             .assets
             .glyphs
@@ -940,6 +976,7 @@ impl Renderer {
         {
             stack.trim_to_budget();
         }
+        drop(trimming);
     }
 
     /// Shared body of the prepass calls: the needed codepoints per glyphs
@@ -1019,10 +1056,35 @@ impl Renderer {
         needed
     }
 
+    /// [`render_reading`](Self::render_reading), holding the glyph banks
+    /// against a trim for as long as it runs, and doing a trim that had to
+    /// wait for it once it is done.
+    fn render_from(
+        &self,
+        z: u8,
+        x: u32,
+        y: u32,
+        set: &SourceSet,
+        opts: RenderOptions,
+        observer: Option<&dyn ezu_graph::NodeObserver>,
+    ) -> Result<Vec<u8>, Error> {
+        let out = {
+            let _reading = self
+                .glyph_gate
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.render_reading(z, x, y, set, opts, observer)
+        };
+        if self.trim_pending.load(Ordering::SeqCst) {
+            self.trim_glyphs();
+        }
+        out
+    }
+
     /// Binds each payload in `set` to a per-render loader, dispatching on
     /// the source's declared kind in the style, and renders, showing each
     /// node's value to `observer` as it is computed.
-    fn render_from(
+    fn render_reading(
         &self,
         z: u8,
         x: u32,
@@ -1601,6 +1663,41 @@ fn collect_codepoints(s: &str, out: &mut BTreeSet<u32>) {
 mod tests {
     use super::*;
 
+    /// A trim never takes glyphs from under a render on another thread: it
+    /// waits for the last render running to finish, which does it.
+    #[test]
+    fn a_trim_waits_for_the_renders_in_flight() {
+        let mut r = Renderer::new(
+            r##"{ "name": "labels", "tile-size": 64,
+                  "sources": { "g": { "type": "glyphs", "url": "https://example.invalid/{fontstack}/{range}.pbf",
+                                      "fontstack": "Sans" } },
+                  "nodes": { "out": { "op": "solid", "color": "#000000" } },
+                  "output": "@out" }"##,
+        )
+        .expect("builds");
+        let range = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../ezu-core/tests/glyphs/0-255.pbf"),
+        )
+        .expect("reads the glyph range");
+        r.bind_source("g", range, &BindOptions::default())
+            .expect("binds");
+        r.set_glyph_budget(Some(1));
+        assert_eq!(r.memory_usage().glyph_ranges, 1);
+
+        // As if a render were running on another thread.
+        let reading = r.glyph_gate.read().unwrap();
+        r.trim_glyphs();
+        assert_eq!(r.memory_usage().glyph_ranges, 1, "trimmed under a render");
+        drop(reading);
+
+        // The next render to finish does the trim it was owed.
+        r.render_tile_with(1, 0, 0, &SourceSet::new(), RenderOptions::default())
+            .expect("renders");
+        assert_eq!(r.memory_usage().glyph_ranges, 0, "the owed trim never ran");
+        assert!(!r.trim_pending.load(Ordering::SeqCst));
+    }
+
     /// The warnings are the graph's, and follow the style.
     #[test]
     fn the_build_warnings_are_the_current_styles() {
@@ -1615,7 +1712,9 @@ mod tests {
         )
         .expect("builds");
         assert!(
-            r.warnings().iter().any(|w| w.contains("`source` is not set")),
+            r.warnings()
+                .iter()
+                .any(|w| w.contains("`source` is not set")),
             "{:?}",
             r.warnings()
         );
