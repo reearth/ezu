@@ -259,6 +259,70 @@ fn renders_from_sets_can_share_a_renderer_across_threads() {
     );
 }
 
+/// A vector tile prepares its features for filtering once per zoom, on the
+/// first render that reads it at that zoom, and renders on other threads
+/// reading the same load wait for that one preparation. Several threads
+/// that all start on freshly loaded data draw what renders one at a time
+/// draw.
+#[test]
+fn renders_on_several_threads_share_a_loaded_vector_tile() {
+    let tiles = [
+        (14, 14554, 6454),
+        (14, 14555, 6454),
+        (14, 14554, 6455),
+        (14, 14555, 6455),
+    ];
+    let want = bound_per_tile(STITCHED, "basemap", BASEMAP_Z14, &tiles);
+
+    // A few rounds, each on a fresh load, so the first preparation is
+    // raced each time.
+    for _ in 0..4 {
+        let r = Renderer::new(STITCHED).expect("builds");
+        let data = r.load_source("basemap", BASEMAP_Z14).expect("loads");
+        let sets: Vec<SourceSet> = tiles
+            .iter()
+            .map(|_| {
+                let mut set = SourceSet::new();
+                for c in neighbourhood() {
+                    set.bind(&data, &at(c, None)).expect("binds");
+                }
+                set
+            })
+            .collect();
+        // Two threads per tile, held at the line until all are ready.
+        let jobs: Vec<usize> = (0..tiles.len()).chain(0..tiles.len()).collect();
+        let start = std::sync::Barrier::new(jobs.len());
+        let got: Vec<(usize, Vec<u8>)> = std::thread::scope(|s| {
+            let handles: Vec<_> = jobs
+                .iter()
+                .map(|&i| {
+                    let (r, sets, start) = (&r, &sets, &start);
+                    let (z, x, y) = tiles[i];
+                    s.spawn(move || {
+                        start.wait();
+                        (
+                            i,
+                            r.render_tile_with(z, x, y, &sets[i], rgba())
+                                .expect("renders"),
+                        )
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("no panic"))
+                .collect()
+        });
+        for (i, pixels) in got {
+            let (z, x, y) = tiles[i];
+            assert!(
+                pixels == want[i],
+                "{z}/{x}/{y} rendered on several threads differs from one at a time"
+            );
+        }
+    }
+}
+
 #[test]
 fn a_set_ignores_what_is_bound_to_the_renderer() {
     let mut r = Renderer::new(STITCHED).expect("builds");
