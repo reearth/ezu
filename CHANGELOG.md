@@ -213,6 +213,10 @@ mean is spelled out in
   ring's own opacity in place of `opacity`, and `blur` (`circle-blur`), a
   fade to the edge over that fraction of the radius, each with a `*-expr`
   form. Left out, the ring takes `opacity` and the edge is crisp, as before.
+- `stamp` takes `anchor` (the nine names `icon-anchor` takes on `text`),
+  `anchor-expr` and `offset` in px, as MapLibre's `icon-anchor` and
+  `icon-offset`: the sprite sits on the point by that part, shifted by the
+  offset, and scales and turns about the point. Left out, it stays centred.
 
 ### Changed
 

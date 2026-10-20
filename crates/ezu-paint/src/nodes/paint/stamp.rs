@@ -2,11 +2,14 @@
 //! image once at every point in `Features.points`, with optional
 //! rotation / scale / per-point jitter. The image is sampled at its
 //! native dimensions regardless of which kind it was wired in as.
+//! `anchor` picks which part of the image sits on the point and `offset`
+//! shifts it from there, as MapLibre's `icon-anchor` and `icon-offset` do.
 //!
 //! Lines and polygons in the features input are ignored. The output
 //! has the canvas-padded dimensions, matching every other paint node.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use ezu_graph::{
@@ -22,11 +25,12 @@ use xxhash_rust::xxh3::Xxh3;
 use ezu_core::{
     coord::tile_px_to_world,
     seed::{next_unit, world_seed},
+    text::Anchor,
 };
 
 use crate::nodes::common::{
-    canvas_into_raster, core_tile, downcast_features, empty_raster, make_canvas,
-    unwrap_raster_or_sprite, FramedImage, ACCEPTS_RASTER_OR_SPRITE,
+    canvas_into_raster, core_tile, downcast_features, empty_raster, make_canvas, read_string_or,
+    read_xy, unwrap_raster_or_sprite, FramedImage, ACCEPTS_RASTER_OR_SPRITE,
 };
 
 const STAMP_SALT: u32 = 0x5354_4d50; // 'STMP'
@@ -136,8 +140,48 @@ struct StampNode {
     icon_sprite: Option<String>,
     icon_name_expr: Option<maplibre_expr::Expr>,
     icon_name_expr_src: Option<String>,
+    /// Which part of the image sits on the point (MapLibre `icon-anchor`).
+    anchor: Anchor,
+    /// Data-driven `anchor`: a MapLibre string expression naming the anchor
+    /// per feature group, with its raw JSON text for the hash.
+    anchor_expr: Option<maplibre_expr::Expr>,
+    anchor_expr_src: Option<String>,
+    /// Set once `anchor-expr` has given a name that is not an anchor, so the
+    /// mistake is reported once per node rather than once per group.
+    anchor_expr_warned: AtomicBool,
+    /// Shift `[x, y]` in px from the anchored position, right and down
+    /// positive (MapLibre `icon-offset`). Like the image it is scaled by the
+    /// stamp's scale and turned with its rotation.
+    offset: [f32; 2],
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
+}
+
+impl StampNode {
+    /// The anchor fractions for one group: `anchor-expr`'s anchor when it
+    /// names one, else `anchor`. An evaluation error falls back quietly like
+    /// the other per-group expressions; a string that names no anchor is a
+    /// style mistake, so it is reported, once per node.
+    fn group_anchor(&self, ectx: &maplibre_expr::EvaluationContext) -> (f32, f32) {
+        let Some(expr) = &self.anchor_expr else {
+            return self.anchor.fraction();
+        };
+        let Ok(maplibre_expr::Value::String(name)) = maplibre_expr::evaluate(expr, ectx) else {
+            return self.anchor.fraction();
+        };
+        match Anchor::parse(&name) {
+            Some(a) => a.fraction(),
+            None => {
+                if !self.anchor_expr_warned.swap(true, Ordering::Relaxed) {
+                    tracing::warn!(
+                        "stamp: `anchor-expr` gave `{name}`, which is not an anchor name — \
+                         `anchor` was used for such points"
+                    );
+                }
+                self.anchor.fraction()
+            }
+        }
+    }
 }
 
 impl Node for StampNode {
@@ -211,13 +255,16 @@ impl Node for StampNode {
         };
 
         // Stamp every point in `points` with `img` at the given scale /
-        // rotation / opacity. Jitter is keyed by world position, so it does
-        // not depend on the group the point came from.
+        // rotation / opacity, the `anchor` fractions of the image on the
+        // point. Jitter is keyed by world position, so it does not depend on
+        // the group the point came from.
+        let offset = self.offset;
         let stamp_points = |pm: &mut tiny_skia::Pixmap,
                             points: &[(i32, i32)],
                             img: &FramedImage,
                             scale: f32,
                             rotation_deg: f32,
+                            (fx, fy): (f32, f32),
                             pix_paint: &PixmapPaint| {
             let (iw, ih) = img.size();
             let mut pm = pm.as_mut();
@@ -245,16 +292,19 @@ impl Node for StampNode {
                     dx = (next_unit(&mut seed) - 0.5) * 2.0 * position_jitter_px;
                     dy = (next_unit(&mut seed) - 0.5) * 2.0 * position_jitter_px;
                 }
+                // The image turns and scales about the point, and the offset
+                // with it, as MapLibre turns an icon about its anchor.
                 let t = Transform::from_translate(px + dx, py + dy)
                     .pre_rotate(rotation_deg + rot_off)
                     .pre_scale(s, s)
-                    .pre_translate(-iw * 0.5, -ih * 0.5);
+                    .pre_translate(offset[0] - fx * iw, offset[1] - fy * ih);
                 img.draw(&mut pm, pix_paint, t);
             }
         };
         let has_paint_expr = self.scale_expr.is_some()
             || self.rotation_deg_expr.is_some()
-            || self.opacity_expr.is_some();
+            || self.opacity_expr.is_some()
+            || self.anchor_expr.is_some();
         let z = ctx.tile.z;
         let pm = canvas.pixmap_mut();
 
@@ -291,7 +341,16 @@ impl Node for StampNode {
                     opacity,
                     ..PixmapPaint::default()
                 };
-                stamp_points(pm, &group.points, img, scale, rotation_deg, &pix_paint);
+                let anchor = self.group_anchor(&ectx);
+                stamp_points(
+                    pm,
+                    &group.points,
+                    img,
+                    scale,
+                    rotation_deg,
+                    anchor,
+                    &pix_paint,
+                );
             }
         } else {
             // Single `image` input stamped at every point.
@@ -314,7 +373,16 @@ impl Node for StampNode {
                         opacity,
                         ..PixmapPaint::default()
                     };
-                    stamp_points(pm, &group.points, &img, scale, rotation_deg, &pix_paint);
+                    let anchor = self.group_anchor(&ectx);
+                    stamp_points(
+                        pm,
+                        &group.points,
+                        &img,
+                        scale,
+                        rotation_deg,
+                        anchor,
+                        &pix_paint,
+                    );
                 }
             } else {
                 let pix_paint = PixmapPaint {
@@ -328,6 +396,7 @@ impl Node for StampNode {
                     &img,
                     const_scale,
                     const_rotation_deg,
+                    self.anchor.fraction(),
                     &pix_paint,
                 );
             }
@@ -352,6 +421,7 @@ impl Node for StampNode {
             (b"rotationdegexpr".as_slice(), &self.rotation_deg_expr_src),
             (b"opacityexpr".as_slice(), &self.opacity_expr_src),
             (b"iconnameexpr".as_slice(), &self.icon_name_expr_src),
+            (b"anchorexpr".as_slice(), &self.anchor_expr_src),
         ] {
             if let Some(s) = src {
                 h.update(tag);
@@ -362,6 +432,11 @@ impl Node for StampNode {
             h.update(b"iconsprite");
             h.update(sprite.as_bytes());
         }
+        let (fx, fy) = self.anchor.fraction();
+        h.update(&fx.to_le_bytes());
+        h.update(&fy.to_le_bytes());
+        h.update(&self.offset[0].to_le_bytes());
+        h.update(&self.offset[1].to_le_bytes());
     }
     fn param_refs(&self) -> Vec<String> {
         self.param_refs.clone()
@@ -463,6 +538,14 @@ impl NodeFactory for StampFactory {
             parse_expr_field(fields, "rotation-deg-expr", &maplibre_expr::Type::Number)?;
         let (opacity_expr, opacity_expr_src) =
             parse_expr_field(fields, "opacity-expr", &maplibre_expr::Type::Number)?;
+        let anchor_s = read_string_or(fields, "anchor", ctx, "center")?;
+        let anchor = Anchor::parse(&anchor_s).ok_or_else(|| FactoryError::BadField {
+            field: "anchor".into(),
+            msg: format!("unknown anchor `{anchor_s}`"),
+        })?;
+        let (anchor_expr, anchor_expr_src) =
+            parse_expr_field(fields, "anchor-expr", &maplibre_expr::Type::String)?;
+        let offset = read_xy(fields, "offset", ctx, [0.0, 0.0])?;
 
         let mut ports = vec![PortSpec {
             name: "features",
@@ -504,6 +587,11 @@ impl NodeFactory for StampFactory {
                 icon_sprite,
                 icon_name_expr,
                 icon_name_expr_src,
+                anchor,
+                anchor_expr,
+                anchor_expr_src,
+                anchor_expr_warned: AtomicBool::new(false),
+                offset,
                 ports,
                 param_refs: parts.param_refs,
             }),
@@ -540,6 +628,13 @@ impl NodeFactory for StampFactory {
                 "opacity-expr": {
                     "description": "A MapLibre number expression giving opacity, evaluated per feature group; overrides the constant `opacity`.",
                 },
+                "anchor": { "type": "string", "enum": ["center", "left", "right", "top", "bottom", "top-left", "top-right", "bottom-left", "bottom-right"],
+                            "description": "Which part of the sprite sits on the point (MapLibre `icon-anchor`): `bottom` puts its bottom edge's middle there, say, for a pin. Rotation and scale turn about the point. Default `center`." },
+                "anchor-expr": {
+                    "description": "A MapLibre string expression naming the anchor per feature group (data-driven `icon-anchor`): one of the `anchor` names. It takes the place of `anchor` for that group; a group whose result is not an anchor name, or whose evaluation fails, uses `anchor`, and a result that is not an anchor name is reported once per node.",
+                },
+                "offset": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2,
+                            "description": "Shift [x, y] in px from the anchored position, right and down positive (MapLibre `icon-offset`). Like the sprite it is scaled by `scale` and turned by the rotation. Default [0, 0]." },
             },
             "required": ["features"],
         })

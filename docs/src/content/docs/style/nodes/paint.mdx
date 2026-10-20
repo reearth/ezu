@@ -166,9 +166,12 @@ Stamp a sprite at every input point. Lines and polygons are ignored. Rotation, s
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
+| `anchor` | `center` \| `left` \| `right` \| `top` \| `bottom` \| `top-left` \| `top-right` \| `bottom-left` \| `bottom-right` | no | Which part of the sprite sits on the point (MapLibre `icon-anchor`): `bottom` puts its bottom edge's middle there, say, for a pin. Rotation and scale turn about the point. Default `center`. |
+| `anchor-expr` | — | no | A MapLibre string expression naming the anchor per feature group (data-driven `icon-anchor`): one of the `anchor` names. It takes the place of `anchor` for that group; a group whose result is not an anchor name, or whose evaluation fails, uses `anchor`, and a result that is not an anchor name is reported once per node. |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
 | `image` | `@node` | no | Reference to another node (`@name`). |
 | `name-expr` | — | no | A MapLibre expression giving each feature's icon name (MapLibre data-driven `icon-image`), cropped per group from the `sprite` atlas. Used instead of an `image` input; any icon the bound sheet contains is croppable, so no enumeration is needed. |
+| `offset` | array of number | no | Shift [x, y] in px from the anchored position, right and down positive (MapLibre `icon-offset`). Like the sprite it is scaled by `scale` and turned by the rotation. Default [0, 0]. |
 | `opacity` | number (0…1) \| `$param` \| `@node` | no | — |
 | `opacity-expr` | — | no | A MapLibre number expression giving opacity, evaluated per feature group; overrides the constant `opacity`. |
 | `position-jitter-px` | number (0…∞) \| `$param` \| `@node` | no | Per-point random offset, ±value canvas pixels, drawn independently on x and y. Breaks up the regular lattice a `point-grid` leaves. Default 0 (no offset). |

@@ -4940,6 +4940,24 @@
           {
             "description": "Stamp a sprite at every input point. Lines and polygons are ignored. Rotation, scale and position jitter are world-deterministic — a given point gets the same jitter no matter which tile renders it, and the three do not correlate. Provide either an `image` input (one sprite for every point) or, for a data-driven `icon-image`, a `sprite` atlas ref plus a `name-expr` that names each feature's icon.",
             "properties": {
+              "anchor": {
+                "description": "Which part of the sprite sits on the point (MapLibre `icon-anchor`): `bottom` puts its bottom edge's middle there, say, for a pin. Rotation and scale turn about the point. Default `center`.",
+                "enum": [
+                  "center",
+                  "left",
+                  "right",
+                  "top",
+                  "bottom",
+                  "top-left",
+                  "top-right",
+                  "bottom-left",
+                  "bottom-right"
+                ],
+                "type": "string"
+              },
+              "anchor-expr": {
+                "description": "A MapLibre string expression naming the anchor per feature group (data-driven `icon-anchor`): one of the `anchor` names. It takes the place of `anchor` for that group; a group whose result is not an anchor name, or whose evaluation fails, uses `anchor`, and a result that is not an anchor name is reported once per node."
+              },
               "features": {
                 "description": "Reference to another node (`@name`).",
                 "pattern": "^@?[A-Za-z_][A-Za-z0-9_-]*$",
@@ -4952,6 +4970,15 @@
               },
               "name-expr": {
                 "description": "A MapLibre expression giving each feature's icon name (MapLibre data-driven `icon-image`), cropped per group from the `sprite` atlas. Used instead of an `image` input; any icon the bound sheet contains is croppable, so no enumeration is needed."
+              },
+              "offset": {
+                "description": "Shift [x, y] in px from the anchored position, right and down positive (MapLibre `icon-offset`). Like the sprite it is scaled by `scale` and turned by the rotation. Default [0, 0].",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
               },
               "op": {
                 "const": "stamp",
