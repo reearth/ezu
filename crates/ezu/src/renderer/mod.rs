@@ -98,7 +98,7 @@ use source_set::Payload;
 pub use ezu_core::frame::{Frame, FrameRequest, RowCopy};
 
 /// A Web Mercator tile, as [`Renderer::render_frame`] names the tile it
-/// is about to bind. Re-exported so a shell needs this crate and nothing
+/// is about to render. Re-exported so a shell needs this crate and nothing
 /// under it.
 pub use ezu_core::TileId;
 

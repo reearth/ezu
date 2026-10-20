@@ -98,7 +98,8 @@ tiles the page covers at the tile size that meets the scale and crop them into
 one RGBA page, the same as [`ezu frame`](/ezu/guides/bbox-and-pyramids/#a-page-at-a-print-scale):
 
 ```rust
-use ezu::renderer::FrameRequest;
+use std::collections::HashMap;
+use ezu::renderer::{FrameRequest, SourceSet};
 
 let f = r.compute_frame(&FrameRequest {
     center_lon: 139.70, center_lat: 35.68,
@@ -107,17 +108,30 @@ let f = r.compute_frame(&FrameRequest {
     zoom: None,
     style_tile_size: r.tile_size(),
 })?;
+let mut loaded = HashMap::new();                    // each fetched tile, decoded once
 let page = r.render_frame(&f, RenderOptions::default(), |b, tile| {
-    let mvt = fetch_mvt(tile.z, tile.x, tile.y)?;   // your fetch, your error type
-    b.bind_source("basemap", mvt, &BindOptions::default())?;
-    Ok::<_, MyError>(())
+    let mut set = SourceSet::new();
+    for (dx, dy) in [(0, 0)].into_iter().chain(b.requested_neighbor_offsets("basemap")?) {
+        let at = (tile.x as i32 + dx, tile.y as i32 + dy);
+        if !loaded.contains_key(&at) {
+            let mvt = fetch_mvt(tile.z, at.0, at.1)?;  // your fetch, your error type
+            loaded.insert(at, b.load_source("basemap", &mvt)?);
+        }
+        set.bind(&loaded[&at], &BindOptions { coord: (dx, dy), ..BindOptions::default() })?;
+    }
+    Ok::<_, MyError>(set)
 })?;
 ```
 
-The bind gets a `FrameBinder` for the tile it is binding. `render_frame` holds
-the renderer by `&mut` for the whole frame, so that binder is the only way to
-bind while it runs — the borrow checker does what the JS and Go packages check at
-run time.
+Each tile renders from the `SourceSet` its callback returns, as
+`render_tile_with` does. The tiles of a frame border each other, so keeping
+each `SourceData` and putting it into the set of every tile that reads it
+decodes each fetched tile once. The callback also gets a `FrameBinder`, which
+loads data, answers the queries a fetch needs, and binds into the renderer what
+a set turns out to need — the glyphs `needed_codepoints_in` lists.
+`render_frame` holds the renderer by `&mut` for the whole frame, so that binder
+is the only way to change it while the frame runs — the borrow checker does
+what the JS and Go packages check at run time.
 
 ## Serial or parallel
 
