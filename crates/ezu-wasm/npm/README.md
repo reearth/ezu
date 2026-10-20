@@ -194,6 +194,14 @@ class Renderer {
       | null | undefined,
     opts?: { pad?: number; params?: Record<string, number | boolean | string> },
   ): Promise<Uint8Array>;                    // straight RGBA, width × height
+  // renderFrame, also gathering features nodes over the page: each node's
+  // page as the GeoJSON text `ezu frame --features` writes.
+  renderFrameWithFeatures(
+    frame: Frame, sources: /* as renderFrame */ any,
+    request: { nodes: { node: string; key?: string[] }[];
+               coords?: "lonlat" | "px" },
+    opts?: { pad?: number; params?: Record<string, number | boolean | string> },
+  ): Promise<{ image: Uint8Array; features: { node: string; geojson: string }[] }>;
 
   free(): void;
 }

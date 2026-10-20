@@ -111,7 +111,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
 use ezu::renderer::{
-    BindOptions, Error, ErrorKind, Frame, FrameRequest, OutputFormat, PngCompression, RenderOptions,
+    BindOptions, Error, ErrorKind, FeatureCoords, Frame, FrameFeatureCollector, FrameFeatureNode,
+    FrameFeatures, FrameRequest, OutputFormat, PngCompression, RenderOptions,
 };
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -418,11 +419,78 @@ impl Renderer {
         self.frame.busy.set(true);
         let (inner, state) = (Rc::clone(&self.inner), Rc::clone(&self.frame));
         wasm_bindgen_futures::future_to_promise(async move {
-            let result = render_frame_tiles(&inner, &state, &frame, sources, opts).await;
+            let result = render_frame_tiles(&inner, &state, &frame, sources, opts, None).await;
             // Give the renderer back whether or not the frame made it.
             state.open_tile.set(0);
             state.busy.set(false);
-            result
+            result.map(Into::into)
+        })
+    }
+
+    /// `renderFrame`, also handing back what features nodes held over the
+    /// whole page: resolves to `{ image, features }`, where `image` is the
+    /// buffer `renderFrame` resolves to and `features` holds one
+    /// `{ node, geojson }` per entry of `request.nodes`, in that order.
+    /// `geojson` is a FeatureCollection as text, byte for byte the file
+    /// `ezu frame --features` writes for the same style, data and frame.
+    ///
+    /// `request` is `{ nodes: [{ node, key? }], coords? }`. `key` names the
+    /// properties that identify a feature across tiles — `["label-id",
+    /// "part"]` for `label-boxes`: features whose key properties are all
+    /// equal are written once, the first in reading order (rows top to
+    /// bottom, then left to right), and the page is sorted by the key.
+    /// Without one, every tile's features are written, so a feature several
+    /// tiles see appears once per tile. `coords` is `"lonlat"` (the
+    /// default), WGS84 to seven decimal places, or `"px"`, page pixels to
+    /// two. Features wholly off the page are left out; one that reaches
+    /// into it is written whole.
+    ///
+    /// The values are the ones each tile's render computed on its way to
+    /// the pixels, so this costs no second evaluation. A name that is not
+    /// a node of the style, or names one that produces something other
+    /// than features, and a key that names no property, reject with
+    /// `InvalidStyle` before anything renders.
+    #[wasm_bindgen(js_name = renderFrameWithFeatures, unchecked_return_type = "Promise<FrameWithFeatures>")]
+    pub fn render_frame_with_features(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "Frame")] frame: js_sys::Object,
+        #[wasm_bindgen(
+            unchecked_param_type = "((tile: { z: number; x: number; y: number }, binder: FrameBinder) => SourceSet | Promise<SourceSet>) | null | undefined"
+        )]
+        sources: Option<js_sys::Function>,
+        #[wasm_bindgen(unchecked_param_type = "FrameFeatures")] request: js_sys::Object,
+        opts: Option<js_sys::Object>,
+    ) -> js_sys::Promise {
+        if let Err(e) = self.idle() {
+            return js_sys::Promise::reject(&e);
+        }
+        let collector = parse_frame(&frame)
+            .and_then(|f| Ok((f, parse_frame_features(&request)?)))
+            .and_then(|(f, req)| self.inner.borrow().frame_features(&f, &req).map_err(js_err));
+        let mut collector = match collector {
+            Ok(c) => c,
+            Err(e) => return js_sys::Promise::reject(&e),
+        };
+        self.frame.busy.set(true);
+        let (inner, state) = (Rc::clone(&self.inner), Rc::clone(&self.frame));
+        wasm_bindgen_futures::future_to_promise(async move {
+            let result =
+                render_frame_tiles(&inner, &state, &frame, sources, opts, Some(&mut collector))
+                    .await;
+            state.open_tile.set(0);
+            state.busy.set(false);
+            let image = result?;
+            let list = js_sys::Array::new();
+            for page in collector.finish() {
+                let entry = js_sys::Object::new();
+                js_sys::Reflect::set(&entry, &"node".into(), &page.node().into())?;
+                js_sys::Reflect::set(&entry, &"geojson".into(), &page.to_geojson().into())?;
+                list.push(&entry);
+            }
+            let out = js_sys::Object::new();
+            js_sys::Reflect::set(&out, &"image".into(), &image)?;
+            js_sys::Reflect::set(&out, &"features".into(), &list)?;
+            Ok(out.into())
         })
     }
 
@@ -1152,13 +1220,16 @@ fn bind_into(
 }
 
 /// The tile loop of `renderFrame`, which owns the renderer while it runs.
+/// With a collector, each tile also renders the nodes it gathers and hands
+/// it their values.
 async fn render_frame_tiles(
     inner: &Rc<RefCell<ezu::renderer::Renderer>>,
     state: &Rc<FrameState>,
     frame: &js_sys::Object,
     sources: Option<js_sys::Function>,
     opts: Option<js_sys::Object>,
-) -> Result<JsValue, JsValue> {
+    mut collector: Option<&mut FrameFeatureCollector>,
+) -> Result<js_sys::Uint8Array, JsValue> {
     let frame = parse_frame(frame)?;
     let opts = frame_render_options(opts.as_ref(), frame.tile_size)?;
     // The page is assembled in JS memory, not in the wasm heap: the heap
@@ -1189,9 +1260,18 @@ async fn render_frame_tiles(
                 state.open_tile.set(0);
                 set = returned_set(&settled?)?;
             }
-            let px = inner
-                .borrow()
-                .render_tile_with(frame.zoom, x, y, &set, opts.clone());
+            let px = match collector.as_deref_mut() {
+                None => inner
+                    .borrow()
+                    .render_tile_with(frame.zoom, x, y, &set, opts.clone()),
+                Some(c) => inner
+                    .borrow()
+                    .render_tile_with_features(frame.zoom, x, y, &set, opts.clone(), &c.nodes())
+                    .map(|(px, values)| {
+                        c.add(ezu::renderer::TileId::new(frame.zoom, x, y), &values);
+                        px
+                    }),
+            };
             inner.borrow().trim_glyphs();
             let px = px.map_err(js_err)?;
             let want = t as usize * t as usize * 4;
@@ -1211,7 +1291,7 @@ async fn render_frame_tiles(
             }
         }
     }
-    Ok(out.into())
+    Ok(out)
 }
 
 /// The set a frame's `sources` returned, read without taking it from the
@@ -1273,6 +1353,30 @@ export interface TileWithFeatures {
   image: Uint8Array;
   /** One collection per node asked for, in the order asked. */
   features: NodeFeatures[];
+}
+
+/** Which features nodes `renderFrameWithFeatures` gathers over a page, and how it writes them. */
+export interface FrameFeatures {
+  /** One page of features per entry, in this order. `key` names the properties that identify a feature across tiles; with one, each feature is written once and the page is sorted by it. */
+  nodes: Array<{ node: string; key?: string[] }>;
+  /** WGS84 longitude and latitude (the default), or page pixels. */
+  coords?: "lonlat" | "px";
+}
+
+/** What one features node held over a whole page. */
+export interface PageFeatures {
+  /** The node's id, as it was asked for. */
+  node: string;
+  /** A GeoJSON FeatureCollection as text: byte for byte the file `ezu frame --features` writes. */
+  geojson: string;
+}
+
+/** What `renderFrameWithFeatures` hands back. */
+export interface FrameWithFeatures {
+  /** The page, exactly as `renderFrame` resolves to it. */
+  image: Uint8Array;
+  /** One page of features per node asked for, in the order asked. */
+  features: PageFeatures[];
 }
 "#;
 
@@ -1495,6 +1599,56 @@ fn tile_object(z: u8, x: u32, y: u32) -> Result<JsValue, JsValue> {
 
 /// `obj[key]` as a number, `None` when it is absent (`undefined` or
 /// `null`), and `InvalidStyle` when it is something else.
+/// Read `renderFrameWithFeatures`'s `{ nodes: [{ node, key? }], coords? }`,
+/// with the names and refusals the C ABI's `ezu_frame_features_new` has.
+fn parse_frame_features(obj: &js_sys::Object) -> Result<FrameFeatures, JsValue> {
+    let bad_nodes = || {
+        named_err(
+            ErrorKind::InvalidStyle,
+            "the frame features request needs nodes as an array of { node: id, key?: [property, …] }",
+        )
+    };
+    let nodes = js_sys::Reflect::get(obj, &"nodes".into())?
+        .dyn_into::<js_sys::Array>()
+        .map_err(|_| bad_nodes())?
+        .iter()
+        .map(|entry| {
+            let node = js_sys::Reflect::get(&entry, &"node".into())?
+                .as_string()
+                .ok_or_else(bad_nodes)?;
+            let key = js_sys::Reflect::get(&entry, &"key".into())?;
+            let key = if key.is_undefined() || key.is_null() {
+                None
+            } else {
+                let props = key.dyn_into::<js_sys::Array>().map_err(|_| bad_nodes())?;
+                Some(
+                    props
+                        .iter()
+                        .map(|p| p.as_string().ok_or_else(bad_nodes))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )
+            };
+            Ok(FrameFeatureNode { node, key })
+        })
+        .collect::<Result<Vec<_>, JsValue>>()?;
+    let coords = js_sys::Reflect::get(obj, &"coords".into())?;
+    let coords = if coords.is_undefined() || coords.is_null() {
+        FeatureCoords::default()
+    } else {
+        coords
+            .as_string()
+            .as_deref()
+            .and_then(FeatureCoords::from_name)
+            .ok_or_else(|| {
+                named_err(
+                    ErrorKind::InvalidStyle,
+                    "coords must be \"lonlat\" or \"px\"",
+                )
+            })?
+    };
+    Ok(FrameFeatures { nodes, coords })
+}
+
 fn number_field(obj: &js_sys::Object, key: &str) -> Result<Option<f64>, JsValue> {
     let value = js_sys::Reflect::get(obj, &key.into())?;
     if value.is_undefined() || value.is_null() {

@@ -248,6 +248,93 @@ func TestRenderFrameMatchesTheCLI(t *testing.T) {
 	}
 }
 
+// The features files the CLI writes for the corner frame above, with
+//
+//	--features roads_f=roads.geojson --features water_f=water.geojson
+//	--features-key water_f=kind [--features-coords px]
+//
+// added to the same command. crates/ezu-wasm/tests/frame.test.mjs pins the
+// same hashes.
+var cornerFeatures = map[FeatureCoords]map[string]string{
+	CoordsLonLat: {
+		"roads_f": "e193daaa36a6a60f329ae635f8b2f0c4ff65d63b0930748c191ffe6c58aa259d",
+		"water_f": "8154c7f79a530cc9909e91a852ec9ff94f63153cc397eb10a8fda22f1df6cb8e",
+	},
+	CoordsPx: {
+		"roads_f": "c528e74c03f10b211bab369b9779c7402ed49e28cd43bd4ca86bc96cd6bfd8e2",
+		"water_f": "41efc5b75feaa06431cf6ff57b7b92481c21aaa99f495719e7f0c0a4bd1a3a05",
+	},
+}
+
+func TestRenderFrameWithFeaturesWritesTheCLIsFiles(t *testing.T) {
+	ctx, renderer := open(t, stainedGlassStyle)
+	f, err := renderer.ComputeFrame(ctx, FrameRequest{
+		CenterLon: 139.812, CenterLat: 35.6216,
+		Scale: 40000, DPI: 200,
+		Width: 500, Height: 400,
+	}, AtZoom(14))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := renderer.LoadSource(ctx, "basemap", readFile(t, "testdata/basemap-13-7277-3227.mvt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Release(ctx)
+	sources := func(ctx context.Context, tile Tile, b *FrameBinder) (SourceSet, error) {
+		var set SourceSet
+		return set, set.Bind(parent, FromZoom(13))
+	}
+	nodes := []FrameFeatureNode{{Node: "roads_f"}, {Node: "water_f", Key: []string{"kind"}}}
+
+	for _, coords := range []FeatureCoords{CoordsLonLat, CoordsPx, ""} {
+		img, pages, err := renderer.RenderFrameWithFeatures(ctx, f, sources, FrameFeatures{Nodes: nodes, Coords: coords}, Render{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sum := sha256.Sum256(img.Pix); hex.EncodeToString(sum[:]) != cornerFramePixels {
+			t.Errorf("%q: the page is not RenderFrame's", coords)
+		}
+		if len(pages) != 2 || pages[0].Node != "roads_f" || pages[1].Node != "water_f" {
+			t.Fatalf("%q: pages for %+v", coords, pages)
+		}
+		want := cornerFeatures[coords]
+		if coords == "" {
+			want = cornerFeatures[CoordsLonLat]
+		}
+		for _, p := range pages {
+			if sum := sha256.Sum256(p.GeoJSON); hex.EncodeToString(sum[:]) != want[p.Node] {
+				t.Errorf("%q: %s is not the CLI's file:\n%.300s", coords, p.Node, p.GeoJSON)
+			}
+		}
+	}
+
+	refuse := func(ctx context.Context, tile Tile, b *FrameBinder) (SourceSet, error) {
+		t.Fatal("a refused request rendered")
+		return SourceSet{}, nil
+	}
+	for _, bad := range []FrameFeatureNode{{Node: "nope"}, {Node: "out"}, {Node: "roads_f", Key: []string{}}} {
+		_, _, err := renderer.RenderFrameWithFeatures(ctx, f, refuse, FrameFeatures{Nodes: []FrameFeatureNode{bad}}, Render{})
+		if !IsKind(err, KindInvalidStyle) {
+			t.Errorf("%+v: %v, want InvalidStyle", bad, err)
+		}
+	}
+	// A frame that stops part way drops what it gathered and gives the
+	// renderer back.
+	failure := errors.New("fetch failed")
+	_, _, err = renderer.RenderFrameWithFeatures(ctx, f, func(context.Context, Tile, *FrameBinder) (SourceSet, error) {
+		return SourceSet{}, failure
+	}, FrameFeatures{Nodes: nodes}, Render{})
+	if !errors.Is(err, failure) {
+		t.Errorf("a failed fetch came back as %v", err)
+	}
+	if img, err := renderer.RenderFrame(ctx, f, sources, Render{}); err != nil {
+		t.Fatal(err)
+	} else if sum := sha256.Sum256(img.Pix); hex.EncodeToString(sum[:]) != cornerFramePixels {
+		t.Error("the renderer draws another page after a refused and a failed request")
+	}
+}
+
 // A frame holds the renderer until it returns: another goroutine reaching
 // for it while a tile's sources fetches is refused anything that would change
 // what the frame draws but may still load data and render from a set, a

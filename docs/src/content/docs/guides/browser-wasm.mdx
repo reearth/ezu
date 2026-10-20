@@ -272,6 +272,20 @@ frame's tiles under it. `loadSource`, `renderTileWith` and the queries that
 only read, such as `sourceTile` and `neededCodepointsIn`, still work, and the
 renderer is given back however the frame ends.
 
+`renderFrameWithFeatures` renders the same page and also gathers features nodes
+over it, as the CLI's `--features` does: each node's page comes back as the
+file the CLI writes, byte for byte, with features wholly off the page left out,
+coordinates in longitude and latitude or page pixels, and, given a key, one copy
+of a feature that several tiles saw, sorted by the key:
+
+```js
+const { image, features } = await r.renderFrameWithFeatures(f, sources, {
+  nodes: [{ node: "boxes", key: ["label-id", "part"] }],
+  coords: "lonlat", // or "px"
+});
+// features[0]: { node: "boxes", geojson: '{"type":"FeatureCollection","features":[\n…' }
+```
+
 To render a frame's tiles yourself — spread over several renderers, say — draw
 each at `f.tileSize` (`renderTile(z, x, y, { format: "rgba", tileSize: f.tileSize })`,
 or `setTileSize` on the renderer) and copy it into the page with its top-left at

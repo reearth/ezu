@@ -197,6 +197,62 @@ test("renderFrame matches the CLI and the tiles it is made of", async () => {
   r.free();
 });
 
+// The features files the CLI writes for the corner frame, with
+//
+//   --features roads_f=roads.geojson --features water_f=water.geojson
+//   --features-key water_f=kind [--features-coords px]
+//
+// over the z13 parent tile. go/frame_test.go pins the same hashes.
+const cornerFeatures = {
+  lonlat: {
+    roads_f: "e193daaa36a6a60f329ae635f8b2f0c4ff65d63b0930748c191ffe6c58aa259d",
+    water_f: "8154c7f79a530cc9909e91a852ec9ff94f63153cc397eb10a8fda22f1df6cb8e",
+  },
+  px: {
+    roads_f: "c528e74c03f10b211bab369b9779c7402ed49e28cd43bd4ca86bc96cd6bfd8e2",
+    water_f: "41efc5b75feaa06431cf6ff57b7b92481c21aaa99f495719e7f0c0a4bd1a3a05",
+  },
+};
+
+test("renderFrameWithFeatures writes the CLI's features files", async () => {
+  const r = new Renderer(stainedGlass());
+  const f = r.computeFrame(cornerRequest);
+  const parent = r.loadSource("basemap", read("go/testdata/basemap-13-7277-3227.mvt"));
+  const set = new SourceSet();
+  set.bind(parent, { sourceZoom: 13 });
+  const sources = () => set;
+  const nodes = [{ node: "roads_f" }, { node: "water_f", key: ["kind"] }];
+
+  for (const coords of ["lonlat", "px"]) {
+    const { image, features } = await r.renderFrameWithFeatures(f, sources, { nodes, coords });
+    assert.equal(sha256(image), cornerFramePixels, "the page is renderFrame's");
+    assert.deepEqual(features.map((p) => p.node), ["roads_f", "water_f"]);
+    for (const p of features) {
+      assert.equal(sha256(p.geojson), cornerFeatures[coords][p.node], `${coords} ${p.node}`);
+    }
+  }
+  // Left out, the coordinates are lon/lat.
+  const { features } = await r.renderFrameWithFeatures(f, sources, { nodes: [{ node: "roads_f" }] });
+  assert.equal(sha256(features[0].geojson), cornerFeatures.lonlat.roads_f);
+
+  for (const request of [
+    { nodes: [{ node: "nope" }] },
+    { nodes: [{ node: "out" }] },
+    { nodes: [{ node: "roads_f", key: [] }] },
+    { nodes: [{ node: "roads_f" }], coords: "mercator" },
+    {},
+  ]) {
+    await assert.rejects(r.renderFrameWithFeatures(f, () => assert.fail("renders"), request), {
+      name: "InvalidStyle",
+    });
+  }
+  // A refused request leaves the renderer free.
+  assert.equal(sha256(await r.renderFrame(f, sources)), cornerFramePixels);
+  set.free();
+  parent.free();
+  r.free();
+});
+
 test("renderFrame refuses what contradicts the frame and passes a sources error on", async () => {
   const r = new Renderer(stainedGlass());
   const f = r.computeFrame(cornerRequest);

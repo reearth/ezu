@@ -51,13 +51,13 @@ mod options;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use ezu::renderer::{Error, ErrorKind, Renderer, SourceData, SourceSet};
+use ezu::renderer::{Error, ErrorKind, FrameFeatureCollector, Renderer, SourceData, SourceSet};
 
 /// Incremented whenever the surface changes — a signature, a format, a
 /// code's meaning, or an export appearing or leaving. The Go package
 /// checks it at instantiation, which is what catches a committed module
 /// that was not rebuilt.
-pub const ABI_VERSION: u32 = 5;
+pub const ABI_VERSION: u32 = 6;
 
 /// Every function this shell exports, in one list, so a test can compare
 /// it with what the committed module actually carries. The linker's own
@@ -102,6 +102,10 @@ pub const EXPORTS: &[&str] = &[
     "ezu_render_tile",
     "ezu_render_tile_with",
     "ezu_render_tile_with_features",
+    "ezu_frame_features_new",
+    "ezu_frame_features_render_tile",
+    "ezu_frame_features_finish",
+    "ezu_frame_features_free",
     "ezu_trim_glyphs",
 ];
 
@@ -153,6 +157,12 @@ thread_local! {
     /// to the wrong one is an error rather than another renderer's data.
     static SOURCES: RefCell<HashMap<u32, (u32, SourceData)>> = RefCell::new(HashMap::new());
     static NEXT_SOURCE: RefCell<u32> = const { RefCell::new(1) };
+    /// Frame features being gathered, by id, with the handle of the
+    /// renderer that started each; one table for the module, as for
+    /// `SOURCES`.
+    static FRAME_FEATURES: RefCell<HashMap<u32, (u32, FrameFeatureCollector)>> =
+        RefCell::new(HashMap::new());
+    static NEXT_FRAME_FEATURES: RefCell<u32> = const { RefCell::new(1) };
 }
 
 /// Record a failure and return its code.
@@ -406,6 +416,7 @@ pub extern "C" fn ezu_renderer_free(handle: u32) -> i64 {
     RENDERERS.with(|r| {
         if r.borrow_mut().remove(&handle).is_some() {
             SOURCES.with(|s| s.borrow_mut().retain(|_, (owner, _)| *owner != handle));
+            FRAME_FEATURES.with(|f| f.borrow_mut().retain(|_, (owner, _)| *owner != handle));
             0
         } else {
             bad_handle(handle)
@@ -1190,6 +1201,177 @@ pub extern "C" fn ezu_render_tile_with_features(
             Err(e) => fail_err(e),
         }
     })
+}
+
+// --- page features ---------------------------------------------------------
+
+/// Start gathering features nodes over the tiles of a print frame, the
+/// way `ezu frame --features` does, and return a positive id for it.
+///
+/// A host that renders a frame's tiles itself renders each of them with
+/// [`ezu_frame_features_render_tile`] instead of [`ezu_render_tile_with`],
+/// which keeps what the nodes held, and then hands the id to
+/// [`ezu_frame_features_finish`] for the page's GeoJSON. The assembly is
+/// the renderer's, so the files are the ones the CLI writes, byte for
+/// byte.
+///
+/// `req` is JSON:
+///
+/// ```json
+/// {
+///   "frame": { "zoom": 14, "tileSize": 391, "width": 500, "height": 400,
+///              "left": 5690328, "top": 2523437,
+///              "tilesX": [14554, 14556], "tilesY": [6454, 6456] },
+///   "nodes": [ { "node": "boxes", "key": ["label-id", "part"] },
+///              { "node": "roads" } ],
+///   "coords": "lonlat"
+/// }
+/// ```
+///
+/// `frame` is what [`ezu_compute_frame`] answered with. Each entry of
+/// `nodes` is one page, in that order; `key` names the properties that
+/// identify a feature several tiles see, so it is written once, and the
+/// page is sorted by them. `coords` is `"lonlat"` (the default) or `"px"`,
+/// page pixels.
+///
+/// A name that is not a features node of the style, and a `key` that names
+/// no property, fail with `InvalidStyle` here. The gathering belongs to
+/// this renderer, and is dropped with it.
+#[unsafe(no_mangle)]
+pub extern "C" fn ezu_frame_features_new(handle: u32, req_ptr: u32, req_len: u32) -> i64 {
+    let (frame, req) = match options::parse_frame_features(unsafe { input(req_ptr, req_len) }) {
+        Ok(r) => r,
+        Err(e) => return fail_err(e),
+    };
+    with_renderer(handle, |r| match r.frame_features(&frame, &req) {
+        Ok(collector) => {
+            let id = NEXT_FRAME_FEATURES.with(|n| {
+                let mut n = n.borrow_mut();
+                let id = *n;
+                *n += 1;
+                id
+            });
+            FRAME_FEATURES.with(|f| f.borrow_mut().insert(id, (handle, collector)));
+            id as i64
+        }
+        Err(e) => fail_err(e),
+    })
+}
+
+/// [`ezu_render_tile_with`] for one of the frame's tiles, also keeping
+/// what the nodes [`ezu_frame_features_new`] named held in the gathering
+/// `id`. The image is written into the out-slots exactly as
+/// `ezu_render_tile_with` writes it. Tiles may come in any order.
+///
+/// An `id` this renderer did not start, or one already finished or
+/// dropped, fails with `BadHandle`.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn ezu_frame_features_render_tile(
+    handle: u32,
+    id: u32,
+    z: u32,
+    x: u32,
+    y: u32,
+    set_ptr: u32,
+    set_len: u32,
+    opts_ptr: u32,
+    opts_len: u32,
+    out_ptr: u32,
+    out_len: u32,
+) -> i64 {
+    let opts = match options::parse_render(unsafe { input(opts_ptr, opts_len) }) {
+        Ok(o) => o,
+        Err(e) => return fail_err(e),
+    };
+    let raw = unsafe { input(set_ptr, set_len) };
+    with_renderer(handle, |r| {
+        let set = match source_set(handle, raw) {
+            Ok(set) => set,
+            Err(code) => return code,
+        };
+        FRAME_FEATURES.with(|f| {
+            let mut f = f.borrow_mut();
+            let Some(collector) = f
+                .get_mut(&id)
+                .filter(|(owner, _)| *owner == handle)
+                .map(|(_, c)| c)
+            else {
+                return unknown_gathering(handle, id);
+            };
+            let nodes: Vec<String> = collector.nodes().into_iter().map(String::from).collect();
+            let names: Vec<&str> = nodes.iter().map(String::as_str).collect();
+            match r.render_tile_with_features(z as u8, x, y, &set, opts, &names) {
+                Ok((image, values)) => {
+                    collector.add(ezu::renderer::TileId::new(z as u8, x, y), &values);
+                    unsafe { reply(out_ptr, out_len, image) };
+                    0
+                }
+                Err(e) => fail_err(e),
+            }
+        })
+    })
+}
+
+/// Assemble the gathering `id` into its pages and drop it. The answer is a
+/// JSON array with one entry per node asked for, in that order:
+/// `[{"node": "boxes", "geojson": "<the page's FeatureCollection>"}, …]`.
+/// Each `geojson` string is, byte for byte, the file `ezu frame --features`
+/// writes for the same style, data and frame. Fails as
+/// [`ezu_frame_features_render_tile`] does for an `id` it does not know.
+#[unsafe(no_mangle)]
+pub extern "C" fn ezu_frame_features_finish(
+    handle: u32,
+    id: u32,
+    out_ptr: u32,
+    out_len: u32,
+) -> i64 {
+    with_renderer(handle, |_| {
+        let Some(collector) = take_gathering(handle, id) else {
+            return unknown_gathering(handle, id);
+        };
+        let pages: Vec<serde_json::Value> = collector
+            .finish()
+            .iter()
+            .map(|p| serde_json::json!({ "node": p.node(), "geojson": p.to_geojson() }))
+            .collect();
+        unsafe { reply_json(out_ptr, out_len, serde_json::Value::from(pages).to_string()) }
+    })
+}
+
+/// Drop the gathering `id` without finishing it: a frame that stopped
+/// part way. Fails as [`ezu_frame_features_render_tile`] does for an `id`
+/// it does not know.
+#[unsafe(no_mangle)]
+pub extern "C" fn ezu_frame_features_free(handle: u32, id: u32) -> i64 {
+    with_renderer(handle, |_| match take_gathering(handle, id) {
+        Some(_) => 0,
+        None => unknown_gathering(handle, id),
+    })
+}
+
+fn take_gathering(handle: u32, id: u32) -> Option<FrameFeatureCollector> {
+    FRAME_FEATURES.with(|f| {
+        let mut f = f.borrow_mut();
+        match f.get(&id) {
+            Some((owner, _)) if *owner == handle => f.remove(&id).map(|(_, c)| c),
+            _ => None,
+        }
+    })
+}
+
+/// An id that names no live gathering is a dead handle, like a renderer's.
+fn unknown_gathering(handle: u32, id: u32) -> i64 {
+    LAST_ERROR.with(|slot| {
+        *slot.borrow_mut() = (
+            BAD_HANDLE,
+            format!(
+                "renderer {handle} is gathering no frame features with id {id}; \
+                 it was finished, dropped, or started by another renderer"
+            ),
+        )
+    });
+    ERR_BAD_HANDLE
 }
 
 /// Bring every bound fontstack back under the budget

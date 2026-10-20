@@ -280,7 +280,8 @@ func (r *Renderer) setTileSize(ctx context.Context, size uint32) error {
 // Until RenderFrame returns, the renderer is the frame's. Everything that
 // would change what it draws — [Renderer.BindSource],
 // [Renderer.ClearSources], [Renderer.RenderTile], [Renderer.TrimGlyphs],
-// another RenderFrame, [Renderer.SetStyle], [Renderer.SetTileSize],
+// another RenderFrame or [Renderer.RenderFrameWithFeatures],
+// [Renderer.SetStyle], [Renderer.SetTileSize],
 // [Renderer.ClearTileSize], [Renderer.SetGlyphBudget],
 // [Renderer.ClearGlyphBudget] — fails with [ErrFrameInProgress], so a
 // goroutine that reaches for the renderer while sources is fetching cannot
@@ -297,23 +298,14 @@ func (r *Renderer) setTileSize(ctx context.Context, size uint32) error {
 // renderers, as ever; a [Pool] hands them out, and the data each frame loads
 // belongs to the renderer it was loaded on.
 func (r *Renderer) RenderFrame(ctx context.Context, f Frame, sources func(ctx context.Context, tile Tile, b *FrameBinder) (SourceSet, error), opts Render) (*image.NRGBA, error) {
-	if f.TileSize == 0 || f.Width == 0 || f.Height == 0 {
-		return nil, errors.New("ezu: the frame has no size; compute it with ComputeFrame")
+	opts, err := frameRenderOptions(f, opts)
+	if err != nil {
+		return nil, err
 	}
-	if opts.Format != "" && opts.Format != FormatRGBA {
-		return nil, fmt.Errorf("ezu: a frame renders as raw pixels; leave Render.Format empty, not %q", opts.Format)
-	}
-	if opts.TileSize != 0 && opts.TileSize != f.TileSize {
-		return nil, fmt.Errorf("ezu: the frame renders at tile size %d; leave Render.TileSize zero, not %d",
-			f.TileSize, opts.TileSize)
-	}
-	opts.Format = FormatRGBA
-	opts.TileSize = f.TileSize
-
 	if !r.framing.CompareAndSwap(false, true) {
 		return nil, ErrFrameInProgress
 	}
-	img, err := r.renderFrameTiles(ctx, f, sources, opts)
+	img, err := r.renderFrameTiles(ctx, f, sources, opts, 0)
 	r.openTile.Store(0)
 	r.framing.Store(false)
 	if err != nil {
@@ -322,7 +314,189 @@ func (r *Renderer) RenderFrame(ctx context.Context, f Frame, sources func(ctx co
 	return img, nil
 }
 
-func (r *Renderer) renderFrameTiles(ctx context.Context, f Frame, sources func(ctx context.Context, tile Tile, b *FrameBinder) (SourceSet, error), opts Render) (*image.NRGBA, error) {
+// frameRenderOptions checks opts against the frame and fixes what the frame
+// fixes: raw pixels, at the frame's tile size.
+func frameRenderOptions(f Frame, opts Render) (Render, error) {
+	if f.TileSize == 0 || f.Width == 0 || f.Height == 0 {
+		return opts, errors.New("ezu: the frame has no size; compute it with ComputeFrame")
+	}
+	if opts.Format != "" && opts.Format != FormatRGBA {
+		return opts, fmt.Errorf("ezu: a frame renders as raw pixels; leave Render.Format empty, not %q", opts.Format)
+	}
+	if opts.TileSize != 0 && opts.TileSize != f.TileSize {
+		return opts, fmt.Errorf("ezu: the frame renders at tile size %d; leave Render.TileSize zero, not %d",
+			f.TileSize, opts.TileSize)
+	}
+	opts.Format = FormatRGBA
+	opts.TileSize = f.TileSize
+	return opts, nil
+}
+
+// FeatureCoords is the coordinates [Renderer.RenderFrameWithFeatures] writes
+// a page's features in.
+type FeatureCoords string
+
+const (
+	// CoordsLonLat is WGS84 longitude and latitude, as RFC 7946 GeoJSON
+	// expects, to seven decimal places. It is the default.
+	CoordsLonLat FeatureCoords = "lonlat"
+	// CoordsPx is pixels of the page: origin at its top-left corner, y down,
+	// to two decimal places.
+	CoordsPx FeatureCoords = "px"
+)
+
+// FrameFeatures is which features nodes [Renderer.RenderFrameWithFeatures]
+// gathers over a page, and how it writes them.
+type FrameFeatures struct {
+	// Nodes is one page of features per entry, in this order. A node may be
+	// named more than once, with different keys.
+	Nodes []FrameFeatureNode
+	// Coords is the coordinates the features are written in; empty is
+	// [CoordsLonLat].
+	Coords FeatureCoords
+}
+
+// FrameFeatureNode is one features node to gather over a page.
+type FrameFeatureNode struct {
+	// Node is the node's id in the style.
+	Node string
+	// Key names the properties that identify a feature across tiles —
+	// "label-id" and "part" for label-boxes. With a key, the features whose
+	// key properties are all equal are written once, the first in reading
+	// order, and the page is sorted by the key. With none (nil), every
+	// tile's features are written, so a feature several tiles see appears
+	// once per tile, and a shape cut at tile edges appears as its pieces.
+	Key []string
+}
+
+// PageFeatures is what one features node held over a whole page, as
+// [Renderer.RenderFrameWithFeatures] hands it back.
+type PageFeatures struct {
+	// Node is the node's id, as it was asked for.
+	Node string
+	// GeoJSON is a FeatureCollection with one Feature per line, byte for
+	// byte the file `ezu frame --features` writes for the same style, data
+	// and frame. Features wholly off the page are left out, and one that
+	// reaches into it is written whole, not clipped. Rings are closed and
+	// wound as RFC 7946 asks, as drawn on the map.
+	GeoJSON []byte
+}
+
+// RenderFrameWithFeatures is [Renderer.RenderFrame], also handing back what
+// the features nodes features names held over the whole page: one
+// [PageFeatures] per entry of features.Nodes, in that order. It is what
+// `ezu frame --features` writes, gathered by the same code.
+//
+// The values are the ones each tile's render computed on its way to the
+// pixels, so this costs no second evaluation, and the image is the one
+// RenderFrame returns. Tiles are read rows top to bottom, then left to
+// right, and each tile's features in their own order; with a key the first
+// copy in that order is the one kept.
+//
+// A name that is not a node of the style, or names one that produces
+// something other than features, and a key that names no property, fail
+// with [KindInvalidStyle] before anything renders.
+func (r *Renderer) RenderFrameWithFeatures(ctx context.Context, f Frame, sources func(ctx context.Context, tile Tile, b *FrameBinder) (SourceSet, error), features FrameFeatures, opts Render) (*image.NRGBA, []PageFeatures, error) {
+	opts, err := frameRenderOptions(f, opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	reqJSON, err := frameFeaturesJSON(f, features)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !r.framing.CompareAndSwap(false, true) {
+		return nil, nil, ErrFrameInProgress
+	}
+	defer r.framing.Store(false)
+	id, err := r.call(ctx, func(ctx context.Context) (int64, error) {
+		ptr, err := r.writeBytes(ctx, reqJSON)
+		if err != nil {
+			return 0, err
+		}
+		defer r.free(ctx, ptr, uint32(len(reqJSON)))
+		return r.call1(ctx, "ezu_frame_features_new", uint64(r.handle), uint64(ptr), uint64(len(reqJSON)))
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	img, err := r.renderFrameTiles(ctx, f, sources, opts, uint32(id))
+	r.openTile.Store(0)
+	if err != nil {
+		// The gathering is dropped with the frame; a renderer that died
+		// took it along.
+		_, _ = r.call(ctx, func(ctx context.Context) (int64, error) {
+			return r.call1(ctx, "ezu_frame_features_free", uint64(r.handle), uint64(id))
+		})
+		return nil, nil, err
+	}
+	_, reply, err := r.withSlots(ctx, func(slots uint32) (int64, error) {
+		return r.call1(ctx, "ezu_frame_features_finish", uint64(r.handle), uint64(id),
+			uint64(slots), uint64(slots+4))
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	var wire []struct {
+		Node    string `json:"node"`
+		GeoJSON string `json:"geojson"`
+	}
+	if err := json.Unmarshal(reply, &wire); err != nil {
+		return nil, nil, fmt.Errorf("ezu: reading the page features: %w", err)
+	}
+	out := make([]PageFeatures, len(wire))
+	for i, p := range wire {
+		out[i] = PageFeatures{Node: p.Node, GeoJSON: []byte(p.GeoJSON)}
+	}
+	return img, out, nil
+}
+
+// frameFeaturesJSON is the module's spelling of a frame features request.
+func frameFeaturesJSON(f Frame, features FrameFeatures) ([]byte, error) {
+	type node struct {
+		Node string   `json:"node"`
+		Key  []string `json:"key,omitempty"`
+	}
+	nodes := make([]node, len(features.Nodes))
+	for i, n := range features.Nodes {
+		if n.Key != nil && len(n.Key) == 0 {
+			return nil, &Error{
+				Name:    KindInvalidStyle,
+				Message: fmt.Sprintf("the key for node `%s` must name one or more properties", n.Node),
+				Code:    -1,
+			}
+		}
+		nodes[i] = node{Node: n.Node, Key: n.Key}
+	}
+	coords := features.Coords
+	if coords == "" {
+		coords = CoordsLonLat
+	}
+	b, err := json.Marshal(map[string]any{
+		"frame": frameWire{
+			Zoom:     f.Zoom,
+			TileSize: f.TileSize,
+			Scale:    f.Scale,
+			Width:    f.Width,
+			Height:   f.Height,
+			Left:     f.Left,
+			Top:      f.Top,
+			Shift:    [2]float64{f.ShiftX, f.ShiftY},
+			TilesX:   [2]int32{f.TilesX.Start, f.TilesX.End},
+			TilesY:   [2]int32{f.TilesY.Start, f.TilesY.End},
+		},
+		"nodes":  nodes,
+		"coords": coords,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ezu: encoding the frame features request: %w", err)
+	}
+	return b, nil
+}
+
+// renderFrameTiles renders f's tiles into one image. A non-zero gathering
+// renders each tile through it, so it keeps what its nodes held.
+func (r *Renderer) renderFrameTiles(ctx context.Context, f Frame, sources func(ctx context.Context, tile Tile, b *FrameBinder) (SourceSet, error), opts Render, gathering uint32) (*image.NRGBA, error) {
 	img := image.NewNRGBA(image.Rect(0, 0, int(f.Width), int(f.Height)))
 	t := int(f.TileSize)
 	var tileScoped map[string]bool
@@ -351,7 +525,13 @@ func (r *Renderer) renderFrameTiles(ctx context.Context, f Frame, sources func(c
 				return nil, fmt.Errorf("ezu: sources for tile %d/%d/%d: %w", tile.Z, tile.X, tile.Y, err)
 			}
 		}
-		px, err := r.RenderTileWith(ctx, tile, set, opts)
+		var px []byte
+		var err error
+		if gathering == 0 {
+			px, err = r.RenderTileWith(ctx, tile, set, opts)
+		} else {
+			px, err = r.renderGatheredTile(ctx, gathering, tile, set, opts)
+		}
 		// Trimmed whether or not the tile rendered, as RenderTile does: the
 		// glyphs were bound for it either way.
 		if trimErr := r.trimGlyphs(ctx); err == nil {
@@ -368,6 +548,38 @@ func (r *Renderer) renderFrameTiles(ctx context.Context, f Frame, sources func(c
 		blitTile(img, px, t, int(dx), int(dy))
 	}
 	return img, nil
+}
+
+// renderGatheredTile is [Renderer.RenderTileWith] for one tile of a frame
+// whose features the module is gathering under id.
+func (r *Renderer) renderGatheredTile(ctx context.Context, id uint32, tile Tile, set SourceSet, opts Render) ([]byte, error) {
+	setJSON, err := set.json(r)
+	if err != nil {
+		return nil, err
+	}
+	optsJSON, err := opts.json()
+	if err != nil {
+		return nil, fmt.Errorf("ezu: encoding the render options: %w", err)
+	}
+	_, payload, err := r.withSlots(ctx, func(slots uint32) (int64, error) {
+		setPtr, err := r.writeBytes(ctx, setJSON)
+		if err != nil {
+			return 0, err
+		}
+		defer r.free(ctx, setPtr, uint32(len(setJSON)))
+		optsPtr, err := r.writeBytes(ctx, optsJSON)
+		if err != nil {
+			return 0, err
+		}
+		defer r.free(ctx, optsPtr, uint32(len(optsJSON)))
+		return r.call1(ctx, "ezu_frame_features_render_tile",
+			uint64(r.handle), uint64(id),
+			uint64(uint32(tile.Z)), uint64(uint32(tile.X)), uint64(uint32(tile.Y)),
+			uint64(setPtr), uint64(len(setJSON)),
+			uint64(optsPtr), uint64(len(optsJSON)),
+			uint64(slots), uint64(slots+4))
+	})
+	return payload, err
 }
 
 // FrameBinder is what [Renderer.RenderFrame] hands each tile's sources: the

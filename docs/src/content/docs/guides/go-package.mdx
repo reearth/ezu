@@ -321,11 +321,24 @@ does `SetStyle`.
 `RenderTileWithFeatures` renders a tile as `RenderTileWith` does and also hands
 back what the named features nodes held — the labels and the boxes placement
 gave them, say — each as a GeoJSON FeatureCollection in tile units: `x` right
-and `y` down from the tile's top-left corner, `0..Extent` across it. The CLI's
-`--features` gathers the same values over a page into one file in longitude and
-latitude or page pixels; here that gathering, placing each tile's features at
-`f.TileOffset(tile)` and dropping the copies neighbouring tiles share, is yours
-to do.
+and `y` down from the tile's top-left corner, `0..Extent` across it.
+
+`RenderFrameWithFeatures` gathers those values over a page, as the CLI's
+`--features` does, and hands back each node's page as the file the CLI writes,
+byte for byte: features wholly off the page left out, coordinates in longitude
+and latitude or page pixels, and, given a key, one copy of a feature that
+several tiles saw, sorted by the key:
+
+```go
+img, pages, err := r.RenderFrameWithFeatures(ctx, f, sources, ezu.FrameFeatures{
+	Nodes:  []ezu.FrameFeatureNode{{Node: "boxes", Key: []string{"label-id", "part"}}},
+	Coords: ezu.CoordsLonLat, // or ezu.CoordsPx
+}, ezu.Render{})
+os.WriteFile("labels.geojson", pages[0].GeoJSON, 0o644)
+```
+
+The gathering runs inside the module, so it works only through the frame's own
+tile loop; a frame spread over a `Pool` gathers its features itself.
 
 ## Hearing that a tile came out wrong
 

@@ -10,7 +10,8 @@
 //! PNG to `"format": "jpeg"` hands back bytes the caller was not expecting.
 
 use ezu::renderer::{
-    BindOptions, Error, ErrorKind, FrameRequest, OutputFormat, PngCompression, RenderOptions,
+    BindOptions, Error, ErrorKind, FeatureCoords, Frame, FrameFeatureNode, FrameFeatures,
+    FrameRequest, OutputFormat, PngCompression, RenderOptions,
 };
 use serde_json::Value;
 
@@ -113,8 +114,6 @@ pub fn parse_set(raw: &[u8]) -> Result<Vec<SetEntry>, Error> {
         .collect()
 }
 
-/// Which tile of the 3×3 neighbourhood the bytes are. Refused values carry
-/// `UnknownSource`, matching the JS shell.
 /// Read the node ids `ezu_render_tile_with_features` reports on: a JSON
 /// array of strings. Empty means none.
 pub fn parse_nodes(raw: &[u8]) -> Result<Vec<String>, Error> {
@@ -139,6 +138,119 @@ pub fn parse_nodes(raw: &[u8]) -> Result<Vec<String>, Error> {
     }
 }
 
+/// `{"frame": {…}, "nodes": [{"node": "<id>", "key": ["<prop>", …]}, …],
+/// "coords": "lonlat" | "px"}`, what `ezu_frame_features_new` gathers.
+///
+/// `frame` is what `ezu_compute_frame` answered with; its `scale` and
+/// `shift` only describe it, so they are not read. `key` may be left out
+/// for a node whose every tile's features are kept, and `coords` for
+/// `"lonlat"`. Every refusal is `InvalidStyle`.
+pub fn parse_frame_features(raw: &[u8]) -> Result<(Frame, FrameFeatures), Error> {
+    let obj = object(raw, "the frame features request")?;
+    let invalid = |msg: String| err(ErrorKind::InvalidStyle, msg);
+    let frame = obj.get("frame").and_then(Value::as_object).ok_or_else(|| {
+        invalid(
+            "the frame features request needs the frame, as ezu_compute_frame answered it".into(),
+        )
+    })?;
+    let whole = |key: &str| -> Result<i64, Error> {
+        frame.get(key).and_then(Value::as_i64).ok_or_else(|| {
+            invalid(format!(
+                "the frame needs {key} as a whole number; compute it with ezu_compute_frame"
+            ))
+        })
+    };
+    let size = |key: &str| -> Result<u32, Error> {
+        u32::try_from(whole(key)?).map_err(|_| {
+            invalid(format!(
+                "the frame's {key} must be a non-negative whole number"
+            ))
+        })
+    };
+    let range = |key: &str| -> Result<std::ops::Range<u32>, Error> {
+        let bad = || {
+            invalid(format!(
+                "the frame's {key} must be a [start, end] pair of tile numbers"
+            ))
+        };
+        match frame.get(key).and_then(Value::as_array).map(Vec::as_slice) {
+            Some([a, b]) => {
+                let end = |v: &Value| {
+                    v.as_u64()
+                        .and_then(|n| u32::try_from(n).ok())
+                        .ok_or_else(bad)
+                };
+                Ok(end(a)?..end(b)?)
+            }
+            _ => Err(bad()),
+        }
+    };
+    let zoom = whole("zoom")?;
+    if !(0..=31).contains(&zoom) {
+        return Err(invalid(format!(
+            "the frame's zoom must be a whole zoom level in 0..=31, got {zoom}"
+        )));
+    }
+    let frame = Frame {
+        zoom: zoom as u8,
+        tile_size: size("tileSize")?,
+        scale: 0.0,
+        width: size("width")?,
+        height: size("height")?,
+        left: whole("left")?,
+        top: whole("top")?,
+        shift: (0.0, 0.0),
+        tiles_x: range("tilesX")?,
+        tiles_y: range("tilesY")?,
+    };
+    if frame.tile_size == 0 || frame.width == 0 || frame.height == 0 {
+        return Err(invalid(
+            "the frame has no size; compute it with ezu_compute_frame".into(),
+        ));
+    }
+
+    let bad_nodes = || {
+        invalid(
+            "the frame features request needs nodes as an array of {\"node\": id, \"key\": [property, …]}"
+                .into(),
+        )
+    };
+    let nodes = obj
+        .get("nodes")
+        .and_then(Value::as_array)
+        .ok_or_else(bad_nodes)?
+        .iter()
+        .map(|entry| {
+            let node = entry
+                .get("node")
+                .and_then(Value::as_str)
+                .ok_or_else(bad_nodes)?
+                .to_string();
+            let key = match entry.get("key").filter(|v| !v.is_null()) {
+                None => None,
+                Some(Value::Array(props)) => Some(
+                    props
+                        .iter()
+                        .map(|p| p.as_str().map(str::to_string).ok_or_else(bad_nodes))
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
+                Some(_) => return Err(bad_nodes()),
+            };
+            Ok(FrameFeatureNode { node, key })
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    let coords = match obj.get("coords").filter(|v| !v.is_null()) {
+        None => FeatureCoords::default(),
+        Some(v) => v
+            .as_str()
+            .and_then(FeatureCoords::from_name)
+            .ok_or_else(|| invalid(format!("coords must be \"lonlat\" or \"px\", got {v}")))?,
+    };
+    Ok((frame, FrameFeatures { nodes, coords }))
+}
+
+/// Which tile of the 3×3 neighbourhood the bytes are. Refused values carry
+/// `UnknownSource`, matching the JS shell.
 fn parse_coord(value: Option<&Value>) -> Result<(i32, i32), Error> {
     let Some(value) = value.filter(|v| !v.is_null()) else {
         return Ok((0, 0));

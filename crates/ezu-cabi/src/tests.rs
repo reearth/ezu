@@ -172,6 +172,48 @@ mod options {
     }
 
     #[test]
+    fn a_frame_features_request_is_a_frame_nodes_and_coords() {
+        use crate::options::parse_frame_features;
+        use ezu::renderer::{FeatureCoords, FrameFeatureNode};
+        let frame = r#""frame":{"zoom":14,"tileSize":391,"scale":40000.5,"width":500,"height":400,
+            "left":5690328,"top":2523437,"shift":[0.1,-0.2],"tilesX":[14554,14556],"tilesY":[6454,6456]}"#;
+        let (f, req) = parse_frame_features(
+            format!(
+                r#"{{{frame},"nodes":[{{"node":"boxes","key":["label-id","part"]}},{{"node":"roads"}}],"coords":"px"}}"#
+            )
+            .as_bytes(),
+        )
+        .expect("parses");
+        assert_eq!(
+            (f.zoom, f.tile_size, f.width, f.left, f.tiles_x, f.tiles_y),
+            (14, 391, 500, 5690328, 14554..14556, 6454..6456)
+        );
+        assert_eq!(
+            req.nodes,
+            [
+                FrameFeatureNode::keyed("boxes", ["label-id", "part"]),
+                FrameFeatureNode::new("roads")
+            ]
+        );
+        assert_eq!(req.coords, FeatureCoords::Px);
+        let (_, req) = parse_frame_features(format!(r#"{{{frame},"nodes":[]}}"#).as_bytes())
+            .expect("coords default");
+        assert_eq!(req.coords, FeatureCoords::LonLat);
+
+        for payload in [
+            r#"{"nodes":[]}"#.to_string(),
+            format!(r#"{{{frame}}}"#),
+            format!(r#"{{{frame},"nodes":[{{"key":["a"]}}]}}"#),
+            format!(r#"{{{frame},"nodes":[{{"node":"a","key":"a"}}]}}"#),
+            format!(r#"{{{frame},"nodes":[],"coords":"mercator"}}"#),
+            r#"{"frame":{"zoom":14,"tileSize":0,"width":5,"height":5,"left":0,"top":0,"tilesX":[0,1],"tilesY":[0,1]},"nodes":[]}"#.to_string(),
+        ] {
+            let e = parse_frame_features(payload.as_bytes()).expect_err("refused");
+            assert_eq!(e.name(), "InvalidStyle", "for {payload}");
+        }
+    }
+
+    #[test]
     fn render_options_are_read_the_way_the_js_shell_reads_them() {
         let r = parse_render(
             br#"{"format":"webp","tileSize":256,"pad":8,
@@ -322,6 +364,64 @@ mod loaded_sources {
         assert_eq!(ezu_renderer_free(a), 0);
         assert!(SOURCES.with(|s| !s.borrow().contains_key(&dropped)));
         assert!(SOURCES.with(|s| s.borrow().contains_key(&kept)));
+        assert_eq!(ezu_renderer_free(b), 0);
+    }
+
+    /// A gathering is a handle owned by the renderer that started it:
+    /// another renderer cannot drop it, it is gone once dropped, and
+    /// freeing its renderer frees it.
+    #[test]
+    fn a_frame_features_gathering_belongs_to_its_renderer() {
+        use ezu::renderer::{FrameFeatureNode, FrameFeatures, FrameRequest};
+        let (a, b) = (renderer(), renderer());
+        let start = |handle: u32| {
+            let collector = RENDERERS.with(|t| {
+                let t = t.borrow();
+                let r = &t[&handle];
+                let f = r
+                    .compute_frame(&FrameRequest {
+                        center_lon: 139.812,
+                        center_lat: 35.6216,
+                        scale: 40000.0,
+                        dpi: 200.0,
+                        width: 500,
+                        height: 400,
+                        zoom: Some(14),
+                        style_tile_size: r.tile_size(),
+                    })
+                    .expect("a frame");
+                let req = FrameFeatures {
+                    nodes: vec![FrameFeatureNode::new("roads_f")],
+                    ..FrameFeatures::default()
+                };
+                r.frame_features(&f, &req).expect("a collector")
+            });
+            let id = NEXT_FRAME_FEATURES.with(|n| {
+                let mut n = n.borrow_mut();
+                *n += 1;
+                *n - 1
+            });
+            FRAME_FEATURES.with(|g| g.borrow_mut().insert(id, (handle, collector)));
+            id
+        };
+        let id = start(a);
+        assert_eq!(
+            ezu_frame_features_free(b, id),
+            ERR_BAD_HANDLE,
+            "b did not start it"
+        );
+        assert_eq!(last_error().0, BAD_HANDLE);
+        assert_eq!(ezu_frame_features_free(a, id), 0);
+        assert_eq!(
+            ezu_frame_features_free(a, id),
+            ERR_BAD_HANDLE,
+            "dropped twice"
+        );
+
+        let (kept, dropped) = (start(b), start(a));
+        assert_eq!(ezu_renderer_free(a), 0);
+        assert!(FRAME_FEATURES.with(|g| !g.borrow().contains_key(&dropped)));
+        assert_eq!(ezu_frame_features_free(b, kept), 0);
         assert_eq!(ezu_renderer_free(b), 0);
     }
 

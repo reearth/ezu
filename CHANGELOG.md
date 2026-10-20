@@ -55,11 +55,12 @@ mean is spelled out in
   for each node id asked for, the node's features from that same evaluation
   as a GeoJSON FeatureCollection in tile units, so a host can list the
   labels on a tile and what placement did to them without rendering twice.
-  `render_frame_with_features` does the same for a print page: each node's
+  `render_frame_with_features` (`RenderFrameWithFeatures`,
+  `renderFrameWithFeatures`) does the same for a print page: each node's
   features gathered over the page's tiles, copies that neighbouring tiles
   both saw collapsed by an optional key, in lon/lat or page pixels, written
   as the same bytes `ezu frame --features` writes. The wasm module's ABI
-  version is now 5.
+  version is now 6.
 - The renderer's cache size can be set, in Rust, Go and JS:
   `set_cache_budget` (`SetCacheBudget` and `ClearCacheBudget`,
   `setCacheBudget` and `clearCacheBudget`) lets the render cache hold more
