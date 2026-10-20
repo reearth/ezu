@@ -175,6 +175,10 @@ mean is spelled out in
   `custom` encoding does, for elevation tiles that use neither Terrarium nor
   Terrain-RGB. The factors default to 1 and the shift to 0; giving one with
   another encoding fails to load, since it would do nothing.
+- `raster` and `dem` nodes take `min-zoom` and `max-zoom`, as `features`
+  and `text` do. Outside that range a `raster` node draws transparent
+  pixels and a `dem` node a zero field, which is what each yields when its
+  source has no tile.
 
 ### Changed
 

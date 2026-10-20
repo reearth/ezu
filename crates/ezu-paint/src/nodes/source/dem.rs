@@ -19,10 +19,27 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::resolve_source;
+use crate::nodes::common::{read_optional_zoom, resolve_source};
 
 struct DemNode {
     name: String,
+    min_zoom: Option<u8>,
+    max_zoom: Option<u8>,
+}
+
+/// What an absent source yields: a zero field sized to the padded canvas.
+/// Consumers degrade gracefully (hillshade becomes flat-lit, slope is
+/// zero).
+fn flat(ctx: &EvalCtx<'_>) -> PortValue {
+    let (pw, ph) = ctx.canvas.padded_dims();
+    let count = (pw * ph) as usize;
+    PortValue::ScalarField(Arc::new(ScalarField {
+        width: pw,
+        height: ph,
+        values: vec![0.0; count].into(),
+        nodata: None,
+        geo_scale: None,
+    }))
 }
 
 impl Node for DemNode {
@@ -39,22 +56,16 @@ impl Node for DemNode {
         vec![self.name.clone()]
     }
     fn eval(&self, ctx: &EvalCtx<'_>, _: &[Option<PortValue>]) -> Result<PortValue, EvalError> {
+        // Outside the node's zoom band it yields what an absent source
+        // does, without looking the binding up — as `features` does.
+        let z = ctx.tile.z;
+        if self.min_zoom.is_some_and(|mn| z < mn) || self.max_zoom.is_some_and(|mx| z > mx) {
+            return Ok(flat(ctx));
+        }
         let asset = match ctx.assets.load(&self.name) {
             Ok(a) => a,
-            Err(AssetError::NotFound(_)) => {
-                // No binding for this tile -> emit a zero field sized to
-                // the canvas. Consumers degrade gracefully (hillshade
-                // becomes flat-lit, slope is zero).
-                let (pw, ph) = ctx.canvas.padded_dims();
-                let count = (pw * ph) as usize;
-                return Ok(PortValue::ScalarField(Arc::new(ScalarField {
-                    width: pw,
-                    height: ph,
-                    values: vec![0.0; count].into(),
-                    nodata: None,
-                    geo_scale: None,
-                })));
-            }
+            // No binding for this tile -> a zero field.
+            Err(AssetError::NotFound(_)) => return Ok(flat(ctx)),
             Err(e) => return Err(EvalError::Asset(e)),
         };
         let Asset::ScalarField(field) = asset else {
@@ -68,6 +79,14 @@ impl Node for DemNode {
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"dem");
         h.update(self.name.as_bytes());
+        if let Some(z) = self.min_zoom {
+            h.update(b"minz");
+            h.update(&[z]);
+        }
+        if let Some(z) = self.max_zoom {
+            h.update(b"maxz");
+            h.update(&[z]);
+        }
     }
 }
 
@@ -83,7 +102,11 @@ impl NodeFactory for DemFactory {
     ) -> Result<BuiltNode, FactoryError> {
         let name = resolve_dem_source(fields, ctx)?;
         Ok(BuiltNode {
-            node: Box::new(DemNode { name }),
+            node: Box::new(DemNode {
+                name,
+                min_zoom: read_optional_zoom(fields, "min-zoom")?,
+                max_zoom: read_optional_zoom(fields, "max-zoom")?,
+            }),
             connections: vec![],
         })
     }
@@ -94,7 +117,11 @@ impl NodeFactory for DemFactory {
                 "source": {
                     "type": "string",
                     "description": "Name of a `dem` source in the document's `sources` block. Omitting it resolves to the only such source and warns at build time."
-                }
+                },
+                "min-zoom": { "type": "integer", "minimum": 0, "maximum": 24,
+                              "description": "Style-level minimum zoom. Below this zoom the node emits a zero field, as for a tile the source does not have." },
+                "max-zoom": { "type": "integer", "minimum": 0, "maximum": 24,
+                              "description": "Style-level maximum zoom. Above this zoom the node emits a zero field." }
             },
         })
     }

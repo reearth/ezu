@@ -1272,6 +1272,18 @@
           {
             "description": "Sample a host-bound raster DEM as a ScalarField. `source` names a `dem` entry in the document's `sources` block; omitting it falls back to the document's only `dem` source, with a build warning.",
             "properties": {
+              "max-zoom": {
+                "description": "Style-level maximum zoom. Above this zoom the node emits a zero field.",
+                "maximum": 24,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "min-zoom": {
+                "description": "Style-level minimum zoom. Below this zoom the node emits a zero field, as for a tile the source does not have.",
+                "maximum": 24,
+                "minimum": 0,
+                "type": "integer"
+              },
               "op": {
                 "const": "dem",
                 "description": "Selects the `dem` operation."
@@ -4520,6 +4532,18 @@
           {
             "description": "Sample a host-bound RGBA tile pyramid (satellite imagery, pre-rendered basemaps) as a canvas-padded Raster. `source` names a `raster` entry in the document's `sources` block; omitting it falls back to the document's only `raster` source, with a build warning.",
             "properties": {
+              "max-zoom": {
+                "description": "Style-level maximum zoom. Above this zoom the node emits transparent pixels.",
+                "maximum": 24,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "min-zoom": {
+                "description": "Style-level minimum zoom. Below this zoom the node emits transparent pixels, as for a tile the source does not have.",
+                "maximum": 24,
+                "minimum": 0,
+                "type": "integer"
+              },
               "op": {
                 "const": "raster",
                 "description": "Selects the `raster` operation."

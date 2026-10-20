@@ -19,6 +19,8 @@ Sample a host-bound raster DEM as a ScalarField. `source` names a `dem` entry in
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
+| `max-zoom` | integer (0…24) | no | Style-level maximum zoom. Above this zoom the node emits a zero field. |
+| `min-zoom` | integer (0…24) | no | Style-level minimum zoom. Below this zoom the node emits a zero field, as for a tile the source does not have. |
 | `source` | string | no | Name of a `dem` source in the document's `sources` block. Omitting it resolves to the only such source and warns at build time. |
 
 ### `features`
@@ -128,6 +130,8 @@ Sample a host-bound RGBA tile pyramid (satellite imagery, pre-rendered basemaps)
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
+| `max-zoom` | integer (0…24) | no | Style-level maximum zoom. Above this zoom the node emits transparent pixels. |
+| `min-zoom` | integer (0…24) | no | Style-level minimum zoom. Below this zoom the node emits transparent pixels, as for a tile the source does not have. |
 | `source` | string | no | Name of a `raster` source in the document's `sources` block. Omitting it resolves to the only such source and warns at build time. |
 
 ### `tile-bounds`

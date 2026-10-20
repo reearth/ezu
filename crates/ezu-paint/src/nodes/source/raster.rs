@@ -12,7 +12,7 @@
 //! field falls back to the document's only `raster` source and warns.
 //! An
 //! unbound source (404 with `on-missing: empty`) emits transparent
-//! pixels.
+//! pixels, and so does a tile outside the node's `min-zoom`/`max-zoom`.
 
 use std::sync::Arc;
 
@@ -23,10 +23,18 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::resolve_source;
+use crate::nodes::common::{read_optional_zoom, resolve_source};
 
 struct RasterNode {
     name: String,
+    min_zoom: Option<u8>,
+    max_zoom: Option<u8>,
+}
+
+/// What an absent source draws: transparent pixels over the padded canvas.
+fn transparent(ctx: &EvalCtx<'_>) -> PortValue {
+    let (pw, ph) = ctx.canvas.padded_dims();
+    PortValue::Raster(Arc::new(RasterBuf::new(pw, ph)))
 }
 
 impl Node for RasterNode {
@@ -43,13 +51,16 @@ impl Node for RasterNode {
         vec![self.name.clone()]
     }
     fn eval(&self, ctx: &EvalCtx<'_>, _: &[Option<PortValue>]) -> Result<PortValue, EvalError> {
+        // Outside the node's zoom band it draws what an absent source
+        // does, without looking the binding up — as `features` does.
+        let z = ctx.tile.z;
+        if self.min_zoom.is_some_and(|mn| z < mn) || self.max_zoom.is_some_and(|mx| z > mx) {
+            return Ok(transparent(ctx));
+        }
         let asset = match ctx.assets.load(&self.name) {
             Ok(a) => a,
-            Err(AssetError::NotFound(_)) => {
-                // No binding for this tile -> transparent canvas.
-                let (pw, ph) = ctx.canvas.padded_dims();
-                return Ok(PortValue::Raster(Arc::new(RasterBuf::new(pw, ph))));
-            }
+            // No binding for this tile -> transparent canvas.
+            Err(AssetError::NotFound(_)) => return Ok(transparent(ctx)),
             Err(e) => return Err(EvalError::Asset(e)),
         };
         let Asset::Image(buf) = asset else {
@@ -70,6 +81,14 @@ impl Node for RasterNode {
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"raster");
         h.update(self.name.as_bytes());
+        if let Some(z) = self.min_zoom {
+            h.update(b"minz");
+            h.update(&[z]);
+        }
+        if let Some(z) = self.max_zoom {
+            h.update(b"maxz");
+            h.update(&[z]);
+        }
     }
 }
 
@@ -85,7 +104,11 @@ impl NodeFactory for RasterFactory {
     ) -> Result<BuiltNode, FactoryError> {
         let name = resolve_raster_source(fields, ctx)?;
         Ok(BuiltNode {
-            node: Box::new(RasterNode { name }),
+            node: Box::new(RasterNode {
+                name,
+                min_zoom: read_optional_zoom(fields, "min-zoom")?,
+                max_zoom: read_optional_zoom(fields, "max-zoom")?,
+            }),
             connections: vec![],
         })
     }
@@ -96,7 +119,11 @@ impl NodeFactory for RasterFactory {
                 "source": {
                     "type": "string",
                     "description": "Name of a `raster` source in the document's `sources` block. Omitting it resolves to the only such source and warns at build time."
-                }
+                },
+                "min-zoom": { "type": "integer", "minimum": 0, "maximum": 24,
+                              "description": "Style-level minimum zoom. Below this zoom the node emits transparent pixels, as for a tile the source does not have." },
+                "max-zoom": { "type": "integer", "minimum": 0, "maximum": 24,
+                              "description": "Style-level maximum zoom. Above this zoom the node emits transparent pixels." }
             },
         })
     }
