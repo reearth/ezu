@@ -246,6 +246,32 @@ pub(super) enum BoundaryMode {
     Transparent,
     /// Reflect at edges so the pattern reads `...|abc|cba|abc|...`.
     Mirror,
+    /// Repeat the raster so the pattern reads `...|abc|abc|abc|...`:
+    /// what leaves one edge comes back in at the opposite one, as a
+    /// sprite that repeats edge to edge needs.
+    Wrap,
+}
+
+impl BoundaryMode {
+    /// One byte per mode for a node's `param_hash`.
+    pub(super) fn tag(self) -> u8 {
+        match self {
+            BoundaryMode::Clamp => 0,
+            BoundaryMode::Transparent => 1,
+            BoundaryMode::Mirror => 2,
+            BoundaryMode::Wrap => 3,
+        }
+    }
+}
+
+/// The schema of a `boundary` field read by [`read_boundary`].
+pub(super) fn boundary_schema() -> Value {
+    serde_json::json!({
+        "type": "string",
+        "enum": ["clamp", "transparent", "mirror", "wrap", "repeat"],
+        "default": "clamp",
+        "description": "How to read past the input's edge: `clamp` repeats the edge pixel, `transparent` reads nothing, `mirror` reflects the image, and `wrap` (or `repeat`) tiles it, so what leaves one edge comes back in at the opposite one.",
+    })
 }
 
 pub(super) fn read_boundary(
@@ -264,9 +290,10 @@ pub(super) fn read_boundary(
         "clamp" => Ok(BoundaryMode::Clamp),
         "transparent" => Ok(BoundaryMode::Transparent),
         "mirror" => Ok(BoundaryMode::Mirror),
+        "wrap" | "repeat" => Ok(BoundaryMode::Wrap),
         _ => Err(FactoryError::BadField {
             field: name.into(),
-            msg: format!("unknown boundary `{s}`, expected clamp/transparent/mirror"),
+            msg: format!("unknown boundary `{s}`, expected clamp/transparent/mirror/wrap"),
         }),
     }
 }
@@ -300,6 +327,7 @@ fn wrap_index(i: i64, dim: u32, mode: BoundaryMode) -> Option<u32> {
             }
             Some(k as u32)
         }
+        BoundaryMode::Wrap => Some(i.rem_euclid(d) as u32),
     }
 }
 
@@ -1146,5 +1174,34 @@ mod cull_tests {
         assert_eq!(kept.len(), 1);
         assert!(kept[0].lines.is_empty(), "the far line went");
         assert_eq!(kept[0].points.len(), 1, "the near point stayed");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn boundary_modes_map_indices_past_the_edge() {
+        let row = |mode| (-4..8).map(|i| wrap_index(i, 4, mode)).collect::<Vec<_>>();
+        let s = Some;
+        assert_eq!(
+            row(BoundaryMode::Clamp),
+            [0, 0, 0, 0, 0, 1, 2, 3, 3, 3, 3, 3].map(s)
+        );
+        assert_eq!(
+            row(BoundaryMode::Mirror),
+            [2, 3, 2, 1, 0, 1, 2, 3, 2, 1, 0, 1].map(s)
+        );
+        assert_eq!(
+            row(BoundaryMode::Wrap),
+            [0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3].map(s)
+        );
+        let transparent = row(BoundaryMode::Transparent);
+        assert_eq!(&transparent[4..8], &[0, 1, 2, 3].map(s));
+        assert!(transparent[..4]
+            .iter()
+            .chain(&transparent[8..])
+            .all(Option::is_none));
     }
 }

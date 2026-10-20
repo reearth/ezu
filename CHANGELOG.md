@@ -256,6 +256,9 @@ mean is spelled out in
   field, so a speck trails upstream where `forward` trails it downstream.
 - `channel-shuffle` can feed a channel from the input's `luminance`, the
   same Rec. 601 luma `pick-channel` reads.
+- `displace` and `warp` take `boundary: "wrap"` (or `"repeat"`): a read past
+  one edge of the image comes back in at the opposite edge, as a sprite that
+  repeats edge to edge needs. A scalar field still clamps at its edge.
 
 ### Changed
 

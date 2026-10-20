@@ -30,8 +30,9 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    image_or_field_output, read_boundary, resample_field, sample_bilinear, unwrap_raster_or_sprite,
-    wrap_raster_like, BoundaryMode, ACCEPTS_IMAGE_OR_FIELD, ACCEPTS_RASTER_OR_SPRITE,
+    boundary_schema, image_or_field_output, read_boundary, resample_field, sample_bilinear,
+    unwrap_raster_or_sprite, wrap_raster_like, BoundaryMode, ACCEPTS_IMAGE_OR_FIELD,
+    ACCEPTS_RASTER_OR_SPRITE,
 };
 
 struct DisplaceNode {
@@ -90,7 +91,9 @@ impl Node for DisplaceNode {
                         x.min(disp.width.saturating_sub(1)),
                         y.min(disp.height.saturating_sub(1)),
                     ),
-                    BoundaryMode::Transparent | BoundaryMode::Mirror => [128, 128, 0, 255],
+                    BoundaryMode::Transparent | BoundaryMode::Mirror | BoundaryMode::Wrap => {
+                        [128, 128, 0, 255]
+                    }
                 }
             };
             let dx = ((dpix[0] as f64) / 255.0 - 0.5) * 2.0 * amp_x;
@@ -120,11 +123,7 @@ impl Node for DisplaceNode {
         h.update(b"displace");
         self.amp_x.param_hash(h);
         self.amp_y.param_hash(h);
-        h.update(&[match self.boundary {
-            BoundaryMode::Clamp => 0,
-            BoundaryMode::Transparent => 1,
-            BoundaryMode::Mirror => 2,
-        }]);
+        h.update(&[self.boundary.tag()]);
     }
     fn param_refs(&self) -> Vec<String> {
         self.param_refs.clone()
@@ -213,11 +212,7 @@ impl NodeFactory for DisplaceFactory {
                 "amp-y-px-max": { "type": "number", "minimum": 0.0, "description": "Upper bound on `amp-y-px` for padding, required when `amp-y-px` is an `@node` port. Values above it are clamped." },
                 "amp-x-px": schema_frag::px_number(),
                 "amp-y-px": schema_frag::px_number(),
-                "boundary": {
-                    "type": "string",
-                    "enum": ["clamp", "transparent", "mirror"],
-                    "default": "clamp",
-                },
+                "boundary": boundary_schema(),
             },
             "required": ["input", "displacement", "amp-px"],
         })

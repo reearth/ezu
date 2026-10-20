@@ -1544,10 +1544,13 @@
               },
               "boundary": {
                 "default": "clamp",
+                "description": "How to read past the input's edge: `clamp` repeats the edge pixel, `transparent` reads nothing, `mirror` reflects the image, and `wrap` (or `repeat`) tiles it, so what leaves one edge comes back in at the opposite one.",
                 "enum": [
                   "clamp",
                   "transparent",
-                  "mirror"
+                  "mirror",
+                  "wrap",
+                  "repeat"
                 ],
                 "type": "string"
               },
@@ -6834,10 +6837,13 @@
               },
               "boundary": {
                 "default": "clamp",
+                "description": "How to read past the input's edge: `clamp` repeats the edge pixel, `transparent` reads nothing, `mirror` reflects the image, and `wrap` (or `repeat`) tiles it, so what leaves one edge comes back in at the opposite one.",
                 "enum": [
                   "clamp",
                   "transparent",
-                  "mirror"
+                  "mirror",
+                  "wrap",
+                  "repeat"
                 ],
                 "type": "string"
               },

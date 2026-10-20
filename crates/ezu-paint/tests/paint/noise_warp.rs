@@ -408,3 +408,60 @@ fn scale_px_pair_entries_take_a_param() {
         );
     }
 }
+
+#[test]
+fn displace_boundary_modes_read_past_the_edge_their_own_way() {
+    // Red on the left half, blue on the right; every pixel reads 4 px to
+    // its right, so the last four columns read past the right edge.
+    let doc = |boundary: &str| {
+        format!(
+            r##"{{
+          "name": "demo",
+          "tile-size": 16,
+          "nodes": {{
+            "src":  {{ "op": "gradient-linear",
+                       "stops": [[0, "#ff0000"], [0.5, "#ff0000"], [0.5, "#0000ff"], [1, "#0000ff"]] }},
+            "disp": {{ "op": "solid", "color": "#ff8080" }},
+            "out":  {{ "op": "displace", "input": "@src", "displacement": "@disp", "amp-px": 4,
+                       "boundary": "{boundary}" }}
+          }},
+          "output": "@out"
+        }}"##
+        )
+    };
+    // x = 14 reads x = 18: clamped to the blue edge, reflected back onto
+    // blue (x = 12), or wrapped round to red (x = 2).
+    let at = |boundary: &str| render(&doc(boundary), 16, 0).pixel(14, 8);
+    assert_eq!(at("clamp"), [0, 0, 0xff, 0xff]);
+    assert_eq!(at("mirror"), [0, 0, 0xff, 0xff]);
+    assert_eq!(at("transparent")[3], 0);
+    assert_eq!(at("wrap"), [0xff, 0, 0, 0xff]);
+    assert_eq!(
+        render(&doc("repeat"), 16, 0).pixels,
+        render(&doc("wrap"), 16, 0).pixels,
+        "`repeat` is `wrap`"
+    );
+}
+
+#[test]
+fn warp_takes_the_wrap_boundary() {
+    let doc = |boundary: &str| {
+        format!(
+            r##"{{
+          "name": "demo",
+          "tile-size": 16,
+          "nodes": {{
+            "src": {{ "op": "gradient-linear", "stops": [[0, "#ff0000"], [1, "#0000ff"]] }},
+            "out": {{ "op": "warp", "input": "@src", "scale-px": 8, "amp-px": 6,
+                      "boundary": "{boundary}" }}
+          }},
+          "output": "@out"
+        }}"##
+        )
+    };
+    let wrapped = render(&doc("wrap"), 16, 0);
+    let clamped = render(&doc("clamp"), 16, 0);
+    // Some read leaves the raster, and wrapping brings back the colour of
+    // the far side instead of the edge's.
+    assert_ne!(wrapped.pixels, clamped.pixels);
+}

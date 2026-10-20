@@ -26,9 +26,9 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    default_field_seed, image_or_field_output, read_boundary, read_number_or, read_optional_string,
-    resample_field, sample_bilinear, unwrap_raster_or_sprite, wrap_raster_like, Anchor,
-    BoundaryMode, ACCEPTS_IMAGE_OR_FIELD,
+    boundary_schema, default_field_seed, image_or_field_output, read_boundary, read_number_or,
+    read_optional_string, resample_field, sample_bilinear, unwrap_raster_or_sprite,
+    wrap_raster_like, Anchor, BoundaryMode, ACCEPTS_IMAGE_OR_FIELD,
 };
 use crate::nodes::raster::noise_field::{fbm, NoiseKind, Sampler, ScalePx, NOISE_TYPES};
 
@@ -174,11 +174,7 @@ impl Node for WarpNode {
             Anchor::Tile => &[0u8],
             Anchor::World => &[1u8],
         });
-        h.update(&[match self.boundary {
-            BoundaryMode::Clamp => 0,
-            BoundaryMode::Transparent => 1,
-            BoundaryMode::Mirror => 2,
-        }]);
+        h.update(&[self.boundary.tag()]);
     }
     fn param_refs(&self) -> Vec<String> {
         self.param_refs.clone()
@@ -305,11 +301,7 @@ impl NodeFactory for WarpFactory {
                 "amp-y-px": schema_frag::px_number(),
                 "seed": { "type": "integer", "minimum": 0, "description": "Field seed. Omitted, `anchor: world` uses a fixed seed so every tile samples the same field, and `anchor: tile` uses the host's per-tile seed so each tile gets its own. Set it to pin either." },
                 "anchor": { "type": "string", "enum": ["tile", "world"], "default": "world" },
-                "boundary": {
-                    "type": "string",
-                    "enum": ["clamp", "transparent", "mirror"],
-                    "default": "clamp",
-                },
+                "boundary": boundary_schema(),
             },
             "required": ["input", "scale-px", "amp-px"],
         })

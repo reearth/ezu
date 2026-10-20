@@ -190,7 +190,7 @@ Photoshop-style displacement map. Output pixel reads `input` at a position offse
 | `amp-x-px-max` | number (0…∞) | no | Upper bound on `amp-x-px` for padding, required when `amp-x-px` is an `@node` port. Values above it are clamped. |
 | `amp-y-px` | number (0…∞) \| `$param` \| `@node` | no | — |
 | `amp-y-px-max` | number (0…∞) | no | Upper bound on `amp-y-px` for padding, required when `amp-y-px` is an `@node` port. Values above it are clamped. |
-| `boundary` | `clamp` \| `transparent` \| `mirror` | no | — |
+| `boundary` | `clamp` \| `transparent` \| `mirror` \| `wrap` \| `repeat` | no | How to read past the input's edge: `clamp` repeats the edge pixel, `transparent` reads nothing, `mirror` reflects the image, and `wrap` (or `repeat`) tiles it, so what leaves one edge comes back in at the opposite one. |
 | `displacement` | `@node` | yes | Reference to another node (`@name`). |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
 
@@ -712,7 +712,7 @@ Domain warp via an internal noise field, on a raster, sprite or scalar field; th
 | `amp-y-px` | number (0…∞) \| `$param` \| `@node` | no | — |
 | `amp-y-px-max` | number (0…∞) | no | Upper bound on `amp-y-px` for padding, required when `amp-y-px` is an `@node` port. Values above it are clamped. |
 | `anchor` | `tile` \| `world` | no | — |
-| `boundary` | `clamp` \| `transparent` \| `mirror` | no | — |
+| `boundary` | `clamp` \| `transparent` \| `mirror` \| `wrap` \| `repeat` | no | How to read past the input's edge: `clamp` repeats the edge pixel, `transparent` reads nothing, `mirror` reflects the image, and `wrap` (or `repeat`) tiles it, so what leaves one edge comes back in at the opposite one. |
 | `gain` | number \| `$param` \| `@node` | no | — |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
 | `lacunarity` | number \| `$param` \| `@node` | no | — |
