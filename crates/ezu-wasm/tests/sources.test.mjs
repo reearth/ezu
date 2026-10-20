@@ -135,10 +135,14 @@ test("renderTileWithFeatures hands back a node's features next to the image", ()
   assert.ok(same(image, plain), "asking for the features changed the image");
   assert.equal(features.length, 1);
   const [f] = features;
-  assert.equal(f.type, "FeatureCollection");
   assert.equal(f.node, "f");
   assert.equal(f.extent, 4096);
-  assert.ok(f.features.length > 0, "the tile has water");
+  assert.equal(typeof f.geojson, "string");
+  const collection = JSON.parse(f.geojson);
+  assert.equal(collection.type, "FeatureCollection");
+  assert.equal(collection.node, "f");
+  assert.equal(collection.extent, 4096);
+  assert.ok(collection.features.length > 0, "the tile has water");
 
   for (const nodes of [["nope"], ["fill"]]) {
     assert.throws(() => r.renderTileWithFeatures(14, 14554, 6454, set, nodes), {

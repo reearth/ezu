@@ -218,10 +218,13 @@ the same evaluation:
 
 ```js
 const { image, features } = r.renderTileWithFeatures(z, x, y, set, ['boxes']);
-// features[0]: { type: "FeatureCollection", node: "boxes", extent: 4096, features: [...] }
+// features[0]: { node: "boxes", extent: 4096, geojson: '{"type":"FeatureCollection",…}' }
+const boxes = JSON.parse(features[0].geojson);
 ```
 
-Each collection is in tile units: `x` right and `y` down from the tile's
+`geojson` is the text the renderer wrote, as `renderFrameWithFeatures` and the
+Go package hand it back too; parse it, or pass it on as it is. The collection is
+in tile units: `x` right and `y` down from the tile's
 top-left corner, `0..extent` across it. A node the render never reached has no
 `extent` and no features, and a name that is not a features node of the style
 throws `InvalidStyle` before anything renders.

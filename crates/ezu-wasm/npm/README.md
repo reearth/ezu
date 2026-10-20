@@ -170,7 +170,8 @@ class Renderer {
                  opts?: object /* renderTile's opts */): Uint8Array;
 
   // renderTileWith, also handing back what the named features nodes held:
-  // one GeoJSON FeatureCollection per node, in tile units (0..extent).
+  // one { node, extent, geojson } per node, geojson being a GeoJSON
+  // FeatureCollection as text in tile units (0..extent).
   renderTileWithFeatures(z: number, x: number, y: number, set: SourceSet,
                          nodes: string[], opts?: object): TileWithFeatures;
 

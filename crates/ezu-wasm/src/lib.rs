@@ -988,10 +988,12 @@ impl Renderer {
     /// `renderTileWith`, also handing back what each of `nodes` — ids of
     /// nodes that produce features — held when the render finished, in the
     /// order given: `{ image, features }`, where `image` is the bytes
-    /// `renderTileWith` returns and `features` holds one GeoJSON
-    /// FeatureCollection per name.
+    /// `renderTileWith` returns and `features` holds one
+    /// `{ node, extent, geojson }` per name, `geojson` being a GeoJSON
+    /// FeatureCollection as text — the shape `renderFrameWithFeatures` and
+    /// the Go package hand back too.
     ///
-    /// Each collection carries the node's id as `node` and the tile's size
+    /// Each entry carries the node's id as `node` and the tile's size
     /// in geometry units as `extent`: coordinates run `0..extent` across
     /// the tile, `x` right and `y` down from its top-left corner. A node the
     /// render never reached — a branch a `switch` did not take — has no
@@ -1019,9 +1021,17 @@ impl Renderer {
             .borrow()
             .render_tile_with_features(z, x, y, &set.inner, parsed, &names)
             .map_err(js_err)?;
+        // The same shape as a page's features and as Go's: the text as the
+        // renderer wrote it, for the host to parse or pass on as it is.
         let list = js_sys::Array::new();
         for f in &features {
-            list.push(&js_sys::JSON::parse(&f.to_geojson())?);
+            let entry = js_sys::Object::new();
+            js_sys::Reflect::set(&entry, &"node".into(), &f.node().into())?;
+            if let Some(value) = f.features() {
+                js_sys::Reflect::set(&entry, &"extent".into(), &value.extent.into())?;
+            }
+            js_sys::Reflect::set(&entry, &"geojson".into(), &f.to_geojson().into())?;
+            list.push(&entry);
         }
         let out = js_sys::Object::new();
         js_sys::Reflect::set(
@@ -1346,14 +1356,14 @@ fn glyph_units_object(
 
 #[wasm_bindgen(typescript_custom_section)]
 const FEATURE_TYPES: &'static str = r#"
-/** What one features node held when a render finished: a GeoJSON FeatureCollection in tile units. */
+/** What one features node held when a render finished. */
 export interface NodeFeatures {
-  type: "FeatureCollection";
   /** The node's id, as it was asked for. */
   node: string;
   /** The tile's size in geometry units: coordinates run 0..extent, x right and y down. Absent when the render never reached the node. */
   extent?: number;
-  features: Array<{ type: "Feature"; geometry: object | null; properties: Record<string, unknown> }>;
+  /** A GeoJSON FeatureCollection as text, in those units, with `node` and `extent` members of its own. */
+  geojson: string;
 }
 
 /** What `renderTileWithFeatures` hands back. */
