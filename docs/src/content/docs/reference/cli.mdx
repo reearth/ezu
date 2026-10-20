@@ -73,6 +73,10 @@ Options:
           Output format. Defaults to whatever `--out`'s extension implies. `rgba` is straight (un-premultiplied) 8-bit RGBA, row-major from the top-left, with no header, as the embedding renderer returns it: tile size × tile size × 4 bytes, the size being `--tile-size` or the style's, which the file does not record [possible values: png, webp, rgba]
       --png-compression <PNG_COMPRESSION>
           Effort the PNG encoder spends: `fast` writes larger files sooner, `best` the smallest at two to four times the encoding time. The pixels are the same at every level. Other formats ignore it [default: default] [possible values: fast, default, best]
+      --features <NODE=PATH>
+          Write the features node NODE, as the tile's render held it, as a GeoJSON FeatureCollection at PATH: the collection the embedding packages' `renderTileWithFeatures` returns, with the node's id as `node` and the tile's size in its units as `extent`. Repeatable. `--features-key` belongs to `bbox` and `frame`, where neighbouring tiles each hold a copy of a feature they share; one tile's value is written as it is
+      --features-coords <FEATURES_COORDS>
+          Coordinates of the `--features` files: `tile`, the node's own units (whole numbers, `0..extent` across the tile, y down); `lonlat` (WGS84, 7 decimals); or `px`, pixels of the tile from its top-left corner, y down (2 decimals) [default: tile] [possible values: tile, lonlat, px]
   -h, --help
           Print help
 ```
@@ -117,6 +121,12 @@ Options:
           Effort the PNG encoder spends: `fast` writes larger files sooner, `best` the smallest at two to four times the encoding time. The pixels are the same at every level. Other formats ignore it [default: default] [possible values: fast, default, best]
       --concurrency <CONCURRENCY>
           Number of tiles rendered in parallel. Defaults to the number of logical CPU cores
+      --features <NODE=PATH>
+          Write the features node NODE, gathered over every tile of the mosaic, as a GeoJSON FeatureCollection at PATH, the way `frame` writes a page's. Features whose bounding box lies wholly outside the mosaic are left out; the rest are written whole. Without `--features-key`, a feature several tiles see is written once per tile, and a shape cut at tile edges as its pieces. Repeatable
+      --features-key <NODE=PROP[,PROP...]>
+          Treat features of NODE whose listed properties are all equal as one feature, keeping the first in tile order (rows top to bottom, then left to right), and sort the file by those properties. For `label-boxes`: `--features-key boxes=label-id,part`. Repeatable, once per node
+      --features-coords <FEATURES_COORDS>
+          Coordinates of the `--features` files: `lonlat` (WGS84, 7 decimals) or `px`, pixels of the mosaic from its top-left corner, y down (2 decimals) [default: lonlat] [possible values: lonlat, px]
   -h, --help
           Print help
 ```

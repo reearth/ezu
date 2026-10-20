@@ -429,6 +429,21 @@ struct TileCmd {
     format: Option<OutputFormat>,
     #[command(flatten)]
     png: PngArgs,
+    /// Write the features node NODE, as the tile's render held it, as a
+    /// GeoJSON FeatureCollection at PATH: the collection the embedding
+    /// packages' `renderTileWithFeatures` returns, with the node's id as
+    /// `node` and the tile's size in its units as `extent`. Repeatable.
+    /// `--features-key` belongs to `bbox` and `frame`, where neighbouring
+    /// tiles each hold a copy of a feature they share; one tile's value is
+    /// written as it is.
+    #[arg(long = "features", value_name = "NODE=PATH", value_parser = frame_features::parse_node_path)]
+    features: Vec<(String, PathBuf)>,
+    /// Coordinates of the `--features` files: `tile`, the node's own units
+    /// (whole numbers, `0..extent` across the tile, y down); `lonlat` (WGS84,
+    /// 7 decimals); or `px`, pixels of the tile from its top-left corner, y
+    /// down (2 decimals).
+    #[arg(long, value_enum, default_value_t = frame_features::TileCoords::Tile)]
+    features_coords: frame_features::TileCoords,
 }
 
 #[derive(Args, Debug)]
@@ -460,6 +475,26 @@ struct BboxCmd {
     /// logical CPU cores.
     #[arg(long)]
     concurrency: Option<usize>,
+    /// Write the features node NODE, gathered over every tile of the
+    /// mosaic, as a GeoJSON FeatureCollection at PATH, the way `frame`
+    /// writes a page's. Features whose bounding box lies wholly outside the
+    /// mosaic are left out; the rest are written whole. Without
+    /// `--features-key`, a feature several tiles see is written once per
+    /// tile, and a shape cut at tile edges as its pieces. Repeatable.
+    #[arg(long = "features", value_name = "NODE=PATH", value_parser = frame_features::parse_node_path)]
+    features: Vec<(String, PathBuf)>,
+    /// Treat features of NODE whose listed properties are all equal as one
+    /// feature, keeping the first in tile order (rows top to bottom, then
+    /// left to right), and sort the file by those properties. For
+    /// `label-boxes`: `--features-key boxes=label-id,part`. Repeatable,
+    /// once per node.
+    #[arg(long, value_name = "NODE=PROP[,PROP...]", value_parser = frame_features::parse_node_key)]
+    features_key: Vec<(String, Vec<String>)>,
+    /// Coordinates of the `--features` files: `lonlat` (WGS84, 7 decimals)
+    /// or `px`, pixels of the mosaic from its top-left corner, y down (2
+    /// decimals).
+    #[arg(long, value_enum, default_value_t = frame_features::FeatureCoords::Lonlat)]
+    features_coords: frame_features::FeatureCoords,
 }
 
 #[derive(Args, Debug)]
@@ -1455,27 +1490,36 @@ async fn run_tile(args: TileCmd) -> Result<(), Box<dyn std::error::Error>> {
         .format
         .unwrap_or_else(|| OutputFormat::from_path(&args.out));
     let png = args.png.png_compression;
-    let bytes = opened
+    let names: Vec<String> = args.features.iter().map(|(n, _)| n.clone()).collect();
+    let (bytes, features) = opened
         .tiles
         .render(args.tile, move |r, set, opts| {
             let t = args.tile;
-            r.render_tile_with(t.z, t.x, t.y, set, format.with(opts, png))
+            let opts = format.with(opts, png);
+            if names.is_empty() {
+                return r
+                    .render_tile_with(t.z, t.x, t.y, set, opts)
+                    .map(|px| (px, Vec::new()));
+            }
+            let names: Vec<&str> = names.iter().map(String::as_str).collect();
+            r.render_tile_with_features(t.z, t.x, t.y, set, opts, &names)
         })
         .await
         .map_err(|e| e.to_string())?;
     std::fs::write(&args.out, &bytes)?;
     tracing::info!("wrote {} ({} bytes)", args.out.display(), bytes.len());
+    let coords = args.features_coords.into();
+    for (f, (_, path)) in features.iter().zip(&args.features) {
+        let text = f.to_geojson_in(coords);
+        std::fs::write(path, &text)?;
+        tracing::info!(
+            "wrote {} (features of `{}`, {} bytes)",
+            path.display(),
+            f.node(),
+            text.len()
+        );
+    }
     Ok(())
-}
-
-/// Render `tile` as straight RGBA, for copying into a larger image.
-async fn render_rgba(tiles: &TileRenderer, tile: CoreTileId) -> Result<Vec<u8>, render::BoxError> {
-    tiles
-        .render(tile, move |r, set, mut opts| {
-            opts.format = ezu::renderer::OutputFormat::Rgba;
-            r.render_tile_with(tile.z, tile.x, tile.y, set, opts)
-        })
-        .await
 }
 
 async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
@@ -1483,6 +1527,8 @@ async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
     if concurrency == 0 {
         return Err("--concurrency must be ≥ 1".into());
     }
+    let exports =
+        frame_features::exports(&args.features, &args.features_key, args.features_coords)?;
     let opened = open(&args.common, args.size).await?;
     let tiles = &opened.tiles;
     let format = args
@@ -1500,27 +1546,46 @@ async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
         y_range.end,
     );
 
+    // The mosaic is a frame that is exactly its tiles, so it renders, and
+    // gathers its features, the way a page does.
     let t = tiles.tile_size();
-    let mut mosaic = Pixmap::new(nx * t, ny * t).ok_or("mosaic alloc")?;
-    let xr = x_range.clone();
-    let coords = y_range
-        .clone()
-        .flat_map(move |ty| xr.clone().map(move |tx| CoreTileId::new(args.zoom, tx, ty)));
-    let mut rendered =
-        futures::stream::iter(coords)
-            .map(|tile| async move {
-                Ok::<_, render::BoxError>((tile, render_rgba(tiles, tile).await?))
-            })
-            .buffer_unordered(concurrency);
-    while let Some(done) = rendered.next().await {
-        let (tile, rgba) = done.map_err(|e| e.to_string())?;
-        let dx = (tile.x - x_range.start) as i64 * t as i64;
-        let dy = (tile.y - y_range.start) as i64 * t as i64;
-        blit_rgba_into(&mut mosaic, &rgba, dx, dy, t);
-    }
-    let bytes = format.encode(&mosaic, args.png.png_compression)?;
+    let mosaic = Frame {
+        zoom: args.zoom,
+        tile_size: t,
+        // A mosaic is asked for by zoom, not by a print scale.
+        scale: 0.0,
+        width: nx * t,
+        height: ny * t,
+        left: x_range.start as i64 * t as i64,
+        top: y_range.start as i64 * t as i64,
+        shift: (0.0, 0.0),
+        tiles_x: x_range,
+        tiles_y: y_range,
+    };
+    let mut collector = match exports.paths.is_empty() {
+        true => None,
+        false => Some(
+            tiles
+                .renderer()
+                .frame_features(&mosaic, &exports.request)
+                .map_err(|e| format!("--features: {e}"))?,
+        ),
+    };
+    let image = render_frame(tiles, &mosaic, concurrency, collector.as_mut()).await?;
+    let bytes = format.encode(&image, args.png.png_compression)?;
     std::fs::write(&args.out, &bytes)?;
     tracing::info!("wrote {} ({} bytes)", args.out.display(), bytes.len());
+    let written = collector.map(FrameFeatureCollector::finish);
+    for (features, path) in written.iter().flatten().zip(&exports.paths) {
+        let text = features.to_geojson();
+        std::fs::write(path, &text)?;
+        tracing::info!(
+            "wrote {} (features of `{}`, {} bytes)",
+            path.display(),
+            features.node(),
+            text.len()
+        );
+    }
     Ok(())
 }
 
@@ -2136,6 +2201,9 @@ mod tests {
             format: None,
             png: PngArgs::default(),
             concurrency: None,
+            features: Vec::new(),
+            features_key: Vec::new(),
+            features_coords: frame_features::FeatureCoords::Lonlat,
         })
         .await
         .unwrap();
@@ -2179,6 +2247,8 @@ mod tests {
             out,
             format: None,
             png: PngArgs::default(),
+            features: Vec::new(),
+            features_coords: frame_features::TileCoords::Tile,
         }
     }
 
@@ -2226,6 +2296,9 @@ mod tests {
             format: None,
             png: PngArgs::default(),
             concurrency: None,
+            features: Vec::new(),
+            features_key: Vec::new(),
+            features_coords: frame_features::FeatureCoords::Lonlat,
         };
         let (m1, m2) = (dir.join("m1.png"), dir.join("m2.png"));
         run_bbox(bbox(&big, m1.clone(), None)).await.unwrap();
@@ -2303,6 +2376,9 @@ mod tests {
                 format: None,
                 png,
                 concurrency: None,
+                features: Vec::new(),
+                features_key: Vec::new(),
+                features_coords: frame_features::FeatureCoords::Lonlat,
             })
             .await
             .unwrap();
@@ -2331,6 +2407,9 @@ mod tests {
             format: Some(OutputFormat::Rgba),
             png: PngArgs::default(),
             concurrency: None,
+            features: Vec::new(),
+            features_key: Vec::new(),
+            features_coords: frame_features::FeatureCoords::Lonlat,
         })
         .await
         .unwrap();
@@ -2437,6 +2516,9 @@ mod tests {
             format: None,
             png: PngArgs::default(),
             concurrency,
+            features: Vec::new(),
+            features_key: Vec::new(),
+            features_coords: frame_features::FeatureCoords::Lonlat,
         };
         let (one, many) = (dir.join("one.png"), dir.join("many.png"));
         run_bbox(bbox(one.clone(), Some(1))).await.unwrap();

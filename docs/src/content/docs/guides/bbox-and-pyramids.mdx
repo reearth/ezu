@@ -108,6 +108,22 @@ the coordinates:
 The same style, data and flags give a byte-identical file on every run, so a
 diff of two runs shows whether anything on the page changed.
 
+`ezu bbox` takes the same three flags and writes the mosaic's features the same
+way: the mosaic is a page that is exactly its tiles, so `px` is pixels of the
+mosaic. `ezu tile` takes `--features` and `--features-coords` for one tile,
+and writes the collection the embedding packages' `renderTileWithFeatures`
+returns, with the node's id as `node` and its units as `extent`. There
+`--features-coords` defaults to `tile`, the node's own whole-number units
+(`0..extent` across the tile), and also takes `lonlat` and `px`, pixels of the
+tile at the size it rendered. A tile has no `--features-key`: the copies a key
+collapses are the ones neighbouring tiles each hold, and one tile is written as
+it is.
+
+```sh
+ezu tile --style labels.json --tile 16/58199/25811 --out tile.png \
+  --features boxes=boxes.geojson --features-coords lonlat
+```
+
 ### Many pages in one run
 
 A print job is usually many pages from one style. Run once per page, ezu

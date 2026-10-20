@@ -299,6 +299,12 @@ mean is spelled out in
   also take `--format rgba` (or an `.rgba` extension, and `"format": "rgba"`
   on a frame page): straight 8-bit RGBA, row-major, with no header, as the
   packages' `rgba` format returns it.
+- `ezu bbox` takes `--features`, `--features-key` and `--features-coords`,
+  and writes a mosaic's features as `frame` writes a page's, the mosaic
+  being a page that is exactly its tiles. `ezu tile` takes `--features` and
+  `--features-coords` (`tile`, the default, `lonlat` or `px`) and writes one
+  tile's collection as the embedding packages' `renderTileWithFeatures`
+  returns it.
 
 ### Changed
 

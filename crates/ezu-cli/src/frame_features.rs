@@ -1,5 +1,6 @@
-//! `ezu frame --features`: a features node's value, gathered over every tile
-//! a print frame renders, written as one GeoJSON file.
+//! `ezu frame --features` (and `ezu bbox --features`): a features node's
+//! value, gathered over every tile a print frame or a mosaic renders,
+//! written as one GeoJSON file. `ezu tile --features` writes one tile's.
 //!
 //! The gathering and the file are the renderer's
 //! ([`ezu::renderer::FrameFeatureCollector`]), so the Go and JS packages
@@ -22,6 +23,28 @@ pub(crate) enum FeatureCoords {
     Lonlat,
     // Pixels of the output image: origin at its top-left corner, y down.
     Px,
+}
+
+/// Coordinate system of `ezu tile --features`.
+// Plain comments on the variants, as on `FeatureCoords`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum TileCoords {
+    // The node's own units: whole numbers, 0..extent across the tile.
+    Tile,
+    // WGS84 longitude and latitude.
+    Lonlat,
+    // Pixels of the tile: origin at its top-left corner, y down.
+    Px,
+}
+
+impl From<TileCoords> for ezu::renderer::TileFeatureCoords {
+    fn from(c: TileCoords) -> Self {
+        match c {
+            TileCoords::Tile => Self::Tile,
+            TileCoords::Lonlat => Self::LonLat,
+            TileCoords::Px => Self::Px,
+        }
+    }
 }
 
 impl From<FeatureCoords> for ezu::renderer::FeatureCoords {
@@ -380,6 +403,188 @@ mod tests {
             "{c} vs {want:?}"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// One point, drawn as a dot, with its features node `feats`.
+    fn point_style(lon: f64, lat: f64) -> String {
+        format!(
+            r##"{{
+              "name": "tile-point",
+              "tile-size": 256,
+              "sources": {{ "pts": {{ "type": "geojson", "data": {pts} }} }},
+              "nodes": {{
+                "feats": {{ "op": "features", "source": "pts", "layer": "pts" }},
+                "dots":  {{ "op": "circles", "features": "@feats", "radius": 3, "color": "#000000" }}
+              }},
+              "output": "@dots"
+            }}"##,
+            pts = points(&[("p", lon, lat)]),
+        )
+    }
+
+    fn common_for(style: &Path) -> CommonArgs {
+        CommonArgs {
+            style: style.to_string_lossy().into_owned(),
+            assets_dir: None,
+            pmtiles: None,
+            mvt: None,
+            overzoom_levels: 4,
+            params: Vec::new(),
+            strict: false,
+            pad: None,
+        }
+    }
+
+    /// `ezu tile --features` writes the tile's collection as the embedding
+    /// packages hand it back — tile units by default — and in lon/lat or the
+    /// tile's pixels on request, at the tile size it rendered.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_tile_writes_its_features_in_the_coords_asked_for() {
+        use crate::{run_tile, TileCmd, TileSizeArgs};
+        let dir = scratch("tile-features");
+        let (lon, lat) = (139.7012345, 35.6598765);
+        let style = dir.join("style.json");
+        std::fs::write(&style, point_style(lon, lat)).unwrap();
+        let z = 16u8;
+        let n = (1u32 << z) as f64;
+        let (wx, wy) = (lon_to_world_x(lon) * n, lat_to_world_y(lat) * n);
+        let tile = ezu::core::TileId::new(z, wx as u32, wy as u32);
+        let run = |coords: TileCoords, tile_size: Option<u32>, out: &str| {
+            let out = dir.join(out);
+            let cmd = TileCmd {
+                common: common_for(&style),
+                size: TileSizeArgs { tile_size },
+                tile,
+                out: dir.join("tile.png"),
+                format: None,
+                png: Default::default(),
+                features: vec![("feats".into(), out.clone())],
+                features_coords: coords,
+            };
+            async move {
+                run_tile(cmd).await.unwrap();
+                std::fs::read_to_string(&out).unwrap()
+            }
+        };
+        let units = run(TileCoords::Tile, None, "units.json").await;
+        let doc: serde_json::Value = serde_json::from_str(&units).unwrap();
+        assert_eq!(
+            (doc["node"].as_str(), doc["extent"].as_u64()),
+            (Some("feats"), Some(4096))
+        );
+        let at = |doc: &serde_json::Value| {
+            let c = &features(doc)[0]["geometry"]["coordinates"];
+            (c[0].as_f64().unwrap(), c[1].as_f64().unwrap())
+        };
+        let (u, v) = at(&doc);
+        let want = ((wx - tile.x as f64) * 4096.0, (wy - tile.y as f64) * 4096.0);
+        assert!(
+            (u - want.0).abs() <= 1.0 && (v - want.1).abs() <= 1.0,
+            "{u},{v}"
+        );
+        assert!(
+            !units.contains('.'),
+            "tile units are whole numbers: {units}"
+        );
+
+        let doc = read_text(&run(TileCoords::Lonlat, None, "lonlat.json").await);
+        let (x, y) = at(&doc);
+        assert!((x - lon).abs() < 2e-6 && (y - lat).abs() < 2e-6, "{x},{y}");
+
+        let doc = read_text(&run(TileCoords::Px, Some(512), "px.json").await);
+        let (x, y) = at(&doc);
+        assert!(
+            (x - u / 8.0).abs() < 0.01 && (y - v / 8.0).abs() < 0.01,
+            "{x},{y}"
+        );
+
+        // A name that is no features node stops the run before it writes.
+        let out = dir.join("never.png");
+        let err = run_tile(TileCmd {
+            common: common_for(&style),
+            size: TileSizeArgs::default(),
+            tile,
+            out: out.clone(),
+            format: None,
+            png: Default::default(),
+            features: vec![("dots".into(), dir.join("never.json"))],
+            features_coords: TileCoords::Tile,
+        })
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("`dots` produces raster"), "{err}");
+        assert!(!out.exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `ezu bbox --features` writes a mosaic's features as `frame` writes a
+    /// page's: one copy with a key, and mosaic pixels for `px`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_mosaic_writes_its_features_as_a_page_does() {
+        use crate::{run_bbox, BBox, BboxCmd, TileSizeArgs};
+        let dir = scratch("bbox-features");
+        let (lon, lat) = (139.7012345, 35.6598765);
+        let style = dir.join("style.json");
+        std::fs::write(&style, point_style(lon, lat)).unwrap();
+        let z = 16u8;
+        let bbox = BBox {
+            min_lng: lon - 0.01,
+            min_lat: lat - 0.01,
+            max_lng: lon + 0.01,
+            max_lat: lat + 0.01,
+        };
+        let run = |coords: FeatureCoords, key: Option<&str>, out: &str| {
+            let out = dir.join(out);
+            let cmd = BboxCmd {
+                common: common_for(&style),
+                size: TileSizeArgs::default(),
+                bbox,
+                zoom: z,
+                out: dir.join("mosaic.png"),
+                format: None,
+                png: Default::default(),
+                concurrency: Some(3),
+                features: vec![("feats".into(), out.clone())],
+                features_key: key
+                    .map(|k| vec![parse_node_key(k).unwrap()])
+                    .unwrap_or_default(),
+                features_coords: coords,
+            };
+            async move {
+                run_bbox(cmd).await.unwrap();
+                std::fs::read_to_string(&out).unwrap()
+            }
+        };
+        let doc = read_text(&run(FeatureCoords::Lonlat, Some("feats=name"), "geo.json").await);
+        let [f] = features(&doc).as_slice() else {
+            panic!("one feature: {doc}");
+        };
+        let c = &f["geometry"]["coordinates"];
+        assert!((c[0].as_f64().unwrap() - lon).abs() < 2e-6, "{c}");
+        assert!((c[1].as_f64().unwrap() - lat).abs() < 2e-6, "{c}");
+
+        let doc = read_text(&run(FeatureCoords::Px, Some("feats=name"), "px.json").await);
+        let c = &features(&doc)[0]["geometry"]["coordinates"];
+        let n = (1u32 << z) as f64;
+        let x0 = (lon_to_world_x(bbox.min_lng) * n).floor();
+        let y0 = (lat_to_world_y(bbox.max_lat) * n).floor();
+        let want = (
+            (lon_to_world_x(lon) * n - x0) * 256.0,
+            (lat_to_world_y(lat) * n - y0) * 256.0,
+        );
+        assert!(
+            (c[0].as_f64().unwrap() - want.0).abs() < 0.1,
+            "{c} vs {want:?}"
+        );
+        assert!(
+            (c[1].as_f64().unwrap() - want.1).abs() < 0.1,
+            "{c} vs {want:?}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn read_text(text: &str) -> serde_json::Value {
+        serde_json::from_str(text).unwrap()
     }
 
     #[tokio::test(flavor = "multi_thread")]
