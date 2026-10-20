@@ -549,10 +549,10 @@ struct Opened {
     tiles: TileRenderer,
 }
 
-/// Read nothing more than `doc` and `style_text` already hold: build the
-/// graph, report on it, open every source the style declares — vector tiles
-/// keeping their bytes in `byte_cache` — and let the renderer read the
-/// style's assets.
+/// Open the style that `doc` and `style_text` hold, without reading it
+/// again: build the graph, report on it, open every source the style
+/// declares, keeping fetched tile bytes in `byte_cache`, and let the
+/// renderer read the style's assets.
 async fn open_style(
     common: &CommonArgs,
     style_text: &str,
