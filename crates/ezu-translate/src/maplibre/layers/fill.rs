@@ -5,7 +5,7 @@ use serde_json::{Map, Value};
 
 use crate::maplibre::color::parse_color;
 use crate::maplibre::filter;
-use crate::maplibre::layers::paint_of;
+use crate::maplibre::layers::{paint_of, translated};
 use crate::maplibre::sources::{features_node, resolve_layer_source, Sources};
 use crate::maplibre::{const_color, const_number, is_expr};
 use crate::maplibre::{Report, ZoomRange};
@@ -29,6 +29,11 @@ pub(crate) fn convert_fill(
     // `fill-pattern` takes precedence over `fill-color`: tile the named
     // sprite icon across the canvas and clip it to the polygon shape.
     if let Some(pattern) = paint.get("fill-pattern") {
+        if paint.get("fill-translate").is_some() {
+            report.warn(format!(
+                "layer `{id}`: `fill-translate` is not supported with `fill-pattern` — drawn unshifted"
+            ));
+        }
         convert_fill_pattern(
             id,
             pattern,
@@ -75,8 +80,15 @@ pub(crate) fn convert_fill(
         feat_id.clone(),
         features_node(&source, &source_layer, base_filter_expr, min_zoom, max_zoom),
     );
-    let mut spec =
-        serde_json::json!({ "op": "fill-solid", "features": format!("@{feat_id}"), "fill": hex });
+    let features = translated(
+        id,
+        "fill-translate",
+        paint,
+        format!("@{feat_id}"),
+        nodes,
+        report,
+    );
+    let mut spec = serde_json::json!({ "op": "fill-solid", "features": features, "fill": hex });
     if let Some(expr) = fill_expr {
         spec["fill-expr"] = expr;
     }
@@ -187,8 +199,15 @@ pub(crate) fn convert_fill_extrusion(
         feat_id.clone(),
         features_node(&source, &source_layer, base_filter_expr, min_zoom, max_zoom),
     );
-    let mut spec =
-        serde_json::json!({ "op": "fill-solid", "features": format!("@{feat_id}"), "fill": hex });
+    let features = translated(
+        id,
+        "fill-extrusion-translate",
+        paint,
+        format!("@{feat_id}"),
+        nodes,
+        report,
+    );
+    let mut spec = serde_json::json!({ "op": "fill-solid", "features": features, "fill": hex });
     if let Some(expr) = fill_expr {
         spec["fill-expr"] = expr;
     }

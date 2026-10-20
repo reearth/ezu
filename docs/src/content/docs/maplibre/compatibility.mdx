@@ -88,6 +88,12 @@ once the style is migrated (`--migrate`, see below).
 | `line-pattern` (data-driven) | `line-stamp` with the style's sprite sheet and the pattern expression as `name-expr`, cropping each feature's icon |
 | top-level `sprite` (single URL or `[{id, url}]`) | one `sprite` source per sheet — atlas `<url>.png` plus index `<url>.json`, or an inline index. `sheet:icon` names supported |
 
+## Shifted geometry
+
+| MapLibre | ezu |
+| --- | --- |
+| `circle-translate`, `fill-translate`, `line-translate`, `fill-extrusion-translate` (constant `[x, y]`) | a `transform` node with `translate-px` between the features and the paint node. The `*-translate-anchor` beside it needs nothing: a tile is never rotated |
+
 ## Data, filters and functions
 
 | MapLibre | ezu |

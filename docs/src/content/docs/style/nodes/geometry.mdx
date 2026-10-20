@@ -288,8 +288,11 @@ Translate / rotate / scale every input vertex. Rotation happens around `pivot` (
 | `scale-xy` | array of number | no | Literal per-axis scale. `scale-x` / `scale-y` override it; uniform `scale` multiplies it. |
 | `scale-y` | number \| `$param` \| `@node` | no | — |
 | `translate` | array of number | no | Literal [x, y] shift. `translate-x` / `translate-y` override it. |
+| `translate-px` | array of number | no | Literal [x, y] shift in canvas pixels, right and down, as MapLibre's `circle-translate` / `fill-translate` / `line-translate` give it; converted to feature units for the tile being drawn, so the shift looks the same at every tile size. Added after `translate`. `translate-x-px` / `translate-y-px` override it. |
 | `translate-x` | number \| `$param` \| `@node` | no | — |
+| `translate-x-px` | number \| `$param` \| `@node` | no | — |
 | `translate-y` | number \| `$param` \| `@node` | no | — |
+| `translate-y-px` | number \| `$param` \| `@node` | no | — |
 
 ### `triangulate`
 

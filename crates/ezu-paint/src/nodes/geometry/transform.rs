@@ -10,6 +10,11 @@
 //! static-bound requirement. The `[x, y]` array forms (`translate`,
 //! `scale-xy`, `pivot`) stay literal: an array is not a scalar, so a
 //! param cannot stand in for one.
+//!
+//! `translate-x-px` / `translate-y-px` (seeded by the literal
+//! `translate-px`) shift by screen pixels instead, the unit MapLibre's
+//! `*-translate` properties use, converted to feature units for the tile
+//! being drawn so the shift looks the same at every tile size and extent.
 
 use ezu_features::ops::transform::transform;
 use ezu_graph::{
@@ -24,6 +29,9 @@ use crate::nodes::common::{downcast_features, features_value, read_xy, FeatureGr
 struct TransformNode {
     translate_x: In<f64>,
     translate_y: In<f64>,
+    /// Shift in canvas pixels, added after `translate-x` / `translate-y`.
+    translate_x_px: In<f64>,
+    translate_y_px: In<f64>,
     rotation_deg: In<f64>,
     scale: In<f64>,
     scale_x: In<f64>,
@@ -64,9 +72,14 @@ impl Node for TransformNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
+        // Pixels to feature units: one tile spans `extent` units across
+        // `tile_w` px (and down `tile_h`).
+        let extent = feats.extent as f64;
         let translate = (
-            self.translate_x.get(ctx, inputs)?,
-            self.translate_y.get(ctx, inputs)?,
+            self.translate_x.get(ctx, inputs)?
+                + self.translate_x_px.get(ctx, inputs)? * extent / ctx.canvas.tile_w.max(1) as f64,
+            self.translate_y.get(ctx, inputs)?
+                + self.translate_y_px.get(ctx, inputs)? * extent / ctx.canvas.tile_h.max(1) as f64,
         );
         let rotation_rad = self.rotation_deg.get(ctx, inputs)?.to_radians();
         let uniform = self.scale.get(ctx, inputs)?;
@@ -103,6 +116,8 @@ impl Node for TransformNode {
         h.update(b"transform");
         self.translate_x.param_hash(h);
         self.translate_y.param_hash(h);
+        self.translate_x_px.param_hash(h);
+        self.translate_y_px.param_hash(h);
         self.rotation_deg.param_hash(h);
         self.scale.param_hash(h);
         self.scale_x.param_hash(h);
@@ -143,6 +158,9 @@ impl NodeFactory for TransformFactory {
         let scale = r.number_or("scale", 1.0)?;
         let scale_x = r.number_or("scale-x", scale_xy[0] as f64)?;
         let scale_y = r.number_or("scale-y", scale_xy[1] as f64)?;
+        let tx_px = read_xy(fields, "translate-px", ctx, [0.0, 0.0])?;
+        let translate_x_px = r.number_or("translate-x-px", tx_px[0] as f64)?;
+        let translate_y_px = r.number_or("translate-y-px", tx_px[1] as f64)?;
         let parts = r.finish();
 
         let mut ports = vec![PortSpec {
@@ -161,6 +179,8 @@ impl NodeFactory for TransformFactory {
             node: Box::new(TransformNode {
                 translate_x,
                 translate_y,
+                translate_x_px,
+                translate_y_px,
                 rotation_deg,
                 scale,
                 scale_x,
@@ -180,6 +200,9 @@ impl NodeFactory for TransformFactory {
                 "translate": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "Literal [x, y] shift. `translate-x` / `translate-y` override it." },
                 "translate-x": schema_frag::number(),
                 "translate-y": schema_frag::number(),
+                "translate-px": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "Literal [x, y] shift in canvas pixels, right and down, as MapLibre's `circle-translate` / `fill-translate` / `line-translate` give it; converted to feature units for the tile being drawn, so the shift looks the same at every tile size. Added after `translate`. `translate-x-px` / `translate-y-px` override it." },
+                "translate-x-px": schema_frag::number(),
+                "translate-y-px": schema_frag::number(),
                 "rotation-deg": schema_frag::number(),
                 "scale": schema_frag::number(),
                 "scale-xy": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "Literal per-axis scale. `scale-x` / `scale-y` override it; uniform `scale` multiplies it." },

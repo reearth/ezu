@@ -327,3 +327,43 @@ fn densify_and_resample_lengths_take_a_param_or_a_node() {
     assert_number_field_drivable_plain(&density_doc("densify", "target-px"), 32, 0, 4.0, 10.0);
     assert_number_field_drivable_plain(&density_doc("resample", "spacing-px"), 32, 0, 5.0, 12.0);
 }
+
+/// `transform`'s `translate-px` shifts by canvas pixels, whatever the tile
+/// size: it lands where the same shift in feature units for that size does.
+#[test]
+fn transform_translate_px_shifts_by_canvas_pixels() {
+    let recipe = |size: u32, shift: &str| {
+        format!(
+            r##"{{
+      "name": "demo",
+      "tile-size": {size},
+      "nodes": {{
+        "sq":    {{ "op": "literal-geometry",
+                    "polygons": [{{ "exterior": [[1024, 1024], [2048, 1024], [2048, 2048], [1024, 2048]] }}] }},
+        "moved": {{ "op": "transform", "features": "@sq", {shift} }},
+        "out":   {{ "op": "fill-solid", "features": "@moved", "fill": "#222222" }}
+      }},
+      "output": "@out"
+    }}"##
+        )
+    };
+    for size in [32_u32, 64] {
+        // 8 px right and 4 px down is 4096 / size feature units per px.
+        let k = 4096.0 / size as f64;
+        let in_units = render(
+            &recipe(size, &format!(r#""translate": [{}, {}]"#, 8.0 * k, 4.0 * k)),
+            size,
+            0,
+        );
+        for shift in [
+            r#""translate-px": [8, 4]"#,
+            r#""translate-x-px": 8, "translate-y-px": 4"#,
+        ] {
+            assert_eq!(
+                render(&recipe(size, shift), size, 0).pixels,
+                in_units.pixels,
+                "{shift} at tile size {size}"
+            );
+        }
+    }
+}

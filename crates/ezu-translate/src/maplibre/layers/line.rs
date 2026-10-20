@@ -5,7 +5,7 @@ use serde_json::{Map, Value};
 
 use crate::maplibre::filter;
 use crate::maplibre::layers::fill::{resolve_number, resolve_paint_color};
-use crate::maplibre::layers::paint_of;
+use crate::maplibre::layers::{paint_of, translated};
 use crate::maplibre::sources::{features_node, resolve_layer_source, Sources};
 use crate::maplibre::{Report, ZoomRange};
 
@@ -40,6 +40,11 @@ pub(crate) fn convert_line(
         if paint.get("line-gap-width").is_some() {
             report.warn(format!(
                 "layer `{id}`: `line-gap-width` is not supported with `line-pattern` — the pattern is drawn along the centreline"
+            ));
+        }
+        if paint.get("line-translate").is_some() {
+            report.warn(format!(
+                "layer `{id}`: `line-translate` is not supported with `line-pattern` — drawn unshifted"
             ));
         }
         let (opacity, opacity_expr) = resolve_number(paint.get("line-opacity"));
@@ -94,11 +99,19 @@ pub(crate) fn convert_line(
         zoom_range,
         nodes,
     );
+    let features = translated(
+        id,
+        "line-translate",
+        paint,
+        format!("@{lines_id}"),
+        nodes,
+        report,
+    );
     // Crisp `stroke` (tiny-skia) rather than a painterly brush, to match
     // MapLibre's clean vector lines.
     let mut spec = serde_json::json!({
         "op": "stroke",
-        "features": format!("@{lines_id}"),
+        "features": features,
         "color": hex,
         "width-px": width,
         "cap": cap,

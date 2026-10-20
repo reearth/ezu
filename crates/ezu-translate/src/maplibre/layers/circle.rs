@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::maplibre::filter;
 use crate::maplibre::layers::fill::{resolve_number, resolve_paint_color};
-use crate::maplibre::layers::paint_of;
+use crate::maplibre::layers::{paint_of, translated};
 use crate::maplibre::sources::{features_node, resolve_layer_source, Sources};
 use crate::maplibre::{Report, ZoomRange};
 
@@ -34,10 +34,18 @@ pub(crate) fn convert_circle(
         features_node(&source, &source_layer, base_filter_expr, min_zoom, max_zoom),
     );
 
+    let features = translated(
+        id,
+        "circle-translate",
+        paint,
+        format!("@{feat_id}"),
+        nodes,
+        report,
+    );
     let circles_id = format!("{id}__circles");
     let mut spec = serde_json::json!({
         "op": "circles",
-        "features": format!("@{feat_id}"),
+        "features": features,
     });
 
     // `circle-radius` → `radius` (constant) or `radius-expr`.

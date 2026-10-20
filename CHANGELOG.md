@@ -361,6 +361,10 @@ mean is spelled out in
   `dasharray` in pixels, and `width` in multiples of the stroke's width, as
   MapLibre's `line-dasharray` is, scaled per feature group when the width
   comes from `width-expr`.
+- `transform` takes `translate-px` (and `translate-x-px` / `translate-y-px`,
+  which take a `$param` or an `@node`): a shift in canvas pixels, converted
+  to feature units for the tile being drawn, so it looks the same at every
+  tile size. It adds to `translate`, which stays in feature units.
 
 ### Changed
 
@@ -518,6 +522,12 @@ mean is spelled out in
   each feature is drawn at, as in MapLibre. A `line-dasharray` given as
   `["literal", […]]` converts too, and one given as an expression, which
   used to be dropped silently, warns and draws solid.
+- `ezu translate` ignored `circle-translate`, `fill-translate`,
+  `line-translate` and `fill-extrusion-translate` without a warning. A
+  constant shift now becomes a `transform` node with `translate-px` in
+  front of the paint node; an expression, or a shift on a `fill-pattern`
+  or `line-pattern` layer, warns and draws unshifted. The `*-anchor`
+  beside each needs nothing, since a tile is never rotated.
 - `icon-rotate-deg` on `text` and `text-labels` turned the icon about its
   own centre, so an icon with an `icon-anchor` other than `center`, or an
   `icon-offset`, spun in place where MapLibre swings it round the anchor

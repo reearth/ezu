@@ -7633,6 +7633,15 @@
                 "minItems": 2,
                 "type": "array"
               },
+              "translate-px": {
+                "description": "Literal [x, y] shift in canvas pixels, right and down, as MapLibre's `circle-translate` / `fill-translate` / `line-translate` give it; converted to feature units for the tile being drawn, so the shift looks the same at every tile size. Added after `translate`. `translate-x-px` / `translate-y-px` override it.",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
               "translate-x": {
                 "oneOf": [
                   {
@@ -7645,7 +7654,31 @@
                   }
                 ]
               },
+              "translate-x-px": {
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
               "translate-y": {
+                "oneOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "translate-y-px": {
                 "oneOf": [
                   {
                     "type": "number"
