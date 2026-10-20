@@ -114,6 +114,65 @@ fn explicit_interval_overrides_the_zoom_ladder() {
     );
 }
 
+/// The column a longitude should land on, at z=0.
+fn expected_col(lon: f64) -> u32 {
+    (ezu_core::coord::lon_to_world_x(lon) * SIZE as f64).round() as u32
+}
+
+#[test]
+fn per_axis_intervals_space_the_two_families_apart() {
+    // Meridians every 90°, parallels every 15°.
+    let r = render(
+        &style(r#", "interval-x-deg": 90, "interval-y-deg": 15"#),
+        SIZE,
+        0,
+    );
+    assert!(col_is_line(&r, expected_col(90.0)), "90°E missing");
+    assert!(!col_is_line(&r, expected_col(30.0)), "no meridian at 30°E");
+    assert!(row_is_line(&r, expected_row(15.0)), "15°N missing");
+    assert!(row_is_line(&r, expected_row(45.0)), "45°N missing");
+}
+
+#[test]
+fn interval_deg_fills_the_axis_left_unset() {
+    // `interval-deg` spaces the parallels; `interval-x-deg` the meridians.
+    let r = render(
+        &style(r#", "interval-deg": 45, "interval-x-deg": 90"#),
+        SIZE,
+        0,
+    );
+    assert!(row_is_line(&r, expected_row(45.0)), "45°N missing");
+    assert!(!col_is_line(&r, expected_col(45.0)), "no meridian at 45°E");
+    assert!(col_is_line(&r, expected_col(90.0)), "90°E missing");
+    // Giving both per-axis intervals equal to `interval-deg` draws what
+    // `interval-deg` alone does.
+    assert_eq!(
+        render(
+            &style(r#", "interval-x-deg": 45, "interval-y-deg": 45"#),
+            SIZE,
+            0
+        )
+        .pixels,
+        render(&style(r#", "interval-deg": 45"#), SIZE, 0).pixels,
+    );
+    // An axis with no interval of its own still follows the zoom ladder
+    // (30° at z=0) when `interval-deg` is absent too.
+    let r = render(&style(r#", "interval-y-deg": 45"#), SIZE, 0);
+    assert!(col_is_line(&r, expected_col(30.0)), "30°E missing");
+    assert!(!row_is_line(&r, expected_row(30.0)), "no parallel at 30°N");
+}
+
+#[test]
+fn a_non_positive_axis_interval_fails_the_build() {
+    for extra in [r#", "interval-x-deg": 0"#, r#", "interval-y-deg": -5"#] {
+        let doc = ezu_style::Document::from_json(&style(extra)).expect("parse");
+        assert!(
+            ezu_graph::build_graph(&doc, &ezu_paint::nodes::default_registry()).is_err(),
+            "{extra} must fail at build"
+        );
+    }
+}
+
 /// Each line carries `axis`, `degrees` and `label`, which is what lets a
 /// downstream op draw or label the two families differently. Colouring
 /// by `axis` proves the properties arrive.

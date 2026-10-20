@@ -2853,7 +2853,35 @@
               "interval-deg": {
                 "oneOf": [
                   {
-                    "description": "Spacing in degrees. Omit to pick one from the zoom along the 30/10/5/2/1 ladder.",
+                    "description": "Spacing in degrees, for both axes unless `interval-x-deg` or `interval-y-deg` overrides one. Omit to pick one from the zoom along the 30/10/5/2/1 ladder.",
+                    "exclusiveMinimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "interval-x-deg": {
+                "oneOf": [
+                  {
+                    "description": "Degrees of longitude between meridians, overriding `interval-deg` on that axis.",
+                    "exclusiveMinimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "interval-y-deg": {
+                "oneOf": [
+                  {
+                    "description": "Degrees of latitude between parallels, overriding `interval-deg` on that axis.",
                     "exclusiveMinimum": 0.0,
                     "type": "number"
                   },

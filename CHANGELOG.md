@@ -262,6 +262,10 @@ mean is spelled out in
 - `color-ramp` takes `interpolation: "step"`, which gives each value the
   colour of the stop at or below it, as MapLibre's `step` does, so the ramp
   paints flat bands. `linear` stays the default.
+- `graticule` takes `interval-x-deg` (between meridians) and
+  `interval-y-deg` (between parallels), as `point-grid` takes `spacing-x`
+  and `spacing-y`. `interval-deg` fills whichever is unset, and an axis
+  with neither still follows the zoom.
 
 ### Changed
 

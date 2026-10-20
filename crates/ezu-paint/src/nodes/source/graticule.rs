@@ -20,6 +20,9 @@
 //! With no `interval-deg` the spacing is chosen from the zoom so that a
 //! handful of lines cross the tile, stepping down the conventional
 //! 30°/10°/5° ladder rather than an arbitrary fraction.
+//! `interval-x-deg` (between meridians) and `interval-y-deg` (between
+//! parallels) set one axis each, the way `point-grid` takes `spacing-x`
+//! and `spacing-y`; `interval-deg` fills whichever of them is unset.
 
 use ezu_core::coord::{lat_to_world_y, lon_to_world_x, world_y_to_lat, MERCATOR_MAX_LAT};
 use ezu_graph::{
@@ -112,7 +115,10 @@ fn line_group(deg: f64, axis: Axes, line: Vec<(i32, i32)>) -> FeatureGroup {
 
 struct GraticuleNode {
     extent: u32,
-    interval_deg: Option<In<f64>>,
+    /// Degrees between meridians; `None` picks it from the zoom.
+    interval_x_deg: Option<In<f64>>,
+    /// Degrees between parallels; `None` picks it from the zoom.
+    interval_y_deg: Option<In<f64>>,
     axes: Axes,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
@@ -137,15 +143,17 @@ impl Node for GraticuleNode {
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
         let e = self.extent as f64;
-        let interval = match &self.interval_deg {
-            Some(field) => field.get(ctx, inputs)?,
-            None => auto_interval(ctx.tile.z),
+        let interval = |field: &Option<In<f64>>| -> Result<f64, EvalError> {
+            match field {
+                Some(field) => field.get(ctx, inputs),
+                None => Ok(auto_interval(ctx.tile.z)),
+            }
         };
-        // A non-positive interval has no lines in it; emit nothing
-        // rather than loop forever.
-        if !interval.is_finite() || interval <= 0.0 {
-            return Ok(features_value(self.extent, vec![]));
-        }
+        let interval_x = interval(&self.interval_x_deg)?;
+        let interval_y = interval(&self.interval_y_deg)?;
+        // A non-positive interval has no lines in it; emit none of that
+        // family rather than loop forever.
+        let usable = |i: f64| i.is_finite() && i > 0.0;
 
         let axis_tiles = (1u64 << ctx.tile.z) as f64;
         // The tile's own footprint in world units, and the conversion
@@ -157,7 +165,8 @@ impl Node for GraticuleNode {
 
         let mut groups = Vec::new();
 
-        if self.axes != Axes::Meridians {
+        if self.axes != Axes::Meridians && usable(interval_y) {
+            let interval = interval_y;
             // North edge is the smaller world y, so it is the *higher*
             // latitude: walk south from there.
             let lat_north = world_y_to_lat(world_y0).min(MERCATOR_MAX_LAT);
@@ -175,7 +184,8 @@ impl Node for GraticuleNode {
             }
         }
 
-        if self.axes != Axes::Parallels {
+        if self.axes != Axes::Parallels && usable(interval_x) {
+            let interval = interval_x;
             let lon_west = (world_x0 * 360.0 - 180.0).max(-180.0);
             let lon_east = ((world_x0 + span) * 360.0 - 180.0).min(180.0);
             let k_lo = (lon_west / interval).ceil() as i64;
@@ -196,8 +206,11 @@ impl Node for GraticuleNode {
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"graticule");
         h.update(&self.extent.to_le_bytes());
-        if let Some(field) = &self.interval_deg {
-            field.param_hash(h);
+        for (tag, field) in [(b'x', &self.interval_x_deg), (b'y', &self.interval_y_deg)] {
+            if let Some(field) = field {
+                h.update(&[tag]);
+                field.param_hash(h);
+            }
         }
         h.update(match self.axes {
             Axes::Both => &[0u8],
@@ -239,28 +252,34 @@ impl NodeFactory for GraticuleFactory {
 
         let mut r = InReader::new(fields, ctx, 0);
         // Absent rather than defaulted: without an interval the node
-        // picks one from the zoom, which no constant can express.
-        let interval_deg = match fields.contains_key("interval-deg") {
-            true => Some(r.number("interval-deg")?),
-            false => None,
-        };
-        let parts = r.finish();
-
-        if let Some(field) = &interval_deg {
+        // picks one from the zoom, which no constant can express. The
+        // shared `interval-deg` is read whenever present, even when both
+        // axes override it, so a malformed value is still reported.
+        let mut read = |name: &'static str| -> Result<Option<In<f64>>, FactoryError> {
+            if !fields.contains_key(name) {
+                return Ok(None);
+            }
+            let field = r.number(name)?;
             if let Some(b) = field.static_bound() {
                 if b <= 0.0 {
                     return Err(FactoryError::BadField {
-                        field: "interval-deg".into(),
-                        msg: "interval-deg must be > 0".into(),
+                        field: name.into(),
+                        msg: format!("{name} must be > 0"),
                     });
                 }
             }
-        }
+            Ok(Some(field))
+        };
+        let shared = read("interval-deg")?;
+        let interval_x_deg = read("interval-x-deg")?.or_else(|| shared.clone());
+        let interval_y_deg = read("interval-y-deg")?.or(shared);
+        let parts = r.finish();
 
         Ok(BuiltNode {
             node: Box::new(GraticuleNode {
                 extent,
-                interval_deg,
+                interval_x_deg,
+                interval_y_deg,
                 axes,
                 ports: parts.ports,
                 param_refs: parts.param_refs,
@@ -275,7 +294,11 @@ impl NodeFactory for GraticuleFactory {
                 "extent": { "type": "integer", "minimum": 1, "default": DEFAULT_EXTENT,
                             "description": "Coordinate extent of the emitted geometry, matching the features it is drawn alongside." },
                 "interval-deg": schema_frag::in_number(serde_json::json!({ "type": "number", "exclusiveMinimum": 0.0,
-                                   "description": "Spacing in degrees. Omit to pick one from the zoom along the 30/10/5/2/1 ladder." })),
+                                   "description": "Spacing in degrees, for both axes unless `interval-x-deg` or `interval-y-deg` overrides one. Omit to pick one from the zoom along the 30/10/5/2/1 ladder." })),
+                "interval-x-deg": schema_frag::in_number(serde_json::json!({ "type": "number", "exclusiveMinimum": 0.0,
+                                   "description": "Degrees of longitude between meridians, overriding `interval-deg` on that axis." })),
+                "interval-y-deg": schema_frag::in_number(serde_json::json!({ "type": "number", "exclusiveMinimum": 0.0,
+                                   "description": "Degrees of latitude between parallels, overriding `interval-deg` on that axis." })),
                 "axes": { "type": "string", "enum": ["both", "parallels", "meridians"], "default": "both",
                           "description": "Which families to emit: parallels of latitude, meridians of longitude, or both." },
             },
