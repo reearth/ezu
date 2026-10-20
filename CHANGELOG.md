@@ -405,6 +405,11 @@ mean is spelled out in
   `clip: true` did. It still works, with a warning naming the replacement;
   when both are set, `composite` is used. `ezu translate` writes
   `composite` for a `fill-pattern`.
+- `place`'s `top-center`, `center-left`, `center-right` and
+  `bottom-center` anchors, for MapLibre's `top`, `left`, `right` and
+  `bottom`, the names `text` and `stamp` take. They place the image as
+  before, with a warning naming the replacement, also when a `string`
+  param's default or `enum` holds one.
 
 ### Fixed
 

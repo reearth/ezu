@@ -530,7 +530,7 @@ Draw the source raster onto the canvas exactly once. `fit:none` (default) uses p
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `anchor` | `top-left` \| `top-center` \| `top-right` \| `center-left` \| `center` \| `center-right` \| `bottom-left` \| `bottom-center` \| `bottom-right` \| `$param` | no | Only used when fit=none. |
+| `anchor` | `top-left` \| `top` \| `top-right` \| `left` \| `center` \| `right` \| `bottom-left` \| `bottom` \| `bottom-right` \| `top-center` \| `center-left` \| `center-right` \| `bottom-center` \| `$param` | no | Which point of the image lands on `position-px`, by MapLibre's anchor names, as `text` and `stamp` take them. `top-center`, `center-left`, `center-right` and `bottom-center` are deprecated names for `top`, `left`, `right` and `bottom`. Only used when fit=none. |
 | `fit` | `none` \| `cover` \| `contain` \| `stretch` \| `$param` | no | — |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
 | `opacity` | number (0…1) \| `$param` \| `@node` | no | — |

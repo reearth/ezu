@@ -28,7 +28,7 @@ use ezu_core::{
     text::Anchor,
 };
 
-use super::text::TEXT_ANCHORS;
+use crate::nodes::common::ANCHOR_NAMES as TEXT_ANCHORS;
 use crate::nodes::common::{
     canvas_into_raster, core_tile, downcast_features, empty_raster, make_canvas, read_xy,
     unwrap_raster_or_sprite, FramedImage, ACCEPTS_RASTER_OR_SPRITE,

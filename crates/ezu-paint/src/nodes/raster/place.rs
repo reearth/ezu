@@ -18,6 +18,7 @@
 
 use std::sync::Arc;
 
+use ezu_core::text::Anchor;
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EnumTable, EvalCtx, EvalError,
     FactoryCtx, FactoryError, In, InEnum, InReader, Node, NodeFactory, PortKind, PortSpec,
@@ -28,7 +29,7 @@ use tiny_skia::{PixmapPaint, Transform};
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    canvas_into_raster, make_canvas, read_xy, unwrap_raster_or_sprite, FramedImage,
+    canvas_into_raster, make_canvas, read_xy, unwrap_raster_or_sprite, warn_renamed, FramedImage,
     ACCEPTS_RASTER_OR_SPRITE,
 };
 
@@ -47,54 +48,37 @@ const FITS: EnumTable<Fit> = &[
     ("stretch", Fit::Stretch),
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Anchor9 {
-    TopLeft,
-    TopCenter,
-    TopRight,
-    CenterLeft,
-    Center,
-    CenterRight,
-    BottomLeft,
-    BottomCenter,
-    BottomRight,
-}
-
-const ANCHORS: EnumTable<Anchor9> = &[
-    ("top-left", Anchor9::TopLeft),
-    ("top-center", Anchor9::TopCenter),
-    ("top-right", Anchor9::TopRight),
-    ("center-left", Anchor9::CenterLeft),
-    ("center", Anchor9::Center),
-    ("center-right", Anchor9::CenterRight),
-    ("bottom-left", Anchor9::BottomLeft),
-    ("bottom-center", Anchor9::BottomCenter),
-    ("bottom-right", Anchor9::BottomRight),
+/// `place` named its edge anchors `top-center` and so on before it took
+/// MapLibre's names, which `text` and `stamp` use; the old names still
+/// work, with a warning.
+const RENAMED_ANCHORS: &[(&str, &str)] = &[
+    ("top-center", "top"),
+    ("center-left", "left"),
+    ("center-right", "right"),
+    ("bottom-center", "bottom"),
 ];
 
-impl Anchor9 {
-    /// Return the (fx, fy) in `[0, 1]` × `[0, 1]` of the anchor point
-    /// inside the source image. Multiplying by `(src.w, src.h)` gives
-    /// the pixel coordinate of the anchor.
-    fn fractions(self) -> (f32, f32) {
-        match self {
-            Self::TopLeft => (0.0, 0.0),
-            Self::TopCenter => (0.5, 0.0),
-            Self::TopRight => (1.0, 0.0),
-            Self::CenterLeft => (0.0, 0.5),
-            Self::Center => (0.5, 0.5),
-            Self::CenterRight => (1.0, 0.5),
-            Self::BottomLeft => (0.0, 1.0),
-            Self::BottomCenter => (0.5, 1.0),
-            Self::BottomRight => (1.0, 1.0),
-        }
-    }
-}
+/// MapLibre's nine names, then the old ones for the four edges.
+const ANCHORS: EnumTable<Anchor> = &[
+    ("top-left", Anchor::TopLeft),
+    ("top", Anchor::Top),
+    ("top-right", Anchor::TopRight),
+    ("left", Anchor::Left),
+    ("center", Anchor::Center),
+    ("right", Anchor::Right),
+    ("bottom-left", Anchor::BottomLeft),
+    ("bottom", Anchor::Bottom),
+    ("bottom-right", Anchor::BottomRight),
+    ("top-center", Anchor::Top),
+    ("center-left", Anchor::Left),
+    ("center-right", Anchor::Right),
+    ("bottom-center", Anchor::Bottom),
+];
 
 struct PlaceNode {
     fit: InEnum<Fit>,
     position_px: [f32; 2],
-    anchor: InEnum<Anchor9>,
+    anchor: InEnum<Anchor>,
     scale: In<f64>,
     rotation_deg: In<f64>,
     opacity: In<f64>,
@@ -146,7 +130,7 @@ impl Node for PlaceNode {
         let fit = self.fit.get(ctx)?;
         let transform = match fit {
             Fit::None => {
-                let (fx, fy) = self.anchor.get(ctx)?.fractions();
+                let (fx, fy) = self.anchor.get(ctx)?.fraction();
                 let ax = sw * fx;
                 let ay = sh * fy;
                 Transform::from_translate(self.position_px[0] + pad, self.position_px[1] + pad)
@@ -215,7 +199,8 @@ impl NodeFactory for PlaceFactory {
         let position_px = read_xy(fields, "position-px", ctx, [0.0, 0.0])?;
         let mut r = InReader::new(fields, ctx, 1);
         let fit = r.enum_or("fit", Fit::None, FITS)?;
-        let anchor = r.enum_or("anchor", Anchor9::TopLeft, ANCHORS)?;
+        let anchor = r.enum_or("anchor", Anchor::TopLeft, ANCHORS)?;
+        warn_renamed(fields, ctx, "anchor", RENAMED_ANCHORS);
         let scale = r.number_or("scale", 1.0)?;
         let rotation_deg = r.number_or("rotation-deg", 0.0)?;
         let opacity = r.number_or("opacity", 1.0)?;
@@ -260,11 +245,9 @@ impl NodeFactory for PlaceFactory {
                                  "minItems": 2, "maxItems": 2,
                                  "description": "fit=none: canvas pixel where the image's `anchor` point lands. Other fits: offset from canvas center." },
                 "anchor": schema_frag::in_enum(serde_json::json!({ "type": "string",
-                            "enum": ["top-left", "top-center", "top-right",
-                                     "center-left", "center", "center-right",
-                                     "bottom-left", "bottom-center", "bottom-right"],
+                            "enum": ezu_graph::enum_names(ANCHORS),
                             "default": "top-left",
-                            "description": "Only used when fit=none." })),
+                            "description": "Which point of the image lands on `position-px`, by MapLibre's anchor names, as `text` and `stamp` take them. `top-center`, `center-left`, `center-right` and `bottom-center` are deprecated names for `top`, `left`, `right` and `bottom`. Only used when fit=none." })),
                 "scale": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0,
                            "description": "Uniform scale for fit=none. Ignored for other fits." })),
                 "rotation-deg": schema_frag::in_number(serde_json::json!({ "type": "number",

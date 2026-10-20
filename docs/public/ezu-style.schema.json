@@ -4705,17 +4705,21 @@
                 "oneOf": [
                   {
                     "default": "top-left",
-                    "description": "Only used when fit=none.",
+                    "description": "Which point of the image lands on `position-px`, by MapLibre's anchor names, as `text` and `stamp` take them. `top-center`, `center-left`, `center-right` and `bottom-center` are deprecated names for `top`, `left`, `right` and `bottom`. Only used when fit=none.",
                     "enum": [
                       "top-left",
-                      "top-center",
+                      "top",
                       "top-right",
-                      "center-left",
+                      "left",
                       "center",
-                      "center-right",
+                      "right",
                       "bottom-left",
-                      "bottom-center",
-                      "bottom-right"
+                      "bottom",
+                      "bottom-right",
+                      "top-center",
+                      "center-left",
+                      "center-right",
+                      "bottom-center"
                     ],
                     "type": "string"
                   },

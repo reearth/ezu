@@ -355,6 +355,68 @@ pub(super) fn default_field_seed(anchor: Anchor, rng_seed: u64) -> u32 {
 
 pub(super) const ANCHORS: EnumTable<Anchor> = &[("tile", Anchor::Tile), ("world", Anchor::World)];
 
+/// MapLibre's nine names for the part of a box that sits on a point
+/// (`text-anchor`, `icon-anchor`), the names every anchor field takes.
+pub(super) const ANCHOR_NAMES: EnumTable<ezu_core::text::Anchor> = {
+    use ezu_core::text::Anchor as A;
+    &[
+        ("center", A::Center),
+        ("left", A::Left),
+        ("right", A::Right),
+        ("top", A::Top),
+        ("bottom", A::Bottom),
+        ("top-left", A::TopLeft),
+        ("top-right", A::TopRight),
+        ("bottom-left", A::BottomLeft),
+        ("bottom-right", A::BottomRight),
+    ]
+};
+
+/// Warn about each deprecated name a fixed-set field is given, naming the
+/// one to write instead: as a literal, or as the default or an `enum`
+/// value of the `$param` it reads. `renamed` pairs each old name with its
+/// replacement. The old names still parse, so this changes no output.
+pub(super) fn warn_renamed(
+    fields: &serde_json::Map<String, Value>,
+    ctx: &FactoryCtx<'_>,
+    field: &str,
+    renamed: &[(&str, &str)],
+) {
+    let Some(s) = fields.get(field).and_then(Value::as_str) else {
+        return;
+    };
+    let new_for = |old: &str| renamed.iter().find(|(o, _)| *o == old).map(|(_, n)| *n);
+    match spec::FieldRef::classify(s) {
+        spec::FieldRef::Literal(old) => {
+            if let Some(new) = new_for(old) {
+                ctx.warn(format!(
+                    "`{field}`: `{old}` is deprecated: write \"{field}\": \"{new}\""
+                ));
+            }
+        }
+        spec::FieldRef::Param(p) => {
+            let Some(decl) = ctx.params.get(p) else {
+                return;
+            };
+            let mut named: Vec<&str> = decl.default.as_str().into_iter().collect();
+            named.extend(decl.choices.iter().flatten().map(String::as_str));
+            let mut seen = Vec::new();
+            for old in named {
+                if let Some(new) = new_for(old) {
+                    if !seen.contains(&old) {
+                        seen.push(old);
+                        ctx.warn(format!(
+                            "`{field}`: param `${p}` names `{old}`, which is deprecated: \
+                             write `{new}`"
+                        ));
+                    }
+                }
+            }
+        }
+        spec::FieldRef::Node(_) => {}
+    }
+}
+
 /// The schema of an `anchor` field taking `tile` / `world`.
 pub(super) fn anchor_schema(default: &str, description: Option<&str>) -> Value {
     let mut literal = serde_json::json!({

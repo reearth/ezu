@@ -68,6 +68,7 @@ use xxhash_rust::xxh3::Xxh3;
 use crate::nodes::common::{
     downcast_features, neighbor_feature_groups, read_bool_or, read_number, read_number_or,
     read_optional_string, read_optional_zoom, read_xy, FeatureGroup, NeighborGroups,
+    ANCHOR_NAMES as TEXT_ANCHORS,
 };
 use ezu_core::text::{
     clip_line,
@@ -82,19 +83,6 @@ use super::labels::{
     draw_labels, label_rect, rotated_bounds, set_id, BackgroundDraw, FaceCache, IconDraw,
     LabelDraw, LabelSet, PointVariant,
 };
-
-/// MapLibre's nine anchor names, shared with `stamp`.
-pub(super) const TEXT_ANCHORS: EnumTable<Anchor> = &[
-    ("center", Anchor::Center),
-    ("left", Anchor::Left),
-    ("right", Anchor::Right),
-    ("top", Anchor::Top),
-    ("bottom", Anchor::Bottom),
-    ("top-left", Anchor::TopLeft),
-    ("top-right", Anchor::TopRight),
-    ("bottom-left", Anchor::BottomLeft),
-    ("bottom-right", Anchor::BottomRight),
-];
 
 // The label's layout is fixed when the graph is built — its sizes, offsets
 // and spacing are read then too, and the label pad and the anchor list

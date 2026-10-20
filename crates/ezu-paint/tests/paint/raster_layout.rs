@@ -317,3 +317,77 @@ fn tiling_scale_takes_a_param_or_a_node() {
     }"##;
     assert_number_field_drivable_plain(doc, 32, 0, 16.0, 10.0);
 }
+
+/// `place` takes MapLibre's anchor names. Its old names for the four edges
+/// still place the image exactly where the new ones do, and the build warns
+/// with the name to write instead — for a literal and for a param alike.
+#[test]
+fn place_old_edge_anchor_names_warn_and_place_the_same() {
+    let sprite = disk_sprite(16, 16, 8.0, [0, 255, 0, 255]);
+    let doc = |params: &str, anchor: &str| {
+        format!(
+            r##"{{
+              "name": "demo",
+              "tile-size": 32,
+              "params": {{ {params} }},
+              "sources": {{ "src": {{ "type": "image", "src": "builtin:src" }} }},
+              "nodes": {{
+                "src":  {{ "op": "image", "src": "@src" }},
+                "out":  {{ "op": "place", "input": "@src", "fit": "none",
+                          "anchor": {anchor}, "position-px": [16, 16] }}
+              }},
+              "output": "@out"
+            }}"##
+        )
+    };
+    let warnings = |json: &str| {
+        let doc = Document::from_json(json).unwrap();
+        build_graph(&doc, &default_registry())
+            .unwrap()
+            .warnings()
+            .to_vec()
+    };
+    let draw = |json: &str| {
+        render_with_images(
+            json,
+            32,
+            0,
+            TileId { z: 0, x: 0, y: 0 },
+            &[("src", sprite.clone())],
+        )
+        .pixels
+        .clone()
+    };
+    for (old, new) in [
+        ("top-center", "top"),
+        ("center-left", "left"),
+        ("center-right", "right"),
+        ("bottom-center", "bottom"),
+    ] {
+        let old_doc = doc("", &format!("\"{old}\""));
+        let new_doc = doc("", &format!("\"{new}\""));
+        assert_eq!(draw(&old_doc), draw(&new_doc), "{old}");
+        assert!(warnings(&new_doc).is_empty(), "{new}");
+        let w = warnings(&old_doc);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(
+            w[0].contains(&format!(
+                "`{old}` is deprecated: write \"anchor\": \"{new}\""
+            )),
+            "{}",
+            w[0]
+        );
+    }
+    // The old name in a param's declaration warns too.
+    let param = doc(
+        r#""at": { "type": "string", "enum": ["top", "bottom-center"], "default": "top" }"#,
+        "\"$at\"",
+    );
+    let w = warnings(&param);
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(
+        w[0].contains("`bottom-center`, which is deprecated: write `bottom`"),
+        "{}",
+        w[0]
+    );
+}
