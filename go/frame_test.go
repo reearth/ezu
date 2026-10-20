@@ -299,6 +299,8 @@ func TestRenderFrameHoldsTheRenderer(t *testing.T) {
 				renderer.ClearTileSize(ctx),
 				renderer.SetGlyphBudget(ctx, 1024),
 				renderer.ClearGlyphBudget(ctx),
+				renderer.SetCacheBudget(ctx, 1<<20),
+				renderer.ClearCacheBudget(ctx),
 				renderer.TrimGlyphs(ctx),
 			}
 			// None of these changes what the frame draws.

@@ -539,6 +539,33 @@ impl Renderer {
         Ok(())
     }
 
+    /// Let the render cache hold up to `bytes` of pixels instead of its
+    /// default (8 MiB). The cache keeps intermediate results a later render
+    /// can reuse — most of all what a world-anchored node computes, which
+    /// every tile around it reads too — so a host rendering many
+    /// neighbouring tiles with memory to spare renders them faster with
+    /// more, and one in a memory-capped isolate can hold it to less.
+    /// `memoryUsage().cacheBudget` reports it back.
+    ///
+    /// The cache starts empty at the new size, and keeps the size through
+    /// `setStyle` and `setTileSize`. Throws `FrameInProgress` while a
+    /// `renderFrame` holds the renderer.
+    #[wasm_bindgen(js_name = setCacheBudget)]
+    pub fn set_cache_budget(&self, bytes: usize) -> Result<(), JsValue> {
+        self.idle()?;
+        self.inner.borrow_mut().set_cache_budget(Some(bytes));
+        Ok(())
+    }
+
+    /// Go back to the render cache's default size. Throws
+    /// `FrameInProgress` while a `renderFrame` holds the renderer.
+    #[wasm_bindgen(js_name = clearCacheBudget)]
+    pub fn clear_cache_budget(&self) -> Result<(), JsValue> {
+        self.idle()?;
+        self.inner.borrow_mut().set_cache_budget(None);
+        Ok(())
+    }
+
     /// Every source the style declares, in declaration order, as an array
     /// of `{ name, type, tileScoped, url?, indexUrl? }`.
     ///

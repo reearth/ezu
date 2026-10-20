@@ -178,7 +178,8 @@ let cache = ezu::graph::Cache::with_capacity(4096);   // entries, not bytes
 A Mutex-protected LRU keyed by a Merkle-style content hash over
 `(canvas, tile, node param hash + asset hashes, input hashes)`. Hits are cheap to
 clone because heavy payloads sit behind `Arc`. Keep one cache per style for the
-life of that style; throw it away when the style changes.
+life of that style; throw it away when the style changes. `ezu::renderer` keeps
+its own, 8 MiB of pixels unless `set_cache_budget` says otherwise.
 
 ## Your own ops
 

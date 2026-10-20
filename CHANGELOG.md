@@ -56,6 +56,12 @@ mean is spelled out in
   as a GeoJSON FeatureCollection in tile units, so a host can list the
   labels on a tile and what placement did to them without rendering twice.
   The wasm module's ABI version is now 5.
+- The renderer's cache size can be set, in Rust, Go and JS:
+  `set_cache_budget` (`SetCacheBudget` and `ClearCacheBudget`,
+  `setCacheBudget` and `clearCacheBudget`) lets the render cache hold more
+  or less than its default 8 MiB of pixels, for a batch of neighbouring
+  tiles that reuse each other's work or for a tight memory limit, and keeps
+  the size across a new style.
 - `text` and `text-labels` take `anchor-expr`, a MapLibre expression that
   names a point label's anchor per feature, so one layer can put some labels
   left of their points and others right of them, or switch sides with zoom.

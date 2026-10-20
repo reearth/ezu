@@ -433,6 +433,12 @@ is the one bank that otherwise accumulates for the life of a renderer;
 pointer, because a budget of `0` is a real budget — keep nothing — and should not
 be the same word as having none.
 
+The render cache bounds itself at 8 MiB of pixels by default. `SetCacheBudget`
+moves that bound — up, for a renderer working through many neighbouring tiles
+that reuse each other's intermediates, or down, under a tight memory limit —
+and `ClearCacheBudget` goes back to the default. The size holds across
+`SetStyle`.
+
 Hitting the limit is not a silent kill. The module's allocator reports the failed
 allocation on its way out, so the call returns an `*ezu.Error` named
 `OutOfMemory` carrying the number of bytes it could not have:

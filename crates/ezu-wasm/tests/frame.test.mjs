@@ -258,6 +258,8 @@ test("a frame holds the renderer until it settles", async () => {
     assert.throws(() => r.setTileSize(256), busy);
     assert.throws(() => r.clearTileSize(), busy);
     assert.throws(() => r.setGlyphBudget(1024), busy);
+    assert.throws(() => r.setCacheBudget(1 << 20), busy);
+    assert.throws(() => r.clearCacheBudget(), busy);
     await assert.rejects(r.renderFrame(f, null), busy);
     // None of these changes what the frame draws.
     r.loadSource("basemap", parent).free();

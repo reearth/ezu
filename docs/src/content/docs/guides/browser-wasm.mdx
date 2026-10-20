@@ -284,6 +284,9 @@ or `setTileSize` on the renderer) and copy it into the page with its top-left at
 plus module-wide `heapBytes`. `heapBytes` is a high-water mark: wasm cannot
 return pages to the host, so it never falls. In a memory-capped isolate, poll it
 and shed load — drop a renderer with `free()` — before an allocation fails.
+The render cache bounds itself at 8 MiB of pixels; `setCacheBudget(bytes)`
+moves that bound, down for a tight isolate or up for a batch of neighbouring
+tiles, and `clearCacheBudget()` goes back to the default.
 
 `setStyle(styleJson)` swaps the style in place and returns the new node count,
 reusing the module and the asset bank.

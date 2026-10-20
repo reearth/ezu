@@ -1135,6 +1135,34 @@ func (r *Renderer) setGlyphBudget(ctx context.Context, value, set uint64) error 
 	return err
 }
 
+// SetCacheBudget lets the render cache hold up to bytes of pixels instead
+// of its default (8 MiB). The cache keeps intermediate results a later
+// render can reuse — most of all what a world-anchored node computes, which
+// every tile around it reads too — so a host rendering many neighbouring
+// tiles with memory to spare renders them faster with more, and one short of
+// memory can hold it to less. [Usage.CacheBudget] reports it back.
+//
+// The cache starts empty at the new size, and keeps the size through
+// [Renderer.SetStyle] and [Renderer.SetTileSize].
+func (r *Renderer) SetCacheBudget(ctx context.Context, bytes uint64) error {
+	return r.setCacheBudget(ctx, bytes, 1)
+}
+
+// ClearCacheBudget goes back to the render cache's default size.
+func (r *Renderer) ClearCacheBudget(ctx context.Context) error {
+	return r.setCacheBudget(ctx, 0, 0)
+}
+
+func (r *Renderer) setCacheBudget(ctx context.Context, value, set uint64) error {
+	if err := r.idle(); err != nil {
+		return err
+	}
+	_, err := r.call(ctx, func(ctx context.Context) (int64, error) {
+		return r.call1(ctx, "ezu_set_cache_budget", uint64(r.handle), value, set)
+	})
+	return err
+}
+
 // Attribution is the effective attribution declared by the style (document
 // and sources), joined with " | ". Empty when the style declares none.
 // Upstream TileJSON or PMTiles metadata is yours to merge in.

@@ -140,6 +140,11 @@ class Renderer {
   // (and reads back as `Infinity` from `memoryUsage().glyphBudget`).
   setGlyphBudget(bytes: number): void;
 
+  // Let the render cache hold `bytes` of pixels instead of its default
+  // (8 MiB); clearCacheBudget() goes back. Kept through setStyle.
+  setCacheBudget(bytes: number): void;
+  clearCacheBudget(): void;
+
   // Single unified render. `opts.format` picks the encoder; `tileSize`
   // / `pad` override the canvas for hi-DPI / preview.
   renderTile(z: number, x: number, y: number, opts?: {

@@ -28,3 +28,19 @@ fn a_print_frame_computes_as_the_other_bindings_do() {
     assert!((f.scale - 999.8).abs() <= 0.05, "scale 1:{}", f.scale);
     assert_eq!((f.tiles_x, f.tiles_y), (465594..465599, 206453..206457));
 }
+
+/// The cache budget is the host's to set, and outlives a style or tile size
+/// change, which start a fresh cache of the same size.
+#[test]
+fn the_cache_budget_is_the_hosts_and_survives_a_new_cache() {
+    let mut r = Renderer::new(STAINED_GLASS).expect("builds");
+    let default = r.memory_usage().cache_budget;
+    assert_eq!(default, 8 * 1024 * 1024);
+    r.set_cache_budget(Some(64 * 1024 * 1024));
+    assert_eq!(r.memory_usage().cache_budget, 64 * 1024 * 1024);
+    r.set_tile_size(Some(256)).expect("a size");
+    r.set_style(STAINED_GLASS).expect("builds");
+    assert_eq!(r.memory_usage().cache_budget, 64 * 1024 * 1024);
+    r.set_cache_budget(None);
+    assert_eq!(r.memory_usage().cache_budget, default);
+}

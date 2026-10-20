@@ -95,6 +95,11 @@ class Renderer {
   // renderer. Trimming runs after `renderTile`, never while binding.
   setGlyphBudget(bytes: number): void;
 
+  // Let the render cache hold `bytes` of pixels instead of its default
+  // (8 MiB); clearCacheBudget() goes back. Kept through setStyle.
+  setCacheBudget(bytes: number): void;
+  clearCacheBudget(): void;
+
   // Names with at least one pending tile-scoped binding.
   boundSources(): string[];
 

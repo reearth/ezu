@@ -146,3 +146,13 @@ test("renderTileWithFeatures hands back a node's features next to the image", ()
     });
   }
 });
+
+test("the cache budget is the host's and outlives a new style", () => {
+  const r = new Renderer(stitched);
+  const fallback = r.memoryUsage().cacheBudget;
+  r.setCacheBudget(32 << 20);
+  r.setStyle(stitched);
+  assert.equal(r.memoryUsage().cacheBudget, 32 << 20);
+  r.clearCacheBudget();
+  assert.equal(r.memoryUsage().cacheBudget, fallback);
+});

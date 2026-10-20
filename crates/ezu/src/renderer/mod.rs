@@ -175,6 +175,10 @@ pub struct Renderer {
     /// Tile size every render uses in place of the style's `tile-size`,
     /// set by [`Renderer::set_tile_size`]. `None` renders at the style's.
     tile_size_override: Option<u32>,
+    /// Pixel bytes the render cache may hold, set by
+    /// [`Renderer::set_cache_budget`]. `None` keeps the graph cache's own
+    /// default.
+    cache_budget: Option<usize>,
 }
 
 impl Renderer {
@@ -184,12 +188,32 @@ impl Renderer {
         Ok(Self {
             doc,
             graph: Arc::new(graph),
-            cache: Arc::new(Cache::new()),
+            cache: new_cache(None),
             assets: BrushBankLoader::new(),
             bindings: SourceSet::new(),
             glyph_budget: None,
             tile_size_override: None,
+            cache_budget: None,
         })
+    }
+
+    /// Let the render cache hold up to `bytes` of pixels instead of its
+    /// default (8 MiB). `None` goes back to the default.
+    ///
+    /// The cache keeps intermediate results a later render can reuse — most
+    /// of all the ones a world-anchored node computes, which every tile
+    /// around it reads too — so a host rendering many neighbouring tiles
+    /// with memory to spare renders them faster with more of it, and a host
+    /// short of memory can hold it to less. It bounds itself:
+    /// [`MemoryUsage::cache_bytes`] near the budget is steady state.
+    ///
+    /// The cache is dropped and starts empty at the new size. The budget
+    /// stays through [`set_style`](Self::set_style) and
+    /// [`set_tile_size`](Self::set_tile_size), which start a fresh cache of
+    /// the same size.
+    pub fn set_cache_budget(&mut self, bytes: Option<usize>) {
+        self.cache_budget = bytes;
+        self.cache = new_cache(bytes);
     }
 
     /// Replace the active style. Returns the new node count. Invalidates
@@ -202,7 +226,7 @@ impl Renderer {
         let n = doc.nodes.len();
         self.doc = doc;
         self.graph = Arc::new(graph);
-        self.cache = Arc::new(Cache::new());
+        self.cache = new_cache(self.cache_budget);
         self.bindings.clear();
         self.tile_size_override = None;
         Ok(n)
@@ -245,7 +269,7 @@ impl Renderer {
         let before = self.render_tile_size();
         self.tile_size_override = size;
         if self.render_tile_size() != before {
-            self.cache = Arc::new(Cache::new());
+            self.cache = new_cache(self.cache_budget);
         }
         Ok(())
     }
@@ -1239,6 +1263,15 @@ fn stitched_content(slots: &HashMap<(i32, i32), source_set::Placed>) -> u128 {
         ]);
     }
     h.digest128()
+}
+
+/// A render cache holding up to `budget` bytes of pixels, or the graph
+/// cache's default.
+fn new_cache(budget: Option<usize>) -> Arc<Cache> {
+    Arc::new(Cache::with_limits(
+        ezu_graph::cache::DEFAULT_CAPACITY,
+        budget.unwrap_or(ezu_graph::cache::DEFAULT_BYTE_BUDGET),
+    ))
 }
 
 fn already_bound_otherwise(name: &str) -> Error {

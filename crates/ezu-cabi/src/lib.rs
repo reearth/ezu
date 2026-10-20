@@ -89,6 +89,7 @@ pub const EXPORTS: &[&str] = &[
     "ezu_sources",
     "ezu_bound_sources",
     "ezu_set_glyph_budget",
+    "ezu_set_cache_budget",
     "ezu_source_tile",
     "ezu_requested_neighbor_offsets",
     "ezu_needed_codepoints",
@@ -989,6 +990,22 @@ pub extern "C" fn ezu_set_glyph_budget(handle: u32, bytes: u64, set: u32) -> i64
     let budget = (set != 0).then(|| bytes.min(usize::MAX as u64) as usize);
     with_renderer_mut(handle, |r| {
         r.set_glyph_budget(budget);
+        0
+    })
+}
+
+/// Let the render cache hold up to `bytes` of pixels instead of its default
+/// (8 MiB): more for a host rendering many neighbouring tiles with memory to
+/// spare, less for one short of it. The cache starts empty at the new size,
+/// and keeps the size through [`ezu_set_style`] and [`ezu_set_tile_size`].
+///
+/// `set` spells "unset" as [`ezu_set_glyph_budget`]'s does: zero goes back
+/// to the default and ignores `bytes`.
+#[unsafe(no_mangle)]
+pub extern "C" fn ezu_set_cache_budget(handle: u32, bytes: u64, set: u32) -> i64 {
+    let budget = (set != 0).then(|| bytes.min(usize::MAX as u64) as usize);
+    with_renderer_mut(handle, |r| {
+        r.set_cache_budget(budget);
         0
     })
 }

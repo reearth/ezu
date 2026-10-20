@@ -284,6 +284,30 @@ func TestMemoryUsageAndGlyphBudget(t *testing.T) {
 	if usage.CacheBudget == 0 {
 		t.Error("the render cache reports no eviction budget, so it would grow without bound")
 	}
+
+	// The cache budget is the host's, and outlives a new style.
+	defaultCache := usage.CacheBudget
+	if err := renderer.SetCacheBudget(ctx, 32<<20); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := renderer.SetStyle(ctx, readFile(t, stainedGlassStyle)); err != nil {
+		t.Fatal(err)
+	}
+	if usage, err = renderer.MemoryUsage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if usage.CacheBudget != 32<<20 {
+		t.Errorf("the cache budget reads back as %d after SetStyle, want %d", usage.CacheBudget, 32<<20)
+	}
+	if err := renderer.ClearCacheBudget(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if usage, err = renderer.MemoryUsage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if usage.CacheBudget != defaultCache {
+		t.Errorf("a cleared cache budget reads back as %d, want %d", usage.CacheBudget, defaultCache)
+	}
 }
 
 // Replacing the style keeps the instance and the persistent banks but drops
