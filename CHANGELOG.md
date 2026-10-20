@@ -49,7 +49,7 @@ mean is spelled out in
   loaded it and is freed with `Release`; in JS with `free()`. `bind_source`
   and `render_tile` work as before, and a vector tile bound with
   `bind_source` is now decoded once rather than at both the bind and the
-  render. The wasm module's ABI version is now 4.
+  render.
 - A render can hand back what a features node held next to the image, in
   Rust, Go and JS: `render_tile_with_features` (`RenderTileWithFeatures`,
   `renderTileWithFeatures`) renders as `render_tile_with` does and returns,
