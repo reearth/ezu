@@ -232,7 +232,7 @@ fn icon_fields(
     if let Some(anchor) = const_string(get("icon-anchor"), "icon-anchor", id, report) {
         f.insert("icon-anchor".into(), Value::from(anchor));
     }
-    if let Some(offset) = const_offset(get("icon-offset"), id, report) {
+    if let Some(offset) = const_offset(get("icon-offset"), "icon-offset", id, report) {
         f.insert("icon-offset".into(), serde_json::json!(offset));
     }
 
@@ -443,6 +443,22 @@ fn convert_icon_stamp(
     }
     if let Some(e) = opacity_expr {
         spec["opacity-expr"] = e;
+    }
+
+    // `layout.icon-anchor` → `anchor` (constant) or `anchor-expr`;
+    // `layout.icon-offset` → `offset`, which has no expression form.
+    match layout.and_then(|l| l.get("icon-anchor")) {
+        Some(Value::String(a)) => spec["anchor"] = Value::from(a.clone()),
+        Some(e) => spec["anchor-expr"] = e.clone(),
+        None => {}
+    }
+    if let Some(offset) = const_offset(
+        layout.and_then(|l| l.get("icon-offset")),
+        "icon-offset",
+        id,
+        report,
+    ) {
+        spec["offset"] = serde_json::json!(offset);
     }
 
     // A line-placed icon repeats along the path in MapLibre and is stamped at
@@ -665,7 +681,7 @@ fn convert_text(
                 }
             }
         }
-        if let Some(offset) = const_offset(get("text-offset"), id, report) {
+        if let Some(offset) = const_offset(get("text-offset"), "text-offset", id, report) {
             spec["offset-em"] = serde_json::json!(offset);
         }
     }
@@ -1150,7 +1166,7 @@ fn text_anchor_offsets(
         .filter(|&r| r > 0.0);
     let [ox, oy] = match radial {
         Some(_) => [0.0, 0.0],
-        None => const_offset(get("text-offset"), id, report)
+        None => const_offset(get("text-offset"), "text-offset", id, report)
             .map_or([0.0, 0.0], |[x, y]| [(x as f32).abs(), (y as f32).abs()]),
     };
     Some(
@@ -1230,9 +1246,10 @@ fn const_anchor_list(v: Option<&Value>, id: &str, report: &mut Report) -> Option
     }
 }
 
-/// A constant `text-offset` (`[x, y]` in em); an expression warns and
-/// yields `None`.
-fn const_offset(v: Option<&Value>, id: &str, report: &mut Report) -> Option<[f64; 2]> {
+/// A constant `[x, y]` offset (`text-offset` in em, `icon-offset` in px),
+/// named `prop` in the warning an expression gets; an expression yields
+/// `None`.
+fn const_offset(v: Option<&Value>, prop: &str, id: &str, report: &mut Report) -> Option<[f64; 2]> {
     match v {
         None => None,
         Some(Value::Array(a)) if a.len() == 2 && a.iter().all(Value::is_number) => {
@@ -1240,7 +1257,7 @@ fn const_offset(v: Option<&Value>, id: &str, report: &mut Report) -> Option<[f64
         }
         Some(_) => {
             report.warn(format!(
-                "layer `{id}`: expression `text-offset` not supported — using the default"
+                "layer `{id}`: expression `{prop}` not supported — using the default"
             ));
             None
         }

@@ -344,6 +344,11 @@ mean is spelled out in
   leaves alone. They now become the `circles` node's `stroke-opacity` and
   `blur` (or their `*-expr` forms), and a layer that sets `circle-opacity`
   under a ring gets `stroke-opacity: 1`.
+- `ezu translate` dropped `icon-anchor` and `icon-offset` from a
+  line-placed icon, which it stamps, without a warning. They now become the
+  `stamp`'s `anchor` (or `anchor-expr`) and `offset`; an expression
+  `icon-offset` warns. The warning for an expression `icon-offset` on a
+  point-placed icon named `text-offset`, and now names `icon-offset`.
 
 ## 0.12.0 — 2026-10-12
 

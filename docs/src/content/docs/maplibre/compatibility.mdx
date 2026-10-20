@@ -46,7 +46,8 @@ Two structural facts first:
 `-ignore-placement`, `icon-optional`/`text-optional`, and `icon-text-fit` +
 `-padding` with nine-slice `stretchX`/`stretchY`/`content` metadata all convert.
 Icon-only symbol layers place too. Line-placed icons lower to a collision-free
-`stamp`.
+`stamp`, which keeps `icon-anchor` (data-driven too) and a constant
+`icon-offset`.
 
 **Text.** `symbol-placement: point` / `line` / `line-center` with `text-field`,
 `-size`/`-color`/`-halo-*`/`-opacity`, anchor, offset, justify, wrapping,

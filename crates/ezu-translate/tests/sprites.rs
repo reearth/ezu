@@ -334,3 +334,56 @@ fn line_pattern_warns_about_a_gap_width() {
         report.warnings
     );
 }
+
+#[test]
+fn a_line_placed_icon_keeps_its_anchor_and_offset() {
+    // A line-placed icon lowers to `stamp`, which now takes `anchor`,
+    // `anchor-expr` and `offset`; they used to be dropped without a word.
+    let convert_layout = |layout: serde_json::Value| {
+        let style = serde_json::json!({
+            "version": 8,
+            "name": "line-icons",
+            "sprite": "https://example.com/sprites/basemap",
+            "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+            "layers": [
+                { "id": "shields", "type": "symbol", "source": "s", "source-layer": "roads",
+                  "layout": layout }
+            ]
+        });
+        let (recipe, report) = convert(&style, &ConvertOptions::default()).unwrap();
+        let text = serde_json::to_string(&recipe).unwrap();
+        ezu_style::Document::from_json(&text).expect("recipe parses as ezu Document");
+        let stamp = recipe["nodes"]
+            .as_object()
+            .unwrap()
+            .values()
+            .find(|n| n["op"] == "stamp")
+            .expect("a stamp node")
+            .clone();
+        (stamp, report)
+    };
+
+    let (stamp, report) = convert_layout(serde_json::json!({
+        "symbol-placement": "line", "icon-image": "shield",
+        "icon-anchor": "bottom", "icon-offset": [0, -2]
+    }));
+    assert_eq!(stamp["anchor"], "bottom");
+    assert_eq!(stamp["offset"], serde_json::json!([0.0, -2.0]));
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+
+    let anchor = serde_json::json!(["match", ["get", "kind"], "pin", "bottom", "center"]);
+    let (stamp, report) = convert_layout(serde_json::json!({
+        "symbol-placement": "line", "icon-image": "shield",
+        "icon-anchor": anchor, "icon-offset": ["literal", [0, 1]]
+    }));
+    assert_eq!(stamp["anchor-expr"], anchor);
+    assert!(stamp.get("offset").is_none());
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("`icon-offset` not supported")),
+        "{:?}",
+        report.warnings
+    );
+}
