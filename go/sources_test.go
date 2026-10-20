@@ -153,6 +153,44 @@ func TestSourceDataServesSeveralTiles(t *testing.T) {
 	}
 }
 
+// A clone holds what its original held, and binding into one leaves the
+// other as it was, which a plain copy of the struct does not.
+func TestSourceSetCloneIsItsOwn(t *testing.T) {
+	ctx, renderer := open(t, stainedGlassStyle)
+	data, err := renderer.LoadSource(ctx, "basemap", readFile(t, "testdata/basemap-13-7277-3227.mvt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer data.Release(ctx)
+
+	if empty := (SourceSet{}).Clone(); !empty.IsEmpty() {
+		t.Error("a clone of an empty set holds something")
+	}
+	var set SourceSet
+	if err := set.Bind(data, FromZoom(13)); err != nil {
+		t.Fatal(err)
+	}
+	clone := set.Clone()
+	if err := clone.Bind(data, AtOffset(Offset{DX: 1}), FromZoom(13)); err != nil {
+		t.Fatal(err)
+	}
+	if len(set.entries) != 1 || len(clone.entries) != 2 {
+		t.Errorf("the set holds %d entries and its clone %d, want 1 and 2", len(set.entries), len(clone.entries))
+	}
+	tile := Tile{Z: 14, X: 14554, Y: 6454}
+	want, err := renderer.RenderTileWith(ctx, tile, set, Render{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := renderer.RenderTileWith(ctx, tile, set.Clone(), Render{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Error("a clone renders other pixels than its original")
+	}
+}
+
 // Released data, and data from another renderer, are refused before they
 // reach the module; so is what LoadSource has no use for.
 func TestSourceDataBelongsToItsRenderer(t *testing.T) {

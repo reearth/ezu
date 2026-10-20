@@ -37,7 +37,8 @@ mean is spelled out in
   from what is bound to it, in Rust, Go and JS. `load_source` (`LoadSource`,
   `loadSource`) decodes a vector, DEM, imagery or GeoJSON payload once into a
   `SourceData`; a `SourceSet` holds the payloads one render reads, each at
-  its neighbour offset; and `render_tile_with` (`RenderTileWith`,
+  its neighbour offset, and clones without copying them (`clone`, `Clone`,
+  `clone()`); and `render_tile_with` (`RenderTileWith`,
   `renderTileWith`) renders from a set and nothing else that is
   tile-scoped. A tile loaded once can sit in the set of every tile it
   borders, so a block of tiles decodes each tile once instead of once per

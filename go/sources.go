@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
 	"sync/atomic"
 )
@@ -119,7 +120,8 @@ func (r *Renderer) LoadSource(ctx context.Context, name string, data []byte) (*S
 // [Renderer.RenderTileWith].
 //
 // The zero value is an empty set, ready to use. Like a map, a copy shares
-// its entries with the original, so build a fresh one per tile. A set says
+// its entries with the original, so build a fresh one per tile, or start
+// from another with [SourceSet.Clone]. A set says
 // nothing about the tile it is for — offsets are relative — so pairing each
 // tile with its neighbourhood is yours to do.
 //
@@ -178,6 +180,17 @@ func (s SourceSet) Contains(source string) bool {
 
 // IsEmpty reports whether nothing is bound at all.
 func (s SourceSet) IsEmpty() bool { return len(s.entries) == 0 }
+
+// Clone returns a set holding what s holds that can then be bound into
+// without touching s, which a plain copy cannot: a copy shares s's
+// entries. The data is shared rather than copied, so this costs one entry
+// per binding — the way to start a tile's set from its neighbour's.
+func (s SourceSet) Clone() SourceSet {
+	if s.entries == nil {
+		return SourceSet{}
+	}
+	return SourceSet{entries: maps.Clone(s.entries)}
+}
 
 // json encodes the set the way the module reads it, for renderer r:
 // [{"data": id, "coord": [dx, dy], "sourceZoom": z}, …]. Entries are sorted
