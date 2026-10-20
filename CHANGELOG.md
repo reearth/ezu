@@ -357,6 +357,10 @@ mean is spelled out in
   fill and leave the outline as it is. `ezu translate` gives the outline the
   layer's `fill-opacity` through them, so a faded fill's outline fades with
   it, as in MapLibre.
+- `stroke` takes `dash-unit`: `px` (the default, as before) measures
+  `dasharray` in pixels, and `width` in multiples of the stroke's width, as
+  MapLibre's `line-dasharray` is, scaled per feature group when the width
+  comes from `width-expr`.
 
 ### Changed
 
@@ -507,6 +511,13 @@ mean is spelled out in
 - `ezu translate` dropped an expression `fill-outline-color` without a
   warning. It now becomes the `fill-solid`'s `edge-expr`, with the 1 px
   outline a constant one gets, and a value it cannot read warns.
+- `ezu translate` scaled `line-dasharray` by a 1 px width when `line-width`
+  was an expression, usually a zoom curve, so the dashes came out as short
+  as a hairline's at every zoom, without a warning. The dash now carries
+  over in line widths with `dash-unit: width`, so it scales with the width
+  each feature is drawn at, as in MapLibre. A `line-dasharray` given as
+  `["literal", […]]` converts too, and one given as an expression, which
+  used to be dropped silently, warns and draws solid.
 - `icon-rotate-deg` on `text` and `text-labels` turned the icon about its
   own centre, so an icon with an `icon-anchor` other than `center`, or an
   `icon-offset`, spun in place where MapLibre swings it round the anchor

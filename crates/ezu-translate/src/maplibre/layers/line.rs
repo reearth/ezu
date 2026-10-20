@@ -25,8 +25,8 @@ pub(crate) fn convert_line(
     let paint = paint_of(layer);
 
     // `line-width` → a constant `width-px` (literal) else a raw expression
-    // emitted as `width-expr`, evaluated per tile. The pattern path and
-    // dasharray scaling need a concrete width, so keep a constant fallback.
+    // emitted as `width-expr`, evaluated per tile, with a constant fallback
+    // for a feature the expression gives no number.
     let (width_const, width_expr) = resolve_number(paint.get("line-width"));
     let width = width_const.unwrap_or(1.0).max(0.1);
 
@@ -122,19 +122,37 @@ pub(crate) fn convert_line(
     if let Some(expr) = opacity_expr {
         spec["opacity-expr"] = expr;
     }
-    // MapLibre `line-dasharray` is in units of line width → convert to px.
-    if let Some(arr) = paint.get("line-dasharray").and_then(Value::as_array) {
-        let dash: Vec<Value> = arr
-            .iter()
-            .filter_map(Value::as_f64)
-            .map(|d| Value::from(d * width))
-            .collect();
-        if !dash.is_empty() {
-            spec["dasharray"] = Value::Array(dash);
+    // MapLibre `line-dasharray` is in units of line width, so the lengths
+    // carry over as they are and `dash-unit: width` scales them by the
+    // stroke's width — the width each feature resolves `width-expr` to, when
+    // `line-width` is an expression.
+    if let Some(v) = paint.get("line-dasharray") {
+        match const_dasharray(v) {
+            Some(dash) if !dash.is_empty() => {
+                spec["dasharray"] = Value::Array(dash.into_iter().map(Value::from).collect());
+                spec["dash-unit"] = Value::from("width");
+            }
+            Some(_) => {}
+            None => report.warn(format!(
+                "layer `{id}`: `line-dasharray` carries over only as a constant array — drawn solid"
+            )),
         }
     }
     nodes.insert(stroke_id.clone(), spec);
     outputs.push(stroke_id);
+}
+
+/// A constant `line-dasharray`: a bare array of numbers, or one wrapped in
+/// `["literal", …]`. `None` for an expression or anything else that is
+/// not a list of non-negative numbers.
+fn const_dasharray(v: &Value) -> Option<Vec<f64>> {
+    let arr = match v.as_array()?.as_slice() {
+        [Value::String(op), Value::Array(inner)] if op == "literal" => inner,
+        _ => v.as_array()?,
+    };
+    arr.iter()
+        .map(|d| d.as_f64().filter(|d| *d >= 0.0))
+        .collect()
 }
 
 /// The features a line layer draws, as polylines: `features` → `boundary`.

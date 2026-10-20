@@ -5880,7 +5880,7 @@
             "type": "object"
           },
           {
-            "description": "Crisp constant-width vector stroke along feature polylines (tiny-skia), with cap/join and optional pixel `dasharray`. The sharp counterpart to `line` (painterly brush) — for clean cartographic road/boundary lines.",
+            "description": "Crisp constant-width vector stroke along feature polylines (tiny-skia), with cap/join and an optional `dasharray`, in pixels or in stroke widths. The sharp counterpart to `line` (painterly brush) — for clean cartographic road/boundary lines.",
             "properties": {
               "cap": {
                 "oneOf": [
@@ -5908,8 +5908,26 @@
               "color-expr": {
                 "description": "A MapLibre color expression (JSON array, e.g. [\"match\", [\"get\", \"class\"], \"river\", \"#48b\", \"#888\"]), evaluated per feature group at paint time. When present it overrides the constant `color`; a group whose expression doesn't resolve to a color falls back to `color`. Unlocks data-driven stroke colors."
               },
+              "dash-unit": {
+                "oneOf": [
+                  {
+                    "default": "px",
+                    "description": "What `dasharray` is measured in. `px` (the default) keeps the dashes the same length whatever the width; `width` multiplies each length by the stroke's width, as MapLibre's `line-dasharray` does, so with a `width-expr` each feature group's dashes scale with the width it resolves to. A casing's dashes scale with `width-px`, not with the gap.",
+                    "enum": [
+                      "px",
+                      "width"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
               "dasharray": {
-                "description": "On/off lengths in pixels; omit for solid. Each length may be a `$param`.",
+                "description": "On/off lengths, in pixels or, with `dash-unit: width`, in multiples of the stroke width; omit for solid. Each length may be a `$param`.",
                 "items": {
                   "oneOf": [
                     {

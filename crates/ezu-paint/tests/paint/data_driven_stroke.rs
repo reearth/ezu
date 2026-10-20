@@ -170,3 +170,59 @@ fn opaque_color_expr_matches_constant_color_pixel_for_pixel() {
     let mid = a.pixel(32, 32);
     assert!(mid[0] > 150 && mid[3] > 150, "line should be red: {mid:?}");
 }
+
+/// Render one horizontal `class` line at mid-tile through a `stroke` with
+/// `fields` (a JSON object body without braces).
+fn render_line(class: &str, fields: &str) -> Vec<u8> {
+    let json = format!(
+        r##"{{
+      "name": "dash-unit",
+      "tile-size": 64,
+      "sources": {{ "src": {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }} }},
+      "nodes": {{
+        "feats": {{ "op": "features", "source": "src", "layer": "roads" }},
+        "out":   {{ "op": "stroke", "features": "@feats", "color": "#000000", {fields} }}
+      }},
+      "output": "@out"
+    }}"##
+    );
+    render_with_features(
+        &json,
+        64,
+        0,
+        TileId { z: 0, x: 0, y: 0 },
+        &[("src.roads", one_line_layer("roads", class, 2048))],
+    )
+    .pixels
+    .clone()
+}
+
+#[test]
+fn dash_unit_width_scales_the_dashes_by_each_groups_width() {
+    // In widths, a [2, 1] dash on a 2 px stroke is [4, 2] px and on a 4 px
+    // stroke [8, 4] px — whether the width is a constant or a `width-expr`
+    // resolving per feature.
+    let expr = r#""width-px": 1, "width-expr": ["match", ["get","class"], "thin", 2, 4],
+                  "dasharray": [2, 1], "dash-unit": "width""#;
+    let thin = render_line("thin", r#""width-px": 2, "dasharray": [4, 2]"#);
+    let wide = render_line("wide", r#""width-px": 4, "dasharray": [8, 4]"#);
+    assert_ne!(thin, wide);
+    assert_eq!(render_line("thin", expr), thin);
+    assert_eq!(render_line("wide", expr), wide);
+    assert_eq!(
+        render_line(
+            "wide",
+            r#""width-px": 4, "dasharray": [2, 1], "dash-unit": "width""#
+        ),
+        wide
+    );
+
+    // `px`, the default, keeps the lengths whatever the width.
+    assert_eq!(
+        render_line(
+            "wide",
+            r#""width-px": 4, "dasharray": [4, 2], "dash-unit": "px""#
+        ),
+        render_line("wide", r#""width-px": 4, "dasharray": [4, 2]"#),
+    );
+}

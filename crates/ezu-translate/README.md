@@ -41,7 +41,7 @@ cargo run -p ezu-translate --example convert -- style.json > recipe.json
 | ordered layer list | `blend` chain (painter's algorithm) |
 | `background` | `solid` |
 | `fill` (solid colour, `fill-outline-color`) | `features` + `fill-solid` (outline → `edge`) |
-| `line` (+ `line-dasharray`, `line-cap`/`join`, `line-gap-width`) | `features` + crisp `stroke` (dash in px); a gap renders MapLibre's casing annulus — one stroke's footprint with the corridor knocked out, so joins, caps, and dash phase behave like the GL shader |
+| `line` (+ `line-dasharray`, `line-cap`/`join`, `line-gap-width`) | `features` + crisp `stroke` (dash in line widths, `dash-unit: width`); a gap renders MapLibre's casing annulus — one stroke's footprint with the corridor knocked out, so joins, caps, and dash phase behave like the GL shader |
 | `raster` | `raster` |
 | `circle` (+ `circle-stroke-*`) | a `circle` sprite `stamp`ed at each point (stroke = a larger ring stamped underneath) |
 | `symbol` **icons** (`icon-image` incl. data-driven, `icon-size`/`-rotate`/`-opacity`/`-anchor`/`-offset`/`-padding`, `icon-allow-overlap`/`icon-overlap`/`-ignore-placement`, `icon-optional`/`text-optional`, `icon-text-fit` + `-padding` with nine-slice sprite `stretchX`/`stretchY`/`content` metadata) | the icon rides the layer's label: a point symbol's icon and text boxes join the shared collision index and place or drop **as one unit** (`*-optional` lets one half survive alone); icon-only symbol layers place too. Line-placed icons still lower to a collision-free `stamp` |

@@ -189,7 +189,7 @@ Stamp a sprite at every input point. Lines and polygons are ignored. Rotation, s
 
 ### `stroke`
 
-Crisp constant-width vector stroke along feature polylines (tiny-skia), with cap/join and optional pixel `dasharray`. The sharp counterpart to `line` (painterly brush) — for clean cartographic road/boundary lines.
+Crisp constant-width vector stroke along feature polylines (tiny-skia), with cap/join and an optional `dasharray`, in pixels or in stroke widths. The sharp counterpart to `line` (painterly brush) — for clean cartographic road/boundary lines.
 
 <figure class="op-demo">
   <div class="op-demo__images">
@@ -203,7 +203,8 @@ Crisp constant-width vector stroke along feature polylines (tiny-skia), with cap
 | `cap` | `butt` \| `round` \| `square` \| `$param` | no | — |
 | `color` | color \| `$param` \| `@node` | yes | sRGB hex color, `$param` reference, or `@node` scalar port. |
 | `color-expr` | — | no | A MapLibre color expression (JSON array, e.g. ["match", ["get", "class"], "river", "#48b", "#888"]), evaluated per feature group at paint time. When present it overrides the constant `color`; a group whose expression doesn't resolve to a color falls back to `color`. Unlocks data-driven stroke colors. |
-| `dasharray` | array of number (0…∞) \| `$param` | no | On/off lengths in pixels; omit for solid. Each length may be a `$param`. |
+| `dash-unit` | `px` \| `width` \| `$param` | no | What `dasharray` is measured in. `px` (the default) keeps the dashes the same length whatever the width; `width` multiplies each length by the stroke's width, as MapLibre's `line-dasharray` does, so with a `width-expr` each feature group's dashes scale with the width it resolves to. A casing's dashes scale with `width-px`, not with the gap. |
+| `dasharray` | array of number (0…∞) \| `$param` | no | On/off lengths, in pixels or, with `dash-unit: width`, in multiples of the stroke width; omit for solid. Each length may be a `$param`. |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
 | `gap-width-expr` | — | no | A MapLibre number expression (JSON array) giving the casing gap in pixels, evaluated per feature group at paint time. When present it overrides the constant `gap-width-px`; a group whose expression doesn't resolve to a number falls back to `gap-width-px`. |
 | `gap-width-px` | number \| `$param` \| `@node` | no | MapLibre `line-gap-width`: when &gt; 0 the stroke becomes a casing — two parallel bands of `width-px` each, their inner edges this many pixels apart (outer footprint `gap + 2 * width`, centred on the line). `0` strokes the centreline. |

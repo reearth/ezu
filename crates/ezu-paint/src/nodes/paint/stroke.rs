@@ -32,6 +32,19 @@ pub(super) const JOINS: EnumTable<LineJoin> = &[
     ("bevel", LineJoin::Bevel),
 ];
 
+/// What `dasharray`'s lengths are measured in.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum DashUnit {
+    /// Pixels, whatever the stroke's width.
+    Px,
+    /// Multiples of the stroke's width, as MapLibre's `line-dasharray` is:
+    /// each feature group's dashes scale with the width that group resolves
+    /// to, `width-expr` included.
+    Width,
+}
+
+const DASH_UNITS: EnumTable<DashUnit> = &[("px", DashUnit::Px), ("width", DashUnit::Width)];
+
 struct StrokeNode {
     color: In<[f32; 4]>,
     width_px: In<f64>,
@@ -39,9 +52,10 @@ struct StrokeNode {
     opacity: In<f64>,
     cap: InEnum<LineCap>,
     join: InEnum<LineJoin>,
-    /// On/off dash pattern in pixels (`None` = solid). Each length may
-    /// be a `$param`, so the pattern resolves once per eval.
+    /// On/off dash pattern (`None` = solid), in `dash_unit`s. Each length
+    /// may be a `$param`, so the pattern resolves once per eval.
     dash: Option<Vec<In<f64>>>,
+    dash_unit: InEnum<DashUnit>,
     /// Optional data-driven stroke color: a MapLibre color expression
     /// evaluated per feature group. When set, it overrides the constant
     /// `color` for groups whose expression resolves to a color.
@@ -123,6 +137,12 @@ impl Node for StrokeNode {
                     .collect::<Result<Vec<_>, _>>()?,
             ),
         };
+        let dash_unit = self.dash_unit.get(ctx)?;
+        // The pattern in pixels for a stroke of `width`.
+        let dash_px = |width: f32| match (&dash, dash_unit) {
+            (Some(d), DashUnit::Width) => Some(d.iter().map(|l| l * width).collect()),
+            (d, _) => d.clone(),
+        };
         let mut canvas = make_canvas(ctx)?;
 
         if self.color_expr.is_some()
@@ -177,7 +197,7 @@ impl Node for StrokeNode {
                     width,
                     cap,
                     join,
-                    dash: dash.clone(),
+                    dash: dash_px(width),
                     gap,
                 };
                 paint_strokes(&mut canvas, &group.lines, feats.extent, &style);
@@ -190,7 +210,7 @@ impl Node for StrokeNode {
             width: const_width,
             cap,
             join,
-            dash: dash.clone(),
+            dash: dash_px(const_width),
             gap: const_gap,
         };
         let lines: Vec<_> = feats.lines().cloned().collect();
@@ -213,6 +233,7 @@ impl Node for StrokeNode {
         } else {
             h.update(&[0]);
         }
+        self.dash_unit.param_hash(h);
         if let Some(s) = &self.color_expr_src {
             h.update(b"colorexpr");
             h.update(s.as_bytes());
@@ -271,6 +292,7 @@ impl NodeFactory for StrokeFactory {
         let width_px = r.number_or("width-px", 1.0)?;
         let gap_width_px = r.number_or("gap-width-px", 0.0)?;
         let opacity = r.number_or("opacity", 1.0)?;
+        let dash_unit = r.enum_or("dash-unit", DashUnit::Px, DASH_UNITS)?;
         let parts = r.finish();
 
         // `color-expr`: a raw MapLibre color expression, compiled once and
@@ -370,6 +392,7 @@ impl NodeFactory for StrokeFactory {
                 cap,
                 join,
                 dash,
+                dash_unit,
                 color_expr,
                 width_expr,
                 gap_width_expr,
@@ -386,7 +409,7 @@ impl NodeFactory for StrokeFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Crisp constant-width vector stroke along feature polylines (tiny-skia), with cap/join and optional pixel `dasharray`. The sharp counterpart to `line` (painterly brush) — for clean cartographic road/boundary lines.",
+            "description": "Crisp constant-width vector stroke along feature polylines (tiny-skia), with cap/join and an optional `dasharray`, in pixels or in stroke widths. The sharp counterpart to `line` (painterly brush) — for clean cartographic road/boundary lines.",
             "properties": {
                 "features": schema_frag::node_ref(),
                 "color": schema_frag::color(),
@@ -413,7 +436,9 @@ impl NodeFactory for StrokeFactory {
                 "join": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": enum_names(JOINS), "default": "miter" })),
                 "dasharray": { "type": "array",
                                "items": schema_frag::nested_number(serde_json::json!({ "type": "number", "minimum": 0.0 })),
-                               "description": "On/off lengths in pixels; omit for solid. Each length may be a `$param`." },
+                               "description": "On/off lengths, in pixels or, with `dash-unit: width`, in multiples of the stroke width; omit for solid. Each length may be a `$param`." },
+                "dash-unit": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": enum_names(DASH_UNITS), "default": "px",
+                               "description": "What `dasharray` is measured in. `px` (the default) keeps the dashes the same length whatever the width; `width` multiplies each length by the stroke's width, as MapLibre's `line-dasharray` does, so with a `width-expr` each feature group's dashes scale with the width it resolves to. A casing's dashes scale with `width-px`, not with the gap." })),
             },
             "required": ["features", "color"],
         })

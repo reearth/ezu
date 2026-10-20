@@ -22,7 +22,8 @@ fn lines_use_stroke_with_dash_and_fill_has_outline() {
     let (recipe, _) = convert(&style, &ConvertOptions::default()).unwrap();
     let nodes = recipe["nodes"].as_object().unwrap();
 
-    // Line → crisp `stroke` with cap/join and pixel dash (3,2 × width 2 = 6,4).
+    // Line → crisp `stroke` with cap/join and a dash in line widths, as
+    // MapLibre measures it.
     let stroke = nodes
         .values()
         .find(|n| n["op"] == "stroke")
@@ -30,7 +31,8 @@ fn lines_use_stroke_with_dash_and_fill_has_outline() {
     assert_eq!(stroke["width-px"], 2.0);
     assert_eq!(stroke["cap"], "round");
     assert_eq!(stroke["join"], "round");
-    assert_eq!(stroke["dasharray"], serde_json::json!([6.0, 4.0]));
+    assert_eq!(stroke["dasharray"], serde_json::json!([3.0, 2.0]));
+    assert_eq!(stroke["dash-unit"], "width");
     // No painterly brush nodes anymore.
     assert!(!nodes
         .values()
@@ -150,4 +152,56 @@ fn a_line_layer_strokes_the_rings_of_polygon_features() {
     assert_eq!(alpha(64, 128), 255, "west edge is stroked");
     assert_eq!(alpha(128, 192), 255, "south edge is stroked");
     assert_eq!(alpha(128, 128), 0, "the inside is not filled");
+}
+
+/// The `stroke` a single line layer with `paint` converts to, and the
+/// conversion's warnings.
+fn stroke_for(paint: serde_json::Value) -> (serde_json::Value, Vec<String>) {
+    let style = serde_json::json!({
+        "version": 8,
+        "name": "dashes",
+        "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+        "layers": [
+            { "id": "path", "type": "line", "source": "s", "source-layer": "paths", "paint": paint }
+        ]
+    });
+    let (recipe, report) = convert(&style, &ConvertOptions::default()).unwrap();
+    let text = serde_json::to_string(&recipe).unwrap();
+    ezu_style::Document::from_json(&text).expect("recipe parses as ezu Document");
+    (recipe["nodes"]["path__stroke"].clone(), report.warnings)
+}
+
+#[test]
+fn dashes_scale_with_an_expression_line_width() {
+    // A zoom curve width has no single value to scale the dash by up front,
+    // so the dash stays in widths and the node scales it by the width it
+    // resolves per feature.
+    let width = serde_json::json!(["interpolate", ["linear"], ["zoom"], 10, 1, 16, 4]);
+    let (stroke, warnings) = stroke_for(serde_json::json!({
+        "line-width": width, "line-dasharray": [2, 1]
+    }));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(stroke["width-expr"], width);
+    assert_eq!(stroke["dasharray"], serde_json::json!([2.0, 1.0]));
+    assert_eq!(stroke["dash-unit"], "width");
+
+    // `["literal", […]]` is the same constant.
+    let (stroke, warnings) = stroke_for(serde_json::json!({
+        "line-width": 3, "line-dasharray": ["literal", [2, 1]]
+    }));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(stroke["dasharray"], serde_json::json!([2.0, 1.0]));
+}
+
+#[test]
+fn an_expression_line_dasharray_warns_and_draws_solid() {
+    let (stroke, warnings) = stroke_for(serde_json::json!({
+        "line-width": 2,
+        "line-dasharray": ["step", ["zoom"], ["literal", [2, 1]], 14, ["literal", [4, 2]]]
+    }));
+    assert!(stroke.get("dasharray").is_none());
+    assert!(
+        warnings.iter().any(|w| w.contains("line-dasharray")),
+        "{warnings:?}"
+    );
 }
