@@ -117,20 +117,23 @@ Place the labels of every `text-labels` layer against one shared collision index
 
 ### `line`
 
-Brush stroke along MVT polylines.
+Brush stroke along MVT polylines. Color, radius and opacity each have an optional `*-expr` MapLibre-expression sibling evaluated per feature group; the pressure jitter is seeded by world position, so it is the same whichever values a group resolves to.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `brush` | `@node` | yes | Reference to another node (`@name`). |
 | `color` | color \| `$param` \| `@node` | yes | sRGB hex color, `$param` reference, or `@node` scalar port. |
+| `color-expr` | — | no | A MapLibre color expression (JSON array, e.g. ["match", ["get", "class"], "river", "#48b", "#888"]), evaluated per feature group; overrides the constant `color`. As with `color`, the alpha is ignored — the stroke's opacity comes from the brush, `opacity` or `opacity-expr`. A group whose expression doesn't resolve to a color falls back to `color`. |
 | `dtime` | number (0…∞) \| `$param` \| `@node` | no | — |
 | `dtime-stroke-curve` | array of array of number \| string | no | Piecewise-linear `[[t, y], ...]` multiplier on `dtime`. `y` scales the per-vertex dtime — y=3 makes the brush linger 3× longer (slower hand), y=0.3 sweeps through 3× faster. Used with dynamics-driven brushes that respond to stroke speed. |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
 | `hardness-stroke-curve` | array of array of number \| string | no | Piecewise-linear `[[t, y], ...]` driving a libmypaint `stroke` input on the brush. `t` is normalized stroke progress in [0, 1]; `y` is an offset added to the setting's base value. `radius` is log-space (y=-2.3 ≈ ×0.1, y=+0.69 ≈ ×2); `opaque` and `hardness` are linear. |
 | `opacity` | number (0…1) \| `$param` \| `@node` | no | — |
+| `opacity-expr` | — | no | A MapLibre number expression giving the brush opacity, evaluated per feature group; overrides `opacity` (or the brush's own). A group whose expression doesn't resolve to a number keeps `opacity`, or the brush's. |
 | `opacity-stroke-curve` | array of array of number \| string | no | Piecewise-linear `[[t, y], ...]` driving a libmypaint `stroke` input on the brush. `t` is normalized stroke progress in [0, 1]; `y` is an offset added to the setting's base value. `radius` is log-space (y=-2.3 ≈ ×0.1, y=+0.69 ≈ ×2); `opaque` and `hardness` are linear. |
 | `pressure-base` | number (0…1) \| `$param` \| `@node` | no | — |
 | `pressure-jitter` | number (0…1) \| `$param` \| `@node` | no | — |
+| `radius-expr` | — | no | A MapLibre number expression (px, e.g. ["interpolate", ["linear"], ["zoom"], 10, 1, 16, 4]) giving the brush radius, evaluated per feature group with the tile's zoom; overrides `radius-px` (or the brush's own radius). A group whose expression doesn't resolve to a number keeps `radius-px`, or the brush's radius. |
 | `radius-px` | number (0…∞) \| `$param` \| `@node` | no | — |
 | `radius-stroke-curve` | array of array of number \| string | no | Piecewise-linear `[[t, y], ...]` driving a libmypaint `stroke` input on the brush. `t` is normalized stroke progress in [0, 1]; `y` is an offset added to the setting's base value. `radius` is log-space (y=-2.3 ≈ ×0.1, y=+0.69 ≈ ×2); `opaque` and `hardness` are linear. |
 

@@ -3290,7 +3290,7 @@
             "type": "object"
           },
           {
-            "description": "Brush stroke along MVT polylines.",
+            "description": "Brush stroke along MVT polylines. Color, radius and opacity each have an optional `*-expr` MapLibre-expression sibling evaluated per feature group; the pressure jitter is seeded by world position, so it is the same whichever values a group resolves to.",
             "properties": {
               "brush": {
                 "description": "Reference to another node (`@name`).",
@@ -3301,6 +3301,9 @@
                 "description": "sRGB hex color, `$param` reference, or `@node` scalar port.",
                 "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|[$@][A-Za-z_][A-Za-z0-9_-]*)$",
                 "type": "string"
+              },
+              "color-expr": {
+                "description": "A MapLibre color expression (JSON array, e.g. [\"match\", [\"get\", \"class\"], \"river\", \"#48b\", \"#888\"]), evaluated per feature group; overrides the constant `color`. As with `color`, the alpha is ignored — the stroke's opacity comes from the brush, `opacity` or `opacity-expr`. A group whose expression doesn't resolve to a color falls back to `color`."
               },
               "dtime": {
                 "oneOf": [
@@ -3382,6 +3385,9 @@
                   }
                 ]
               },
+              "opacity-expr": {
+                "description": "A MapLibre number expression giving the brush opacity, evaluated per feature group; overrides `opacity` (or the brush's own). A group whose expression doesn't resolve to a number keeps `opacity`, or the brush's."
+              },
               "opacity-stroke-curve": {
                 "description": "Piecewise-linear `[[t, y], ...]` driving a libmypaint `stroke` input on the brush. `t` is normalized stroke progress in [0, 1]; `y` is an offset added to the setting's base value. `radius` is log-space (y=-2.3 ≈ ×0.1, y=+0.69 ≈ ×2); `opaque` and `hardness` are linear.",
                 "items": {
@@ -3431,6 +3437,9 @@
                     "type": "string"
                   }
                 ]
+              },
+              "radius-expr": {
+                "description": "A MapLibre number expression (px, e.g. [\"interpolate\", [\"linear\"], [\"zoom\"], 10, 1, 16, 4]) giving the brush radius, evaluated per feature group with the tile's zoom; overrides `radius-px` (or the brush's own radius). A group whose expression doesn't resolve to a number keeps `radius-px`, or the brush's radius."
               },
               "radius-px": {
                 "oneOf": [

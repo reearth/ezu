@@ -12,10 +12,12 @@ use hokusai::Brush;
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
+use super::stamp::{eval_color_f32, parse_expr_field};
 use crate::nodes::common::{
     canvas_into_raster, core_tile, downcast_brush, downcast_features, empty_raster, make_canvas,
     srgb_to_linear_rgba,
 };
+use crate::strokes::{paint_line_batches, LineBatch};
 use crate::{paint_lines, LineStrokeStyle};
 // NOTE: `paint_lines_parallel` exists behind the `parallel` feature but
 // is intentionally NOT wired in here yet. Without a hokusai-side
@@ -35,6 +37,16 @@ struct LineNode {
     opacity_stroke_curve: Option<CurveIn>,
     hardness_stroke_curve: Option<CurveIn>,
     dtime_stroke_curve: Option<CurveIn>,
+    /// Optional data-driven color / radius / opacity: MapLibre expressions
+    /// evaluated per feature group. When set, each overrides its constant
+    /// counterpart (`color`, `radius-px`, `opacity`) for the group's lines.
+    color_expr: Option<maplibre_expr::Expr>,
+    radius_expr: Option<maplibre_expr::Expr>,
+    opacity_expr: Option<maplibre_expr::Expr>,
+    /// Raw `*-expr` JSON text, for a stable hash.
+    color_expr_src: Option<String>,
+    radius_expr_src: Option<String>,
+    opacity_expr_src: Option<String>,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
 }
@@ -49,11 +61,15 @@ impl Node for LineNode {
     /// the brush, which arrives on a port — the graph resolves it and
     /// passes it in. `radius-px` replaces the brush's own radius, and a
     /// radius curve lifts it further, so either without a static
-    /// ceiling leaves the reach unbounded.
+    /// ceiling leaves the reach unbounded, as does an expression-driven
+    /// radius, which has no static value at all.
     fn influence_pad(&self, ctx: &InfluenceCtx<'_>) -> u32 {
         let Some(ink) = ctx.brush else {
             return InfluenceCtx::UNBOUNDED;
         };
+        if self.radius_expr.is_some() {
+            return InfluenceCtx::UNBOUNDED;
+        }
         // `radius-px` replaces the brush's own radius; the rest of the
         // dab scales with it.
         let mut reach = match &self.radius_px {
@@ -101,17 +117,24 @@ impl Node for LineNode {
             return Ok(empty_raster(ctx));
         }
         let mut canvas = make_canvas(ctx)?;
+        let radius_px = match &self.radius_px {
+            Some(r) => Some(r.get(ctx, inputs)? as f32),
+            None => None,
+        };
+        let opacity = match &self.opacity {
+            Some(o) => Some(o.get(ctx, inputs)? as f32),
+            None => None,
+        };
         // Clone brush and apply optional radius / opacity overrides.
         let mut brush: Brush = (*brush_arc).clone();
-        if let Some(r) = &self.radius_px {
-            let r = r.get(ctx, inputs)? as f32;
-            brush.get_mut(hokusai::BrushSetting::Radius).base_value = libm::logf(r.max(0.05));
+        if let Some(r) = radius_px {
+            set_radius(&mut brush, r);
         }
-        if let Some(o) = &self.opacity {
-            let o = o.get(ctx, inputs)? as f32;
-            brush.get_mut(hokusai::BrushSetting::Opaque).base_value = o.clamp(0.0, 1.0);
+        if let Some(o) = opacity {
+            set_opacity(&mut brush, o);
         }
-        let lin = srgb_to_linear_rgba(self.color.get(ctx, inputs)?);
+        let color = self.color.get(ctx, inputs)?;
+        let lin = srgb_to_linear_rgba(color);
         let style = LineStrokeStyle {
             color: [lin[0], lin[1], lin[2]],
             pressure_base: self.pressure_base.get(ctx, inputs)? as f32,
@@ -122,6 +145,41 @@ impl Node for LineNode {
             hardness_stroke_curve: resolve_curve(&self.hardness_stroke_curve, ctx, inputs)?,
             dtime_stroke_curve: resolve_curve(&self.dtime_stroke_curve, ctx, inputs)?,
         };
+
+        if self.color_expr.is_some() || self.radius_expr.is_some() || self.opacity_expr.is_some() {
+            // Data-driven line: each group strokes with its own color and
+            // brush, all onto one surface. Whichever expression is absent (or
+            // doesn't resolve for a group) leaves the constant in place.
+            let z = ctx.tile.z;
+            let mut batches = Vec::with_capacity(feats.groups.len());
+            for group in &feats.groups {
+                if group.lines.is_empty() {
+                    continue;
+                }
+                let ectx = crate::render::group_expr_context(group, z);
+                let mut brush = brush.clone();
+                if let Some(r) = eval_opt_number(&self.radius_expr, &ectx) {
+                    set_radius(&mut brush, r);
+                }
+                if let Some(o) = eval_opt_number(&self.opacity_expr, &ectx) {
+                    set_opacity(&mut brush, o);
+                }
+                let mut style = style.clone();
+                // The color's alpha is ignored, as the constant `color`'s
+                // is: the brush's opacity carries the stroke's alpha.
+                let color = eval_color_f32(&self.color_expr, &ectx, color);
+                let lin = srgb_to_linear_rgba(color);
+                style.color = [lin[0], lin[1], lin[2]];
+                batches.push(LineBatch {
+                    lines: &group.lines,
+                    brush,
+                    style,
+                });
+            }
+            paint_line_batches(&mut canvas, &batches, feats.extent, core_tile(ctx));
+            return Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))));
+        }
+
         let lines: Vec<_> = feats.lines().cloned().collect();
         paint_lines(
             &mut canvas,
@@ -155,9 +213,43 @@ impl Node for LineNode {
         hash_curve(h, b"o", self.opacity_stroke_curve.as_deref());
         hash_curve(h, b"h", self.hardness_stroke_curve.as_deref());
         hash_curve(h, b"d", self.dtime_stroke_curve.as_deref());
+        for (tag, src) in [
+            (b"colorexpr".as_slice(), &self.color_expr_src),
+            (b"radiusexpr".as_slice(), &self.radius_expr_src),
+            (b"opacityexpr".as_slice(), &self.opacity_expr_src),
+        ] {
+            if let Some(s) = src {
+                h.update(tag);
+                h.update(s.as_bytes());
+            }
+        }
     }
     fn param_refs(&self) -> Vec<String> {
         self.param_refs.clone()
+    }
+}
+
+/// Give the brush a radius of `r` px. The setting is log-space, and a
+/// radius below 0.05 px is held there so the log stays finite.
+fn set_radius(brush: &mut Brush, r: f32) {
+    brush.get_mut(hokusai::BrushSetting::Radius).base_value = libm::logf(r.max(0.05));
+}
+
+/// Give the brush an opacity of `o`, held to `0..=1`.
+fn set_opacity(brush: &mut Brush, o: f32) {
+    brush.get_mut(hokusai::BrushSetting::Opaque).base_value = o.clamp(0.0, 1.0);
+}
+
+/// Evaluate a `Number` expression for a group, or `None` when it is absent
+/// or doesn't resolve to a number — the brush then keeps what the constant
+/// fields gave it.
+fn eval_opt_number(
+    expr: &Option<maplibre_expr::Expr>,
+    ectx: &maplibre_expr::EvaluationContext,
+) -> Option<f32> {
+    match maplibre_expr::evaluate(expr.as_ref()?, ectx) {
+        Ok(maplibre_expr::Value::Number(n)) => Some(n as f32),
+        _ => None,
     }
 }
 
@@ -237,6 +329,13 @@ impl NodeFactory for LineFactory {
         let dtime_stroke_curve = read_stroke_curve(fields, "dtime-stroke-curve", &mut r)?;
         let parts = r.finish();
 
+        let (color_expr, color_expr_src) =
+            parse_expr_field(fields, "color-expr", &maplibre_expr::Type::Color)?;
+        let (radius_expr, radius_expr_src) =
+            parse_expr_field(fields, "radius-expr", &maplibre_expr::Type::Number)?;
+        let (opacity_expr, opacity_expr_src) =
+            parse_expr_field(fields, "opacity-expr", &maplibre_expr::Type::Number)?;
+
         let mut ports = vec![
             PortSpec {
                 name: "features",
@@ -274,6 +373,12 @@ impl NodeFactory for LineFactory {
                 opacity_stroke_curve,
                 hardness_stroke_curve,
                 dtime_stroke_curve,
+                color_expr,
+                radius_expr,
+                opacity_expr,
+                color_expr_src,
+                radius_expr_src,
+                opacity_expr_src,
                 ports,
                 param_refs: parts.param_refs,
             }),
@@ -308,13 +413,22 @@ impl NodeFactory for LineFactory {
             v
         };
         serde_json::json!({
-            "description": "Brush stroke along MVT polylines.",
+            "description": "Brush stroke along MVT polylines. Color, radius and opacity each have an optional `*-expr` MapLibre-expression sibling evaluated per feature group; the pressure jitter is seeded by world position, so it is the same whichever values a group resolves to.",
             "properties": {
                 "features": schema_frag::node_ref(),
                 "brush": schema_frag::node_ref(),
                 "color": schema_frag::color(),
+                "color-expr": {
+                    "description": "A MapLibre color expression (JSON array, e.g. [\"match\", [\"get\", \"class\"], \"river\", \"#48b\", \"#888\"]), evaluated per feature group; overrides the constant `color`. As with `color`, the alpha is ignored — the stroke's opacity comes from the brush, `opacity` or `opacity-expr`. A group whose expression doesn't resolve to a color falls back to `color`.",
+                },
                 "radius-px": schema_frag::px_number(),
+                "radius-expr": {
+                    "description": "A MapLibre number expression (px, e.g. [\"interpolate\", [\"linear\"], [\"zoom\"], 10, 1, 16, 4]) giving the brush radius, evaluated per feature group with the tile's zoom; overrides `radius-px` (or the brush's own radius). A group whose expression doesn't resolve to a number keeps `radius-px`, or the brush's radius.",
+                },
                 "opacity": schema_frag::unit_number(),
+                "opacity-expr": {
+                    "description": "A MapLibre number expression giving the brush opacity, evaluated per feature group; overrides `opacity` (or the brush's own). A group whose expression doesn't resolve to a number keeps `opacity`, or the brush's.",
+                },
                 "pressure-base": schema_frag::unit_number(),
                 "pressure-jitter": schema_frag::unit_number(),
                 "dtime": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0 })),

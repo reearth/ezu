@@ -119,6 +119,45 @@ pub fn paint_lines(
     composite(canvas, &surface);
 }
 
+/// One batch of polylines for [`paint_line_batches`], with the brush and
+/// style its lines are stroked with.
+pub(crate) struct LineBatch<'a> {
+    pub(crate) lines: &'a [Vec<(i32, i32)>],
+    pub(crate) brush: Brush,
+    pub(crate) style: LineStrokeStyle,
+}
+
+/// [`paint_lines`] for lines that do not all share one brush and style:
+/// each batch is stroked with its own, in order, onto one surface that is
+/// composited once. One surface, rather than a [`paint_lines`] call per
+/// batch, keeps where batches cross the way a single call leaves crossing
+/// lines — wet ink mixing in the surface, and a smudging brush picking up
+/// the batches before it — so splitting lines into batches changes only
+/// the paint each one carries. The pressure jitter is seeded by world
+/// position alone, so a line's stroke is the same in whichever batch it
+/// falls.
+pub(crate) fn paint_line_batches(
+    canvas: &mut Canvas,
+    batches: &[LineBatch<'_>],
+    extent: u32,
+    tile: TileId,
+) {
+    let pw = canvas.width();
+    let ph = canvas.height();
+    if pw == 0 || ph == 0 || batches.iter().all(|b| b.lines.is_empty()) {
+        return;
+    }
+    let geom = StrokeGeom::from_canvas(canvas, extent, tile);
+    let mut surface = MemSurface::new();
+    for batch in batches {
+        let brush = color_overridden(&batch.brush, batch.style.color);
+        for line in visible_lines(batch.lines, &geom, &brush, pw, ph) {
+            stroke_one(&mut surface, &brush, line, &geom, &batch.style);
+        }
+    }
+    composite(canvas, &surface);
+}
+
 /// Parallel variant of [`paint_lines`]. Splits `lines` into roughly
 /// `rayon::current_num_threads()` chunks; each chunk paints into its own
 /// `MemSurface` on a worker thread. Pixmaps are composited in chunk

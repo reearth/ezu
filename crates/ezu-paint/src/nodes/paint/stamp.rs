@@ -75,6 +75,25 @@ pub(super) fn eval_number(
     }
 }
 
+/// Evaluate a `Color` expression for a group into straight RGBA in `0..=1`,
+/// falling back to `fallback` when the expression is absent or doesn't
+/// resolve to a color. maplibre-expr `Color` stores straight channels in
+/// `0..=1`, exactly like a parsed hex literal, so a data-driven color paints
+/// the same pixels as the same constant.
+pub(super) fn eval_color_f32(
+    expr: &Option<maplibre_expr::Expr>,
+    ectx: &maplibre_expr::EvaluationContext,
+    fallback: [f32; 4],
+) -> [f32; 4] {
+    match expr {
+        Some(e) => match maplibre_expr::evaluate(e, ectx) {
+            Ok(maplibre_expr::Value::Color(c)) => [c.r as f32, c.g as f32, c.b as f32, c.a as f32],
+            _ => fallback,
+        },
+        None => fallback,
+    }
+}
+
 /// Evaluate an expression to the icon name (a string) for a group, or `None`
 /// when it doesn't resolve to a (non-empty) string.
 pub(super) fn eval_icon_name(

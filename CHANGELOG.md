@@ -202,6 +202,10 @@ mean is spelled out in
 - `line-stamp` takes `width-expr` and `opacity-expr`, evaluated per feature
   group as on `stroke`, and a pattern named per feature: `sprite` plus
   `name-expr` in place of the `image` input, as on `stamp`.
+- `line` takes `color-expr`, `radius-expr` and `opacity-expr`, evaluated per
+  feature group. The groups share one brush surface and the pressure jitter
+  stays seeded by world position, so a style that resolves every group to
+  the constants draws exactly what the constants draw.
 
 ### Changed
 
