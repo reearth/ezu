@@ -217,6 +217,8 @@ mean is spelled out in
   `anchor-expr` and `offset` in px, as MapLibre's `icon-anchor` and
   `icon-offset`: the sprite sits on the point by that part, shifted by the
   offset, and scales and turns about the point. Left out, it stays centred.
+- `fill-solid` takes `edge-expr`, the outline colour per feature group. Its
+  alpha is the outline's opacity, as the constant `edge`'s is.
 
 ### Changed
 

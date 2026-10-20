@@ -1,6 +1,6 @@
-//! Data-driven `fill-solid` fills: a `fill-expr` MapLibre color expression
-//! evaluated per feature group, plus color-conversion parity with the
-//! constant `fill` path.
+//! Data-driven `fill-solid` fills: `fill-expr` and `edge-expr` MapLibre color
+//! expressions evaluated per feature group, plus color-conversion parity with
+//! the constant `fill` path.
 
 use crate::common::render_with_features;
 use ezu_features::{Feature, FeatureLayer, Geometry, Polygon, Value};
@@ -151,5 +151,75 @@ fn opaque_fill_expr_matches_constant_fill_pixel_for_pixel() {
     assert!(
         mid[0] > 200 && mid[3] > 200,
         "interior should be red: {mid:?}"
+    );
+}
+
+/// Render one `class = c` square inside the tile through a `fill-solid` with
+/// `fields` (a JSON object body without braces).
+fn render_square(c: &str, fields: &str) -> Vec<u8> {
+    let json = format!(
+        r##"{{
+      "name": "dd-edge",
+      "tile-size": 64,
+      "sources": {{ "src": {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }} }},
+      "nodes": {{
+        "feats": {{ "op": "features", "source": "src", "layer": "poly" }},
+        "out":   {{ "op": "fill-solid", "features": "@feats", {fields} }}
+      }},
+      "output": "@out"
+    }}"##
+    );
+    let layer = FeatureLayer {
+        name: "poly".to_string(),
+        extent: 4096,
+        features: vec![feature_with(c, rect(1000, 900, 3100, 3000))],
+    };
+    render_with_features(
+        &json,
+        64,
+        0,
+        TileId { z: 0, x: 0, y: 0 },
+        &[("src.poly", layer)],
+    )
+    .pixels
+    .clone()
+}
+
+#[test]
+fn edge_expr_renders_as_each_groups_literal_edge() {
+    let expr = r##""fill": "#dddddd", "edge-width": 3,
+        "edge-expr": ["match", ["get","class"], "road", "#ff000080", "#0000ff"]"##;
+    let red = render_square(
+        "road",
+        r##""fill": "#dddddd", "edge-width": 3, "edge": "#ff000080""##,
+    );
+    let blue = render_square(
+        "park",
+        r##""fill": "#dddddd", "edge-width": 3, "edge": "#0000ff""##,
+    );
+    assert_ne!(red, blue, "the literals should differ");
+    assert_eq!(render_square("road", expr), red);
+    assert_eq!(render_square("park", expr), blue);
+}
+
+#[test]
+fn edge_expr_falls_back_to_edge_or_to_no_outline() {
+    // A group the expression gives no color keeps the constant `edge`, and
+    // draws no outline when there is none.
+    let miss =
+        r##"["match", ["get","class"], "road", "#ff0000", ["to-color", ["get", "absent"]]]"##;
+    assert_eq!(
+        render_square(
+            "park",
+            &format!(r##""fill": "#dddddd", "edge": "#00ff00", "edge-expr": {miss}"##)
+        ),
+        render_square("park", r##""fill": "#dddddd", "edge": "#00ff00""##),
+    );
+    assert_eq!(
+        render_square(
+            "park",
+            &format!(r##""fill": "#dddddd", "edge-expr": {miss}"##)
+        ),
+        render_square("park", r##""fill": "#dddddd""##),
     );
 }

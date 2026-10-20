@@ -31,9 +31,15 @@ struct FillSolidNode {
     /// Optional data-driven opacity: a MapLibre number expression evaluated per
     /// feature group. When set, it overrides the constant `fill-alpha`.
     opacity_expr: Option<maplibre_expr::Expr>,
-    /// Raw `fill-expr` / `opacity-expr` JSON text, kept only for a stable hash.
+    /// Optional data-driven outline: a MapLibre color expression evaluated
+    /// per feature group. When set, it overrides the constant `edge`; its
+    /// alpha is the outline's opacity, as the constant's is.
+    edge_expr: Option<maplibre_expr::Expr>,
+    /// Raw `fill-expr` / `opacity-expr` / `edge-expr` JSON text, kept only
+    /// for a stable hash.
     fill_expr_src: Option<String>,
     opacity_expr_src: Option<String>,
+    edge_expr_src: Option<String>,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
 }
@@ -86,11 +92,11 @@ impl Node for FillSolidNode {
         let blur_sigma = self.blur_sigma.get(ctx, inputs)? as f32;
         let mut canvas = make_canvas(ctx)?;
 
-        if self.fill_expr.is_some() || self.opacity_expr.is_some() {
-            // Data-driven fill: resolve a color and/or opacity per feature
-            // group and accumulate each group's polygons onto the same
-            // canvas. Whichever expression is absent (or errors for a group)
-            // falls back to the constant `fill` / `fill-alpha`.
+        if self.fill_expr.is_some() || self.opacity_expr.is_some() || self.edge_expr.is_some() {
+            // Data-driven fill: resolve a color, opacity and/or outline per
+            // feature group and accumulate each group's polygons onto the
+            // same canvas. Whichever expression is absent (or errors for a
+            // group) falls back to the constant `fill` / `fill-alpha` / `edge`.
             let const_fill = color_f32_to_u8(self.fill.get(ctx, inputs)?);
             let z = ctx.tile.z;
             for group in &feats.groups {
@@ -115,9 +121,20 @@ impl Node for FillSolidNode {
                     },
                     None => fill_alpha,
                 };
+                let edge = match &self.edge_expr {
+                    Some(expr) => match maplibre_expr::evaluate(expr, &ectx) {
+                        Ok(maplibre_expr::Value::Color(c)) => {
+                            Some(rgba8_to_color(color_f32_to_u8([
+                                c.r as f32, c.g as f32, c.b as f32, c.a as f32,
+                            ])))
+                        }
+                        _ => edge_color,
+                    },
+                    None => edge_color,
+                };
                 let style = WatercolorStyle {
                     fill: tint_alpha_color(fill, alpha),
-                    edge: edge_color,
+                    edge,
                     edge_width,
                     blur_sigma,
                 };
@@ -155,6 +172,10 @@ impl Node for FillSolidNode {
         }
         if let Some(s) = &self.opacity_expr_src {
             h.update(b"opacityexpr");
+            h.update(s.as_bytes());
+        }
+        if let Some(s) = &self.edge_expr_src {
+            h.update(b"edgeexpr");
             h.update(s.as_bytes());
         }
     }
@@ -219,6 +240,10 @@ impl NodeFactory for FillSolidFactory {
             }
             None => (None, None),
         };
+        // `edge-expr`: a raw MapLibre color expression for the outline,
+        // evaluated per feature group at paint time. Overrides `edge`.
+        let (edge_expr, edge_expr_src) =
+            super::stamp::parse_expr_field(fields, "edge-expr", &maplibre_expr::Type::Color)?;
         let parts = r.finish();
 
         let mut ports = vec![PortSpec {
@@ -242,8 +267,10 @@ impl NodeFactory for FillSolidFactory {
                 blur_sigma,
                 fill_expr,
                 opacity_expr,
+                edge_expr,
                 fill_expr_src,
                 opacity_expr_src,
+                edge_expr_src,
                 ports,
                 param_refs: parts.param_refs,
             }),
@@ -264,6 +291,9 @@ impl NodeFactory for FillSolidFactory {
                     "description": "A MapLibre number expression (JSON array) giving fill opacity, evaluated per feature group at paint time. When present it overrides the constant `fill-alpha`; a group whose expression doesn't resolve to a number falls back to `fill-alpha`.",
                 },
                 "edge": schema_frag::color(),
+                "edge-expr": {
+                    "description": "A MapLibre color expression for the outline (MapLibre data-driven `fill-outline-color`), evaluated per feature group at paint time. When present it overrides the constant `edge`; the color's alpha is the outline's opacity, as `edge`'s is, and `fill-alpha` does not fade it. A group whose expression doesn't resolve to a color falls back to `edge`, or draws no outline when `edge` is left out.",
+                },
                 "edge-width": schema_frag::px_number(),
                 "blur-sigma": schema_frag::px_number(),
                 "blur-sigma-max": { "type": "number", "minimum": 0.0, "description": "Upper bound on `blur-sigma` for padding, required when `blur-sigma` is an `@node` port. Values above it are clamped." },
