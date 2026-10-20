@@ -45,6 +45,10 @@ pub struct Sources {
     /// shows up on the next one, and only decoded again when its bytes
     /// changed.
     pub byte_cache: Arc<TileByteCache>,
+    /// `--tile-size`: what every style renders at in place of its own.
+    pub tile_size: Option<u32>,
+    /// `--pad`: the margin every style renders with in place of its own.
+    pub pad: Option<u32>,
 }
 
 /// Payload emitted when the watcher reloads the style from disk.
@@ -86,11 +90,14 @@ impl StyleSnapshot {
         // The document parsed, so all the renderer can refuse is the graph.
         let renderer =
             Renderer::new(&text).map_err(|e| BuildSnapshotError::Graph(e.to_string()))?;
-        let pad = crate::canvas_pad(renderer.graph(), &doc);
+        let pad = sources
+            .pad
+            .unwrap_or_else(|| crate::canvas_pad(renderer.graph(), &doc));
         let tiles = TileRenderer::open(Open {
             renderer,
             doc: &doc,
             pad,
+            tile_size: sources.tile_size,
             assets_dir: &sources.assets_dir,
             vector: Arc::clone(&sources.feature_sources),
             overzoom_levels: sources.overzoom_levels,

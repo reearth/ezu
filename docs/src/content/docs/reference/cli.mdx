@@ -61,6 +61,10 @@ Options:
           Override a document parameter, as `name=value` (repeatable). Values are validated against the style's `params` declarations: numbers respect `min`/`max`, colors are `#rrggbb[aa]`, bools are `true`/`false`
       --strict
           Refuse to render a style that raises build warnings — an unnamed `source`, a `$param` baked in at build time. For CI, where a warning is a style that will surprise someone later
+      --pad <PAD>
+          Margin rendered around each tile before it is cropped, in pixels, in place of the style's `pad` raised to what its filters reach. Narrower than that reach, a tile's edge is computed from clamped data and seams against its neighbour
+      --tile-size <TILE_SIZE>
+          Render each tile this many pixels square instead of at the style's `tile-size` — `1024` for a hi-DPI tile of a 512 px style, covering the same ground. The style's own pixel sizes (line widths, text, `pad`) are not scaled with it, so they draw finer
       --tile <TILE>
           Tile coordinate as `Z/X/Y`
       --out <OUT>
@@ -95,6 +99,10 @@ Options:
           Override a document parameter, as `name=value` (repeatable). Values are validated against the style's `params` declarations: numbers respect `min`/`max`, colors are `#rrggbb[aa]`, bools are `true`/`false`
       --strict
           Refuse to render a style that raises build warnings — an unnamed `source`, a `$param` baked in at build time. For CI, where a warning is a style that will surprise someone later
+      --pad <PAD>
+          Margin rendered around each tile before it is cropped, in pixels, in place of the style's `pad` raised to what its filters reach. Narrower than that reach, a tile's edge is computed from clamped data and seams against its neighbour
+      --tile-size <TILE_SIZE>
+          Render each tile this many pixels square instead of at the style's `tile-size` — `1024` for a hi-DPI tile of a 512 px style, covering the same ground. The style's own pixel sizes (line widths, text, `pad`) are not scaled with it, so they draw finer
       --bbox <BBOX>
           Bounding box `min_lng,min_lat,max_lng,max_lat` (WGS84)
       --zoom <ZOOM>
@@ -131,6 +139,8 @@ Options:
           Override a document parameter, as `name=value` (repeatable). Values are validated against the style's `params` declarations: numbers respect `min`/`max`, colors are `#rrggbb[aa]`, bools are `true`/`false`
       --strict
           Refuse to render a style that raises build warnings — an unnamed `source`, a `$param` baked in at build time. For CI, where a warning is a style that will surprise someone later
+      --pad <PAD>
+          Margin rendered around each tile before it is cropped, in pixels, in place of the style's `pad` raised to what its filters reach. Narrower than that reach, a tile's edge is computed from clamped data and seams against its neighbour
       --pages <PATH>
           Render every page a JSON file lists, in place of the one page the flags below describe. Each page takes the fields `center`, `scale`, `dpi`, `size-mm` or `size-px`, `zoom`, `out`, `format`, `features-coords` and `features` (`{NODE: {"out": PATH, "key": [PROP, ...]}}`), any of them but `out` from a `defaults` object. The style is read once, and pages over the same tiles fetch them once
       --center <CENTER>
@@ -144,7 +154,7 @@ Options:
       --size-px <SIZE_PX>
           Output size as `WIDTHxHEIGHT` in pixels, in place of `--size-mm`
       --zoom <ZOOM>
-          Render at this zoom, deriving the tile size from it. By default the zoom is the one whose tile size comes nearest the style's `tile-size`
+          Render at this zoom, deriving the tile size from it. By default the zoom is the one whose tile size comes nearest the style's `tile-size`. This is how a frame's tile size is chosen: the scale fixes it for each zoom, so `frame` takes no `--tile-size`
       --out <OUT>
           Output path. Format is sniffed from the extension (`.png` / `.webp`); use `--format` to override [default: out.png]
       --format <FORMAT>
@@ -185,6 +195,10 @@ Options:
           Override a document parameter, as `name=value` (repeatable). Values are validated against the style's `params` declarations: numbers respect `min`/`max`, colors are `#rrggbb[aa]`, bools are `true`/`false`
       --strict
           Refuse to render a style that raises build warnings — an unnamed `source`, a `$param` baked in at build time. For CI, where a warning is a style that will surprise someone later
+      --pad <PAD>
+          Margin rendered around each tile before it is cropped, in pixels, in place of the style's `pad` raised to what its filters reach. Narrower than that reach, a tile's edge is computed from clamped data and seams against its neighbour
+      --tile-size <TILE_SIZE>
+          Render each tile this many pixels square instead of at the style's `tile-size` — `1024` for a hi-DPI tile of a 512 px style, covering the same ground. The style's own pixel sizes (line widths, text, `pad`) are not scaled with it, so they draw finer
       --bbox <BBOX>
           Bounding box `min_lng,min_lat,max_lng,max_lat` (WGS84). When omitted, every tile at each zoom is generated — at z=14 that is 268M tiles, so a bbox is strongly recommended
       --min-zoom <MIN_ZOOM>
@@ -323,6 +337,10 @@ Options:
           Bind address [env: EZU_BIND=] [default: 127.0.0.1:8080]
       --overzoom-levels <OVERZOOM_LEVELS>
           When a requested tile is missing, fall back to a parent tile up to this many zoom levels up and re-project its geometry onto the requested tile (MVT "overzoom"). `0` disables [default: 4]
+      --tile-size <TILE_SIZE>
+          Render each tile this many pixels square instead of at the style's `tile-size`. A request can still ask for a multiple of it per tile with `@2x` (up to `@4x`) before the extension. The style's own pixel sizes (line widths, text, `pad`) are not scaled with it
+      --pad <PAD>
+          Margin rendered around each tile before it is cropped, in pixels, in place of the style's `pad` raised to what its filters reach, for every style the server loads. Narrower than that reach, a tile's edge seams against its neighbour
   -h, --help
           Print help
 ```

@@ -275,6 +275,21 @@ fn status_of(e: &(dyn std::error::Error + 'static)) -> StatusCode {
     }
 }
 
+/// The pixel density a tile URL's `@Nx` asks for, `N` from 1 to 4: the
+/// MapLibre and XYZ spelling of a hi-DPI tile.
+fn density(factor: &str) -> Result<u32, (StatusCode, String)> {
+    factor
+        .strip_suffix('x')
+        .and_then(|n| n.parse::<u32>().ok())
+        .filter(|n| (1..=4).contains(n))
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("`@{factor}`: expected @1x, @2x, @3x or @4x"),
+            )
+        })
+}
+
 async fn get_tile(
     State(s): State<AppState>,
     Path((z, x, y_ext)): Path<(u8, u32, String)>,
@@ -288,6 +303,10 @@ async fn get_tile(
         (s, TileFormat::Png)
     } else {
         (y_ext.as_str(), TileFormat::Png)
+    };
+    let (y_str, scale) = match y_str.split_once('@') {
+        Some((y, factor)) => (y, density(factor)?),
+        None => (y_str, 1),
     };
     let y: u32 = y_str
         .parse()
@@ -311,12 +330,22 @@ async fn get_tile(
         }
         (Arc::clone(&snap.tiles), params)
     };
+    // `@Nx` draws the same tile on a canvas N times the size every tile
+    // renders at, as a hi-DPI map client asks for it.
+    let tile_size = match scale {
+        1 => None,
+        n => Some(tiles.tile_size().checked_mul(n).ok_or((
+            StatusCode::BAD_REQUEST,
+            format!("@{n}x of a {} px tile is too large", tiles.tile_size()),
+        ))?),
+    };
 
     let bytes = tiles
         .render(tile, move |r, set, opts| {
             let opts = RenderOptions {
                 format: format.encoding(),
                 params,
+                tile_size: tile_size.or(opts.tile_size),
                 ..opts
             };
             r.render_tile_with(tile.z, tile.x, tile.y, set, opts)
@@ -486,6 +515,15 @@ mod tests {
 
     /// What `ezu serve` holds for `style`, its files under `root`.
     async fn serve(style: &str, root: &FsPath) -> Result<AppState, String> {
+        serve_at(style, root, None).await
+    }
+
+    /// [`serve`], with `--tile-size`.
+    async fn serve_at(
+        style: &str,
+        root: &FsPath,
+        tile_size: Option<u32>,
+    ) -> Result<AppState, String> {
         let doc = ezu::style::Document::from_json(style).map_err(|e| e.to_string())?;
         let byte_cache = Arc::new(TileByteCache::new(1 << 20));
         let feature_sources = FeatureSources::open(&doc, None, root)
@@ -497,6 +535,8 @@ mod tests {
             feature_sources: Arc::new(feature_sources),
             overzoom_levels: 0,
             byte_cache,
+            tile_size,
+            pad: None,
         };
         let snapshot = StyleSnapshot::build(style.to_string(), 1, &sources)
             .await
@@ -567,6 +607,52 @@ mod tests {
         write_tile(&root, "bg", centre, "mvt", b"not a tile either");
         let (status, _) = request(&state, "GET", uri, "").await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    fn png_size(bytes: &[u8]) -> (u32, u32) {
+        let p = tiny_skia::Pixmap::decode_png(bytes).expect("a PNG");
+        (p.width(), p.height())
+    }
+
+    /// `@2x` is the tile at twice the tile size: the tile a server started
+    /// with `--tile-size` of double the style's draws, byte for byte.
+    #[tokio::test]
+    async fn an_at_2x_tile_is_the_tile_at_twice_the_size() {
+        let root = scratch("density");
+        write_tile(
+            &root,
+            "bg",
+            (14, 14554, 6454),
+            "mvt",
+            &testdata("basemap-14-14554-6454.mvt"),
+        );
+        let state = serve(STITCHED, &root).await.unwrap();
+        let (status, plain) = request(&state, "GET", "/tiles/14/14554/6454.png", "").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(png_size(&plain), (64, 64));
+        let (status, one) = request(&state, "GET", "/tiles/14/14554/6454@1x.png", "").await;
+        assert_eq!((status, &one), (StatusCode::OK, &plain));
+        let (status, double) = request(&state, "GET", "/tiles/14/14554/6454@2x.png", "").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(png_size(&double), (128, 128));
+
+        let big = serve_at(STITCHED, &root, Some(128)).await.unwrap();
+        let (_, at_128) = request(&big, "GET", "/tiles/14/14554/6454.png", "").await;
+        assert!(double == at_128, "@2x differs from a 128 px tile");
+        // The multiple is of the size the server renders at.
+        let (_, quad) = request(&big, "GET", "/tiles/14/14554/6454@2x.webp", "").await;
+        let quad = ezu::paint::host::decode_image_bytes(&quad).expect("a WebP");
+        assert_eq!((quad.width, quad.height), (256, 256));
+
+        for bad in ["@0x", "@5x", "@2", "@x", "@1.5x"] {
+            let uri = format!("/tiles/14/14554/6454{bad}.png");
+            assert_eq!(
+                request(&state, "GET", &uri, "").await.0,
+                StatusCode::BAD_REQUEST,
+                "{uri}"
+            );
+        }
         std::fs::remove_dir_all(&root).ok();
     }
 

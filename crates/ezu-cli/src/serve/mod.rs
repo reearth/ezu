@@ -2,7 +2,8 @@
 //!
 //! Hosts the same surface area the now-retired `ezu-server` binary
 //! used to: an inline HTML editor at `/`, `GET/PUT /style`, rendered
-//! tiles at `/tiles/{z}/{x}/{y}.{png,webp}`, raw MVT bytes for the
+//! tiles at `/tiles/{z}/{x}/{y}.{png,webp}` (or `{y}@2x.png` and so on, for
+//! a tile at a multiple of the tile size), raw MVT bytes for the
 //! WASM demo at `/mvt/{z}/{x}/{y}`, and a registry-derived JSON
 //! Schema at `/schemas/ezu-style.json`. The editor uses the schema
 //! for client-side validation as you type.
@@ -60,6 +61,18 @@ pub struct ServeCmd {
     /// onto the requested tile (MVT "overzoom"). `0` disables.
     #[arg(long, default_value_t = 4)]
     overzoom_levels: u8,
+    /// Render each tile this many pixels square instead of at the style's
+    /// `tile-size`. A request can still ask for a multiple of it per tile
+    /// with `@2x` (up to `@4x`) before the extension. The style's own pixel
+    /// sizes (line widths, text, `pad`) are not scaled with it.
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+    tile_size: Option<u32>,
+    /// Margin rendered around each tile before it is cropped, in pixels,
+    /// in place of the style's `pad` raised to what its filters reach, for
+    /// every style the server loads. Narrower than that reach, a tile's
+    /// edge seams against its neighbour.
+    #[arg(long)]
+    pad: Option<u32>,
 }
 
 pub async fn run(args: ServeCmd) -> Result<(), Box<dyn std::error::Error>> {
@@ -112,6 +125,8 @@ pub async fn run(args: ServeCmd) -> Result<(), Box<dyn std::error::Error>> {
         feature_sources: Arc::new(feature_sources),
         overzoom_levels: args.overzoom_levels,
         byte_cache,
+        tile_size: args.tile_size,
+        pad: args.pad,
     };
 
     let snapshot = StyleSnapshot::build(style_text, 1, &sources).await?;

@@ -54,6 +54,9 @@ pub(crate) struct Open<'a> {
     pub doc: &'a Document,
     /// The canvas margin every render is drawn with.
     pub pad: u32,
+    /// The tile size every render is drawn at in place of the style's,
+    /// until [`TileRenderer::set_tile_size`] changes it.
+    pub tile_size: Option<u32>,
     /// Where `file:` paths in the style resolve.
     pub assets_dir: &'a Path,
     /// The style's vector tile sources, opened by the caller, which may
@@ -99,6 +102,9 @@ impl TileRenderer {
         if o.cache_budget.is_some() {
             renderer.set_cache_budget(o.cache_budget);
         }
+        // On the renderer rather than in every render's options, so a frame
+        // that sets its own size per page is not overridden by it.
+        renderer.set_tile_size(o.tile_size)?;
         let mut pyramids = PyramidSources::new(o.doc, o.assets_dir);
         if let Some((cache, remote_only)) = o.byte_cache {
             pyramids = pyramids.with_byte_cache(cache, remote_only);

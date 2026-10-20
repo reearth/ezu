@@ -34,8 +34,11 @@ for one-off swaps.
 Global flags: `--verbose` / `-v` turns on per-node debug logs from the
 evaluator (op name, cache hit/miss, output shape, eval duration).
 Render commands share `--style`, `--assets-dir`, `--pmtiles` / `--mvt`,
-`--overzoom-levels`, and repeatable `--param NAME=VALUE` overrides
-validated against the style's `params` declarations.
+`--overzoom-levels`, `--pad`, and repeatable `--param NAME=VALUE` overrides
+validated against the style's `params` declarations. `tile`, `bbox`,
+`tiles` and `serve` also take `--tile-size`, to render at another size than
+the style's `tile-size`; `serve` answers `{y}@2x.png` with the tile at twice
+it.
 
 ```sh
 # Single tile — the reference styles bundle their own `sources` block,

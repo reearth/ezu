@@ -283,6 +283,7 @@ mod tests {
             overzoom_levels: 4,
             params: Vec::new(),
             strict: false,
+            pad: None,
         }
     }
 

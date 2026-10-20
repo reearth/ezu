@@ -175,6 +175,7 @@ mod tests {
                 overzoom_levels: 4,
                 params: Vec::new(),
                 strict: false,
+                pad: None,
             },
             pages: None,
             center: Some((req.center_lon, req.center_lat)),

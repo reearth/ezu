@@ -32,6 +32,37 @@ basemap.
 It is built for development, so treat it accordingly: no auth, no rate limiting,
 and one process. But it renders the same bytes a library host would.
 
+## Tile size and hi-DPI tiles
+
+A tile renders at the style's `tile-size` unless asked otherwise. `--tile-size`
+changes it for every tile a command writes — `ezu tile`, `ezu bbox`,
+`ezu tiles` and `ezu serve` all take it — and draws what the style with its
+`tile-size` edited would: the same ground on a bigger or smaller canvas.
+
+`ezu serve` also takes the MapLibre and XYZ spelling for a hi-DPI tile in the
+URL: `/tiles/{z}/{x}/{y}@2x.png` is the tile at twice the size the server
+renders at, and `@1x` to `@4x` are accepted, on `.webp` as well. Point a
+MapLibre raster source at the `@2x` URL with the style's `tileSize` and a
+retina screen gets one tile pixel per device pixel.
+
+```js
+map.addSource('ezu', {
+  type: 'raster',
+  tiles: ['http://127.0.0.1:8080/tiles/{z}/{x}/{y}@2x.png'],
+  tileSize: 512, // the style's tile-size: what each tile covers on screen
+});
+```
+
+Neither enlarges the style's own pixel sizes: line widths, text and `pad` are
+in pixels of the canvas, so on a bigger canvas they draw finer. A style meant
+for hi-DPI output states its sizes for that canvas, or takes them as
+[params](/ezu/concepts/params-and-functions/) a client can raise.
+
+`--pad` replaces the margin a tile renders with outside its edge. By default it
+is the style's `pad` raised to what its filters reach, and there is rarely a
+reason to change it; a margin narrower than that reach computes the tile's edge
+from clamped data, which seams against the neighbour.
+
 ## 3. Embed the library
 
 For production, host the renderer yourself — `ezu` in a Rust service

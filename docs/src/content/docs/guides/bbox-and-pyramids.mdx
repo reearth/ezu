@@ -195,6 +195,14 @@ or a malformed colour fails before rendering starts.
 
 - **WebP** — `--out tile.webp` (or `--format webp`) writes lossless WebP, usually
   20–40 % smaller than PNG on painterly content, through a pure-Rust encoder.
+- **Tile size** — `tile`, `bbox` and `tiles` take `--tile-size` to render each
+  tile at another size than the style's `tile-size`: `--tile-size 1024` on a
+  512 px style is a hi-DPI pyramid of the same tiles. The style's own pixel
+  sizes (line widths, text) are not scaled with it. `frame` has no such flag,
+  since its tile size is what meets the scale; `--zoom` is how to move it.
+  `--pad` replaces the margin rendered around each tile, on every command
+  including `frame`; the default, the style's `pad` raised to what its filters
+  reach, rarely wants changing.
 - **Overzoom** — when a requested tile is missing from the source, ezu walks up
   to `--overzoom-levels` parent zooms (default 4) and reprojects the ancestor's
   geometry into the requested frame. `--overzoom-levels 0` disables it.

@@ -281,6 +281,14 @@ mean is spelled out in
   renders use, which `set_tile_size` may have changed from the style's:
   `renderTileSize` in JS and `RenderTileSize` in Go, as Rust's
   `render_tile_size`.
+- `ezu tile`, `ezu bbox`, `ezu tiles` and `ezu serve` take `--tile-size`,
+  which renders every tile at that size instead of the style's
+  `tile-size`, as the embedding renderer's `tileSize` option does, and all
+  of them and `ezu frame` take `--pad`, which replaces the margin rendered
+  outside each tile. `ezu serve` also answers `/tiles/{z}/{x}/{y}@2x.png`
+  (`@1x` to `@4x`, PNG or WebP) with the tile at that multiple of its tile
+  size, the URL a MapLibre client asks a hi-DPI tile by. `frame` takes no
+  `--tile-size`: its tile size is what meets the scale.
 
 ### Changed
 

@@ -120,6 +120,25 @@ struct CommonArgs {
     /// where a warning is a style that will surprise someone later.
     #[arg(long)]
     strict: bool,
+    /// Margin rendered around each tile before it is cropped, in pixels,
+    /// in place of the style's `pad` raised to what its filters reach.
+    /// Narrower than that reach, a tile's edge is computed from clamped
+    /// data and seams against its neighbour.
+    #[arg(long)]
+    pad: Option<u32>,
+}
+
+/// `--tile-size`, for the commands that render tiles at a size of the
+/// caller's choosing. `frame` has no such flag: its tile size is what meets
+/// the scale.
+#[derive(Args, Debug, Clone, Copy, Default)]
+struct TileSizeArgs {
+    /// Render each tile this many pixels square instead of at the style's
+    /// `tile-size` — `1024` for a hi-DPI tile of a 512 px style, covering
+    /// the same ground. The style's own pixel sizes (line widths, text,
+    /// `pad`) are not scaled with it, so they draw finer.
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+    tile_size: Option<u32>,
 }
 
 /// Output raster format. Pure-Rust pipelines on both sides — WebP is
@@ -320,6 +339,8 @@ struct TranslateCmd {
 struct TileCmd {
     #[command(flatten)]
     common: CommonArgs,
+    #[command(flatten)]
+    size: TileSizeArgs,
     /// Tile coordinate as `Z/X/Y`.
     #[arg(long, value_parser = parse_zxy)]
     tile: CoreTileId,
@@ -336,6 +357,8 @@ struct TileCmd {
 struct BboxCmd {
     #[command(flatten)]
     common: CommonArgs,
+    #[command(flatten)]
+    size: TileSizeArgs,
     /// Bounding box `min_lng,min_lat,max_lng,max_lat` (WGS84).
     #[arg(long, value_parser = parse_bbox)]
     bbox: BBox,
@@ -387,7 +410,8 @@ struct FrameCmd {
     size_px: Option<(u32, u32)>,
     /// Render at this zoom, deriving the tile size from it. By default the
     /// zoom is the one whose tile size comes nearest the style's
-    /// `tile-size`.
+    /// `tile-size`. This is how a frame's tile size is chosen: the scale
+    /// fixes it for each zoom, so `frame` takes no `--tile-size`.
     #[arg(long)]
     zoom: Option<u8>,
     /// Output path. Format is sniffed from the extension (`.png` /
@@ -427,6 +451,8 @@ struct FrameCmd {
 struct TilesCmd {
     #[command(flatten)]
     common: CommonArgs,
+    #[command(flatten)]
+    size: TileSizeArgs,
     /// Bounding box `min_lng,min_lat,max_lng,max_lat` (WGS84). When
     /// omitted, every tile at each zoom is generated — at z=14 that
     /// is 268M tiles, so a bbox is strongly recommended.
@@ -540,13 +566,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-/// Read the style `common` names and open it for rendering, keeping the
-/// source tiles fetched for one render for the next ones.
-async fn open(common: &CommonArgs) -> Result<Opened, Box<dyn std::error::Error>> {
+/// Read the style `common` names and open it for rendering at `size`,
+/// keeping the source tiles fetched for one render for the next ones.
+async fn open(
+    common: &CommonArgs,
+    size: TileSizeArgs,
+) -> Result<Opened, Box<dyn std::error::Error>> {
     let style_text = fetch_text(&common.style).await?;
     let doc = Document::from_json(&style_text)?;
     let byte_cache = Arc::new(TileByteCache::new(tile_cache_budget_bytes()));
-    open_style(common, &style_text, &doc, &byte_cache).await
+    open_style(common, size, &style_text, &doc, &byte_cache).await
 }
 
 /// A style opened for rendering: a renderer over the style's sources, whose
@@ -565,26 +594,37 @@ impl Opened {
 /// Open the style that `doc` and `style_text` hold, without reading it
 /// again: build the renderer, report on its graph, open every source the
 /// style declares, keeping fetched tile bytes in `byte_cache`, and let the
-/// renderer read the style's assets.
+/// renderer read the style's assets. Tiles render at `size`'s tile size, or
+/// the style's.
 async fn open_style(
     common: &CommonArgs,
+    size: TileSizeArgs,
     style_text: &str,
     doc: &Document,
     byte_cache: &Arc<TileByteCache>,
 ) -> Result<Opened, Box<dyn std::error::Error>> {
-    tracing::info!(
-        "style: {} v{} ({} nodes, tile={})",
-        doc.name,
-        doc.version,
-        doc.nodes.len(),
-        doc.tile_size,
-    );
+    match size.tile_size {
+        Some(t) => tracing::info!(
+            "style: {} v{} ({} nodes, tile={}, rendering at {t})",
+            doc.name,
+            doc.version,
+            doc.nodes.len(),
+            doc.tile_size,
+        ),
+        None => tracing::info!(
+            "style: {} v{} ({} nodes, tile={})",
+            doc.name,
+            doc.version,
+            doc.nodes.len(),
+            doc.tile_size,
+        ),
+    }
     let assets_dir = assets_dir_for(&common.style, common.assets_dir.as_deref());
     // Building the renderer builds the graph, and logs its warnings.
     let renderer = Renderer::new(style_text)?;
     let graph = renderer.graph();
-    report_pad(graph, doc);
-    let pad = canvas_pad(graph, doc);
+    report_pad(graph, doc, common.pad);
+    let pad = common.pad.unwrap_or_else(|| canvas_pad(graph, doc));
     let warnings = graph.warnings().to_vec();
     // Checked here so a bad value fails before anything is fetched; the
     // renderer checks each render's the same way.
@@ -605,6 +645,7 @@ async fn open_style(
         renderer,
         doc,
         pad,
+        tile_size: size.tile_size,
         assets_dir: &assets_dir,
         vector: Arc::new(vector),
         overzoom_levels: common.overzoom_levels,
@@ -725,8 +766,9 @@ pub(crate) fn canvas_pad(graph: &Graph, doc: &Document) -> u32 {
     }
 }
 
-/// Say what the canvas margin will be and where it came from.
-fn report_pad(graph: &Graph, doc: &Document) {
+/// Say what the canvas margin will be and where it came from: `flag` is
+/// `--pad`, which wins over the style.
+pub(crate) fn report_pad(graph: &Graph, doc: &Document, flag: Option<u32>) {
     let needed = match graph.required_pad() {
         Ok(needed) => needed,
         Err(e) => {
@@ -734,6 +776,16 @@ fn report_pad(graph: &Graph, doc: &Document) {
             return;
         }
     };
+    if let Some(pad) = flag {
+        if pad < needed {
+            tracing::warn!(
+                "pad: {pad} from --pad, {needed} needed — tile edges will seam where filters reach past {pad}"
+            );
+        } else {
+            tracing::info!("pad: {pad} from --pad, {needed} needed");
+        }
+        return;
+    }
     if needed > doc.pad {
         tracing::info!(
             "pad: {} declared, {needed} needed — rendering with {needed}",
@@ -931,13 +983,21 @@ async fn run_graph_view(args: GraphCmd) -> Result<(), Box<dyn std::error::Error>
         // A diagram of what the graph does; warnings are worth seeing
         // here, not worth refusing to draw over.
         strict: false,
+        pad: None,
     };
     // Read once: a style at a URL is fetched once, and the diagram is of
     // the very document that rendered.
     let style_text = fetch_text(&common.style).await?;
     let doc = Document::from_json(&style_text)?;
     let byte_cache = Arc::new(TileByteCache::new(tile_cache_budget_bytes()));
-    let opened = open_style(&common, &style_text, &doc, &byte_cache).await?;
+    let opened = open_style(
+        &common,
+        TileSizeArgs::default(),
+        &style_text,
+        &doc,
+        &byte_cache,
+    )
+    .await?;
     let tiles = &opened.tiles;
 
     let canvas = CanvasInfo::square(tiles.tile_size(), tiles.pad());
@@ -1288,7 +1348,7 @@ fn render_mermaid(doc: &ezu::style::Document) -> String {
 }
 
 async fn run_tile(args: TileCmd) -> Result<(), Box<dyn std::error::Error>> {
-    let opened = open(&args.common).await?;
+    let opened = open(&args.common, args.size).await?;
     let format = args
         .format
         .unwrap_or_else(|| OutputFormat::from_path(&args.out));
@@ -1316,7 +1376,7 @@ async fn render_rgba(tiles: &TileRenderer, tile: CoreTileId) -> Result<Vec<u8>, 
 }
 
 async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
-    let opened = open(&args.common).await?;
+    let opened = open(&args.common, args.size).await?;
     let tiles = &opened.tiles;
     let format = args
         .format
@@ -1470,7 +1530,16 @@ async fn render_pages(
         log_frame(frame, style_tile_size, page.scale);
         let opened = match &mut state {
             Some(opened) => opened,
-            None => state.insert(open_style(common, &style_text, &doc, byte_cache).await?),
+            None => state.insert(
+                open_style(
+                    common,
+                    TileSizeArgs::default(),
+                    &style_text,
+                    &doc,
+                    byte_cache,
+                )
+                .await?,
+            ),
         };
         opened.tiles.set_tile_size(frame.tile_size)?;
         // Every page's features are checked against the graph as soon as
@@ -1640,7 +1709,7 @@ async fn run_tiles(args: TilesCmd) -> Result<(), Box<dyn std::error::Error>> {
     if concurrency == 0 {
         return Err("--concurrency must be ≥ 1".into());
     }
-    let opened = open(&args.common).await?;
+    let opened = open(&args.common, args.size).await?;
     let tiles = &opened.tiles;
 
     let mut total: u64 = 0;
@@ -1892,6 +1961,7 @@ mod tests {
             overzoom_levels: 4,
             params: Vec::new(),
             strict: false,
+            pad: None,
         }
     }
 
@@ -1950,6 +2020,7 @@ mod tests {
         let bbox_out = dir.join("bbox.png");
         run_bbox(BboxCmd {
             common: common(&bbox_style),
+            size: TileSizeArgs::default(),
             bbox: BBox {
                 min_lng: lon(frame.tiles_x.start as f64 + 0.5),
                 max_lng: lon(frame.tiles_x.end as f64 - 0.5),
@@ -1984,6 +2055,179 @@ mod tests {
         // could not pass by comparing two blank images.
         assert!(got.pixels().windows(2).any(|p| p[0] != p[1]));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A scratch directory of its own for one test.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ezu-{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn tile_cmd(style: &Path, tile: CoreTileId, out: PathBuf) -> TileCmd {
+        TileCmd {
+            common: common(style),
+            size: TileSizeArgs::default(),
+            tile,
+            out,
+            format: None,
+        }
+    }
+
+    /// `--tile-size` draws what the style with its `tile-size` edited
+    /// draws, in `tile`, `bbox` and `tiles` alike.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tile_size_renders_what_the_edited_style_does() {
+        let dir = scratch("tile-size");
+        let (small, big) = (dir.join("small.json"), dir.join("big.json"));
+        std::fs::write(&small, style(64)).unwrap();
+        std::fs::write(&big, style(128)).unwrap();
+        // The tile the polygon sits in.
+        let tile = CoreTileId::new(16, 58199, 25811);
+
+        let edited = dir.join("edited.png");
+        run_tile(tile_cmd(&big, tile, edited.clone()))
+            .await
+            .unwrap();
+        let flagged = dir.join("flagged.png");
+        let mut cmd = tile_cmd(&small, tile, flagged.clone());
+        cmd.size.tile_size = Some(128);
+        run_tile(cmd).await.unwrap();
+        let (a, b) = (
+            Pixmap::load_png(&edited).unwrap(),
+            Pixmap::load_png(&flagged).unwrap(),
+        );
+        assert_eq!((b.width(), b.height()), (128, 128));
+        assert!(
+            a.data() == b.data(),
+            "--tile-size 128 differs from tile-size 128"
+        );
+        assert!(b.pixels().windows(2).any(|p| p[0] != p[1]), "not blank");
+
+        let bbox = |style: &Path, out: PathBuf, tile_size| BboxCmd {
+            common: common(style),
+            size: TileSizeArgs { tile_size },
+            bbox: BBox {
+                min_lng: 139.698,
+                min_lat: 35.658,
+                max_lng: 139.703,
+                max_lat: 35.663,
+            },
+            zoom: 16,
+            out,
+            format: None,
+        };
+        let (m1, m2) = (dir.join("m1.png"), dir.join("m2.png"));
+        run_bbox(bbox(&big, m1.clone(), None)).await.unwrap();
+        run_bbox(bbox(&small, m2.clone(), Some(128))).await.unwrap();
+        assert_eq!(std::fs::read(&m1).unwrap(), std::fs::read(&m2).unwrap());
+
+        let tiles_cmd = |style: &Path, out: PathBuf, tile_size| TilesCmd {
+            common: common(style),
+            size: TileSizeArgs { tile_size },
+            bbox: Some(BBox {
+                min_lng: 139.698,
+                min_lat: 35.658,
+                max_lng: 139.703,
+                max_lat: 35.663,
+            }),
+            min_zoom: 16,
+            max_zoom: 16,
+            out,
+            format: OutputFormat::Png,
+            concurrency: Some(2),
+        };
+        let (p1, p2) = (dir.join("p1"), dir.join("p2"));
+        run_tiles(tiles_cmd(&big, p1.clone(), None)).await.unwrap();
+        run_tiles(tiles_cmd(&small, p2.clone(), Some(128)))
+            .await
+            .unwrap();
+        let at = |root: &Path| std::fs::read(root.join("16/58199/25811.png")).unwrap();
+        assert_eq!(at(&p1), at(&p2));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `--pad` replaces the style's margin, and is not raised to what the
+    /// filters reach: none at all clamps the blur at the tile's edge, which
+    /// the polygon crosses.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pad_replaces_the_styles_margin() {
+        let dir = scratch("pad");
+        let path = dir.join("style.json");
+        std::fs::write(&path, style(64)).unwrap();
+        let wide = dir.join("wide.json");
+        std::fs::write(&wide, style(64).replace(r#""pad": 8"#, r#""pad": 40"#)).unwrap();
+        let tile = CoreTileId::new(16, 58199, 25811);
+        let render = |style: PathBuf, pad: Option<u32>, name: &str| {
+            let out = dir.join(name);
+            let mut cmd = tile_cmd(&style, tile, out.clone());
+            cmd.common.pad = pad;
+            async move {
+                run_tile(cmd).await.unwrap();
+                std::fs::read(&out).unwrap()
+            }
+        };
+        let declared = render(wide.clone(), None, "declared.png").await;
+        assert_eq!(render(path.clone(), Some(40), "flag.png").await, declared);
+        assert_ne!(
+            render(path.clone(), Some(0), "none.png").await,
+            render(path.clone(), None, "default.png").await,
+            "--pad 0 kept the margin the blur needs"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn tile_size_is_a_flag_where_it_applies() {
+        let parse = |args: &[&str]| Cli::try_parse_from(args).map(|c| c.cmd);
+        let base = ["ezu", "tile", "--style", "s.json", "--tile", "1/0/0"];
+        let Ok(Cmd::Tile(t)) = parse(&[&base[..], &["--tile-size", "1024", "--pad", "0"]].concat())
+        else {
+            panic!("tile takes --tile-size and --pad");
+        };
+        assert_eq!((t.size.tile_size, t.common.pad), (Some(1024), Some(0)));
+        assert!(parse(&[&base[..], &["--tile-size", "0"]].concat()).is_err());
+        let frame = [
+            "ezu",
+            "frame",
+            "--style",
+            "s.json",
+            "--center",
+            "0,0",
+            "--scale",
+            "1000",
+            "--dpi",
+            "96",
+            "--size-px",
+            "10x10",
+        ];
+        assert!(parse(&[&frame[..], &["--pad", "4"]].concat()).is_ok());
+        assert!(
+            parse(&[&frame[..], &["--tile-size", "512"]].concat()).is_err(),
+            "a frame's tile size follows from its scale"
+        );
+        for cmd in [
+            &[
+                "ezu", "bbox", "--style", "s", "--bbox", "0,0,1,1", "--zoom", "3",
+            ][..],
+            &[
+                "ezu",
+                "tiles",
+                "--style",
+                "s",
+                "--min-zoom",
+                "0",
+                "--max-zoom",
+                "1",
+            ][..],
+            &["ezu", "serve", "s"][..],
+        ] {
+            assert!(
+                parse(&[cmd, &["--tile-size", "512", "--pad", "8"]].concat()).is_ok(),
+                "{cmd:?}"
+            );
+        }
     }
 
     #[test]
