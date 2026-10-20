@@ -63,6 +63,10 @@ pub struct TileByteCache {
     budget: usize,
     inner: std::sync::Mutex<ByteCacheInner>,
     in_flight: std::sync::Mutex<std::collections::HashMap<ByteKey, Arc<tokio::sync::Mutex<()>>>>,
+    /// The id the next source to use the cache gets. Every opened source
+    /// gets its own, so a source opened again for an edited style cannot
+    /// read what the one before it kept.
+    next_id: std::sync::atomic::AtomicUsize,
 }
 
 /// Key: the source's id in the cache, then `z`, `x`, `y`.
@@ -90,7 +94,14 @@ impl TileByteCache {
             budget,
             inner: std::sync::Mutex::new(ByteCacheInner::default()),
             in_flight: std::sync::Mutex::new(std::collections::HashMap::new()),
+            next_id: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    /// A fresh id for a source to keep its tiles under.
+    fn register(&self) -> usize {
+        self.next_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
 
     /// The lock one fetch of `tile` of source `id` holds while it runs.
@@ -268,6 +279,19 @@ impl TileSource {
     /// render by reprojecting ancestor tiles.
     pub fn data_maxzoom(&self) -> Option<u8> {
         self.data_maxzoom
+    }
+
+    /// Keep the tiles this source fetches in `cache`. With `remote_only`, a
+    /// source read from local disk is left to read afresh each time, so an
+    /// edited tile shows up on the next render.
+    fn use_byte_cache(&mut self, cache: &Arc<TileByteCache>, remote_only: bool) {
+        let local = matches!(
+            self.kind,
+            TileSourceKind::PmTilesLocal(_) | TileSourceKind::MvtFile { .. }
+        );
+        if !(remote_only && local) {
+            self.byte_cache = Some((Arc::clone(cache), cache.register()));
+        }
     }
 
     /// Upstream attribution captured at open time (TileJSON
@@ -500,10 +524,11 @@ impl FeatureSources {
     }
 
     /// Keep the tiles every source fetches in `cache`, for renders that
-    /// come back to the same tiles.
-    pub fn with_byte_cache(mut self, cache: &Arc<TileByteCache>) -> Self {
-        for (id, source) in self.0.iter_mut().enumerate() {
-            source.tiles.byte_cache = Some((Arc::clone(cache), id));
+    /// come back to the same tiles; with `remote_only`, only the ones not
+    /// read from local disk.
+    pub fn with_byte_cache(mut self, cache: &Arc<TileByteCache>, remote_only: bool) -> Self {
+        for source in &mut self.0 {
+            source.tiles.use_byte_cache(cache, remote_only);
         }
         self
     }
@@ -522,6 +547,99 @@ impl FeatureSources {
             Some(name) => self.0.iter().find(|s| &*s.name == name),
             None => self.0.first(),
         }
+    }
+}
+
+/// One `dem` or `raster` source the style declares, opened: a tile pyramid
+/// whose tiles the renderer stitches into a 3×3 neighbourhood itself.
+pub struct PyramidSource {
+    pub name: Arc<str>,
+    tiles: TileSource,
+    /// The declared `max-zoom`. Unlike a vector source's, it is not
+    /// widened by what a TileJSON or PMTiles header claims.
+    max_zoom: Option<u8>,
+    on_missing: ezu::style::OnMissing,
+}
+
+impl PyramidSource {
+    /// The bytes that draw `tile` and the tile they belong to: the covering
+    /// ancestor past the source's `max-zoom`, and under `on-missing:
+    /// upsample` the nearest ancestor that exists. `None` when there is
+    /// none, which `on-missing` says what to make of.
+    pub async fn fetch(&self, tile: TileId) -> Result<Option<(Bytes, TileId)>, SourceError> {
+        let mut z = self.max_zoom.map_or(tile.z, |mz| tile.z.min(mz));
+        loop {
+            let at = tile.ancestor_at(z).unwrap_or(tile);
+            if let Some(bytes) = self.tiles.fetch(at).await? {
+                return Ok(Some((bytes, at)));
+            }
+            if self.on_missing == ezu::style::OnMissing::Upsample && z > 0 {
+                z -= 1;
+            } else {
+                return Ok(None);
+            }
+        }
+    }
+
+    pub fn on_missing(&self) -> ezu::style::OnMissing {
+        self.on_missing
+    }
+}
+
+/// Every `dem` and `raster` source a style declares, in declaration order.
+#[derive(Default)]
+pub struct PyramidSources(Vec<PyramidSource>);
+
+impl PyramidSources {
+    /// Open each `dem` and `raster` source `doc` declares. A URL ending in
+    /// `.pmtiles` is an archive, a relative path to one read against
+    /// `base_dir`; a `.json` URL is a TileJSON document; anything else an
+    /// XYZ template.
+    pub async fn open(
+        doc: &ezu::style::Document,
+        base_dir: &Path,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        use ezu::style::SourceDecl;
+        let mut out = Vec::new();
+        for (name, decl) in &doc.sources {
+            let (url, max_zoom, on_missing) = match decl {
+                SourceDecl::Dem(s) => (&s.url, s.max_zoom, s.on_missing),
+                SourceDecl::Raster(s) => (&s.url, s.max_zoom, s.on_missing),
+                _ => continue,
+            };
+            let spec = if url.ends_with(".pmtiles") {
+                let local = !is_url(url) && !url.starts_with("file:");
+                let path = if local && !Path::new(url).is_absolute() {
+                    base_dir.join(url).to_string_lossy().replace('\\', "/")
+                } else {
+                    url.clone()
+                };
+                SourceSpec::PmTiles(path)
+            } else {
+                SourceSpec::Mvt(url.clone())
+            };
+            out.push(PyramidSource {
+                name: Arc::from(name.as_str()),
+                tiles: TileSource::open(&spec, Some(base_dir))
+                    .await
+                    .map_err(|e| format!("source `{name}`: {e}"))?,
+                max_zoom,
+                on_missing,
+            });
+        }
+        Ok(Self(out))
+    }
+
+    /// As [`FeatureSources::with_byte_cache`].
+    pub fn with_byte_cache(mut self, cache: &Arc<TileByteCache>, remote_only: bool) -> Self {
+        for source in &mut self.0 {
+            source.tiles.use_byte_cache(cache, remote_only);
+        }
+        self
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &PyramidSource> {
+        self.0.iter()
     }
 }
 
@@ -811,7 +929,7 @@ mod tests {
         let sources = FeatureSources::open(&mvt_doc("file:bg/{z}/{x}/{y}.pbf"), None, &root)
             .await
             .unwrap()
-            .with_byte_cache(&cache);
+            .with_byte_cache(&cache, false);
         let bg = sources.get(Some("bg")).unwrap();
         let (here, absent) = (TileId::new(14, 4, 8), TileId::new(14, 4, 9));
         assert_eq!(

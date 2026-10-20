@@ -1595,10 +1595,12 @@ pub async fn prefetch_doc_assets(
     Ok(())
 }
 
-/// Read an asset src (`http(s)://` or `file:PATH`, the latter resolved
-/// against `base_dir`) into bytes.
+/// Read an asset src (`http(s)://`, `data:`, or `file:PATH`, the last
+/// resolved against `base_dir`) into bytes — what a host fetching a
+/// style's documents itself, such as a remote GeoJSON source, reads them
+/// with.
 #[cfg(feature = "http")]
-async fn read_asset_bytes(src: &str, base_dir: &std::path::Path) -> Result<Vec<u8>, String> {
+pub async fn read_asset_bytes(src: &str, base_dir: &std::path::Path) -> Result<Vec<u8>, String> {
     if is_http_url(src) {
         http_bytes(src).await
     } else if src.starts_with("data:") {

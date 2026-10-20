@@ -146,10 +146,11 @@ with `--center`, `--out` and the rest; `--concurrency` and the style flags
 still apply, to every page.
 
 Pages render one after another, each page's tiles in parallel as before. The
-style is read and its sources opened once. Vector tiles one page fetched are
-kept in memory for the next, up to 256 MB (`EZU_TILE_CACHE_MB` sets another
-limit), so pages over the same area at the same zoom fetch them once; raster
-and DEM tiles are kept too. The intermediate cache of the graph belongs to
+style is read and its sources opened once. Source tiles one page fetched —
+vector, raster and DEM alike — are kept in memory for the next, up to 256 MB
+(`EZU_TILE_CACHE_MB` sets another limit), so pages over the same area at the
+same zoom fetch them once, and the most recently used are kept decoded too.
+The intermediate cache of the graph belongs to
 one tile size, and a page at a new tile size starts a fresh one, so a job
 ordered by scale reuses the most. Each page logs a line with its time and the
 tiles it fetched and reused, and the run ends with the totals.

@@ -27,6 +27,9 @@ serde_json = { workspace = true }
 maplibre-expr = { workspace = true }
 base64 = { workspace = true }
 thiserror = { workspace = true }
+# A hash of each fetched source tile, which is what tells a decoded tile
+# apart from an edited one.
+xxhash-rust = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "sync", "signal", "net"] }
 futures = "0.3"

@@ -424,7 +424,7 @@ mod tests {
             let style = style.clone();
             async move {
                 let cache = Arc::new(TileByteCache::new(64 << 20));
-                render_pages(&common(&style), &pages, 3, Some(Arc::clone(&cache)))
+                render_pages(&common(&style), &pages, 3, true, &cache)
                     .await
                     .unwrap();
                 cache.counts()

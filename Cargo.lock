@@ -742,6 +742,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "xxhash-rust",
 ]
 
 [[package]]

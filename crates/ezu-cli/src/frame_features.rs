@@ -13,12 +13,11 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
 use std::path::PathBuf;
-use std::sync::Mutex;
 
 use clap::ValueEnum;
 use ezu::core::frame::Frame;
-use ezu::graph::{Graph, NodeIx, NodeObserver, OpaqueValue, PortKind, PortValue};
-use ezu::paint::nodes::{FeatureGroup, FilteredFeatures};
+use ezu::graph::{Graph, NodeIx, PortKind};
+use ezu::renderer::{FeatureGroup, NodeFeatures};
 use maplibre_expr::Value;
 
 /// Decimal places for longitude and latitude: about 1 cm on the ground,
@@ -76,7 +75,7 @@ pub(crate) fn resolve(
     graph: &Graph,
     features: &[(String, PathBuf)],
     keys: &[(String, Vec<String>)],
-) -> Result<(Vec<Export>, Vec<NodeIx>), String> {
+) -> Result<(Vec<Export>, Vec<String>), String> {
     let mut key_of: BTreeMap<&str, &Vec<String>> = BTreeMap::new();
     for (node, props) in keys {
         if !features.iter().any(|(n, _)| n == node) {
@@ -88,10 +87,10 @@ pub(crate) fn resolve(
             return Err(format!("--features-key is given twice for `{node}`"));
         }
     }
-    let mut nodes: Vec<NodeIx> = Vec::new();
+    let mut nodes: Vec<String> = Vec::new();
     let mut exports = Vec::with_capacity(features.len());
     for (node, path) in features {
-        let ix = graph
+        let ix: NodeIx = graph
             .index_of(node)
             .ok_or_else(|| format!("--features: the style has no node `{node}`"))?;
         let kind = graph.output_kind(ix);
@@ -100,10 +99,10 @@ pub(crate) fn resolve(
                 "--features: node `{node}` produces {kind}, not features"
             ));
         }
-        let slot = match nodes.iter().position(|&n| n == ix) {
+        let slot = match nodes.iter().position(|n| n == node) {
             Some(slot) => slot,
             None => {
-                nodes.push(ix);
+                nodes.push(node.clone());
                 nodes.len() - 1
             }
         };
@@ -117,41 +116,12 @@ pub(crate) fn resolve(
     Ok((exports, nodes))
 }
 
-/// Keeps the value of each watched node from one tile's render.
-pub(crate) struct Capture {
-    nodes: Vec<NodeIx>,
-    values: Mutex<Vec<Option<OpaqueValue>>>,
-}
-
-impl Capture {
-    pub(crate) fn new(nodes: Vec<NodeIx>) -> Self {
-        let values = Mutex::new(vec![None; nodes.len()]);
-        Capture { nodes, values }
-    }
-
-    /// The captured values, one per watched node in the order given to
-    /// [`Capture::new`].
-    pub(crate) fn take(&self) -> Vec<Option<OpaqueValue>> {
-        std::mem::take(&mut *self.values.lock().unwrap_or_else(|p| p.into_inner()))
-    }
-}
-
-impl NodeObserver for Capture {
-    fn on_node(&self, ix: NodeIx, value: &PortValue, _cache_hit: bool, _elapsed_us: u128) {
-        let Some(slot) = self.nodes.iter().position(|&n| n == ix) else {
-            return;
-        };
-        if let PortValue::Features(any) = value {
-            self.values.lock().unwrap_or_else(|p| p.into_inner())[slot] = Some(any.clone());
-        }
-    }
-}
-
-/// The watched nodes' values from tile `(x, y)`.
+/// The watched nodes' values from tile `(x, y)`, one per node in the order
+/// [`resolve`] lists them.
 pub(crate) struct TileCapture {
     pub x: u32,
     pub y: u32,
-    pub values: Vec<Option<OpaqueValue>>,
+    pub values: Vec<NodeFeatures>,
 }
 
 /// One group, projected and ready to write.
@@ -180,15 +150,13 @@ pub(crate) fn feature_collection(
     let mut items: Vec<(Vec<Option<&Value>>, Item<'_>)> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     for tile in tiles.iter() {
-        let Some(any) = tile.values.get(export.slot).and_then(Option::as_ref) else {
+        let Some(feats) = tile
+            .values
+            .get(export.slot)
+            .and_then(NodeFeatures::features)
+        else {
             continue;
         };
-        let feats = any.downcast_ref::<FilteredFeatures>().ok_or_else(|| {
-            format!(
-                "--features: node `{}` produced features this command cannot read",
-                export.node
-            )
-        })?;
         let project = Projection::new(frame, tile.x, tile.y, feats.extent, coords);
         for group in &feats.groups {
             let Some(bounds) = project.frame_bounds(group) else {

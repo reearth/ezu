@@ -12,6 +12,7 @@
 mod frame_features;
 mod frame_pages;
 mod graph_view;
+mod render;
 mod serve;
 pub(crate) mod source;
 
@@ -36,9 +37,10 @@ use ezu::paint::nodes::default_registry;
 use ezu::style::{Document, SourceDecl};
 use futures::future::try_join_all;
 use futures::stream::{StreamExt, TryStreamExt};
-use tiny_skia::Pixmap;
+use tiny_skia::{ColorU8, Pixmap};
 use tracing_subscriber::EnvFilter;
 
+use crate::render::TileRenderer;
 use crate::source::{FeatureSources, SourceSpec, TileByteCache};
 
 #[derive(Parser, Debug)]
@@ -550,42 +552,16 @@ struct Prepared {
     params: Arc<ParamValues>,
 }
 
-impl Prepared {
-    /// The same style at another tile size. Everything opened is shared;
-    /// only the canvas and the graph's intermediate cache, whose entries are
-    /// sized by the tile, are new. Nothing else read from the document
-    /// depends on the tile size, so this renders what preparing the document
-    /// at `tile_size` would.
-    fn at_tile_size(self, tile_size: u32) -> Prepared {
-        Prepared {
-            cache: Arc::new(Cache::with_limits(
-                ezu::graph::cache::DEFAULT_CAPACITY,
-                cache_budget_bytes(),
-            )),
-            canvas: CanvasInfo::square(tile_size, self.canvas.pad),
-            ..self
-        }
-    }
-}
-
 async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Error>> {
     let style_text = fetch_text(&common.style).await?;
     let doc = Document::from_json(&style_text)?;
-    prepare_doc(common, doc, None).await
+    prepare_doc(common, doc).await
 }
 
-/// [`prepare`] for a document already read, which a caller may have
-/// adjusted first — `ezu frame` sets its `tile_size`. Everything sized by
-/// the tile (the canvas, and through it raster and DEM stitching, GeoJSON
-/// projection and label placement) is derived from the document here, so
-/// an override made before this call reaches all of it.
-///
-/// With `byte_cache`, the vector tile sources keep the bytes they fetch
-/// there.
+/// [`prepare`] for a document already read.
 async fn prepare_doc(
     common: &CommonArgs,
     doc: Document,
-    byte_cache: Option<&Arc<TileByteCache>>,
 ) -> Result<Prepared, Box<dyn std::error::Error>> {
     tracing::info!(
         "style: {} v{} ({} nodes, tile={})",
@@ -613,7 +589,7 @@ async fn prepare_doc(
     report_pad(&graph, &doc);
     let cache = Arc::new(Cache::with_limits(
         ezu::graph::cache::DEFAULT_CAPACITY,
-        cache_budget_bytes(),
+        cache_budget_bytes().unwrap_or(ezu::graph::cache::DEFAULT_BYTE_BUDGET),
     ));
     let canvas = CanvasInfo::square(doc.tile_size, canvas_pad(&graph, &doc));
 
@@ -625,11 +601,7 @@ async fn prepare_doc(
         (None, None) => None,
         _ => return Err("--pmtiles and --mvt are mutually exclusive".into()),
     };
-    let mut feature_sources = FeatureSources::open(&doc, cli_override, &assets_dir).await?;
-    if let Some(cache) = byte_cache {
-        feature_sources = feature_sources.with_byte_cache(cache);
-    }
-    let feature_sources = Arc::new(feature_sources);
+    let feature_sources = Arc::new(FeatureSources::open(&doc, cli_override, &assets_dir).await?);
 
     let dem_sources = Arc::new(build_dem_sources(&doc));
     if !dem_sources.is_empty() {
@@ -661,6 +633,123 @@ async fn prepare_doc(
         overzoom_levels: common.overzoom_levels,
         params: Arc::new(parse_cli_params(&common.params, &doc)?),
     })
+}
+
+/// A style opened for rendering: the document and its graph, which is what
+/// the CLI reports from and checks requests against, and a renderer over
+/// the style's sources.
+struct Opened {
+    graph: Arc<Graph>,
+    tiles: TileRenderer,
+}
+
+/// Read nothing more than `doc` and `style_text` already hold: build the
+/// graph, report on it, open every source the style declares — vector tiles
+/// keeping their bytes in `byte_cache` — and let the renderer read the
+/// style's assets.
+async fn open_style(
+    common: &CommonArgs,
+    style_text: &str,
+    doc: &Document,
+    byte_cache: &Arc<TileByteCache>,
+) -> Result<Opened, Box<dyn std::error::Error>> {
+    tracing::info!(
+        "style: {} v{} ({} nodes, tile={})",
+        doc.name,
+        doc.version,
+        doc.nodes.len(),
+        doc.tile_size,
+    );
+    let assets_dir = assets_dir_for(&common.style, common.assets_dir.as_deref());
+    let graph = Arc::new(build_graph(doc, &default_registry())?);
+    report_pad(&graph, doc);
+    // Checked here so a bad value fails before anything is fetched; the
+    // renderer checks each render's the same way.
+    parse_cli_params(&common.params, doc)?;
+
+    // CLI flags override the URL but keep the doc's source NAME, since
+    // the style's `features` nodes reference sources by name.
+    let cli_override = match (&common.pmtiles, &common.mvt) {
+        (Some(p), None) => Some((SourceSpec::PmTiles(p.clone()), "--pmtiles flag")),
+        (None, Some(u)) => Some((SourceSpec::Mvt(u.clone()), "--mvt flag")),
+        (None, None) => None,
+        _ => return Err("--pmtiles and --mvt are mutually exclusive".into()),
+    };
+    let vector = FeatureSources::open(doc, cli_override, &assets_dir)
+        .await?
+        .with_byte_cache(byte_cache, false);
+    let tiles = TileRenderer::open(render::Open {
+        style: style_text,
+        doc,
+        requested: graph.asset_inputs(),
+        pad: canvas_pad(&graph, doc),
+        assets_dir: &assets_dir,
+        vector: Arc::new(vector),
+        overzoom_levels: common.overzoom_levels,
+        params: common
+            .params
+            .iter()
+            .filter_map(|p| p.split_once('='))
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+        byte_cache: Some((byte_cache, false)),
+        decoded_budget: DECODED_CACHE_BUDGET,
+        cache_budget: cache_budget_bytes(),
+    })
+    .await?;
+    // The renderer has logged the graph's warnings as it built.
+    strict_verdict(common.strict, graph.warnings())?;
+    tracing::info!("assets resolved against {}", assets_dir.display());
+    Ok(Opened { graph, tiles })
+}
+
+/// How many bytes of fetched source tiles stay decoded for the renders
+/// around the one that decoded them. Charged by the size of the encoded
+/// tile, which is a fraction of the decoded one, so this holds a few
+/// hundred tiles — rows of a pyramid, or the tiles a run of pages shares.
+const DECODED_CACHE_BUDGET: usize = 32 * 1024 * 1024;
+
+/// The directory `file:` paths in the style resolve against: `--assets-dir`,
+/// or the style file's own directory, or the current one for a style read
+/// from a URL.
+fn assets_dir_for(style: &str, flag: Option<&Path>) -> PathBuf {
+    match flag {
+        Some(dir) => dir.to_path_buf(),
+        None if is_url(style) => PathBuf::from("."),
+        None => Path::new(style)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from(".")),
+    }
+}
+
+/// Copy `rgba`, a `tile_size`-square tile of straight RGBA, into `dst`
+/// with its top-left at `(dx, dy)`, keeping only the part that falls
+/// inside `dst`.
+///
+/// The offset may be negative or run past the far edge: a print frame takes
+/// just a corner of the tiles along its border. Each pixel is
+/// premultiplied back into the image as it is copied, which gives back
+/// exactly the renderer's own pixels: they were demultiplied from those,
+/// and premultiplying a demultiplied pixel is exact.
+fn blit_rgba_into(dst: &mut Pixmap, rgba: &[u8], dx: i64, dy: i64, tile_size: u32) {
+    let t = tile_size as i64;
+    let (dw, dh) = (dst.width() as i64, dst.height() as i64);
+    let (x0, x1) = (dx.max(0), (dx + t).min(dw));
+    let (y0, y1) = (dy.max(0), (dy + t).min(dh));
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+    let pixels = dst.pixels_mut();
+    for y in y0..y1 {
+        let src_row = ((y - dy) * t) as usize;
+        let dst_row = (y * dw) as usize;
+        for x in x0..x1 {
+            let s = (src_row + (x - dx) as usize) * 4;
+            pixels[dst_row + x as usize] =
+                ColorU8::from_rgba(rgba[s], rgba[s + 1], rgba[s + 2], rgba[s + 3]).premultiply();
+        }
+    }
 }
 
 /// Parse repeated `--param name=value` flags against the document's
@@ -1398,15 +1487,15 @@ async fn run_frame(args: FrameCmd) -> Result<(), Box<dyn std::error::Error>> {
     if concurrency == 0 {
         return Err("--concurrency must be ≥ 1".into());
     }
+    let cache = Arc::new(TileByteCache::new(tile_cache_budget_bytes()));
     match &args.pages {
         Some(path) => {
             let pages = frame_pages::read(path)?;
-            let cache = Arc::new(TileByteCache::new(tile_cache_budget_bytes()));
-            render_pages(&args.common, &pages, concurrency, Some(cache)).await
+            render_pages(&args.common, &pages, concurrency, true, &cache).await
         }
         None => {
             let page = page_from_flags(&args)?;
-            render_pages(&args.common, &[page], concurrency, None).await
+            render_pages(&args.common, &[page], concurrency, false, &cache).await
         }
     }
 }
@@ -1449,20 +1538,20 @@ fn page_from_flags(args: &FrameCmd) -> Result<frame_pages::Page, Box<dyn std::er
 /// graph's intermediate cache is sized by the tile, so pages at the same
 /// tile size share one and a page at another size starts a fresh one,
 /// dropping the last: memory stays at one cache however many tile sizes the
-/// job has, and a job ordered by scale keeps the most of it. With
-/// `byte_cache`, vector tile bytes fetched for one page are kept for the
-/// next; raster and DEM sources keep their decoded tiles across pages
-/// already. Every page writes what a single-page run of it would.
+/// job has, and a job ordered by scale keeps the most of it. Source tiles
+/// fetched for one page are kept for the next, as fetched bytes in
+/// `byte_cache` and as decoded data. Every page writes what a single-page
+/// run of it would.
 ///
-/// A `byte_cache` marks a pages-file run: errors then name the page, and
-/// each page and the whole job log a summary.
+/// `many` marks a pages-file run: errors then name the page, and each page
+/// and the whole job log a summary.
 async fn render_pages(
     common: &CommonArgs,
     pages: &[frame_pages::Page],
     concurrency: usize,
-    byte_cache: Option<Arc<TileByteCache>>,
+    many: bool,
+    byte_cache: &Arc<TileByteCache>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let many = byte_cache.is_some();
     let on_page = |i: usize, e: Box<dyn std::error::Error>| -> Box<dyn std::error::Error> {
         if many {
             format!("page {}: {e}", i + 1).into()
@@ -1471,8 +1560,9 @@ async fn render_pages(
         }
     };
     // The frame's tile size depends on the style's own, so the document is
-    // read before `prepare` builds anything sized from it.
-    let doc = Document::from_json(&fetch_text(&common.style).await?)?;
+    // read before anything is sized from it.
+    let style_text = fetch_text(&common.style).await?;
+    let doc = Document::from_json(&style_text)?;
     let style_tile_size = doc.tile_size;
     let frames = pages
         .iter()
@@ -1493,35 +1583,29 @@ async fn render_pages(
         .collect::<Result<Vec<_>, _>>()?;
 
     let started = std::time::Instant::now();
-    let mut doc = Some(doc);
-    let mut state: Option<Prepared> = None;
-    let mut resolved: Vec<(Vec<frame_features::Export>, Vec<ezu::graph::NodeIx>)> = Vec::new();
+    let mut state: Option<Opened> = None;
+    let mut resolved: Vec<(Vec<frame_features::Export>, Vec<String>)> = Vec::new();
     for (i, (page, frame)) in pages.iter().zip(&frames).enumerate() {
         let page_started = std::time::Instant::now();
-        let counts_before = byte_cache.as_ref().map(|c| c.counts());
+        let counts_before = byte_cache.counts();
         log_frame(frame, style_tile_size, page.scale);
-        let prep = match state.take() {
-            Some(prep) if prep.canvas.tile_w == frame.tile_size => prep,
-            Some(prep) => prep.at_tile_size(frame.tile_size),
-            None => {
-                let mut doc = doc.take().expect("the style is prepared once");
-                doc.tile_size = frame.tile_size;
-                prepare_doc(common, doc, byte_cache.as_ref()).await?
-            }
+        let opened = match &mut state {
+            Some(opened) => opened,
+            None => state.insert(open_style(common, &style_text, &doc, byte_cache).await?),
         };
-        let prep = state.insert(prep);
+        opened.tiles.set_tile_size(frame.tile_size)?;
         // Every page's features are checked against the graph as soon as
         // there is one, before the first page renders.
         if resolved.is_empty() {
             for (j, p) in pages.iter().enumerate() {
-                let r = frame_features::resolve(&prep.graph, &p.features, &p.features_key)
+                let r = frame_features::resolve(&opened.graph, &p.features, &p.features_key)
                     .map_err(|e| on_page(j, e.into()))?;
                 resolved.push(r);
             }
         }
         let (exports, watched) = &resolved[i];
 
-        let (image, mut captures) = render_frame(prep, frame, concurrency, watched)
+        let (image, mut captures) = render_frame(&opened.tiles, frame, concurrency, watched)
             .await
             .map_err(|e| on_page(i, e))?;
         let bytes = match page.format {
@@ -1545,10 +1629,11 @@ async fn render_pages(
                 text.len()
             );
         }
-        if let (Some(cache), Some((hits, misses))) = (&byte_cache, counts_before) {
-            let (h, m) = cache.counts();
+        if many {
+            let (hits, misses) = counts_before;
+            let (h, m) = byte_cache.counts();
             tracing::info!(
-                "page {}/{}: {} in {:.2}s, {} tiles at z={}, vector tiles fetched {}, reused {}",
+                "page {}/{}: {} in {:.2}s, {} tiles at z={}, source tiles fetched {}, reused {}",
                 i + 1,
                 pages.len(),
                 page.out.display(),
@@ -1560,13 +1645,13 @@ async fn render_pages(
             );
         }
     }
-    if let Some(cache) = &byte_cache {
-        let (hits, misses) = cache.counts();
+    if many {
+        let (hits, misses) = byte_cache.counts();
         tracing::info!(
-            "{} pages in {:.2}s, vector tiles fetched {misses}, reused {hits} ({:.1} MB kept)",
+            "{} pages in {:.2}s, source tiles fetched {misses}, reused {hits} ({:.1} MB kept)",
             pages.len(),
             started.elapsed().as_secs_f64(),
-            cache.held_bytes() as f64 / (1024.0 * 1024.0),
+            byte_cache.held_bytes() as f64 / (1024.0 * 1024.0),
         );
     }
     Ok(())
@@ -1606,10 +1691,10 @@ fn log_frame(frame: &Frame, style_tile_size: u32, scale: f64) {
 /// The values of the `watched` nodes are kept from every tile, in the order
 /// the tiles finished.
 async fn render_frame(
-    prep: &Prepared,
+    tiles: &TileRenderer,
     frame: &Frame,
     concurrency: usize,
-    watched: &[ezu::graph::NodeIx],
+    watched: &[String],
 ) -> Result<(Pixmap, Vec<frame_features::TileCapture>), Box<dyn std::error::Error>> {
     let mut image = Pixmap::new(frame.width, frame.height)
         .ok_or_else(|| format!("cannot allocate a {}×{} image", frame.width, frame.height))?;
@@ -1620,34 +1705,29 @@ async fn render_frame(
         .clone()
         .flat_map(move |ty| xr.clone().map(move |tx| (tx, ty)));
     let mut rendered = futures::stream::iter(coords)
-        .map(|(tx, ty)| async move {
-            let capture = (!watched.is_empty())
-                .then(|| Arc::new(frame_features::Capture::new(watched.to_vec())));
-            let observer = capture
-                .clone()
-                .map(|c| c as Arc<dyn NodeObserver + Send + Sync>);
-            let raster = render_one(
-                Arc::clone(&prep.graph),
-                Arc::clone(&prep.cache),
-                Arc::clone(&prep.loader),
-                Arc::clone(&prep.feature_sources),
-                Arc::clone(&prep.dem_sources),
-                Arc::clone(&prep.raster_sources),
-                Arc::clone(&prep.geojson_sources),
-                prep.canvas,
-                CoreTileId::new(frame.zoom, tx, ty),
-                prep.overzoom_levels,
-                Arc::clone(&prep.params),
-                observer,
-            )
-            .await?;
-            let values = capture.map(|c| c.take());
-            Ok::<_, Box<dyn std::error::Error + Send + Sync>>((tx, ty, raster, values))
+        .map(|(tx, ty)| {
+            let watched = watched.to_vec();
+            async move {
+                let tile = CoreTileId::new(frame.zoom, tx, ty);
+                let (rgba, values) = tiles
+                    .render(tile, move |r, set, mut opts| {
+                        opts.format = ezu::renderer::OutputFormat::Rgba;
+                        if watched.is_empty() {
+                            return r
+                                .render_tile_with(tile.z, tile.x, tile.y, set, opts)
+                                .map(|px| (px, Vec::new()));
+                        }
+                        let names: Vec<&str> = watched.iter().map(String::as_str).collect();
+                        r.render_tile_with_features(tile.z, tile.x, tile.y, set, opts, &names)
+                    })
+                    .await?;
+                Ok::<_, render::BoxError>((tx, ty, rgba, values))
+            }
         })
         .buffer_unordered(concurrency);
     while let Some(done) = rendered.next().await {
-        let (tx, ty, raster, values) = done.map_err(|e| e.to_string())?;
-        if let Some(values) = values {
+        let (tx, ty, rgba, values) = done.map_err(|e| e.to_string())?;
+        if !watched.is_empty() {
             captures.push(frame_features::TileCapture {
                 x: tx,
                 y: ty,
@@ -1655,14 +1735,7 @@ async fn render_frame(
             });
         }
         let (dx, dy) = frame.tile_offset(tx, ty);
-        blit_padded_into(
-            &mut image,
-            &raster,
-            dx,
-            dy,
-            prep.canvas.tile_w,
-            prep.canvas.pad,
-        );
+        blit_rgba_into(&mut image, &rgba, dx, dy, frame.tile_size);
     }
     Ok((image, captures))
 }
@@ -1912,22 +1985,21 @@ fn report_glyph_memory(loader: &BrushBankLoader) {
 }
 
 /// Ceiling on the pixel bytes the intermediate cache retains, from
-/// `EZU_CACHE_MB` (default: the library's own).
+/// `EZU_CACHE_MB`; `None` keeps the library's own.
 ///
 /// The default is sized for rendering a tile at a time. Bulk runs
 /// (`ezu tiles`, `ezu bbox`) re-use world-anchored intermediates across
 /// neighbouring tiles, so on a machine with memory to spare, raising it
 /// trades RAM for a shorter run.
-fn cache_budget_bytes() -> usize {
+fn cache_budget_bytes() -> Option<usize> {
     std::env::var("EZU_CACHE_MB")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .map(|mb| mb * 1024 * 1024)
-        .unwrap_or(ezu::graph::cache::DEFAULT_BYTE_BUDGET)
 }
 
-/// Ceiling on the vector tile bytes `ezu frame --pages` keeps across pages,
-/// from `EZU_TILE_CACHE_MB` (default 256 MB).
+/// Ceiling on the source tile bytes a run keeps once fetched, from
+/// `EZU_TILE_CACHE_MB` (default 256 MB).
 fn tile_cache_budget_bytes() -> usize {
     std::env::var("EZU_TILE_CACHE_MB")
         .ok()
