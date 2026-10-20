@@ -12,8 +12,9 @@
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, InfluenceCtx, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    enum_names, schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EnumTable, EvalCtx,
+    EvalError, FactoryCtx, FactoryError, In, InEnum, InReader, InfluenceCtx, Node, NodeFactory,
+    PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use tiny_skia::{
@@ -87,6 +88,42 @@ fn eval_color(
     }
 }
 
+/// Where the stroke ring sits against the circle's `radius`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum StrokeAlign {
+    /// Straddling the radius, half the ring inside it and half outside.
+    Center,
+    /// Wholly outside the radius, as MapLibre draws `circle-stroke-width`:
+    /// the fill keeps its full radius and the ring adds to it.
+    Outside,
+    /// Wholly inside the radius, so the circle never grows past it.
+    Inside,
+}
+
+const STROKE_ALIGNS: EnumTable<StrokeAlign> = &[
+    ("center", StrokeAlign::Center),
+    ("outside", StrokeAlign::Outside),
+    ("inside", StrokeAlign::Inside),
+];
+
+impl StrokeAlign {
+    /// The radius the ring's centreline runs along, the width it is
+    /// stroked at, and how far out the circle as a whole reaches, for a
+    /// fill of `radius` and a ring of `width`.
+    fn ring(self, radius: f32, width: f32) -> (f32, f32, f32) {
+        match self {
+            StrokeAlign::Center => (radius, width, radius + 0.5 * width),
+            StrokeAlign::Outside => (radius + 0.5 * width, width, radius + width),
+            // A ring at least as wide as the radius covers the whole disk;
+            // stroking it any wider would spill past the radius.
+            StrokeAlign::Inside => {
+                let width = width.min(radius);
+                (radius - 0.5 * width, width, radius)
+            }
+        }
+    }
+}
+
 /// Gradient stops sampled along the blur's fade; enough that the smoothstep
 /// reads as a curve rather than a few bands.
 const BLUR_STOPS: usize = 9;
@@ -146,6 +183,8 @@ struct CirclesNode {
     /// The ring's own opacity (MapLibre `circle-stroke-opacity`). Absent,
     /// the ring takes `opacity` as the fill does.
     stroke_opacity: Option<In<f64>>,
+    /// Where the ring sits against `radius`.
+    stroke_align: InEnum<StrokeAlign>,
     /// MapLibre `circle-blur`: the fraction of the circle's outer radius over
     /// which it fades out to its edge. 0 keeps a crisp edge.
     blur: In<f64>,
@@ -214,6 +253,7 @@ impl Node for CirclesNode {
             None => None,
         };
         let const_blur = (self.blur.get(ctx, inputs)? as f32).max(0.0);
+        let stroke_align = self.stroke_align.get(ctx)?;
 
         let mut canvas = make_canvas(ctx)?;
         let pad = canvas.pad() as f32;
@@ -247,12 +287,13 @@ impl Node for CirclesNode {
             };
             let stroke_color = tint_alpha_color(stroke_rgba, stroke_opacity);
             let blur = eval_number(&self.blur_expr, &ectx, const_blur).max(0.0);
-            // The ring straddles the radius, so the circle ends half its
-            // width further out; that outer edge is what the blur fades to.
-            let outer = if stroke_width > 0.0 {
-                radius + 0.5 * stroke_width
+            // The circle ends at the ring's outer edge, wherever
+            // `stroke-align` puts the ring; that edge is what the blur fades
+            // to.
+            let (ring_radius, ring_width, outer) = if stroke_width > 0.0 {
+                stroke_align.ring(radius, stroke_width)
             } else {
-                radius
+                (radius, 0.0, radius)
             };
 
             let pm = canvas.pixmap_mut();
@@ -263,6 +304,16 @@ impl Node for CirclesNode {
                 pb.push_circle(px, py, radius);
                 let Some(path) = pb.finish() else {
                     continue;
+                };
+                // A centred ring runs along the fill's own outline.
+                let ring_path;
+                let ring = if ring_radius == radius {
+                    Some(&path)
+                } else {
+                    let mut pb = PathBuilder::new();
+                    pb.push_circle(px, py, ring_radius);
+                    ring_path = pb.finish();
+                    ring_path.as_ref()
                 };
                 // Fill first, stroke outline on top (matches MapLibre
                 // `circle-stroke` sitting above the fill).
@@ -276,15 +327,15 @@ impl Node for CirclesNode {
                     Transform::identity(),
                     None,
                 );
-                if stroke_width > 0.0 {
+                if let (true, Some(ring)) = (ring_width > 0.0, ring) {
                     let mut sp = Paint::default();
                     set_paint_color(&mut sp, stroke_color, blur, (px, py), outer);
                     sp.anti_alias = true;
                     pm.stroke_path(
-                        &path,
+                        ring,
                         &sp,
                         &Stroke {
-                            width: stroke_width,
+                            width: ring_width,
                             ..Default::default()
                         },
                         Transform::identity(),
@@ -312,6 +363,7 @@ impl Node for CirclesNode {
             o.param_hash(h);
         }
         self.blur.param_hash(h);
+        self.stroke_align.param_hash(h);
         for (tag, src) in [
             (b"radiusexpr".as_slice(), &self.radius_expr_src),
             (b"colorexpr".as_slice(), &self.color_expr_src),
@@ -358,6 +410,7 @@ impl NodeFactory for CirclesFactory {
             None
         };
         let blur = r.number_or("blur", 0.0)?;
+        let stroke_align = r.enum_or("stroke-align", StrokeAlign::Center, STROKE_ALIGNS)?;
         let parts = r.finish();
 
         let (radius_expr, radius_expr_src) =
@@ -395,6 +448,7 @@ impl NodeFactory for CirclesFactory {
                 stroke_width,
                 stroke_color,
                 stroke_opacity,
+                stroke_align,
                 blur,
                 radius_expr,
                 color_expr,
@@ -442,6 +496,8 @@ impl NodeFactory for CirclesFactory {
                 "stroke-width-expr": {
                     "description": "A MapLibre number expression (px) for the stroke ring, evaluated per feature group; overrides the constant `stroke-width`. A ring is drawn only when width > 0.",
                 },
+                "stroke-align": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": enum_names(STROKE_ALIGNS), "default": "center",
+                                  "description": "Where the stroke ring sits against `radius`. `center` straddles it, half inside and half outside; `outside` lies wholly outside it, from `radius` to `radius + stroke-width`, as MapLibre draws `circle-stroke-width`; `inside` lies wholly within it, so the circle never grows past `radius`. The fill always reaches `radius`." })),
                 "stroke-color": schema_frag::color(),
                 "stroke-color-expr": {
                     "description": "A MapLibre color expression for the stroke ring, evaluated per feature group; overrides the constant `stroke-color`.",

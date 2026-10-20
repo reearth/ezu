@@ -93,6 +93,11 @@ pub(crate) fn convert_circle(
     // draws a ring gets the default `stroke-opacity` of 1 spelled out.
     let (so, so_expr) = resolve_number(paint.get("circle-stroke-opacity"));
     let has_ring = sw.is_some_and(|w| w > 0.0) || spec.get("stroke-width-expr").is_some();
+    // MapLibre draws the ring outside `circle-radius`, which keeps its
+    // full fill: the circle reaches `radius + stroke width`.
+    if has_ring {
+        spec["stroke-align"] = Value::from("outside");
+    }
     let fades_fill = opacity.is_some_and(|o| o != 1.0) || spec.get("opacity-expr").is_some();
     match (so, so_expr) {
         (Some(o), _) => spec["stroke-opacity"] = Value::from(o),

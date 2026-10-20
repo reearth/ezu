@@ -271,3 +271,46 @@ fn blur_fades_the_circle_towards_its_edge() {
     );
     assert!(alpha(15) < 40, "nearly gone at the edge: {}", alpha(15));
 }
+
+#[test]
+fn stroke_align_places_the_ring_against_the_radius() {
+    // A red disk of radius 10 with a 4 px blue ring. Reading along the row
+    // through the centre, the ring's pixels say where it sits.
+    let ring_at = |align: &str| {
+        let r = render_one(
+            "x",
+            &format!(
+                r##""radius": 10, "color": "#ff0000", "stroke-width": 4,
+                    "stroke-color": "#0000ff" {align}"##
+            ),
+        );
+        let blue: Vec<u32> = (32..64)
+            .filter(|&x| {
+                let p = r.pixel(x, 32);
+                p[3] > 200 && p[2] > 200 && p[0] < 50
+            })
+            .map(|x| x - 32)
+            .collect();
+        let red = r.pixel(32 + 9, 32);
+        (blue, red)
+    };
+    let (centre, _) = ring_at("");
+    assert_eq!(centre, ring_at(r#", "stroke-align": "center""#).0);
+    assert_eq!(
+        (centre[0], centre[centre.len() - 1]),
+        (8, 11),
+        "centred, the ring straddles the radius"
+    );
+
+    // Outside, as MapLibre draws it: radius 10 to 14, the fill kept whole.
+    let (outside, red) = ring_at(r#", "stroke-align": "outside""#);
+    assert_eq!((outside[0], outside[outside.len() - 1]), (10, 13));
+    assert!(
+        red[0] > 200 && red[2] < 50,
+        "the fill reaches the radius: {red:?}"
+    );
+
+    // Inside: radius 6 to 10, so the circle stays within its radius.
+    let (inside, _) = ring_at(r#", "stroke-align": "inside""#);
+    assert_eq!((inside[0], inside[inside.len() - 1]), (6, 9));
+}

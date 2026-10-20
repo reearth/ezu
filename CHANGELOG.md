@@ -346,6 +346,12 @@ mean is spelled out in
   each position takes the colour of the stop at or below it (the first
   stop's below them all), so the gradient paints flat bands. `linear`
   stays the default.
+- `circles` takes `stroke-align`: `center` (the default, as before)
+  straddles `radius` with the ring, `outside` draws it from `radius` out to
+  `radius + stroke-width`, as MapLibre draws `circle-stroke-width`, and
+  `inside` keeps it within `radius`. The blur fades to the ring's outer
+  edge wherever it sits. `ezu translate` writes `outside` for a layer with a
+  stroke, so a stroked circle is as large as MapLibre draws it.
 
 ### Changed
 

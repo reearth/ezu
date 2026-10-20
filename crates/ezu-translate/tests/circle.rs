@@ -141,3 +141,20 @@ fn circle_opacity_leaves_the_ring_alone() {
     let c = circles_for(serde_json::json!({ "circle-radius": 6, "circle-stroke-width": 2 }));
     assert!(c.get("stroke-opacity").is_none());
 }
+
+#[test]
+fn the_ring_lies_outside_the_radius_as_in_maplibre() {
+    // MapLibre's ring runs from `circle-radius` out to radius + stroke
+    // width; the node centres it on the radius unless told otherwise.
+    let c = circles_for(serde_json::json!({ "circle-radius": 6, "circle-stroke-width": 2 }));
+    assert_eq!(c["stroke-align"], "outside");
+    let width = serde_json::json!(["interpolate", ["linear"], ["zoom"], 10, 1, 16, 3]);
+    let c = circles_for(serde_json::json!({ "circle-radius": 6, "circle-stroke-width": width }));
+    assert_eq!(c["stroke-align"], "outside");
+
+    // No ring, nothing to align.
+    let c = circles_for(serde_json::json!({ "circle-radius": 6 }));
+    assert!(c.get("stroke-align").is_none());
+    let c = circles_for(serde_json::json!({ "circle-radius": 6, "circle-stroke-width": 0 }));
+    assert!(c.get("stroke-align").is_none());
+}
