@@ -28,7 +28,7 @@ Two structural facts first:
 
 | MapLibre | ezu |
 | --- | --- |
-| `background` | `solid` |
+| `background` | `solid`. A zoom curve on `background-color` becomes an `expr` node feeding its `color`; a constant `background-opacity` is folded into the colour's alpha |
 | `fill` (solid colour, `fill-outline-color`) | `features` + `fill-solid` (outline → `edge`, or `edge-expr` when data-driven). `fill-opacity` becomes `fill-alpha` / `opacity-expr` and, under an outline, `edge-alpha` / `edge-alpha-expr` too, since MapLibre fades the outline with the fill |
 | `line` (+ `line-dasharray`, `line-cap`/`join`, `line-gap-width`) | `features` → `boundary` (`clip-edges: drop`) → crisp `stroke`, the dash in line widths (`dash-unit: width`), so it scales with the width each feature is drawn at, an expression `line-width` included. On a polygon source-layer the rings are stroked without the tile-buffer clip edges, as MapLibre does. A gap renders MapLibre's casing annulus — one stroke's footprint with the corridor knocked out — so joins, caps and dash phase behave like the GL shader |
 | `circle` (+ `circle-stroke-*`, `circle-blur`) | `circles`: a crisp disk at each point with its stroke ring, each property a constant or a per-feature `*-expr`. `circle-stroke-opacity` becomes `stroke-opacity`, and `circle-blur` the `blur` fade to the edge. The ring gets `stroke-align: outside`, so it runs from `circle-radius` out to radius + stroke width, as in MapLibre |

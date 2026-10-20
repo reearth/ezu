@@ -32,6 +32,16 @@ pub fn parse_color(s: &str) -> Option<(String, f32)> {
     None
 }
 
+/// `#rrggbb` with `alpha` folded in as `#rrggbbaa`, or left as it is when
+/// opaque.
+pub(crate) fn with_alpha(hex: &str, alpha: f32) -> String {
+    if alpha >= 1.0 {
+        return hex.to_string();
+    }
+    let a = (alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
+    format!("{hex}{a:02x}")
+}
+
 /// CSS/SVG named colours → `#rrggbb`. Case-insensitive. MapLibre accepts
 /// these anywhere a colour is expected.
 fn named_color(s: &str) -> Option<&'static str> {

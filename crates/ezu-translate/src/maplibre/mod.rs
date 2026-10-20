@@ -346,7 +346,9 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
         let ty = layer.get("type").and_then(Value::as_str).unwrap_or("");
         let out_start = outputs.len();
         match ty {
-            "background" => convert_background(id, layer, &mut nodes, &mut outputs, zoom_range),
+            "background" => {
+                convert_background(id, layer, &mut nodes, &mut outputs, zoom_range, &mut report)
+            }
             "fill" => convert_fill(
                 id,
                 layer,

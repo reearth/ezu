@@ -533,6 +533,13 @@ mean is spelled out in
   front of the paint node; an expression, or a shift on a `fill-pattern`
   or `line-pattern` layer, warns and draws unshifted. The `*-anchor`
   beside each needs nothing, since a tile is never rotated.
+- `ezu translate` painted a `background` black when `background-color`
+  was an expression, such as a zoom curve, opaque when the colour was
+  translucent, and ignored `background-opacity` and `background-pattern`,
+  all without a warning. An expression colour now becomes an `expr` node
+  feeding the `solid`'s `color`, a constant `background-opacity` and the
+  colour's own alpha are folded into the colour, and an expression
+  opacity, an opacity beside an expression colour, or a pattern warns.
 - `icon-rotate-deg` on `text` and `text-labels` turned the icon about its
   own centre, so an icon with an `icon-anchor` other than `center`, or an
   `icon-offset`, spun in place where MapLibre swings it round the anchor

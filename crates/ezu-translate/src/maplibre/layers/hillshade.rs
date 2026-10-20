@@ -2,7 +2,7 @@
 
 use serde_json::{Map, Value};
 
-use crate::maplibre::color::parse_color;
+use crate::maplibre::color::{parse_color, with_alpha};
 use crate::maplibre::layers::{paint_of, with_zoom_range};
 use crate::maplibre::{const_color, const_number};
 use crate::maplibre::{Report, ZoomRange};
@@ -85,14 +85,4 @@ pub(crate) fn convert_hillshade(
     }
     nodes.insert(hs_id.clone(), hillshade);
     outputs.push(hs_id);
-}
-
-/// `#rrggbb` with `alpha` folded in as `#rrggbbaa`, or left as it is when
-/// opaque.
-fn with_alpha(hex: &str, alpha: f32) -> String {
-    if alpha >= 1.0 {
-        return hex.to_string();
-    }
-    let a = (alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
-    format!("{hex}{a:02x}")
 }

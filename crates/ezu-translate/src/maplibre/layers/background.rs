@@ -2,9 +2,9 @@
 
 use serde_json::{Map, Value};
 
-use crate::maplibre::color::parse_color;
+use crate::maplibre::color::{parse_color, with_alpha};
 use crate::maplibre::layers::paint_of;
-use crate::maplibre::{const_color, ZoomRange};
+use crate::maplibre::{const_color, const_number, is_expr, Report, ZoomRange};
 
 pub(crate) fn convert_background(
     id: &str,
@@ -12,19 +12,64 @@ pub(crate) fn convert_background(
     nodes: &mut Map<String, Value>,
     outputs: &mut Vec<String>,
     zoom_range: ZoomRange,
+    report: &mut Report,
 ) {
     let paint = paint_of(layer);
-    // The `solid` node's `color` is a plain port with no `*-expr` sibling,
-    // so only a literal `background-color` carries over.
-    let (hex, _a) = paint
-        .get("background-color")
-        .and_then(const_color)
-        .and_then(|v| parse_color(&v))
-        .unwrap_or_else(|| ("#000000".to_string(), 1.0));
+    if paint.get("background-pattern").is_some() {
+        report.warn(format!(
+            "layer `{id}`: `background-pattern` is not supported — drawn in `background-color`"
+        ));
+    }
+    let opacity = paint.get("background-opacity");
+    // A background has no features, so a `background-color` expression can
+    // only follow the zoom: an `expr` node evaluates it per tile and feeds
+    // the `solid` node's `color`. A literal is the colour itself, with a
+    // constant `background-opacity` folded into its alpha.
+    let color = match paint.get("background-color") {
+        Some(v) if is_expr(v) => {
+            if opacity.is_some() {
+                report.warn(format!(
+                    "layer `{id}`: `background-opacity` with an expression `background-color` is not supported — drawn opaque"
+                ));
+            }
+            let expr_id = format!("{id}__color");
+            nodes.insert(
+                expr_id.clone(),
+                serde_json::json!({ "op": "expr", "type": "color", "expr": v }),
+            );
+            Value::from(format!("@{expr_id}"))
+        }
+        v => {
+            let (hex, alpha) = match v.and_then(const_color).and_then(|s| parse_color(&s)) {
+                Some(c) => c,
+                None => {
+                    if v.is_some() {
+                        report.warn(format!(
+                            "layer `{id}`: `background-color` could not be read — drawn black"
+                        ));
+                    }
+                    ("#000000".to_string(), 1.0)
+                }
+            };
+            let opacity = match opacity {
+                None => 1.0,
+                Some(o) => match const_number(o) {
+                    Some(o) => o.clamp(0.0, 1.0) as f32,
+                    None => {
+                        report.warn(format!(
+                            "layer `{id}`: `background-opacity` carries over only as a constant — drawn opaque"
+                        ));
+                        1.0
+                    }
+                },
+            };
+            Value::from(with_alpha(&hex, alpha * opacity))
+        }
+    };
     let nid = format!("{id}__bg");
     nodes.insert(
         nid.clone(),
-        serde_json::json!({ "op": "solid", "color": hex }),
+        serde_json::json!({ "op": "solid", "color": color }),
     );
     outputs.push(gate_on_zoom(id, nid, nodes, zoom_range));
 }
