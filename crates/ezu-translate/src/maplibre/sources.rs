@@ -90,23 +90,16 @@ pub(crate) fn convert_sources(
                     ));
                     continue;
                 };
-                // The source's zoom range carries over: past `maxzoom` its
-                // tiles are overzoomed, below `minzoom` it draws nothing.
                 let mut mvt = serde_json::json!({ "type": "mvt", "url": url });
-                for (from, to) in [("minzoom", "min-zoom"), ("maxzoom", "max-zoom")] {
-                    if let Some(z) = decl.get(from).and_then(Value::as_f64) {
-                        mvt[to] = Value::from(z.clamp(0.0, 30.0) as u8);
-                    }
-                }
+                copy_zoom_range(decl, &mut mvt);
                 out.insert(name.clone(), mvt);
                 sources.vector.push(name.clone());
             }
             "raster" => {
                 if let Some(url) = url {
-                    out.insert(
-                        name.clone(),
-                        serde_json::json!({ "type": "raster", "url": url }),
-                    );
+                    let mut raster = serde_json::json!({ "type": "raster", "url": url });
+                    copy_zoom_range(decl, &mut raster);
+                    out.insert(name.clone(), raster);
                 } else {
                     report.warn(format!(
                         "source `{name}`: raster source has no url/tiles — skipped"
@@ -149,9 +142,7 @@ pub(crate) fn convert_sources(
                     dem.extend(dem_encoding(name, decl, report));
                     dem.insert("neighbor-fetch".into(), true.into());
                     let mut dem = Value::Object(dem);
-                    if let Some(mz) = decl.get("maxzoom").and_then(Value::as_u64) {
-                        dem["max-zoom"] = Value::from(mz);
-                    }
+                    copy_zoom_range(decl, &mut dem);
                     out.insert(name.clone(), dem);
                 } else {
                     report.warn(format!(
@@ -274,6 +265,18 @@ pub(crate) fn features_node(
         m.insert("max-zoom".into(), Value::from(z));
     }
     Value::Object(m)
+}
+
+/// Carry a tiled source's `minzoom` / `maxzoom` over as `min-zoom` /
+/// `max-zoom`: past `maxzoom` its tiles are overzoomed, below `minzoom` it
+/// has nothing to draw. The same for vector, raster and raster-dem
+/// sources, as MapLibre gives all three the pair.
+fn copy_zoom_range(decl: &Map<String, Value>, out: &mut Value) {
+    for (from, to) in [("minzoom", "min-zoom"), ("maxzoom", "max-zoom")] {
+        if let Some(z) = decl.get(from).and_then(Value::as_f64) {
+            out[to] = Value::from(z.clamp(0.0, 30.0) as u8);
+        }
+    }
 }
 
 /// The `encoding` (and, for `custom`, the factor fields) of the ezu `dem`

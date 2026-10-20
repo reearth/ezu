@@ -95,3 +95,38 @@ fn each_vector_source_keeps_its_own_zoom_range() {
     assert_eq!(doc.sources["blocks"].min_zoom(), Some(14));
     assert_eq!(doc.sources["buildings"].max_zoom(), Some(17));
 }
+
+#[test]
+fn raster_and_raster_dem_sources_keep_their_zoom_range() {
+    let style: serde_json::Value = serde_json::from_str(
+        r##"{
+          "version": 8,
+          "sources": {
+            "photo": { "type": "raster", "tiles": ["https://e.com/p/{z}/{x}/{y}.jpg"],
+                       "minzoom": 3, "maxzoom": 18 },
+            "plain": { "type": "raster", "tiles": ["https://e.com/q/{z}/{x}/{y}.jpg"] },
+            "terrain": { "type": "raster-dem", "tiles": ["https://e.com/d/{z}/{x}/{y}.png"],
+                         "minzoom": 5, "maxzoom": 12 }
+          },
+          "layers": [
+            { "id": "sat", "type": "raster", "source": "photo" },
+            { "id": "hills", "type": "hillshade", "source": "terrain" }
+          ]
+        }"##,
+    )
+    .unwrap();
+    let (recipe, _) = convert(&style, &ConvertOptions::default()).expect("convert");
+    let sources = &recipe["sources"];
+    assert_eq!(sources["photo"]["min-zoom"], 3);
+    assert_eq!(sources["photo"]["max-zoom"], 18);
+    assert!(sources["plain"].get("min-zoom").is_none());
+    assert!(sources["plain"].get("max-zoom").is_none());
+    assert_eq!(sources["terrain"]["min-zoom"], 5);
+    assert_eq!(sources["terrain"]["max-zoom"], 12);
+
+    let doc = ezu_style::Document::from_json(&serde_json::to_string(&recipe).unwrap())
+        .expect("recipe parses as ezu Document");
+    assert_eq!(doc.sources["photo"].min_zoom(), Some(3));
+    assert_eq!(doc.sources["photo"].max_zoom(), Some(18));
+    assert_eq!(doc.sources["terrain"].min_zoom(), Some(5));
+}

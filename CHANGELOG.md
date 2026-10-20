@@ -289,6 +289,11 @@ mean is spelled out in
   carry over as they do for feature layers: as `min-zoom` / `max-zoom` on
   the `raster` and `dem` nodes, and for a background as a `switch` that
   picks a transparent fill outside the band.
+- `ezu translate` dropped a `raster` source's `minzoom` and `maxzoom`, so
+  past the source's deepest zoom it asked for tiles that do not exist
+  instead of upsampling; it also dropped a `raster-dem` source's
+  `minzoom`. They now carry over as `min-zoom` / `max-zoom`, as they do
+  for `vector` sources.
 - `ezu translate` recognised a `custom` `raster-dem` encoding as Terrain-RGB
   or Terrarium only when its `baseShift` was negated (`-10000`, `-32768`).
   MapLibre subtracts `baseShift`, so its own factors for those encodings

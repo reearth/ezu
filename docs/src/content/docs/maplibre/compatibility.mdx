@@ -32,7 +32,7 @@ Two structural facts first:
 | `fill` (solid colour, `fill-outline-color`) | `features` + `fill-solid` (outline → `edge`) |
 | `line` (+ `line-dasharray`, `line-cap`/`join`, `line-gap-width`) | `features` → `boundary` (`clip-edges: drop`) → crisp `stroke`, dash in px. On a polygon source-layer the rings are stroked without the tile-buffer clip edges, as MapLibre does. A gap renders MapLibre's casing annulus — one stroke's footprint with the corridor knocked out — so joins, caps and dash phase behave like the GL shader |
 | `circle` (+ `circle-stroke-*`) | a `circle` sprite `stamp`ed at each point; the stroke is a larger ring stamped underneath |
-| `raster` | `raster` |
+| `raster` | `raster`. The source's `minzoom` / `maxzoom` carry over as `min-zoom` / `max-zoom`, as for `vector` and `raster-dem` sources |
 | `hillshade` (over `raster-dem`) | `dem` + `hillshade` (tone calibration still approximate). The source `encoding` maps `mapbox` (the default) to `mapbox-rgb`, `terrarium` to `terrarium`, and `custom` to `custom` with `redFactor`/`greenFactor`/`blueFactor`/`baseShift` carried as `red-factor`/`green-factor`/`blue-factor`/`base-shift` (or to the fixed encoding whose factors they equal) |
 | `heatmap` | `features` → `density` (GL-JS kernel) → `color-ramp`, with the colour expression over `heatmap-density` baked to a 256-entry ramp per tile |
 | `fill-extrusion` | flat footprint `fill-solid` using `fill-extrusion-color` — no 3-D, height and base dropped |
