@@ -384,9 +384,10 @@ impl Renderer {
     ///
     /// Until the promise settles the renderer is the frame's: everything
     /// that would change what it draws — `bindSource`, `clearSources`,
-    /// `renderTile`, `trimGlyphs`, `renderFrame`, `setStyle`,
-    /// `setTileSize`, `clearTileSize`, `setGlyphBudget` — throws
-    /// `FrameInProgress`, so a request running while `sources` awaits
+    /// `renderTile`, `trimGlyphs`, another `renderFrame` or
+    /// `renderFrameWithFeatures`, `setStyle`, `setTileSize`,
+    /// `clearTileSize`, `setGlyphBudget`, `setCacheBudget`,
+    /// `clearCacheBudget` — throws `FrameInProgress`, so a request running while `sources` awaits
     /// cannot change the frame's tiles under it. `loadSource`,
     /// `renderTileWith` and the queries that only read (`sourceTile`,
     /// `requestedNeighborOffsets`, `neededCodepointsIn`, `boundSources`, …)

@@ -283,7 +283,8 @@ func (r *Renderer) setTileSize(ctx context.Context, size uint32) error {
 // another RenderFrame or [Renderer.RenderFrameWithFeatures],
 // [Renderer.SetStyle], [Renderer.SetTileSize],
 // [Renderer.ClearTileSize], [Renderer.SetGlyphBudget],
-// [Renderer.ClearGlyphBudget] — fails with [ErrFrameInProgress], so a
+// [Renderer.ClearGlyphBudget], [Renderer.SetCacheBudget],
+// [Renderer.ClearCacheBudget] — fails with [ErrFrameInProgress], so a
 // goroutine that reaches for the renderer while sources is fetching cannot
 // change the frame's tiles under it. Loading, releasing and rendering from a
 // set, and queries that only read, which sources needs, still work.

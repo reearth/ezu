@@ -273,7 +273,9 @@ only and only until the function returns or settles; used later it throws
 `StaleBinder`, and a tile-scoped source bound through it throws `UnknownSource`,
 since the frame never reads bound tile data. Anything else that would change
 the renderer — `bindSource`, `clearSources`, `renderTile`, `trimGlyphs`,
-another `renderFrame`, `setStyle`, `setTileSize` — throws `FrameInProgress`, so
+another `renderFrame` or `renderFrameWithFeatures`, `setStyle`, `setTileSize`,
+`clearTileSize`, `setGlyphBudget`, `setCacheBudget`, `clearCacheBudget` —
+throws `FrameInProgress`, so
 a request that runs while your function awaits its fetch cannot change the
 frame's tiles under it. `loadSource`, `renderTileWith` and the queries that
 only read, such as `sourceTile` and `neededCodepointsIn`, still work, and the

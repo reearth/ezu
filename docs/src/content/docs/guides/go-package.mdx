@@ -305,8 +305,8 @@ only until the function returns; kept and used later it fails with
 `ezu.ErrStaleBinder`, and a tile-scoped source bound through it is refused,
 since the frame never reads bound tile data. Anything else that would change
 the renderer — `BindSource`, `ClearSources`, `RenderTile`, `TrimGlyphs`,
-another `RenderFrame`, `SetStyle`, `SetTileSize`, `SetGlyphBudget` and their
-clearing counterparts — fails with `ezu.ErrFrameInProgress`, so a goroutine
+another `RenderFrame` or `RenderFrameWithFeatures`, `SetStyle`, `SetTileSize`,
+`SetGlyphBudget`, `SetCacheBudget` and their clearing counterparts — fails with `ezu.ErrFrameInProgress`, so a goroutine
 that reaches for the renderer while your function fetches cannot change the
 page under it. `LoadSource`, `RenderTileWith` and the queries that only read,
 such as `SourceTile` and `NeededCodepointsIn`, still work. The frame binds no
