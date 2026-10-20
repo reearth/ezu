@@ -35,7 +35,29 @@ is cacheable and reproducible. See
 curve evaluates at integer steps rather than continuously. Styles that rely on
 fractional-zoom interpolation for smooth growth will look stepped between levels.
 
+**Properties a tile has no use for** convert to nothing, without a warning:
+`*-translate-anchor` and `hillshade-illumination-anchor` (they say whether
+something turns with a rotated map), `circle-pitch-scale`,
+`circle-pitch-alignment`, `text-pitch-alignment` and `icon-pitch-alignment`
+(a pitched map), `raster-fade-duration` (an animation), and
+`symbol-avoid-edges`, which keeps a label off a tile edge where MapLibre would
+cut it in two, while ezu places labels across tile edges whole. Nor do a
+symbol's `icon-*` properties without an `icon-image`, its `text-*` ones without
+a `text-field`, or `icon-rotation-alignment` and `icon-keep-upright` on point
+placement.
+
 ## Not yet supported
+
+Any other paint or layout property that translate does not convert is named in
+a warning, `` `name` is not supported — ignored ``. Among those a style is
+likely to carry: `line-blur`, `line-gradient`, `line-miter-limit`,
+`line-round-limit`, `fill-sort-key` / `line-sort-key` / `circle-sort-key`,
+every `raster-*` paint property but `raster-fade-duration`,
+`fill-extrusion-height` / `-base` / `-pattern` / `-vertical-gradient`,
+`hillshade-accent-color`, `text-halo-blur`, `icon-color` / `icon-halo-*`,
+`text-translate` / `icon-translate`, `text-writing-mode` and
+`symbol-z-order`. `fill-antialias: false` warns too, since ezu always
+anti-aliases.
 
 **Text and icons**
 
@@ -84,6 +106,9 @@ fractional-zoom interpolation for smooth growth will look stepped between levels
 
 - `hillshade` tone calibration. The shading is correct in structure; the exact
   tone curve does not match GL-JS.
+- Miter joins on `line` layers reach out to 4 half-widths before they are
+  bevelled, where MapLibre's default `line-miter-limit` bevels past 2, so a
+  sharp corner can come out more pointed.
 
 ## What is exact
 

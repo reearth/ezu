@@ -64,6 +64,12 @@ fn converts_full_osm_style_to_valid_document() {
                 // the `stamp` node, so they're dropped with a warning.
                 || w.contains("on `stamp`")
                 || w.contains("dasharray")
+                // Paint ezu has no counterpart for: SDF icon tinting, soft
+                // halo and line edges, icons turned along a line.
+                || w.contains("`icon-color` is not supported")
+                || w.contains("`text-halo-blur` is not supported")
+                || w.contains("`line-blur` is not supported")
+                || w.contains("`icon-rotation-alignment` is not supported")
                 // Collision knobs ezu doesn't model yet (icon collision,
                 // text/icon pairing, cooperative overlap).
                 || w.contains("text-optional")

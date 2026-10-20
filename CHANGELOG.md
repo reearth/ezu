@@ -546,6 +546,15 @@ mean is spelled out in
   `circle-stroke-color`, `text-color` and `text-halo-color`, so a
   translucent colour drew opaque. It now carries over as `#rrggbbaa`, which
   the node's opacity multiplies, as MapLibre's does.
+- `ezu translate` ignored, without a warning, any paint or layout property
+  its layer converter did not read: `line-blur`, `line-gradient`, the
+  `raster-*` paint properties, `fill-extrusion-height`, `text-halo-blur`,
+  `icon-color` and others. Each is now named in a warning,
+  `` `name` is not supported — ignored ``, and so is
+  `fill-antialias: false`. Properties that change nothing on a tile — the
+  `*-translate-anchor` and pitch properties, `raster-fade-duration`,
+  `symbol-avoid-edges`, and a symbol's `icon-*` properties without an icon
+  or `text-*` ones without text — stay quiet.
 - `icon-rotate-deg` on `text` and `text-labels` turned the icon about its
   own centre, so an icon with an `icon-anchor` other than `center`, or an
   `icon-offset`, spun in place where MapLibre swings it round the anchor

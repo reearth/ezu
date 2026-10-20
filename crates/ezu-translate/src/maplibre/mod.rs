@@ -64,6 +64,19 @@ use layers::{
 };
 use sources::convert_sources;
 
+/// The layer types [`convert`] lowers; any other is skipped with a warning.
+const SUPPORTED_TYPES: &[&str] = &[
+    "background",
+    "fill",
+    "line",
+    "raster",
+    "circle",
+    "heatmap",
+    "hillshade",
+    "fill-extrusion",
+    "symbol",
+];
+
 // --- MapLibre paint-value classification ------------------------------------
 //
 // ezu recipes are zoom-independent: a zoom/data *function* is emitted as a raw
@@ -344,6 +357,9 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
             continue;
         };
         let ty = layer.get("type").and_then(Value::as_str).unwrap_or("");
+        if SUPPORTED_TYPES.contains(&ty) {
+            layers::warn_unread_properties(id, ty, layer, &mut report);
+        }
         let out_start = outputs.len();
         match ty {
             "background" => {

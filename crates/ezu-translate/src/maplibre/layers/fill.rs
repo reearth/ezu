@@ -49,6 +49,13 @@ pub(crate) fn convert_fill(
         return;
     }
 
+    // ezu always anti-aliases a fill's edges, and MapLibre draws
+    // `fill-outline-color` only while `fill-antialias` is on.
+    if paint.get("fill-antialias").and_then(Value::as_bool) == Some(false) {
+        report.warn(format!(
+            "layer `{id}`: `fill-antialias: false` is not supported — drawn anti-aliased"
+        ));
+    }
     let fill_color = paint.get("fill-color");
     // `fill-opacity` → constant `fill-alpha` (literal) else a raw expression
     // emitted as `opacity-expr`, evaluated per tile.
