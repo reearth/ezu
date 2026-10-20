@@ -46,12 +46,10 @@ struct Fetched {
 
 /// What [`TileRenderer::open`] needs besides the style.
 pub(crate) struct Open<'a> {
-    /// The style as written; the renderer parses it itself.
-    pub style: &'a str,
+    /// The renderer over the style, its graph built: what the caller
+    /// reports and checks from, so the style is built once.
+    pub renderer: Renderer,
     pub doc: &'a Document,
-    /// What the style's graph reads: a `dem` or `raster` source nothing
-    /// reads is not fetched.
-    pub requested: BTreeSet<String>,
     /// The canvas margin every render is drawn with.
     pub pad: u32,
     /// Where `file:` paths in the style resolve.
@@ -90,7 +88,10 @@ impl TileRenderer {
     /// Build the renderer, let it read the style's assets, open the `dem`
     /// and `raster` sources and load the remote GeoJSON documents.
     pub(crate) async fn open(o: Open<'_>) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut renderer = Renderer::new(o.style)?;
+        let mut renderer = o.renderer;
+        // What the style's graph reads: a `dem` or `raster` source nothing
+        // reads is not fetched.
+        let requested = renderer.graph().asset_inputs();
         renderer.resolve_assets(o.assets_dir).await?;
         if o.cache_budget.is_some() {
             renderer.set_cache_budget(o.cache_budget);
@@ -106,7 +107,7 @@ impl TileRenderer {
             pyramids: Arc::new(pyramids),
             documents: Arc::new(documents),
             decoded: Arc::new(DecodedCache::new(o.decoded_budget)),
-            requested: Arc::new(o.requested),
+            requested: Arc::new(requested),
             overzoom_levels: o.overzoom_levels,
             base: RenderOptions {
                 pad: Some(o.pad),

@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use ezu::graph::build_graph;
 use ezu::paint::nodes::default_registry;
+use ezu::renderer::Renderer;
 use ezu::style::Document;
 use serde::Serialize;
 use tokio::sync::{broadcast, RwLock};
@@ -81,12 +82,13 @@ impl StyleSnapshot {
         sources: &Sources,
     ) -> Result<Self, BuildSnapshotError> {
         let doc = Document::from_json(&text).map_err(BuildSnapshotError::Parse)?;
-        let graph = build_graph(&doc, &default_registry()).map_err(BuildSnapshotError::Graph)?;
-        let pad = crate::canvas_pad(&graph, &doc);
+        // The document parsed, so all the renderer can refuse is the graph.
+        let renderer =
+            Renderer::new(&text).map_err(|e| BuildSnapshotError::Graph(e.to_string()))?;
+        let pad = crate::canvas_pad(renderer.graph(), &doc);
         let tiles = TileRenderer::open(Open {
-            style: &text,
+            renderer,
             doc: &doc,
-            requested: graph.asset_inputs(),
             pad,
             assets_dir: &sources.assets_dir,
             vector: Arc::clone(&sources.feature_sources),
@@ -113,7 +115,7 @@ pub enum BuildSnapshotError {
     #[error("parse: {0}")]
     Parse(#[from] ezu::style::StyleError),
     #[error("build graph: {0}")]
-    Graph(#[from] ezu::graph::BuildGraphError),
+    Graph(String),
     #[error("prefetch assets: {0}")]
     Assets(String),
 }
@@ -125,7 +127,7 @@ pub enum BuildSnapshotError {
 pub fn validate_text(text: &str) -> Result<(), BuildSnapshotError> {
     let doc = Document::from_json(text).map_err(BuildSnapshotError::Parse)?;
     let registry = default_registry();
-    build_graph(&doc, &registry).map_err(BuildSnapshotError::Graph)?;
+    build_graph(&doc, &registry).map_err(|e| BuildSnapshotError::Graph(e.to_string()))?;
     Ok(())
 }
 

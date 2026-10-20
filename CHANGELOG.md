@@ -189,7 +189,8 @@ mean is spelled out in
   tiles renders about 30% faster on four threads.
 - Every CLI command that draws — `tile`, `tiles`, `bbox`, `frame`, `graph
   --tile` and `serve` — renders through the same renderer as the Rust, Go
-  and JS packages. Each source tile is fetched and decoded once and kept for
+  and JS packages, and builds each style's graph once, in that renderer.
+  Each source tile is fetched and decoded once and kept for
   the tiles around it and, in `frame --pages`, the pages after it, instead
   of being decoded again for every tile that reads it, and raster and DEM
   tiles are now kept within `EZU_TILE_CACHE_MB` rather than without limit.

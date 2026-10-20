@@ -25,7 +25,7 @@ use ezu::core::TileId as CoreTileId;
 use ezu::graph::{build_graph, Cache, CanvasInfo, Graph, ParamValues};
 use ezu::paint::host::{pixmap_to_webp, BrushBankLoader};
 use ezu::paint::nodes::default_registry;
-use ezu::renderer::FrameFeatureCollector;
+use ezu::renderer::{FrameFeatureCollector, Renderer};
 use ezu::style::{Document, SourceDecl};
 use futures::stream::{StreamExt, TryStreamExt};
 use tiny_skia::{ColorU8, Pixmap};
@@ -542,17 +542,22 @@ async fn open(common: &CommonArgs) -> Result<Opened, Box<dyn std::error::Error>>
     open_style(common, &style_text, &doc, &byte_cache).await
 }
 
-/// A style opened for rendering: the document and its graph, which is what
-/// the CLI reports from and checks requests against, and a renderer over
-/// the style's sources.
+/// A style opened for rendering: a renderer over the style's sources, whose
+/// graph is what the CLI reports from and checks requests against.
 struct Opened {
-    graph: Arc<Graph>,
     tiles: TileRenderer,
 }
 
+impl Opened {
+    /// The style's graph, as the renderer built it.
+    fn graph(&self) -> &Graph {
+        self.tiles.renderer().graph()
+    }
+}
+
 /// Open the style that `doc` and `style_text` hold, without reading it
-/// again: build the graph, report on it, open every source the style
-/// declares, keeping fetched tile bytes in `byte_cache`, and let the
+/// again: build the renderer, report on its graph, open every source the
+/// style declares, keeping fetched tile bytes in `byte_cache`, and let the
 /// renderer read the style's assets.
 async fn open_style(
     common: &CommonArgs,
@@ -568,8 +573,12 @@ async fn open_style(
         doc.tile_size,
     );
     let assets_dir = assets_dir_for(&common.style, common.assets_dir.as_deref());
-    let graph = Arc::new(build_graph(doc, &default_registry())?);
-    report_pad(&graph, doc);
+    // Building the renderer builds the graph, and logs its warnings.
+    let renderer = Renderer::new(style_text)?;
+    let graph = renderer.graph();
+    report_pad(graph, doc);
+    let pad = canvas_pad(graph, doc);
+    let warnings = graph.warnings().to_vec();
     // Checked here so a bad value fails before anything is fetched; the
     // renderer checks each render's the same way.
     parse_cli_params(&common.params, doc)?;
@@ -586,10 +595,9 @@ async fn open_style(
         .await?
         .with_byte_cache(byte_cache, false);
     let tiles = TileRenderer::open(render::Open {
-        style: style_text,
+        renderer,
         doc,
-        requested: graph.asset_inputs(),
-        pad: canvas_pad(&graph, doc),
+        pad,
         assets_dir: &assets_dir,
         vector: Arc::new(vector),
         overzoom_levels: common.overzoom_levels,
@@ -605,9 +613,9 @@ async fn open_style(
     })
     .await?;
     // The renderer has logged the graph's warnings as it built.
-    strict_verdict(common.strict, graph.warnings())?;
+    strict_verdict(common.strict, &warnings)?;
     tracing::info!("assets resolved against {}", assets_dir.display());
-    Ok(Opened { graph, tiles })
+    Ok(Opened { tiles })
 }
 
 /// How many bytes of fetched source tiles stay decoded for the renders
@@ -956,7 +964,7 @@ async fn run_graph_view(args: GraphCmd) -> Result<(), Box<dyn std::error::Error>
     }
     let payload = collected.into_payload(
         &doc,
-        &opened.graph,
+        opened.graph(),
         &format!("{}/{}/{}", tile.z, tile.x, tile.y),
         &params,
         sidecar.as_deref(),
@@ -967,7 +975,7 @@ async fn run_graph_view(args: GraphCmd) -> Result<(), Box<dyn std::error::Error>
         "wrote {} ({:.1} KiB, {} nodes)",
         out.display(),
         html.len() as f64 / 1024.0,
-        opened.graph.len(),
+        opened.graph().len(),
     );
     Ok(())
 }
