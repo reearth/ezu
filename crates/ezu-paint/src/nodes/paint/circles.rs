@@ -5,7 +5,8 @@
 //!
 //! Every paint property is a constant `In<...>` with an optional raw-expr
 //! sibling (`radius-expr`, `color-expr`, `opacity-expr`, `stroke-width-expr`,
-//! `stroke-color-expr`) evaluated per feature group via `maplibre-expr`,
+//! `stroke-color-expr`, `stroke-opacity-expr`, `blur-expr`) evaluated per
+//! feature group via `maplibre-expr`,
 //! mirroring the data-driven pattern in `stroke` / `fill-solid`.
 
 use std::sync::Arc;
@@ -15,7 +16,9 @@ use ezu_graph::{
     FactoryError, In, InReader, InfluenceCtx, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
-use tiny_skia::{FillRule, Paint, PathBuilder, Stroke, Transform};
+use tiny_skia::{
+    FillRule, GradientStop, Paint, PathBuilder, RadialGradient, SpreadMode, Stroke, Transform,
+};
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
@@ -84,22 +87,82 @@ fn eval_color(
     }
 }
 
+/// Gradient stops sampled along the blur's fade; enough that the smoothstep
+/// reads as a curve rather than a few bands.
+const BLUR_STOPS: usize = 9;
+
+/// Give `paint` the circle's `color`, faded out towards `outer` (its edge,
+/// centred on `centre`) when `blur` is above zero.
+///
+/// The fade is MapLibre's `circle-blur`: full strength up to `1 - blur` of
+/// the way out, then a smoothstep down to nothing at the edge. A blur above
+/// 1 starts the fade before the centre, so even the centre is faded. Fill
+/// and ring each fade their own colour, where MapLibre mixes the two first
+/// and fades the mix; the two differ only where a translucent ring overlaps
+/// the fill inside the fade.
+fn set_paint_color(
+    paint: &mut Paint<'_>,
+    color: tiny_skia::Color,
+    blur: f32,
+    centre: (f32, f32),
+    outer: f32,
+) {
+    if blur <= 0.0 || outer <= 0.0 {
+        paint.set_color(color);
+        return;
+    }
+    let from = (1.0 - blur).max(0.0);
+    let stops = (0..BLUR_STOPS)
+        .map(|i| {
+            let d = from + (1.0 - from) * i as f32 / (BLUR_STOPS - 1) as f32;
+            // How far inside the edge `d` is, as a fraction of the fade.
+            let u = ((1.0 - d) / blur).clamp(0.0, 1.0);
+            let mut c = color;
+            c.set_alpha(color.alpha() * u * u * (3.0 - 2.0 * u));
+            GradientStop::new(d, c)
+        })
+        .collect();
+    let centre = tiny_skia::Point::from_xy(centre.0, centre.1);
+    match RadialGradient::new(
+        centre,
+        0.0,
+        centre,
+        outer,
+        stops,
+        SpreadMode::Pad,
+        Transform::identity(),
+    ) {
+        Some(shader) => paint.shader = shader,
+        None => paint.set_color(color),
+    }
+}
+
 struct CirclesNode {
     radius: In<f64>,
     color: In<[f32; 4]>,
     opacity: In<f64>,
     stroke_width: In<f64>,
     stroke_color: In<[f32; 4]>,
+    /// The ring's own opacity (MapLibre `circle-stroke-opacity`). Absent,
+    /// the ring takes `opacity` as the fill does.
+    stroke_opacity: Option<In<f64>>,
+    /// MapLibre `circle-blur`: the fraction of the circle's outer radius over
+    /// which it fades out to its edge. 0 keeps a crisp edge.
+    blur: In<f64>,
     radius_expr: Option<maplibre_expr::Expr>,
     color_expr: Option<maplibre_expr::Expr>,
     opacity_expr: Option<maplibre_expr::Expr>,
     stroke_width_expr: Option<maplibre_expr::Expr>,
     stroke_color_expr: Option<maplibre_expr::Expr>,
+    stroke_opacity_expr: Option<maplibre_expr::Expr>,
+    blur_expr: Option<maplibre_expr::Expr>,
     radius_expr_src: Option<String>,
     color_expr_src: Option<String>,
     opacity_expr_src: Option<String>,
     stroke_width_expr_src: Option<String>,
     stroke_color_expr_src: Option<String>,
+    stroke_opacity_expr_src: Option<String>,
+    blur_expr_src: Option<String>,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
 }
@@ -146,6 +209,11 @@ impl Node for CirclesNode {
         let const_opacity = self.opacity.get(ctx, inputs)? as f32;
         let const_stroke_width = (self.stroke_width.get(ctx, inputs)? as f32).max(0.0);
         let const_stroke_color = color_f32_to_u8(self.stroke_color.get(ctx, inputs)?);
+        let const_stroke_opacity = match &self.stroke_opacity {
+            Some(o) => Some(o.get(ctx, inputs)? as f32),
+            None => None,
+        };
+        let const_blur = (self.blur.get(ctx, inputs)? as f32).max(0.0);
 
         let mut canvas = make_canvas(ctx)?;
         let pad = canvas.pad() as f32;
@@ -168,7 +236,24 @@ impl Node for CirclesNode {
             let fill_color = tint_alpha_color(fill_rgba, opacity);
             let stroke_width = eval_number(&self.stroke_width_expr, &ectx, const_stroke_width);
             let stroke_rgba = eval_color(&self.stroke_color_expr, &ectx, const_stroke_color);
-            let stroke_color = tint_alpha_color(stroke_rgba, opacity);
+            // Without a `stroke-opacity` of its own the ring takes `opacity`.
+            let stroke_opacity = match (&self.stroke_opacity_expr, const_stroke_opacity) {
+                (None, None) => opacity,
+                (_, fallback) => eval_number(
+                    &self.stroke_opacity_expr,
+                    &ectx,
+                    fallback.unwrap_or(opacity),
+                ),
+            };
+            let stroke_color = tint_alpha_color(stroke_rgba, stroke_opacity);
+            let blur = eval_number(&self.blur_expr, &ectx, const_blur).max(0.0);
+            // The ring straddles the radius, so the circle ends half its
+            // width further out; that outer edge is what the blur fades to.
+            let outer = if stroke_width > 0.0 {
+                radius + 0.5 * stroke_width
+            } else {
+                radius
+            };
 
             let pm = canvas.pixmap_mut();
             for &(x, y) in &group.points {
@@ -182,7 +267,7 @@ impl Node for CirclesNode {
                 // Fill first, stroke outline on top (matches MapLibre
                 // `circle-stroke` sitting above the fill).
                 let mut fill_paint = Paint::default();
-                fill_paint.set_color(fill_color);
+                set_paint_color(&mut fill_paint, fill_color, blur, (px, py), outer);
                 fill_paint.anti_alias = true;
                 pm.fill_path(
                     &path,
@@ -193,7 +278,7 @@ impl Node for CirclesNode {
                 );
                 if stroke_width > 0.0 {
                     let mut sp = Paint::default();
-                    sp.set_color(stroke_color);
+                    set_paint_color(&mut sp, stroke_color, blur, (px, py), outer);
                     sp.anti_alias = true;
                     pm.stroke_path(
                         &path,
@@ -222,12 +307,22 @@ impl Node for CirclesNode {
         self.opacity.param_hash(h);
         self.stroke_width.param_hash(h);
         self.stroke_color.param_hash(h);
+        if let Some(o) = &self.stroke_opacity {
+            h.update(b"strokeopacity");
+            o.param_hash(h);
+        }
+        self.blur.param_hash(h);
         for (tag, src) in [
             (b"radiusexpr".as_slice(), &self.radius_expr_src),
             (b"colorexpr".as_slice(), &self.color_expr_src),
             (b"opacityexpr".as_slice(), &self.opacity_expr_src),
             (b"strokewidthexpr".as_slice(), &self.stroke_width_expr_src),
             (b"strokecolorexpr".as_slice(), &self.stroke_color_expr_src),
+            (
+                b"strokeopacityexpr".as_slice(),
+                &self.stroke_opacity_expr_src,
+            ),
+            (b"blurexpr".as_slice(), &self.blur_expr_src),
         ] {
             if let Some(s) = src {
                 h.update(tag);
@@ -257,6 +352,12 @@ impl NodeFactory for CirclesFactory {
         let opacity = r.number_or("opacity", 1.0)?;
         let stroke_width = r.number_or("stroke-width", 0.0)?;
         let stroke_color = r.color_or("stroke-color", [0.0, 0.0, 0.0, 1.0])?;
+        let stroke_opacity = if fields.contains_key("stroke-opacity") {
+            Some(r.number("stroke-opacity")?)
+        } else {
+            None
+        };
+        let blur = r.number_or("blur", 0.0)?;
         let parts = r.finish();
 
         let (radius_expr, radius_expr_src) =
@@ -269,6 +370,10 @@ impl NodeFactory for CirclesFactory {
             parse_expr_field(fields, "stroke-width-expr", &maplibre_expr::Type::Number)?;
         let (stroke_color_expr, stroke_color_expr_src) =
             parse_expr_field(fields, "stroke-color-expr", &maplibre_expr::Type::Color)?;
+        let (stroke_opacity_expr, stroke_opacity_expr_src) =
+            parse_expr_field(fields, "stroke-opacity-expr", &maplibre_expr::Type::Number)?;
+        let (blur_expr, blur_expr_src) =
+            parse_expr_field(fields, "blur-expr", &maplibre_expr::Type::Number)?;
 
         let mut ports = vec![PortSpec {
             name: "features",
@@ -289,16 +394,22 @@ impl NodeFactory for CirclesFactory {
                 opacity,
                 stroke_width,
                 stroke_color,
+                stroke_opacity,
+                blur,
                 radius_expr,
                 color_expr,
                 opacity_expr,
                 stroke_width_expr,
                 stroke_color_expr,
+                stroke_opacity_expr,
+                blur_expr,
                 radius_expr_src,
                 color_expr_src,
                 opacity_expr_src,
                 stroke_width_expr_src,
                 stroke_color_expr_src,
+                stroke_opacity_expr_src,
+                blur_expr_src,
                 ports,
                 param_refs: parts.param_refs,
             }),
@@ -320,7 +431,12 @@ impl NodeFactory for CirclesFactory {
                 },
                 "opacity": schema_frag::unit_number(),
                 "opacity-expr": {
-                    "description": "A MapLibre number expression giving opacity, evaluated per feature group; multiplies both fill and stroke alpha. Overrides the constant `opacity`.",
+                    "description": "A MapLibre number expression giving opacity, evaluated per feature group; multiplies the fill's alpha, and the stroke ring's too unless `stroke-opacity` or `stroke-opacity-expr` is set. Overrides the constant `opacity`.",
+                },
+                "blur": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0,
+                          "description": "MapLibre `circle-blur`: the fraction of the circle's outer radius (to the outside of the stroke ring) over which fill and ring fade out to the edge, with a smoothstep. 0 (the default) keeps a crisp edge; 1 fades from the centre; above 1 fades even the centre." })),
+                "blur-expr": {
+                    "description": "A MapLibre number expression for `blur`, evaluated per feature group; overrides the constant `blur`.",
                 },
                 "stroke-width": schema_frag::px_number(),
                 "stroke-width-expr": {
@@ -329,6 +445,11 @@ impl NodeFactory for CirclesFactory {
                 "stroke-color": schema_frag::color(),
                 "stroke-color-expr": {
                     "description": "A MapLibre color expression for the stroke ring, evaluated per feature group; overrides the constant `stroke-color`.",
+                },
+                "stroke-opacity": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0, "maximum": 1.0,
+                                    "description": "The stroke ring's opacity (MapLibre `circle-stroke-opacity`), in place of `opacity`, which then applies to the fill alone. Left out, the ring takes `opacity`." })),
+                "stroke-opacity-expr": {
+                    "description": "A MapLibre number expression for the stroke ring's opacity, evaluated per feature group; overrides `stroke-opacity`. A group whose expression doesn't resolve to a number falls back to `stroke-opacity`, or to `opacity` when that is left out.",
                 },
             },
             "required": ["features"],

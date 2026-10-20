@@ -877,6 +877,23 @@
           {
             "description": "Filled disks at every feature point (tiny-skia), with per-feature radius, color, opacity, and optional stroke ring. The crisp vector counterpart to MapLibre's `circle` layer. Each paint property has an optional `*-expr` MapLibre-expression sibling evaluated per feature group.",
             "properties": {
+              "blur": {
+                "oneOf": [
+                  {
+                    "description": "MapLibre `circle-blur`: the fraction of the circle's outer radius (to the outside of the stroke ring) over which fill and ring fade out to the edge, with a smoothstep. 0 (the default) keeps a crisp edge; 1 fades from the centre; above 1 fades even the centre.",
+                    "minimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "blur-expr": {
+                "description": "A MapLibre number expression for `blur`, evaluated per feature group; overrides the constant `blur`."
+              },
               "color": {
                 "description": "sRGB hex color, `$param` reference, or `@node` scalar port.",
                 "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|[$@][A-Za-z_][A-Za-z0-9_-]*)$",
@@ -909,7 +926,7 @@
                 ]
               },
               "opacity-expr": {
-                "description": "A MapLibre number expression giving opacity, evaluated per feature group; multiplies both fill and stroke alpha. Overrides the constant `opacity`."
+                "description": "A MapLibre number expression giving opacity, evaluated per feature group; multiplies the fill's alpha, and the stroke ring's too unless `stroke-opacity` or `stroke-opacity-expr` is set. Overrides the constant `opacity`."
               },
               "radius": {
                 "oneOf": [
@@ -934,6 +951,24 @@
               },
               "stroke-color-expr": {
                 "description": "A MapLibre color expression for the stroke ring, evaluated per feature group; overrides the constant `stroke-color`."
+              },
+              "stroke-opacity": {
+                "oneOf": [
+                  {
+                    "description": "The stroke ring's opacity (MapLibre `circle-stroke-opacity`), in place of `opacity`, which then applies to the fill alone. Left out, the ring takes `opacity`.",
+                    "maximum": 1.0,
+                    "minimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "stroke-opacity-expr": {
+                "description": "A MapLibre number expression for the stroke ring's opacity, evaluated per feature group; overrides `stroke-opacity`. A group whose expression doesn't resolve to a number falls back to `stroke-opacity`, or to `opacity` when that is left out."
               },
               "stroke-width": {
                 "oneOf": [

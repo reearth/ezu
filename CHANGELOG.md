@@ -209,6 +209,10 @@ mean is spelled out in
 - `fill-dabs` takes `color-expr` and `opacity-expr`, evaluated per feature
   group. The dabs land and jitter where they did, and each takes the paint
   of the group whose polygon covers its centre.
+- `circles` takes `stroke-opacity` (MapLibre `circle-stroke-opacity`), the
+  ring's own opacity in place of `opacity`, and `blur` (`circle-blur`), a
+  fade to the edge over that fraction of the radius, each with a `*-expr`
+  form. Left out, the ring takes `opacity` and the edge is crisp, as before.
 
 ### Changed
 
@@ -331,7 +335,6 @@ mean is spelled out in
   `line-pattern`. They now become the `line-stamp`'s `width-expr`,
   `opacity-expr` and `name-expr`. A `line-gap-width` on such a layer, which
   is not drawn, now warns.
-
 ## 0.12.0 — 2026-10-12
 
 ### Breaking

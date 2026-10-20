@@ -151,3 +151,123 @@ fn opaque_color_expr_matches_constant_color_pixel_for_pixel() {
         "center should be red: {center:?}"
     );
 }
+
+/// Render one point of class `c` at the tile centre through a `circles`
+/// node with `fields` (a JSON object body without braces).
+fn render_one(c: &str, fields: &str) -> std::sync::Arc<ezu_graph::RasterBuf> {
+    let json = format!(
+        r##"{{
+      "name": "circle-one",
+      "tile-size": 64,
+      "sources": {{ "src": {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }} }},
+      "nodes": {{
+        "feats": {{ "op": "features", "source": "src", "layer": "pts" }},
+        "out":   {{ "op": "circles", "features": "@feats", {fields} }}
+      }},
+      "output": "@out"
+    }}"##
+    );
+    render_with_features(
+        &json,
+        64,
+        0,
+        TileId { z: 0, x: 0, y: 0 },
+        &[(
+            "src.pts",
+            points_layer("pts", vec![point_feature(c, 2048, 2048)]),
+        )],
+    )
+}
+
+/// For each `(class, literal)`, the expression render of that class equals
+/// the literal render, and the literals really differ from one another.
+fn assert_matches_literals(expr_fields: &str, literal_fields: &[(&str, &str)]) {
+    let mut seen: Vec<Vec<u8>> = Vec::new();
+    for (c, lit) in literal_fields {
+        let want = render_one(c, lit).pixels.clone();
+        assert_eq!(
+            render_one(c, expr_fields).pixels,
+            want,
+            "class `{c}` should render as `{lit}`"
+        );
+        assert!(
+            !seen.contains(&want),
+            "the literals should differ, or the test proves nothing"
+        );
+        seen.push(want);
+    }
+}
+
+#[test]
+fn stroke_opacity_expr_renders_as_each_groups_literal() {
+    assert_matches_literals(
+        r##""radius": 10, "color": "#ff0000", "stroke-width": 4, "stroke-color": "#0000ff",
+           "stroke-opacity-expr": ["match", ["get","c"], "faint", 0.25, 0.8]"##,
+        &[
+            (
+                "faint",
+                r##""radius": 10, "color": "#ff0000", "stroke-width": 4, "stroke-color": "#0000ff", "stroke-opacity": 0.25"##,
+            ),
+            (
+                "strong",
+                r##""radius": 10, "color": "#ff0000", "stroke-width": 4, "stroke-color": "#0000ff", "stroke-opacity": 0.8"##,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn stroke_opacity_takes_the_ring_out_of_opacity() {
+    // `opacity` fades the fill alone once the ring has its own opacity, as
+    // `circle-opacity` and `circle-stroke-opacity` split it in MapLibre.
+    let r = render_one(
+        "x",
+        r##""radius": 12, "color": "#ff0000", "opacity": 0.3,
+            "stroke-width": 4, "stroke-color": "#0000ff", "stroke-opacity": 1"##,
+    );
+    let fill = r.pixel(32, 32);
+    let ring = r.pixel(32 + 12, 32);
+    assert!(fill[3] < 100, "the fill should be faint: {fill:?}");
+    assert!(ring[3] > 240, "the ring should be opaque: {ring:?}");
+
+    // Left out, the ring takes `opacity` as before.
+    let r = render_one(
+        "x",
+        r##""radius": 12, "color": "#ff0000", "opacity": 0.3,
+            "stroke-width": 4, "stroke-color": "#0000ff""##,
+    );
+    let ring = r.pixel(32 + 12, 32);
+    assert!(ring[3] < 100, "the ring should be faint: {ring:?}");
+}
+
+#[test]
+fn blur_expr_renders_as_each_groups_literal() {
+    assert_matches_literals(
+        r##""radius": 12, "color": "#ff0000",
+           "blur-expr": ["match", ["get","c"], "soft", 0.5, 1]"##,
+        &[
+            ("soft", r##""radius": 12, "color": "#ff0000", "blur": 0.5"##),
+            ("softer", r##""radius": 12, "color": "#ff0000", "blur": 1"##),
+        ],
+    );
+}
+
+#[test]
+fn blur_fades_the_circle_towards_its_edge() {
+    // With `blur: 0.5` the inner half stays at full strength and the alpha
+    // falls off towards the edge.
+    let r = render_one("x", r##""radius": 16, "color": "#ff0000", "blur": 0.5"##);
+    let alpha = |dx: u32| r.pixel(32 + dx, 32)[3];
+    assert!(
+        alpha(0) > 250 && alpha(6) > 250,
+        "the inner half stays solid"
+    );
+    assert!(
+        alpha(9) > alpha(12) && alpha(12) > alpha(15),
+        "the outer half fades: {} {} {}",
+        alpha(9),
+        alpha(12),
+        alpha(15)
+    );
+    assert!(alpha(15) < 40, "nearly gone at the edge: {}", alpha(15));
+}
