@@ -89,7 +89,7 @@ fn sdf_halo_params(halo_width_px: f32, halo_blur_px: f32, font_scale: f32) -> (f
 /// the module docs); `None` keeps the vector fill / stroke.
 ///
 /// With [`TextPaint::strikethrough_px`] set, each non-empty line also gets
-/// a bar spanning its advance extent (see [`strikethrough_rects`]). The bar
+/// a bar spanning its advance extent (see `strikethrough_rects`). The bar
 /// joins both passes — its halo (the bar grown by `halo-width` on every
 /// side, round-cornered) goes down with the glyph halos, its fill in the
 /// block colour after the glyph fills — so it reads over busy backgrounds

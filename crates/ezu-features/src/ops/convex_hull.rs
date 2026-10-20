@@ -1,6 +1,6 @@
 //! Convex hull via the [`geo`] crate. Accepts an arbitrary mix of
 //! points, polylines, and polygon rings — all vertices are pooled and
-//! fed to [`MultiPoint::convex_hull`].
+//! fed to [`ConvexHull::convex_hull`] on a [`MultiPoint`].
 
 use geo::{ConvexHull, Coord, MultiPoint, Point};
 

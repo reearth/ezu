@@ -493,7 +493,7 @@ async fn get_mvt_meta(
 /// identifies which tile the bytes actually came from — equal to `tile`
 /// on a direct hit, an ancestor on overzoom. Callers that intend to
 /// render must run those bytes through
-/// [`ezu_features::mvt::clip_to_descendant`] when the IDs differ; callers
+/// [`ezu::features::mvt::clip_to_descendant`] when the IDs differ; callers
 /// that need the raw native bytes (the `/mvt` endpoint) should treat a
 /// non-matching ID as a miss.
 ///
@@ -529,7 +529,7 @@ async fn fetch_mvt(
 }
 
 /// Pre-fetch the DEM mosaic for every source in the snapshot so the
-/// blocking render path receives ready-to-bind [`ScalarField`]s
+/// blocking render path receives ready-to-bind [`ScalarField`](ezu::graph::ScalarField)s
 /// without juggling async fetches.
 async fn fetch_dem_bindings(
     registry: &DemSourceRegistry,

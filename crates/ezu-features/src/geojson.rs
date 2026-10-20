@@ -1,6 +1,6 @@
 //! GeoJSON parsing.
 //!
-//! Parses a GeoJSON [`FeatureCollection`], single [`Feature`], or bare
+//! Parses a GeoJSON `FeatureCollection`, single `Feature`, or bare
 //! geometry into the crate-root [`Feature`] / [`Geometry`] / [`Value`]
 //! types, with coordinates in MVT's integer tile-local space.
 //!

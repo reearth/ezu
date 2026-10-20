@@ -758,7 +758,7 @@ fn percent_encode(s: &str) -> String {
 
 /// A sprite sheet: one atlas image plus a name → sub-rect index, so
 /// `icon` nodes can crop named icons out of it (icons, `fill-pattern`).
-/// The runtime shape is [`ezu_graph::SpriteSheet`]; the host builds it.
+/// The runtime shape is `ezu_graph::SpriteSheet`; the host builds it.
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct SpriteSource {

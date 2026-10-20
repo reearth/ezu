@@ -171,7 +171,7 @@ pub trait Node: Send + Sync {
     fn param_hash(&self, hasher: &mut Xxh3);
 
     /// Named asset bindings this node samples via the
-    /// [`AssetLoader`](crate::eval::AssetLoader). The evaluator folds
+    /// [`AssetLoader`]. The evaluator folds
     /// each binding's `AssetLoader::hash` into this node's cache key,
     /// so changes in bound data invalidate caches automatically. Like
     /// declaring uniforms in a shader.

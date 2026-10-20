@@ -8,8 +8,8 @@
 //!
 //! ```ignore
 //! let mut r = InReader::new(fields, ctx, FIXED_PORTS.len());
-//! let sigma = r.number(\"sigma\")?;          // In<f64>
-//! let color = r.color_or(\"color\", WHITE)?; // In<[f32; 4]>
+//! let sigma = r.number("sigma")?;          // In<f64>
+//! let color = r.color_or("color", WHITE)?; // In<[f32; 4]>
 //! let parts = r.finish();
 //! // node stores `sigma`, `color`, `parts.ports` (appended after the
 //! // fixed ports), returns `parts.param_refs` from `Node::param_refs`,

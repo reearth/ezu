@@ -85,7 +85,7 @@ static GLYPH_SDF: LazyLock<Mutex<GlyphSdfStore>> = LazyLock::new(|| {
 
 /// A per-eval handle onto the process-wide glyph-SDF cache. Holds only this
 /// eval's hit / miss / built-bytes tallies (for the per-node debug summary);
-/// the built SDFs themselves live in the shared [`GLYPH_SDF`] store and
+/// the built SDFs themselves live in the shared `GLYPH_SDF` store and
 /// persist across tiles, so a glyph rasterized for one tile is reused by
 /// every later tile that repeats it.
 #[derive(Default)]

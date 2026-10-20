@@ -279,7 +279,7 @@ impl TileSource {
     /// Fetch a tile, walking up the pyramid up to `max_parent_levels`
     /// times on `None` (404 / missing). Returns the raw bytes together
     /// with the `TileId` they actually came from — the caller passes
-    /// that to [`ezu_features::mvt::clip_to_descendant`] to remap the
+    /// that to [`ezu::features::mvt::clip_to_descendant`] to remap the
     /// parent's coordinate frame onto the requested tile.
     ///
     /// `max_parent_levels = 0` is identical to [`Self::fetch`].

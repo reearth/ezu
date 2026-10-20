@@ -128,7 +128,7 @@ impl<'a> Evaluator<'a> {
         Ok(out)
     }
 
-    /// Like [`render`] but evaluates nodes concurrently on Rayon, firing
+    /// Like [`render`](Self::render) but evaluates nodes concurrently on Rayon, firing
     /// each node the moment its last input resolves rather than waiting
     /// on a topological-level barrier. A slow node (e.g. text) no longer
     /// stalls unrelated branches, so the wall time tracks the graph's

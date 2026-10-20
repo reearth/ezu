@@ -101,7 +101,7 @@
 //! used after its tile's `sources` has finished.
 //!
 //! `OutOfMemory` is thrown from wherever the heap ran out — see
-//! [`oom`] for what the host may and may not do afterwards.
+//! the `oom` module for what the host may and may not do afterwards.
 
 mod log;
 
@@ -443,7 +443,7 @@ impl Renderer {
     /// - `mvt` / `pmtiles` → store raw MVT bytes per `(dx, dy)` neighbour
     ///   offset (centre `coord: [0, 0]`, the default). Layers are bound as
     ///   `<source>.<layer>` (centre) or `<source>.<layer>@dx,dy`
-    ///   (neighbours) when [`render_tile`] runs. Binding only the centre
+    ///   (neighbours) when [`render_tile`](Self::render_tile) runs. Binding only the centre
     ///   degrades cross-tile label collision to centre-only at borders.
     /// - `dem` / `raster` → store the raw bytes per `(dx, dy)` neighbour
     ///   offset. The centre tile is `coord: [0, 0]` (default). Decoding
@@ -1612,7 +1612,8 @@ pub fn simd_enabled() -> bool {
 ///
 /// This is the figure an isolate's memory cap applies to, and the one
 /// to watch to shed load before an allocation fails — a refused
-/// `memory.grow` throws [`OutOfMemory`](oom) and ends the instance.
+/// `memory.grow` throws `OutOfMemory` (see the `oom` module) and ends the
+/// instance.
 /// It never falls: freed Rust values return to the allocator for reuse,
 /// but wasm cannot hand pages back to the host. So a drop in demand
 /// leaves the number where its peak left it, and only a fresh instance
