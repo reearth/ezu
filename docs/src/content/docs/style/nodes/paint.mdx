@@ -249,7 +249,7 @@ Text labels (MapLibre `symbol-placement`): `placement: point` (default) labels e
 | `icon-optional` | boolean | no | MapLibre `icon-optional`: let the text place when the icon's box is blocked. Default false — icon and text place as one unit. |
 | `icon-padding-expr` | — | no | A MapLibre number expression (px), evaluated per feature group; overrides `icon-padding-px`. |
 | `icon-padding-px` | number (0…∞) | no | MapLibre `icon-padding`: collision-box inflation around the icon, in px. Default 2. |
-| `icon-rotate-deg` | number | no | MapLibre `icon-rotate`: rotation in degrees clockwise about the icon centre. Default 0. |
+| `icon-rotate-deg` | number | no | MapLibre `icon-rotate`: rotation in degrees clockwise about the anchor point, as MapLibre turns an icon: an icon whose `icon-anchor` is off its centre, or that has an `icon-offset`, swings round the point with the offset turning with it, as `stamp` turns its image. The collision box stays the unturned rect. Default 0. |
 | `icon-rotate-deg-expr` | — | no | A MapLibre number expression (degrees clockwise); overrides `icon-rotate-deg`. |
 | `icon-size` | number (0…∞) | no | MapLibre `icon-size`: multiplier on the sprite's authored display size (atlas pixels over its pixel ratio). Default 1. |
 | `icon-size-expr` | — | no | A MapLibre number expression, evaluated per feature group; overrides `icon-size`. |
@@ -347,7 +347,7 @@ Text labels (MapLibre `symbol-placement`): `placement: point` (default) labels e
 | `icon-optional` | boolean | no | MapLibre `icon-optional`: let the text place when the icon's box is blocked. Default false — icon and text place as one unit. |
 | `icon-padding-expr` | — | no | A MapLibre number expression (px), evaluated per feature group; overrides `icon-padding-px`. |
 | `icon-padding-px` | number (0…∞) | no | MapLibre `icon-padding`: collision-box inflation around the icon, in px. Default 2. |
-| `icon-rotate-deg` | number | no | MapLibre `icon-rotate`: rotation in degrees clockwise about the icon centre. Default 0. |
+| `icon-rotate-deg` | number | no | MapLibre `icon-rotate`: rotation in degrees clockwise about the anchor point, as MapLibre turns an icon: an icon whose `icon-anchor` is off its centre, or that has an `icon-offset`, swings round the point with the offset turning with it, as `stamp` turns its image. The collision box stays the unturned rect. Default 0. |
 | `icon-rotate-deg-expr` | — | no | A MapLibre number expression (degrees clockwise); overrides `icon-rotate-deg`. |
 | `icon-size` | number (0…∞) | no | MapLibre `icon-size`: multiplier on the sprite's authored display size (atlas pixels over its pixel ratio). Default 1. |
 | `icon-size-expr` | — | no | A MapLibre number expression, evaluated per feature group; overrides `icon-size`. |

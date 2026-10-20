@@ -310,8 +310,10 @@ impl LabelBoxesNode {
                         icon.image.width as f32 * icon.scale,
                         icon.image.height as f32 * icon.scale,
                     );
+                    // Turned about the anchor, as `text-draw` draws it.
+                    let offset = icon.turned_offset();
                     out.rotated(
-                        (anchor.0 + icon.offset.0, anchor.1 + icon.offset.1),
+                        (anchor.0 + offset.0, anchor.1 + offset.1),
                         icon.rotation_deg.to_radians(),
                         (-0.5 * w, -0.5 * h, 0.5 * w, 0.5 * h),
                         &props,

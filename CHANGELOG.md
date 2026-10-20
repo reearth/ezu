@@ -496,6 +496,13 @@ mean is spelled out in
 - `ezu translate` dropped an expression `fill-outline-color` without a
   warning. It now becomes the `fill-solid`'s `edge-expr`, with the 1 px
   outline a constant one gets, and a value it cannot read warns.
+- `icon-rotate-deg` on `text` and `text-labels` turned the icon about its
+  own centre, so an icon with an `icon-anchor` other than `center`, or an
+  `icon-offset`, spun in place where MapLibre swings it round the anchor
+  point. It now turns about the anchor point, the offset with it, as `stamp`
+  already turned its image, and `label-boxes` reports the icon's quad
+  there. Icons without rotation, and centred icons without an offset, draw
+  as before.
 
 ## 0.12.0 — 2026-10-12
 

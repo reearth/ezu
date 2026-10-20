@@ -432,3 +432,72 @@ fn icon_opacity_takes_a_param_or_a_node() {
         )
     });
 }
+
+/// Bounds `(min_x, min_y, max_x, max_y)` of the icon's green pixels.
+fn green_bounds(r: &RasterBuf) -> (u32, u32, u32, u32) {
+    let mut b = (u32::MAX, u32::MAX, 0, 0);
+    for y in 0..r.height {
+        for x in 0..r.width {
+            let p = r.pixel(x, y);
+            if p[3] >= 200 && p[1] > p[0] && p[1] > p[2] {
+                b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
+            }
+        }
+    }
+    assert!(b.0 <= b.2, "the icon must draw");
+    b
+}
+
+#[test]
+fn a_turned_icon_swings_round_its_anchor_point() {
+    // MapLibre turns an icon's corners about the anchor point. With
+    // `icon-anchor: left` the 16 px icon sits right of the point at (64, 64);
+    // a quarter turn clockwise carries it below the point instead, centred on
+    // x = 64, exactly where `stamp` puts the same image.
+    let fields =
+        format!(r#"{ICON}, "icon-anchor": "left", "icon-offset": [2, 0], "icon-rotate-deg": 90"#);
+    let labelled = render(&recipe(POIS_FIRST, &fields, "pois"), T0, vec![], poi());
+    // The render keeps its pad, so the point sits at (64 + PAD, 64 + PAD).
+    let (x0, y0, x1, y1) = green_bounds(&labelled);
+    let p = PAD + 64;
+    assert!(
+        (p - 9..=p - 7).contains(&x0) && (p + 7..=p + 9).contains(&x1),
+        "the icon is centred under the point: x {x0}..{x1}"
+    );
+    assert!(
+        (p + 1..=p + 3).contains(&y0) && (p + 17..=p + 19).contains(&y1),
+        "the icon and its offset swing below the point: y {y0}..{y1}"
+    );
+
+    let stamped = render_with_features_and_sprite(
+        &format!(
+            r##"{{
+      "name": "stamp-turn",
+      "tile-size": {TILE},
+      "sources": {{
+        "src":   {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
+        "sheet": {{ "type": "sprite", "image": "builtin:atlas",
+                    "index": {{ "dot": {{ "x": 0, "y": 0, "width": 16, "height": 16 }} }} }}
+      }},
+      "nodes": {{
+        "feats": {{ "op": "features", "source": "src", "layer": "pois" }},
+        "dot":   {{ "op": "icon", "sprite": "@sheet", "name": "dot" }},
+        "out":   {{ "op": "stamp", "features": "@feats", "image": "@dot",
+                   "anchor": "left", "offset": [2, 0], "rotation-deg": 90 }}
+      }},
+      "output": "@out"
+    }}"##
+        ),
+        TILE,
+        PAD,
+        T0,
+        &[("src.pois", layer("pois", poi()))],
+        "atlas",
+        dot_sheet(),
+    );
+    assert_eq!(
+        green_bounds(&stamped),
+        (x0, y0, x1, y1),
+        "text's icon and stamp turn about the same point"
+    );
+}

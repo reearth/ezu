@@ -127,16 +127,33 @@ pub(super) struct PointVariant {
 pub(super) struct IconDraw {
     pub image: Arc<RasterBuf>,
     /// Icon centre relative to the label anchor (px), from `icon-anchor`
-    /// and `icon-offset`.
+    /// and `icon-offset`, before `rotation_deg` turns it.
     pub offset: (f32, f32),
     /// Image pixels → canvas px: `icon-size` over the sprite's pixel ratio.
     pub scale: f32,
-    /// MapLibre `icon-rotate`, degrees clockwise about the icon centre.
+    /// MapLibre `icon-rotate`, degrees clockwise about the label anchor:
+    /// MapLibre turns an icon's corners about the anchor point, so an icon
+    /// anchored off its centre, or offset, swings round the point rather
+    /// than spinning in place.
     pub rotation_deg: f32,
     pub opacity: f32,
     /// Half-extent of the drawn icon (px, rotation included), for the
     /// off-canvas reject.
     pub half: (f32, f32),
+}
+
+impl IconDraw {
+    /// The icon's centre relative to the label anchor once `rotation_deg`
+    /// has turned it about the anchor.
+    pub(super) fn turned_offset(&self) -> (f32, f32) {
+        if self.rotation_deg == 0.0 {
+            return self.offset;
+        }
+        let a = self.rotation_deg.to_radians();
+        let (s, c) = (libm::sinf(a), libm::cosf(a));
+        let (x, y) = self.offset;
+        (x * c - y * s, x * s + y * c)
+    }
 }
 
 /// The box around a point label's text (`background-padding` and/or
@@ -477,10 +494,8 @@ pub(super) fn draw_labels(
         else {
             continue;
         };
-        let (ax, ay) = (
-            anchor.0 + pad + icon.offset.0,
-            anchor.1 + pad + icon.offset.1,
-        );
+        let offset = icon.turned_offset();
+        let (ax, ay) = (anchor.0 + pad + offset.0, anchor.1 + pad + offset.1);
         if ax + icon.half.0 < 0.0
             || ax - icon.half.0 > padded_w
             || ay + icon.half.1 < 0.0

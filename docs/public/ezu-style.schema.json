@@ -6363,7 +6363,7 @@
                 "type": "number"
               },
               "icon-rotate-deg": {
-                "description": "MapLibre `icon-rotate`: rotation in degrees clockwise about the icon centre. Default 0.",
+                "description": "MapLibre `icon-rotate`: rotation in degrees clockwise about the anchor point, as MapLibre turns an icon: an icon whose `icon-anchor` is off its centre, or that has an `icon-offset`, swings round the point with the offset turning with it, as `stamp` turns its image. The collision box stays the unturned rect. Default 0.",
                 "type": "number"
               },
               "icon-rotate-deg-expr": {
@@ -6978,7 +6978,7 @@
                 "type": "number"
               },
               "icon-rotate-deg": {
-                "description": "MapLibre `icon-rotate`: rotation in degrees clockwise about the icon centre. Default 0.",
+                "description": "MapLibre `icon-rotate`: rotation in degrees clockwise about the anchor point, as MapLibre turns an icon: an icon whose `icon-anchor` is off its centre, or that has an `icon-offset`, swings round the point with the offset turning with it, as `stamp` turns its image. The collision box stays the unturned rect. Default 0.",
                 "type": "number"
               },
               "icon-rotate-deg-expr": {

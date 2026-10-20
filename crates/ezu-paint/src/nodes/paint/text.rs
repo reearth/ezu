@@ -3980,7 +3980,7 @@ fn text_schema(stage: Stage) -> Value {
                 "icon-offset": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2,
                                  "description": "MapLibre `icon-offset`: shift [x, y] in px, itself scaled by `icon-size`. Default [0, 0]." },
                 "icon-rotate-deg": { "type": "number",
-                                     "description": "MapLibre `icon-rotate`: rotation in degrees clockwise about the icon centre. Default 0." },
+                                     "description": "MapLibre `icon-rotate`: rotation in degrees clockwise about the anchor point, as MapLibre turns an icon: an icon whose `icon-anchor` is off its centre, or that has an `icon-offset`, swings round the point with the offset turning with it, as `stamp` turns its image. The collision box stays the unturned rect. Default 0." },
                 "icon-rotate-deg-expr": { "description": "A MapLibre number expression (degrees clockwise); overrides `icon-rotate-deg`." },
                 "icon-opacity": schema_frag::unit_number(),
                 "icon-opacity-expr": { "description": "A MapLibre number expression giving the icon's opacity; overrides `icon-opacity`." },
