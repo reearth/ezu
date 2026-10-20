@@ -87,8 +87,9 @@ pub(crate) struct TileRenderer {
 }
 
 impl TileRenderer {
-    /// Build the renderer, let it read the style's assets, open the `dem`
-    /// and `raster` sources and load the remote GeoJSON documents.
+    /// Build the renderer, let it read the style's assets and load the
+    /// remote GeoJSON documents. The `dem` and `raster` sources open when a
+    /// render first reads them.
     pub(crate) async fn open(o: Open<'_>) -> Result<Self, Box<dyn std::error::Error>> {
         let mut renderer = o.renderer;
         // What the style's graph reads: a `dem` or `raster` source nothing
@@ -98,7 +99,7 @@ impl TileRenderer {
         if o.cache_budget.is_some() {
             renderer.set_cache_budget(o.cache_budget);
         }
-        let mut pyramids = PyramidSources::open(o.doc, o.assets_dir).await?;
+        let mut pyramids = PyramidSources::new(o.doc, o.assets_dir);
         if let Some((cache, remote_only)) = o.byte_cache {
             pyramids = pyramids.with_byte_cache(cache, remote_only);
         }

@@ -27,6 +27,11 @@ pub enum SourceError {
     MissingDir { pattern: String, dir: String },
     #[error("tilejson at {src}: {msg}")]
     TileJson { src: String, msg: String },
+    #[error("source `{name}`: {error}")]
+    Open {
+        name: String,
+        error: Box<SourceError>,
+    },
 }
 
 /// One of the supported tile-byte sources. Each `fetch` returns the
@@ -559,11 +564,24 @@ impl FeatureSources {
     }
 }
 
-/// One `dem` or `raster` source the style declares, opened: a tile pyramid
-/// whose tiles the renderer stitches into a 3×3 neighbourhood itself.
+/// One `dem` or `raster` source the style declares: a tile pyramid whose
+/// tiles the renderer stitches into a 3×3 neighbourhood itself.
+///
+/// It is opened on first use, not when the style loads. Opening a remote
+/// TileJSON document or `.pmtiles` archive goes to the network, and a style
+/// may declare a source no node reads, so loading the style neither waits
+/// on nor fails over a source until a render or an attribution asks for it.
 pub struct PyramidSource {
     pub name: Arc<str>,
-    tiles: TileSource,
+    spec: SourceSpec,
+    /// Where a relative `file:` path resolves.
+    base_dir: PathBuf,
+    /// Where the opened source keeps the tiles it fetches, and whether
+    /// only remote ones.
+    byte_cache: Option<(Arc<TileByteCache>, bool)>,
+    /// The source once opened. A failed open is not kept, so the next use
+    /// tries again.
+    tiles: tokio::sync::OnceCell<TileSource>,
     /// The declared `min-zoom`: below it nothing is fetched.
     min_zoom: Option<u8>,
     /// The declared `max-zoom`. Unlike a vector source's, it is not
@@ -582,9 +600,41 @@ impl PyramidSource {
         self.min_zoom.is_none_or(|mz| z >= mz)
     }
 
-    /// Upstream attribution captured when the source was opened.
-    pub fn attribution(&self) -> Option<&str> {
-        self.tiles.attribution()
+    /// Whether the source has been opened yet.
+    #[cfg(test)]
+    pub fn is_open(&self) -> bool {
+        self.tiles.initialized()
+    }
+
+    /// The source, opened now if this is its first use.
+    async fn tiles(&self) -> Result<&TileSource, SourceError> {
+        self.tiles
+            .get_or_try_init(|| async {
+                let mut tiles = TileSource::open(&self.spec, Some(&self.base_dir))
+                    .await
+                    .map_err(|e| SourceError::Open {
+                        name: self.name.to_string(),
+                        error: Box::new(e),
+                    })?;
+                if let Some((cache, remote_only)) = &self.byte_cache {
+                    tiles.use_byte_cache(cache, *remote_only);
+                }
+                Ok(tiles)
+            })
+            .await
+    }
+
+    /// Upstream attribution (TileJSON `attribution`, PMTiles metadata),
+    /// opening the source to read it. A source that will not open has
+    /// none to give.
+    pub async fn attribution(&self) -> Option<String> {
+        match self.tiles().await {
+            Ok(tiles) => tiles.attribution().map(str::to_string),
+            Err(e) => {
+                tracing::warn!("{e}");
+                None
+            }
+        }
     }
 
     /// The bytes that draw `tile` and the tile they belong to: the covering
@@ -595,12 +645,13 @@ impl PyramidSource {
         if !self.serves(tile.z) {
             return Ok(None);
         }
+        let tiles = self.tiles().await?;
         let mut z = self.max_zoom.map_or(tile.z, |mz| tile.z.min(mz));
         // Upsampling stops at the floor: the source has nothing above it.
         let floor = self.min_zoom.unwrap_or(0);
         loop {
             let at = tile.ancestor_at(z).unwrap_or(tile);
-            if let Some(bytes) = self.tiles.fetch(at).await? {
+            if let Some(bytes) = tiles.fetch(at).await? {
                 return Ok(Some((bytes, at)));
             }
             if self.on_missing == ezu::style::OnMissing::Upsample && z > floor {
@@ -621,14 +672,11 @@ impl PyramidSource {
 pub struct PyramidSources(Vec<PyramidSource>);
 
 impl PyramidSources {
-    /// Open each `dem` and `raster` source `doc` declares. A URL ending in
-    /// `.pmtiles` is an archive, a relative path to one read against
-    /// `base_dir`; a `.json` URL is a TileJSON document; anything else an
-    /// XYZ template.
-    pub async fn open(
-        doc: &ezu::style::Document,
-        base_dir: &Path,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    /// Each `dem` and `raster` source `doc` declares, each to be opened on
+    /// its first use. A URL ending in `.pmtiles` is an archive, a relative
+    /// path to one read against `base_dir`; a `.json` URL is a TileJSON
+    /// document; anything else an XYZ template.
+    pub fn new(doc: &ezu::style::Document, base_dir: &Path) -> Self {
         use ezu::style::SourceDecl;
         let mut out = Vec::new();
         for (name, decl) in &doc.sources {
@@ -650,22 +698,23 @@ impl PyramidSources {
             };
             out.push(PyramidSource {
                 name: Arc::from(name.as_str()),
-                tiles: TileSource::open(&spec, Some(base_dir))
-                    .await
-                    .map_err(|e| format!("source `{name}`: {e}"))?,
+                spec,
+                base_dir: base_dir.to_path_buf(),
+                byte_cache: None,
+                tiles: tokio::sync::OnceCell::new(),
                 min_zoom: decl.min_zoom(),
                 max_zoom: decl.max_zoom(),
                 on_missing,
                 is_dem,
             });
         }
-        Ok(Self(out))
+        Self(out)
     }
 
-    /// As [`FeatureSources::with_byte_cache`].
+    /// As [`FeatureSources::with_byte_cache`], for each source as it opens.
     pub fn with_byte_cache(mut self, cache: &Arc<TileByteCache>, remote_only: bool) -> Self {
         for source in &mut self.0 {
-            source.tiles.use_byte_cache(cache, remote_only);
+            source.byte_cache = Some((Arc::clone(cache), remote_only));
         }
         self
     }
@@ -961,7 +1010,7 @@ mod tests {
             root.display().to_string().replace('\\', "/"),
         ))
         .unwrap();
-        let sources = PyramidSources::open(&doc, &root).await.unwrap();
+        let sources = PyramidSources::new(&doc, &root);
         let photo = sources.iter().next().unwrap();
         assert!(photo.serves(3) && !photo.serves(2));
         // The z2 tile exists on disk, but the source does not serve z2.

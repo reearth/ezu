@@ -135,8 +135,11 @@ async fn get_attribution(State(s): State<AppState>) -> Json<serde_json::Value> {
                 .sources
                 .get(&*src.name)
                 .is_some_and(|d| d.attribution().is_some());
-            if let (false, Some(a)) = (declares, src.attribution()) {
-                push(a.to_string());
+            if declares {
+                continue;
+            }
+            if let Some(a) = src.attribution().await {
+                push(a);
             }
         }
     }
@@ -606,6 +609,44 @@ mod tests {
             request(&state, "GET", uri, "").await.0,
             StatusCode::BAD_GATEWAY
         );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A `dem` source opens when a tile first reads it: one no node reads
+    /// is never opened, and one that cannot be reached fails its tiles,
+    /// not the style.
+    #[tokio::test]
+    async fn a_dem_source_opens_only_when_a_tile_reads_it() {
+        let root = scratch("dem-lazy");
+        // Nothing listens on the discard port, so opening either fails.
+        let unreachable = [
+            "http://127.0.0.1:9/terrain.json",
+            "http://127.0.0.1:9/terrain.pmtiles",
+        ];
+        for url in unreachable {
+            let state = serve(&dem_style(url, false), &root)
+                .await
+                .unwrap_or_else(|e| panic!("{url}: the style failed to load: {e}"));
+            let (status, _) = request(&state, "GET", "/tiles/3/1/2.png", "").await;
+            assert_eq!(status, StatusCode::OK, "{url}");
+            let snap = state.style.read().await;
+            assert!(
+                snap.tiles.pyramids().iter().all(|p| !p.is_open()),
+                "{url}: a source no node reads was opened"
+            );
+            drop(snap);
+
+            // A new style that reads it loads too, and its tiles fail.
+            let (status, body) = request(&state, "PUT", "/style", &dem_style(url, true)).await;
+            assert_eq!(
+                status,
+                StatusCode::OK,
+                "{url}: {}",
+                String::from_utf8_lossy(&body)
+            );
+            let (status, _) = request(&state, "GET", "/tiles/3/1/2.png", "").await;
+            assert_eq!(status, StatusCode::BAD_GATEWAY, "{url}");
+        }
         std::fs::remove_dir_all(&root).ok();
     }
 }

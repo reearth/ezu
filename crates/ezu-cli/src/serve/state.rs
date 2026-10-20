@@ -74,8 +74,9 @@ pub struct StyleSnapshot {
 
 impl StyleSnapshot {
     /// Parse the document, build the graph, and open a renderer over it:
-    /// its assets read against the assets directory, its `dem` and
-    /// `raster` sources opened, its remote GeoJSON loaded.
+    /// its assets read against the assets directory and its remote GeoJSON
+    /// loaded. Its `dem` and `raster` sources open when a tile first reads
+    /// them, so one that cannot be reached fails those tiles, not the style.
     pub async fn build(
         text: String,
         version: u64,
