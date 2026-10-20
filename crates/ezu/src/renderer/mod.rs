@@ -79,12 +79,14 @@
 //! whose [`name`](ErrorKind::name) is what a host branches on.
 
 mod error;
+mod features;
 mod frame;
 mod options;
 mod source_set;
 mod sources;
 
 pub use error::{Error, ErrorKind};
+pub use features::{FeatureGroup, FilteredFeatures, NodeFeatures};
 pub use frame::{FrameBinder, RenderFrameError};
 pub use options::{BindOptions, OutputFormat, RenderOptions};
 pub use source_set::{SourceData, SourceSet};
@@ -757,7 +759,57 @@ impl Renderer {
         set: &SourceSet,
         opts: RenderOptions,
     ) -> Result<Vec<u8>, Error> {
-        self.render_from(z, x, y, set, opts)
+        self.render_from(z, x, y, set, opts, None)
+    }
+
+    /// [`render_tile_with`](Self::render_tile_with), also handing back what
+    /// each of `nodes` — ids of nodes that produce features — held when the
+    /// render finished, in the order given.
+    ///
+    /// The values are the ones the render computed on its way to the
+    /// pixels, so this costs no second evaluation, and the image is the
+    /// one `render_tile_with` returns. Each is in the tile's own units; see
+    /// [`NodeFeatures`]. A node the render never reached comes back with no
+    /// features.
+    ///
+    /// Fails with [`ErrorKind::InvalidStyle`] when a name is not a node of
+    /// the style, or names a node that produces something other than
+    /// features — checked before anything renders.
+    pub fn render_tile_with_features(
+        &self,
+        z: u8,
+        x: u32,
+        y: u32,
+        set: &SourceSet,
+        opts: RenderOptions,
+        nodes: &[&str],
+    ) -> Result<(Vec<u8>, Vec<NodeFeatures>), Error> {
+        let mut ixs = Vec::with_capacity(nodes.len());
+        for &node in nodes {
+            let ix = self
+                .graph
+                .index_of(node)
+                .ok_or_else(|| err(InvalidStyle, format!("the style has no node `{node}`")))?;
+            let kind = self.graph.output_kind(ix);
+            if kind != ezu_graph::PortKind::Features {
+                return Err(err(
+                    InvalidStyle,
+                    format!("node `{node}` produces {kind}, not features"),
+                ));
+            }
+            ixs.push(ix);
+        }
+        let capture = features::Capture::new(ixs);
+        let image = self.render_from(z, x, y, set, opts, Some(&capture))?;
+        let features = nodes
+            .iter()
+            .zip(capture.take())
+            .map(|(node, features)| NodeFeatures {
+                node: node.to_string(),
+                features,
+            })
+            .collect();
+        Ok((image, features))
     }
 
     /// Bring every bound fontstack back under the
@@ -859,7 +911,8 @@ impl Renderer {
     }
 
     /// Binds each payload in `set` to a per-render loader, dispatching on
-    /// the source's declared kind in the style, and renders.
+    /// the source's declared kind in the style, and renders, showing each
+    /// node's value to `observer` as it is computed.
     fn render_from(
         &self,
         z: u8,
@@ -867,6 +920,7 @@ impl Renderer {
         y: u32,
         set: &SourceSet,
         opts: RenderOptions,
+        observer: Option<&dyn ezu_graph::NodeObserver>,
     ) -> Result<Vec<u8>, Error> {
         let tile_size = opts.tile_size.unwrap_or(self.render_tile_size());
         // `opts.pad` is an explicit override. Otherwise the style's `pad`
@@ -1158,15 +1212,12 @@ impl Renderer {
             params.set(name, value);
         }
 
-        encode_render(
-            &self.graph,
-            &self.cache,
-            &tile_loader,
-            tile_id,
-            canvas,
-            opts,
-            &params,
-        )
+        let ev = Evaluator::new(&self.graph, &self.cache, &tile_loader);
+        let ev = match observer {
+            Some(o) => ev.with_observer(o),
+            None => ev,
+        };
+        encode_render(ev, tile_id, canvas, opts, &params)
     }
 }
 
@@ -1199,15 +1250,12 @@ fn already_bound_otherwise(name: &str) -> Error {
 
 /// Shared finish step: evaluate the graph and encode the result.
 fn encode_render(
-    graph: &Graph,
-    cache: &Cache,
-    tile_loader: &TileLoader<'_>,
+    ev: Evaluator<'_>,
     tile_id: GraphTileId,
     canvas: CanvasInfo,
     opts: RenderOptions,
     params: &ParamValues,
 ) -> Result<Vec<u8>, Error> {
-    let ev = Evaluator::new(graph, cache, tile_loader);
     let seed = tile_seed(tile_id.z, tile_id.x, tile_id.y);
     // The parallel evaluator is used only when the caller opts in, which
     // a host does exactly when it has a thread pool. Before that — and in

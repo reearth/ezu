@@ -374,3 +374,50 @@ fn a_tile_rendered_from_other_data_is_not_served_from_the_cache() {
         .expect("renders");
     assert!(after_rebind == rebound, "a rebind rendered from the cache");
 }
+
+#[test]
+fn a_render_hands_back_the_features_a_node_held() {
+    let tile = (14, 14554, 6454);
+    let r = Renderer::new(STITCHED).expect("builds");
+    let data = r.load_source("basemap", BASEMAP_Z14).expect("loads");
+    let mut set = SourceSet::new();
+    set.bind(&data, &BindOptions::default()).expect("binds");
+    let plain = r
+        .render_tile_with(tile.0, tile.1, tile.2, &set, rgba())
+        .expect("renders");
+
+    // A fresh renderer, so the values are computed rather than read from
+    // the cache — and then again from the cache, which must hand back the
+    // same values.
+    for r in [Renderer::new(STITCHED).expect("builds"), r] {
+        let (image, features) = r
+            .render_tile_with_features(tile.0, tile.1, tile.2, &set, rgba(), &["f", "f"])
+            .expect("renders");
+        assert!(image == plain, "capturing changed the pixels");
+        assert_eq!(features.len(), 2, "one entry per name, repeats included");
+        let f = features[0].features().expect("the node ran");
+        assert_eq!(f.extent, 4096);
+        assert!(!f.groups.is_empty(), "the tile has water");
+        assert_eq!(features[0].node(), "f");
+        let doc: serde_json::Value =
+            serde_json::from_str(&features[1].to_geojson()).expect("valid JSON");
+        assert_eq!(doc["type"], "FeatureCollection");
+        assert_eq!(doc["node"], "f");
+        assert_eq!(doc["extent"], 4096);
+        assert_eq!(
+            doc["features"].as_array().map(Vec::len),
+            Some(f.groups.len())
+        );
+    }
+
+    let refused = |nodes: &[&str]| {
+        let r = Renderer::new(STITCHED).expect("builds");
+        let e = r
+            .render_tile_with_features(tile.0, tile.1, tile.2, &set, rgba(), nodes)
+            .unwrap_err();
+        assert_eq!(e.kind(), ErrorKind::InvalidStyle);
+        e.to_string()
+    };
+    assert!(refused(&["nope"]).contains("no node `nope`"));
+    assert!(refused(&["fill"]).contains("`fill` produces raster"));
+}

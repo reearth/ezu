@@ -696,6 +696,7 @@ dependencies = [
  "ezu-style",
  "ezu-translate",
  "hokusai",
+ "maplibre-expr",
  "pmtiles",
  "reqwest",
  "serde_json",

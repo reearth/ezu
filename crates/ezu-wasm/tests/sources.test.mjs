@@ -124,3 +124,25 @@ test("a set keeps its data, and refuses what bindSource refuses", () => {
   r.trimGlyphs();
   for (const o of [more, set, r]) o.free();
 });
+
+test("renderTileWithFeatures hands back a node's features next to the image", () => {
+  const r = new Renderer(stitched);
+  const set = new SourceSet();
+  set.bind(r.loadSource("basemap", centreBytes));
+  const plain = r.renderTileWith(14, 14554, 6454, set);
+
+  const { image, features } = r.renderTileWithFeatures(14, 14554, 6454, set, ["f"]);
+  assert.ok(same(image, plain), "asking for the features changed the image");
+  assert.equal(features.length, 1);
+  const [f] = features;
+  assert.equal(f.type, "FeatureCollection");
+  assert.equal(f.node, "f");
+  assert.equal(f.extent, 4096);
+  assert.ok(f.features.length > 0, "the tile has water");
+
+  for (const nodes of [["nope"], ["fill"]]) {
+    assert.throws(() => r.renderTileWithFeatures(14, 14554, 6454, set, nodes), {
+      name: "InvalidStyle",
+    });
+  }
+});

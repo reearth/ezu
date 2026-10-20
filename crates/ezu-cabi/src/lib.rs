@@ -57,7 +57,7 @@ use ezu::renderer::{Error, ErrorKind, Renderer, SourceData, SourceSet};
 /// code's meaning, or an export appearing or leaving. The Go package
 /// checks it at instantiation, which is what catches a committed module
 /// that was not rebuilt.
-pub const ABI_VERSION: u32 = 4;
+pub const ABI_VERSION: u32 = 5;
 
 /// Every function this shell exports, in one list, so a test can compare
 /// it with what the committed module actually carries. The linker's own
@@ -100,6 +100,7 @@ pub const EXPORTS: &[&str] = &[
     "ezu_release_source",
     "ezu_render_tile",
     "ezu_render_tile_with",
+    "ezu_render_tile_with_features",
     "ezu_trim_glyphs",
 ];
 
@@ -1098,6 +1099,75 @@ pub extern "C" fn ezu_render_tile_with(
         match r.render_tile_with(z as u8, x, y, &set, opts) {
             Ok(bytes) => {
                 unsafe { reply(out_ptr, out_len, bytes) };
+                0
+            }
+            Err(e) => fail_err(e),
+        }
+    })
+}
+
+/// [`ezu_render_tile_with`], also handing back what the named
+/// features-producing nodes held when the render finished.
+///
+/// `nodes` is a JSON array of node ids, `["boxes", "roads"]`. The image goes
+/// into the first pair of out-slots, exactly as `ezu_render_tile_with`
+/// writes it, and a JSON array into the second: one GeoJSON
+/// FeatureCollection per name, in the order given, each with the node's id
+/// as `node` and its geometry in tile units — `x` right and `y` down from
+/// the tile's top-left corner, `0..extent` across the tile, `extent` given
+/// alongside. A node the render never reached has no `extent` and no
+/// features.
+///
+/// A name that is not a node of the style, or names one that produces
+/// something other than features, fails with `InvalidStyle` before anything
+/// renders. `set` and `opts` are as for `ezu_render_tile_with`.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn ezu_render_tile_with_features(
+    handle: u32,
+    z: u32,
+    x: u32,
+    y: u32,
+    set_ptr: u32,
+    set_len: u32,
+    nodes_ptr: u32,
+    nodes_len: u32,
+    opts_ptr: u32,
+    opts_len: u32,
+    out_ptr: u32,
+    out_len: u32,
+    features_ptr: u32,
+    features_len: u32,
+) -> i64 {
+    let opts = match options::parse_render(unsafe { input(opts_ptr, opts_len) }) {
+        Ok(o) => o,
+        Err(e) => return fail_err(e),
+    };
+    let nodes = match options::parse_nodes(unsafe { input(nodes_ptr, nodes_len) }) {
+        Ok(n) => n,
+        Err(e) => return fail_err(e),
+    };
+    let names: Vec<&str> = nodes.iter().map(String::as_str).collect();
+    let raw = unsafe { input(set_ptr, set_len) };
+    with_renderer(handle, |r| {
+        let set = match source_set(handle, raw) {
+            Ok(set) => set,
+            Err(code) => return code,
+        };
+        match r.render_tile_with_features(z as u8, x, y, &set, opts, &names) {
+            Ok((image, features)) => {
+                let mut json = String::from("[");
+                for (i, f) in features.iter().enumerate() {
+                    if i > 0 {
+                        json.push(',');
+                    }
+                    json.push_str(&f.to_geojson());
+                }
+                json.push(']');
+                unsafe {
+                    reply(out_ptr, out_len, image);
+                    reply(features_ptr, features_len, json.into_bytes());
+                }
                 0
             }
             Err(e) => fail_err(e),

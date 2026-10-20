@@ -2,6 +2,7 @@ package ezu
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -239,5 +240,62 @@ func TestSourceDataBelongsToItsRenderer(t *testing.T) {
 	}
 	if _, err := renderer.RenderTileWith(ctx, tile, SourceSet{}, Render{}); err != nil {
 		t.Errorf("rendering from an empty set gave %v", err)
+	}
+}
+
+// A render can hand back what a features node held, as GeoJSON in tile
+// units, next to the very image RenderTileWith draws.
+func TestRenderTileWithFeaturesHandsBackANodesFeatures(t *testing.T) {
+	stylePath := filepath.Join(t.TempDir(), "stitched.json")
+	if err := os.WriteFile(stylePath, []byte(stitchedStyle), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, renderer := open(t, stylePath)
+	tile := Tile{Z: 14, X: 14554, Y: 6454}
+	data, err := renderer.LoadSource(ctx, "basemap", readFile(t, "testdata/basemap-14-14554-6454.mvt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer data.Release(ctx)
+	var set SourceSet
+	if err := set.Bind(data); err != nil {
+		t.Fatal(err)
+	}
+	plain, err := renderer.RenderTileWith(ctx, tile, set, Render{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	image, features, err := renderer.RenderTileWithFeatures(ctx, tile, set, []string{"f"}, Render{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(image, plain) {
+		t.Error("asking for the features changed the image")
+	}
+	if len(features) != 1 || features[0].Node != "f" || features[0].Extent != 4096 {
+		t.Fatalf("got %+v", features)
+	}
+	var doc struct {
+		Type     string            `json:"type"`
+		Node     string            `json:"node"`
+		Extent   uint32            `json:"extent"`
+		Features []json.RawMessage `json:"features"`
+	}
+	if err := json.Unmarshal(features[0].GeoJSON, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Type != "FeatureCollection" || doc.Node != "f" || doc.Extent != 4096 || len(doc.Features) == 0 {
+		t.Errorf("the node's GeoJSON is %s", features[0].GeoJSON)
+	}
+
+	for _, nodes := range [][]string{{"nope"}, {"fill"}} {
+		if _, _, err := renderer.RenderTileWithFeatures(ctx, tile, set, nodes, Render{}); !IsKind(err, KindInvalidStyle) {
+			t.Errorf("asking for %v gave %v, want %s", nodes, err, KindInvalidStyle)
+		}
+	}
+	// No nodes is a plain render.
+	if image, features, err := renderer.RenderTileWithFeatures(ctx, tile, set, nil, Render{}); err != nil || len(features) != 0 || !bytes.Equal(image, plain) {
+		t.Errorf("no nodes gave %d features, %v", len(features), err)
 	}
 }

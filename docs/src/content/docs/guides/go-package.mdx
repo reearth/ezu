@@ -318,8 +318,14 @@ the renderer) and copy it into the page at `f.TileOffset(tile)`, cropping the
 tiles along the border. `ClearTileSize` goes back to the style's size, and so
 does `SetStyle`.
 
-The CLI's `--features` export of a node's features over the page has no
-counterpart here yet.
+`RenderTileWithFeatures` renders a tile as `RenderTileWith` does and also hands
+back what the named features nodes held — the labels and the boxes placement
+gave them, say — each as a GeoJSON FeatureCollection in tile units: `x` right
+and `y` down from the tile's top-left corner, `0..Extent` across it. The CLI's
+`--features` gathers the same values over a page into one file in longitude and
+latitude or page pixels; here that gathering, placing each tile's features at
+`f.TileOffset(tile)` and dropping the copies neighbouring tiles share, is yours
+to do.
 
 ## Hearing that a tile came out wrong
 

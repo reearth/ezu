@@ -93,7 +93,7 @@ var wasmModule []byte
 // The ABI this package was written against. ezu_abi_version must agree or
 // the embedded module is stale — which is the cost of committing a built
 // artefact, and the check that keeps the cost cheap.
-const abiVersion = 4
+const abiVersion = 5
 
 // The host module the wasm side imports its out-of-memory report from. See
 // oomHandler and crates/ezu-cabi/src/oom.rs.

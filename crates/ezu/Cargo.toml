@@ -26,6 +26,7 @@ renderer = [
     "style-json",
     "ezu-core/text",
     "dep:hokusai",
+    "dep:maplibre-expr",
     "dep:serde_json",
     "dep:tracing",
     "dep:xxhash-rust",
@@ -45,6 +46,9 @@ ezu-translate = { workspace = true, optional = true }
 # For the renderer: brushes bound as `.myb` JSON, the JSON it answers
 # queries with, and its warnings.
 hokusai = { workspace = true, optional = true, features = ["myb-json"] }
+# For the renderer: the property values of a node's features, written out
+# as JSON.
+maplibre-expr = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 tracing = { version = "0.1", optional = true }
 # For the renderer: a hash of each loaded payload, so the render cache

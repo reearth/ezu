@@ -149,6 +149,11 @@ class Renderer {
   renderTileWith(z: number, x: number, y: number, set: SourceSet,
                  opts?: object /* renderTile's opts */): Uint8Array;
 
+  // renderTileWith, also handing back what the named features nodes held:
+  // one GeoJSON FeatureCollection per node, in tile units (0..extent).
+  renderTileWithFeatures(z: number, x: number, y: number, set: SourceSet,
+                         nodes: string[], opts?: object): TileWithFeatures;
+
   // neededCodepoints / neededGlyphRanges for the features in a set.
   neededCodepointsIn(set: SourceSet): Record<string, number[]>;
   neededGlyphRangesIn(set: SourceSet): Record<string, number[]>;

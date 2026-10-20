@@ -254,6 +254,101 @@ func (r *Renderer) RenderTileWith(ctx context.Context, tile Tile, set SourceSet,
 	return payload, err
 }
 
+// NodeFeatures is what one features-producing node held when a render
+// finished, as [Renderer.RenderTileWithFeatures] hands it back.
+type NodeFeatures struct {
+	// Node is the node's id, as it was asked for.
+	Node string
+	// Extent is the tile's size in geometry units: coordinates run 0..Extent
+	// across the tile, x right and y down from its top-left corner. Zero
+	// when the render never reached the node — a branch a switch did not
+	// take — in which case there are no features either.
+	Extent uint32
+	// GeoJSON is the value as a GeoJSON FeatureCollection in those units,
+	// one Feature per feature the node held, with Node and Extent repeated
+	// as its "node" and "extent" members. Rings are closed and wound as RFC
+	// 7946 asks, as drawn on the map; property values JSON has no form for,
+	// such as colours, are written as their text.
+	GeoJSON json.RawMessage
+}
+
+// RenderTileWithFeatures is [Renderer.RenderTileWith], also handing back
+// what each of nodes — ids of nodes that produce features — held when the
+// render finished, in the order given.
+//
+// The values are the ones the render computed on its way to the pixels, so
+// this costs no second evaluation, and the image is the one RenderTileWith
+// returns. A name that is not a node of the style, or names one that
+// produces something other than features, fails with [KindInvalidStyle]
+// before anything renders.
+func (r *Renderer) RenderTileWithFeatures(ctx context.Context, tile Tile, set SourceSet, nodes []string, opts Render) ([]byte, []NodeFeatures, error) {
+	setJSON, err := set.json(r)
+	if err != nil {
+		return nil, nil, err
+	}
+	optsJSON, err := opts.json()
+	if err != nil {
+		return nil, nil, fmt.Errorf("ezu: encoding the render options: %w", err)
+	}
+	if nodes == nil {
+		nodes = []string{}
+	}
+	nodesJSON, err := json.Marshal(nodes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ezu: encoding the node ids: %w", err)
+	}
+	var image, features []byte
+	_, err = r.call(ctx, func(ctx context.Context) (int64, error) {
+		// Two pairs of out-slots: the image, then the features.
+		slots, err := r.alloc(ctx, 16)
+		if err != nil {
+			return 0, err
+		}
+		defer r.free(ctx, slots, 16)
+		var ptrs [3]uint32
+		for i, b := range [][]byte{setJSON, nodesJSON, optsJSON} {
+			if ptrs[i], err = r.writeBytes(ctx, b); err != nil {
+				return 0, err
+			}
+			defer r.free(ctx, ptrs[i], uint32(len(b)))
+		}
+		code, err := r.call1(ctx, "ezu_render_tile_with_features",
+			uint64(r.handle),
+			uint64(uint32(tile.Z)), uint64(uint32(tile.X)), uint64(uint32(tile.Y)),
+			uint64(ptrs[0]), uint64(len(setJSON)),
+			uint64(ptrs[1]), uint64(len(nodesJSON)),
+			uint64(ptrs[2]), uint64(len(optsJSON)),
+			uint64(slots), uint64(slots+4), uint64(slots+8), uint64(slots+12))
+		if err != nil || code < 0 {
+			return code, err
+		}
+		if image, err = r.takeReply(ctx, slots); err != nil {
+			return 0, err
+		}
+		features, err = r.takeReply(ctx, slots+8)
+		return code, err
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	var wire []json.RawMessage
+	if err := json.Unmarshal(features, &wire); err != nil {
+		return nil, nil, fmt.Errorf("ezu: reading the node features: %w", err)
+	}
+	out := make([]NodeFeatures, len(wire))
+	for i, doc := range wire {
+		var head struct {
+			Node   string `json:"node"`
+			Extent uint32 `json:"extent"`
+		}
+		if err := json.Unmarshal(doc, &head); err != nil {
+			return nil, nil, fmt.Errorf("ezu: reading the node features: %w", err)
+		}
+		out[i] = NodeFeatures{Node: head.Node, Extent: head.Extent, GeoJSON: doc}
+	}
+	return image, out, nil
+}
+
 // NeededCodepointsIn is [Renderer.NeededCodepoints] for the features in set
 // rather than the ones bound to the renderer: what to bind into the glyphs
 // sources before rendering from it.

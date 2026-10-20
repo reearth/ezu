@@ -51,7 +51,7 @@ fn every_error_kind_has_its_own_code() {
 }
 
 mod options {
-    use crate::options::{parse_bind, parse_frame, parse_render, parse_set};
+    use crate::options::{parse_bind, parse_frame, parse_nodes, parse_render, parse_set};
     use ezu::renderer::{OutputFormat, PngCompression};
 
     #[test]
@@ -144,6 +144,24 @@ mod options {
         }
         for payload in [&br#"{"data":1}"#[..], &br#"[1]"#[..], &br#"[{"#[..]] {
             let e = parse_set(payload).expect_err("refused");
+            assert_eq!(
+                e.name(),
+                "InvalidStyle",
+                "for {}",
+                String::from_utf8_lossy(payload)
+            );
+        }
+    }
+
+    #[test]
+    fn feature_nodes_are_a_list_of_ids() {
+        assert!(parse_nodes(b"").expect("empty is []").is_empty());
+        assert_eq!(
+            parse_nodes(br#"["boxes","roads","boxes"]"#).expect("parses"),
+            ["boxes", "roads", "boxes"]
+        );
+        for payload in [&br#"{"boxes":1}"#[..], &br#"["a",1]"#[..], &br#"["#[..]] {
+            let e = parse_nodes(payload).expect_err("refused");
             assert_eq!(
                 e.name(),
                 "InvalidStyle",

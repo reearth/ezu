@@ -881,6 +881,54 @@ impl Renderer {
             .map_err(js_err)
     }
 
+    /// `renderTileWith`, also handing back what each of `nodes` — ids of
+    /// nodes that produce features — held when the render finished, in the
+    /// order given: `{ image, features }`, where `image` is the bytes
+    /// `renderTileWith` returns and `features` holds one GeoJSON
+    /// FeatureCollection per name.
+    ///
+    /// Each collection carries the node's id as `node` and the tile's size
+    /// in geometry units as `extent`: coordinates run `0..extent` across
+    /// the tile, `x` right and `y` down from its top-left corner. A node the
+    /// render never reached — a branch a `switch` did not take — has no
+    /// `extent` and no features. The values are the ones the render
+    /// computed on its way to the pixels, so this costs no second
+    /// evaluation.
+    ///
+    /// Throws `InvalidStyle` before anything renders when a name is not a
+    /// node of the style, or names one that produces something other than
+    /// features.
+    #[wasm_bindgen(js_name = renderTileWithFeatures, unchecked_return_type = "TileWithFeatures")]
+    pub fn render_tile_with_features(
+        &self,
+        z: u8,
+        x: u32,
+        y: u32,
+        set: &SourceSet,
+        nodes: Vec<String>,
+        opts: Option<js_sys::Object>,
+    ) -> Result<JsValue, JsValue> {
+        let parsed = parse_render_options(opts.as_ref())?;
+        let names: Vec<&str> = nodes.iter().map(String::as_str).collect();
+        let (image, features) = self
+            .inner
+            .borrow()
+            .render_tile_with_features(z, x, y, &set.inner, parsed, &names)
+            .map_err(js_err)?;
+        let list = js_sys::Array::new();
+        for f in &features {
+            list.push(&js_sys::JSON::parse(&f.to_geojson())?);
+        }
+        let out = js_sys::Object::new();
+        js_sys::Reflect::set(
+            &out,
+            &"image".into(),
+            &js_sys::Uint8Array::from(image.as_slice()),
+        )?;
+        js_sys::Reflect::set(&out, &"features".into(), &list)?;
+        Ok(out.into())
+    }
+
     /// `neededCodepoints` for the features in `set` rather than the ones
     /// bound to the renderer: what to bind into the glyphs sources before
     /// rendering from it.
@@ -1179,6 +1227,27 @@ fn glyph_units_object(
     }
     Ok(out)
 }
+
+#[wasm_bindgen(typescript_custom_section)]
+const FEATURE_TYPES: &'static str = r#"
+/** What one features node held when a render finished: a GeoJSON FeatureCollection in tile units. */
+export interface NodeFeatures {
+  type: "FeatureCollection";
+  /** The node's id, as it was asked for. */
+  node: string;
+  /** The tile's size in geometry units: coordinates run 0..extent, x right and y down. Absent when the render never reached the node. */
+  extent?: number;
+  features: Array<{ type: "Feature"; geometry: object | null; properties: Record<string, unknown> }>;
+}
+
+/** What `renderTileWithFeatures` hands back. */
+export interface TileWithFeatures {
+  /** The encoded tile, exactly as `renderTileWith` returns it. */
+  image: Uint8Array;
+  /** One collection per node asked for, in the order asked. */
+  features: NodeFeatures[];
+}
+"#;
 
 #[wasm_bindgen(typescript_custom_section)]
 const FRAME_TYPES: &'static str = r#"

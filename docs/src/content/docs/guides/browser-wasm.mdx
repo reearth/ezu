@@ -208,6 +208,20 @@ tiles. Glyphs, fonts and sprites are still bound with `bindSource`, and
 glyph budget for `trimGlyphs()` to apply after the batch. A set shares the data
 it holds, so freeing a `SourceData` once its sets have it is safe.
 
+A render can also hand back what a features node held — the labels and the
+boxes placement gave them, the features a filter kept — next to the image, from
+the same evaluation:
+
+```js
+const { image, features } = r.renderTileWithFeatures(z, x, y, set, ['boxes']);
+// features[0]: { type: "FeatureCollection", node: "boxes", extent: 4096, features: [...] }
+```
+
+Each collection is in tile units: `x` right and `y` down from the tile's
+top-left corner, `0..extent` across it. A node the render never reached has no
+`extent` and no features, and a name that is not a features node of the style
+throws `InvalidStyle` before anything renders.
+
 ## A page at a print scale
 
 A printed page is asked for as "1:1000 at 200 dpi, 245 × 174 mm, centred

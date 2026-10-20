@@ -133,6 +133,19 @@ a set turns out to need — the glyphs `needed_codepoints_in` lists.
 is the only way to change it while the frame runs — the borrow checker does
 what the JS and Go packages check at run time.
 
+A render can also hand back what a features node held — the labels and the
+boxes placement gave them, the features a filter kept — next to the image.
+`render_tile_with_features` takes the ids of the nodes to report on and returns
+one `NodeFeatures` per id, computed on the way to the pixels rather than by a
+second render. Each holds the node's `FilteredFeatures` in tile units, and
+`to_geojson()` writes it as a GeoJSON FeatureCollection in those units, which
+is what the JS and Go packages hand back:
+
+```rust
+let (png, features) = r.render_tile_with_features(z, x, y, &set, RenderOptions::default(), &["boxes"])?;
+let geojson = features[0].to_geojson(); // x right, y down, 0..extent across the tile
+```
+
 ## Serial or parallel
 
 `Evaluator::render` walks the topological order sequentially.

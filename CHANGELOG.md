@@ -49,6 +49,13 @@ mean is spelled out in
   and `render_tile` work as before, and a vector tile bound with
   `bind_source` is now decoded once rather than at both the bind and the
   render. The wasm module's ABI version is now 4.
+- A render can hand back what a features node held next to the image, in
+  Rust, Go and JS: `render_tile_with_features` (`RenderTileWithFeatures`,
+  `renderTileWithFeatures`) renders as `render_tile_with` does and returns,
+  for each node id asked for, the node's features from that same evaluation
+  as a GeoJSON FeatureCollection in tile units, so a host can list the
+  labels on a tile and what placement did to them without rendering twice.
+  The wasm module's ABI version is now 5.
 - `text` and `text-labels` take `anchor-expr`, a MapLibre expression that
   names a point label's anchor per feature, so one layer can put some labels
   left of their points and others right of them, or switch sides with zoom.

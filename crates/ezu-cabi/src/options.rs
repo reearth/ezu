@@ -115,6 +115,30 @@ pub fn parse_set(raw: &[u8]) -> Result<Vec<SetEntry>, Error> {
 
 /// Which tile of the 3×3 neighbourhood the bytes are. Refused values carry
 /// `UnknownSource`, matching the JS shell.
+/// Read the node ids `ezu_render_tile_with_features` reports on: a JSON
+/// array of strings. Empty means none.
+pub fn parse_nodes(raw: &[u8]) -> Result<Vec<String>, Error> {
+    if raw.is_empty() {
+        return Ok(Vec::new());
+    }
+    let bad = |got: &dyn std::fmt::Display| {
+        err(
+            ErrorKind::InvalidStyle,
+            format!("the nodes must be a JSON array of node ids, got {got}"),
+        )
+    };
+    match serde_json::from_slice::<Value>(raw).map_err(|e| err(ErrorKind::InvalidStyle, e))? {
+        Value::Array(items) => items
+            .into_iter()
+            .map(|v| match v {
+                Value::String(s) => Ok(s),
+                other => Err(bad(&other)),
+            })
+            .collect(),
+        other => Err(bad(&other)),
+    }
+}
+
 fn parse_coord(value: Option<&Value>) -> Result<(i32, i32), Error> {
     let Some(value) = value.filter(|v| !v.is_null()) else {
         return Ok((0, 0));
