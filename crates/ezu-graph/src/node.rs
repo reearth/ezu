@@ -192,4 +192,19 @@ pub trait Node: Send + Sync {
     fn param_refs(&self) -> Vec<String> {
         Vec::new()
     }
+
+    /// Whether this render reads input `port` at all. A node that picks
+    /// one of its inputs — `switch` — answers `false` for the ones it will
+    /// not pick, and the evaluator then leaves whatever only those inputs
+    /// need unevaluated: a branch that is not shown costs nothing.
+    ///
+    /// Asked before any input is evaluated, so the answer can rest only on
+    /// what the node knows by then — its literals and `ctx.params` — and
+    /// not on a value an input port will carry. A port it skips arrives in
+    /// `eval` as `None`.
+    ///
+    /// Default: every input is read.
+    fn reads_input(&self, _port: usize, _ctx: &EvalCtx<'_>) -> bool {
+        true
+    }
 }

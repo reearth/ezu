@@ -24,11 +24,14 @@ Extract a single channel of an RGBA raster as a [0, 1] ScalarField. RGB channels
 
 ### `switch`
 
-Pick `a` or `b` based on `select` (default `a`). Both inputs accept any port kind. A literal `select` is resolved when the graph is built, and the output mirrors the chosen input's kind — so the two inputs may be different kinds. A `$param` or `@node` `select` is read per render instead, which requires both inputs to be the same kind.
+Pass one of its inputs through. Two-way: `a` / `b` picked by `select` (default `a`). By name, as MapLibre's `match`: `branches` maps names to nodes and `select` names one, with `default` for a name no branch has. By condition, as MapLibre's `case`: the first of `cases` whose `when` holds, else `default`. Inputs accept any port kind. A choice fixed by literals is made when the graph is built, and the output mirrors the chosen input's kind — so branches may be different kinds. A `$param` or `@node` choice is made per render instead, which requires every branch to be the same kind. Only the chosen branch is rendered; a `@node` `when` is known only once evaluated, so every branch from the first one on is rendered with it.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `a` | `@node` | yes | Reference to another node (`@name`). |
-| `b` | `@node` | yes | Reference to another node (`@name`). |
-| `select` | `a` \| `b` \| boolean \| integer (0…1) \| `$param` \| `@node` | no | — |
+| `a` | `@node` | no | Reference to another node (`@name`). |
+| `b` | `@node` | no | Reference to another node (`@name`). |
+| `branches` | object | no | Name → node; `select` names the one to take. A `$param` `select` must be a `string` param, and each value its `enum` allows must name a branch unless there is a `default`. |
+| `cases` | array of object | no | Tried in order; the first whose `when` holds is taken. Needs `default`. |
+| `default` | `@node` | no | Reference to another node (`@name`). |
+| `select` | `a` \| `b` \| boolean \| integer (0…1) \| `$param` \| `@node` \| string | no | With `branches`: the name of the branch to take. |
 

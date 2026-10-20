@@ -417,3 +417,112 @@ fn observer_sees_every_node_once_and_reports_cache_hits() {
         "the same tile again comes entirely from the cache"
     );
 }
+
+/// A node that passes one of its two inputs through and says so up front,
+/// as `switch` does: the other input, and whatever only it needs, must not
+/// be evaluated — on either evaluator.
+#[test]
+fn an_input_a_node_will_not_read_is_not_evaluated() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    use crate::{EvalCtx, EvalError, PortValue};
+
+    struct Pick(usize);
+    impl Node for Pick {
+        fn op_name(&self) -> &'static str {
+            "pick"
+        }
+        fn inputs(&self) -> &[PortSpec] {
+            static SPECS: &[PortSpec] = &[
+                PortSpec::new("a", &[PortKind::Raster]),
+                PortSpec::new("b", &[PortKind::Raster]),
+            ];
+            SPECS
+        }
+        fn output(&self, _: &[Option<PortKind>]) -> PortKind {
+            PortKind::Raster
+        }
+        fn reads_input(&self, port: usize, _: &EvalCtx<'_>) -> bool {
+            port == self.0
+        }
+        fn eval(
+            &self,
+            _: &EvalCtx<'_>,
+            inputs: &[Option<PortValue>],
+        ) -> Result<PortValue, EvalError> {
+            assert!(
+                inputs[1 - self.0].is_none(),
+                "the unread input was handed over"
+            );
+            inputs[self.0]
+                .clone()
+                .ok_or(EvalError::MissingInput("picked".into()))
+        }
+        fn param_hash(&self, h: &mut xxhash_rust::xxh3::Xxh3) {
+            h.update(&[self.0 as u8]);
+        }
+    }
+
+    /// Counts its evaluations, passing its input through.
+    struct Pass(Arc<AtomicU32>);
+    impl Node for Pass {
+        fn op_name(&self) -> &'static str {
+            "pass"
+        }
+        fn inputs(&self) -> &[PortSpec] {
+            static SPECS: &[PortSpec] = &[PortSpec::new("input", &[PortKind::Raster])];
+            SPECS
+        }
+        fn output(&self, _: &[Option<PortKind>]) -> PortKind {
+            PortKind::Raster
+        }
+        fn eval(
+            &self,
+            _: &EvalCtx<'_>,
+            inputs: &[Option<PortValue>],
+        ) -> Result<PortValue, EvalError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            inputs[0]
+                .clone()
+                .ok_or(EvalError::MissingInput("input".into()))
+        }
+        fn param_hash(&self, h: &mut xxhash_rust::xxh3::Xxh3) {
+            h.update(b"pass");
+        }
+    }
+
+    for parallel in [false, true] {
+        for pick in [0, 1] {
+            // `shared` feeds both branches; `left` and `right` are each only
+            // on their own branch.
+            let shared = Counter::new("shared", PortKind::Raster);
+            let left = Arc::new(AtomicU32::new(0));
+            let right = Arc::new(AtomicU32::new(0));
+            let mut b = GraphBuilder::new();
+            b.add_node("shared", Box::new(Forward(shared.clone())))
+                .add_node("left", Box::new(Pass(left.clone())))
+                .add_node("right", Box::new(Pass(right.clone())))
+                .add_node("pick", Box::new(Pick(pick)))
+                .connect("shared", "left", "input")
+                .connect("shared", "right", "input")
+                .connect("left", "pick", "a")
+                .connect("right", "pick", "b")
+                .set_output("pick");
+            let g = b.build().unwrap();
+            let cache = Cache::new();
+            let ev = Evaluator::new(&g, &cache, &NoAssets);
+            let tile = TileId { z: 0, x: 0, y: 0 };
+            let params = ParamValues::new();
+            if parallel {
+                ev.render_parallel(tile, small_canvas(), &params, 0)
+            } else {
+                ev.render(tile, small_canvas(), &params, 0)
+            }
+            .unwrap();
+            let counts = (left.load(Ordering::SeqCst), right.load(Ordering::SeqCst));
+            let want = if pick == 0 { (1, 0) } else { (0, 1) };
+            assert_eq!(counts, want, "parallel: {parallel}, pick: {pick}");
+            assert_eq!(shared.count(), 1, "parallel: {parallel}, pick: {pick}");
+        }
+    }
+}

@@ -322,8 +322,23 @@ mean is spelled out in
   `stitch`, `text`'s layout) take the param's default, with the build-time
   warning other such fields give. The schema marks each of these fields as
   taking a `$param`.
+- `switch` picks among any number of branches, in two new forms beside
+  `a` / `b`. `branches` maps names to nodes and `select` names one, a
+  literal or a `string` param, with an optional `default`, as MapLibre's
+  `match`; the build fails if the param can name a branch that is not
+  there and there is no `default`. `cases` is a list of
+  `{ "when": …, "then": "@node" }` tried in order, with a required
+  `default`, as MapLibre's `case`; a `when` is a bool literal, `$param`
+  or `@node`. A two-way `select` may also be a `string` param naming `a`
+  or `b`.
 
 ### Changed
+
+- A `switch` branch that is not taken is no longer rendered, nor anything
+  only it reads. With a literal or `$param` choice the evaluator leaves it
+  out before rendering; with a `@node` choice, every branch that choice
+  could lead to still renders. Nodes gain `Node::reads_input` to say which
+  inputs a render will read.
 
 - `ezu translate` writes `anchor-offsets` for `text-variable-anchor` and
   `overlap: "always"` for `text-allow-overlap` / `text-overlap: always`, in

@@ -683,6 +683,19 @@ impl<'a, 'c> InReader<'a, 'c> {
                 .map(In::Const)
                 .ok_or_else(|| FactoryError::MissingField(name.to_string()));
         };
+        self.element(name, v)
+    }
+
+    /// Read a scalar that is not a top-level field but stands on its own,
+    /// as one condition of a list does: a literal, a `$param`, or a `@node`,
+    /// which becomes a scalar port named `name`. Unlike
+    /// [`nested`](Self::nested) it can take a port, and so needs a
+    /// `&'static` name for it.
+    pub fn element<T: ScalarType>(
+        &mut self,
+        name: &'static str,
+        v: &Value,
+    ) -> Result<In<T>, FactoryError> {
         if let Some(s) = v.as_str() {
             match spec::FieldRef::classify(s) {
                 spec::FieldRef::Node(id) => {

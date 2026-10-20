@@ -5773,7 +5773,27 @@
             "type": "object"
           },
           {
-            "description": "Pick `a` or `b` based on `select` (default `a`). Both inputs accept any port kind. A literal `select` is resolved when the graph is built, and the output mirrors the chosen input's kind — so the two inputs may be different kinds. A `$param` or `@node` `select` is read per render instead, which requires both inputs to be the same kind.",
+            "description": "Pass one of its inputs through. Two-way: `a` / `b` picked by `select` (default `a`). By name, as MapLibre's `match`: `branches` maps names to nodes and `select` names one, with `default` for a name no branch has. By condition, as MapLibre's `case`: the first of `cases` whose `when` holds, else `default`. Inputs accept any port kind. A choice fixed by literals is made when the graph is built, and the output mirrors the chosen input's kind — so branches may be different kinds. A `$param` or `@node` choice is made per render instead, which requires every branch to be the same kind. Only the chosen branch is rendered; a `@node` `when` is known only once evaluated, so every branch from the first one on is rendered with it.",
+            "oneOf": [
+              {
+                "required": [
+                  "a",
+                  "b"
+                ]
+              },
+              {
+                "required": [
+                  "branches",
+                  "select"
+                ]
+              },
+              {
+                "required": [
+                  "cases",
+                  "default"
+                ]
+              }
+            ],
             "properties": {
               "a": {
                 "description": "Reference to another node (`@name`).",
@@ -5781,6 +5801,53 @@
                 "type": "string"
               },
               "b": {
+                "description": "Reference to another node (`@name`).",
+                "pattern": "^@?[A-Za-z_][A-Za-z0-9_-]*$",
+                "type": "string"
+              },
+              "branches": {
+                "additionalProperties": {
+                  "description": "Reference to another node (`@name`).",
+                  "pattern": "^@?[A-Za-z_][A-Za-z0-9_-]*$",
+                  "type": "string"
+                },
+                "description": "Name → node; `select` names the one to take. A `$param` `select` must be a `string` param, and each value its `enum` allows must name a branch unless there is a `default`.",
+                "minProperties": 1,
+                "type": "object"
+              },
+              "cases": {
+                "description": "Tried in order; the first whose `when` holds is taken. Needs `default`.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "then": {
+                      "description": "Reference to another node (`@name`).",
+                      "pattern": "^@?[A-Za-z_][A-Za-z0-9_-]*$",
+                      "type": "string"
+                    },
+                    "when": {
+                      "oneOf": [
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "description": "`$param` (bool) or `@node` scalar port (an `expr` of `type: bool`, say).",
+                          "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                          "type": "string"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "when",
+                    "then"
+                  ],
+                  "type": "object"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              "default": {
                 "description": "Reference to another node (`@name`).",
                 "pattern": "^@?[A-Za-z_][A-Za-z0-9_-]*$",
                 "type": "string"
@@ -5808,17 +5875,19 @@
                     "type": "integer"
                   },
                   {
-                    "description": "`$param` reference or `@node` scalar port, read per render. `true` / non-zero picks `b`.",
+                    "description": "`$param` reference or `@node` scalar port, read per render. With `a` / `b`, a bool param or port: `true` / non-zero picks `b`; or a `string` param naming `a` or `b`. With `branches`, a `string` param naming a branch.",
                     "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  },
+                  {
+                    "description": "With `branches`: the name of the branch to take.",
                     "type": "string"
                   }
                 ]
               }
             },
             "required": [
-              "op",
-              "a",
-              "b"
+              "op"
             ],
             "title": "op: switch",
             "type": "object"

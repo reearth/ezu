@@ -110,6 +110,8 @@ mod stamp_position_jitter;
 mod string_params;
 #[path = "paint/stroke_gap_width.rs"]
 mod stroke_gap_width;
+#[path = "paint/switch.rs"]
+mod switch;
 #[path = "paint/terrain_holes.rs"]
 mod terrain_holes;
 #[path = "paint/text_anchor_expr.rs"]

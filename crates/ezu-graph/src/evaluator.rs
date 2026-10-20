@@ -22,7 +22,9 @@ pub struct Evaluator<'a> {
 /// Called once per node as it resolves, whichever value it came from —
 /// a fresh evaluation or the cache. Both `render` and `render_parallel`
 /// go through `eval_one`, so an observer sees every node in the graph
-/// exactly once per render, with no re-evaluation.
+/// exactly once per render, with no re-evaluation — except a node the
+/// output reaches only through a `switch` branch that is not picked, which
+/// is not evaluated and so not shown.
 ///
 /// The parallel path calls this from Rayon workers, hence `Sync`; nodes
 /// arrive in completion order, not topological order, so identify them
@@ -82,6 +84,7 @@ impl<'a> Evaluator<'a> {
             crate::mem::reset();
         }
         let influence = self.graph.influence_pads(self.assets);
+        let live = self.live_nodes(&ctx);
         let n = self.graph.len();
         let mut hashes: Vec<Hash128> = vec![0; n];
         let mut values: Vec<Option<PortValue>> = vec![None; n];
@@ -89,11 +92,12 @@ impl<'a> Evaluator<'a> {
         // How many not-yet-evaluated consumers each node still has. Once
         // it hits zero the node's value is dead weight, so it is dropped
         // instead of being carried to the end of the render.
-        let mut consumers: Vec<usize> = (0..n)
-            .map(|ix| self.graph.downstream_unique(ix).len())
-            .collect();
+        let mut consumers = self.live_consumers(&live);
 
         for &ix in self.graph.topo_order() {
+            if !live[ix] {
+                continue;
+            }
             let (value, hash) = {
                 let upstream = |src: NodeIx| -> (Hash128, PortValue) {
                     (
@@ -167,17 +171,24 @@ impl<'a> Evaluator<'a> {
                 crate::mem::reset();
             }
             let n = self.graph.len();
+            let live = self.live_nodes(&ctx);
+            // A node waits only on the inputs that will run: one fed by a
+            // branch nobody picks would otherwise wait for it forever.
+            let pending: Vec<usize> = (0..n)
+                .map(|ix| self.graph.upstream(ix).filter(|&s| live[s]).count())
+                .collect();
             let state = ParState {
                 slots: (0..n).map(|_| Mutex::new(None)).collect(),
                 hashes: (0..n).map(|_| OnceLock::new()).collect(),
-                pending: (0..n)
-                    .map(|ix| AtomicUsize::new(self.graph.indegree(ix)))
-                    .collect(),
-                consumers: (0..n)
-                    .map(|ix| AtomicUsize::new(self.graph.downstream_unique(ix).len()))
+                pending: pending.iter().map(|&p| AtomicUsize::new(p)).collect(),
+                consumers: self
+                    .live_consumers(&live)
+                    .into_iter()
+                    .map(AtomicUsize::new)
                     .collect(),
                 first_err: Mutex::new(None),
                 influence,
+                live,
                 ctx,
             };
 
@@ -185,8 +196,8 @@ impl<'a> Evaluator<'a> {
             // `state` would otherwise capture it by value.
             let state = &state;
             rayon::scope(|scope| {
-                for ix in 0..n {
-                    if self.graph.indegree(ix) == 0 {
+                for (ix, &waits) in pending.iter().enumerate() {
+                    if state.live[ix] && waits == 0 {
                         scope.spawn(move |s| self.schedule(s, state, ix));
                     }
                 }
@@ -280,10 +291,68 @@ impl<'a> Evaluator<'a> {
         }
 
         for &dst in self.graph.downstream_unique(ix) {
-            if state.pending[dst].fetch_sub(1, Ordering::AcqRel) == 1 {
+            if state.live[dst] && state.pending[dst].fetch_sub(1, Ordering::AcqRel) == 1 {
                 scope.spawn(move |s| self.schedule(s, state, dst));
             }
         }
+    }
+
+    /// The nodes this render evaluates. Every node is, as it always was —
+    /// a node the output does not depend on still runs for its own sake,
+    /// which is how a host reads features off a node no layer draws
+    /// ([`NodeObserver`]) — except one the output reaches only through an
+    /// input a node will not read this render ([`Node::reads_input`]): a
+    /// `switch` branch that is not picked, and everything only it needs.
+    fn live_nodes(&self, ctx: &EvalCtx<'_>) -> Vec<bool> {
+        let n = self.graph.len();
+        // What the output reaches through any input: the nodes a pick can
+        // leave out. The rest are roots of their own.
+        let mut reached = vec![false; n];
+        reached[self.graph.output()] = true;
+        let mut todo = vec![self.graph.output()];
+        while let Some(ix) = todo.pop() {
+            for port in 0..self.graph.node(ix).inputs().len() {
+                if let Some(src) = self.graph.incoming(ix, port) {
+                    if !reached[src] {
+                        reached[src] = true;
+                        todo.push(src);
+                    }
+                }
+            }
+        }
+        let mut live = vec![false; n];
+        let mut todo: Vec<NodeIx> = std::iter::once(self.graph.output())
+            .chain((0..n).filter(|&ix| !reached[ix]))
+            .collect();
+        for &ix in &todo {
+            live[ix] = true;
+        }
+        while let Some(ix) = todo.pop() {
+            let node = self.graph.node(ix);
+            for port in 0..node.inputs().len() {
+                if let Some(src) = self.graph.incoming(ix, port) {
+                    if !live[src] && node.reads_input(port, ctx) {
+                        live[src] = true;
+                        todo.push(src);
+                    }
+                }
+            }
+        }
+        live
+    }
+
+    /// How many of each node's consumers this render evaluates — the
+    /// count after which its value can be dropped.
+    fn live_consumers(&self, live: &[bool]) -> Vec<usize> {
+        (0..self.graph.len())
+            .map(|ix| {
+                self.graph
+                    .downstream_unique(ix)
+                    .iter()
+                    .filter(|&&d| live[d])
+                    .count()
+            })
+            .collect()
     }
 
     /// Evaluate one node given the current intermediate state. Pulled
@@ -329,13 +398,15 @@ impl<'a> Evaluator<'a> {
         let mut input_hashes: Vec<Hash128> = Vec::with_capacity(input_specs.len());
         let mut input_vals: Vec<Option<PortValue>> = Vec::with_capacity(input_specs.len());
         for port_ix in 0..input_specs.len() {
+            // A port the node will not read was left out of the render
+            // (see `live_nodes`), so its source may have no value to hand.
             match self.graph.incoming(ix, port_ix) {
-                Some(src) => {
+                Some(src) if node.reads_input(port_ix, ctx) => {
                     let (h, v) = upstream(src);
                     input_hashes.push(h);
                     input_vals.push(Some(v));
                 }
-                None => {
+                _ => {
                     input_hashes.push(0);
                     input_vals.push(None);
                 }
@@ -411,6 +482,8 @@ struct ParState<'a> {
     ctx: EvalCtx<'a>,
     /// Per-node reach, from [`Graph::influence_pads`].
     influence: Vec<u32>,
+    /// The nodes this render evaluates, from [`Evaluator::live_nodes`].
+    live: Vec<bool>,
 }
 
 /// Replace a fully transparent raster with the shared blank of the same
