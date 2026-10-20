@@ -203,6 +203,11 @@ mean is spelled out in
   keep the first bytes it read for as long as it ran. A tile whose bytes did
   not change is not decoded again, and tiles from a URL are still fetched
   once.
+- `scale-px` on `noise` takes a `$param` that follows the value a render
+  passes, or an `@node`, as `warp`'s always has; it used to take a
+  `$param`'s default once at build time. `warp` takes the `[x, y]` form
+  `noise` has, to stretch its displacement along one axis. Each entry of
+  the pair may be a number or a `$param`.
 
 ### Deprecated
 

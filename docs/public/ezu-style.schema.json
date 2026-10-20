@@ -3986,16 +3986,30 @@
                 ]
               },
               "scale-px": {
-                "description": "Noise wavelength in pixels. A single number for isotropic noise; an `[x, y]` array for anisotropic noise (larger value = longer wavelength along that axis, i.e. stretched pattern).",
+                "description": "Noise wavelength in pixels. A single number for isotropic noise; an `[x, y]` array for anisotropic noise (larger value = longer wavelength along that axis, i.e. stretched pattern). A single value may be a `$param` or an `@node`; each entry of the array may be a number or a `$param`.",
                 "oneOf": [
                   {
                     "exclusiveMinimum": 0,
                     "type": "number"
                   },
                   {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  },
+                  {
                     "items": {
-                      "exclusiveMinimum": 0,
-                      "type": "number"
+                      "oneOf": [
+                        {
+                          "exclusiveMinimum": 0,
+                          "type": "number"
+                        },
+                        {
+                          "description": "`$param` reference.",
+                          "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                          "type": "string"
+                        }
+                      ]
                     },
                     "maxItems": 2,
                     "minItems": 2,
@@ -6590,15 +6604,34 @@
                 "description": "Selects the `warp` operation."
               },
               "scale-px": {
+                "description": "Noise wavelength in pixels. A single number for isotropic noise; an `[x, y]` array for anisotropic noise (larger value = longer wavelength along that axis, i.e. stretched pattern). A single value may be a `$param` or an `@node`; each entry of the array may be a number or a `$param`.",
                 "oneOf": [
                   {
-                    "minimum": 0.0,
+                    "exclusiveMinimum": 0,
                     "type": "number"
                   },
                   {
                     "description": "`$param` reference or `@node` scalar port.",
                     "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
                     "type": "string"
+                  },
+                  {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "exclusiveMinimum": 0,
+                          "type": "number"
+                        },
+                        {
+                          "description": "`$param` reference.",
+                          "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "type": "array"
                   }
                 ]
               },

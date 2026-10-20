@@ -1,8 +1,8 @@
 //! `warp` — domain warp over `Raster|Sprite|ScalarField` (pass-through:
 //! the output kind mirrors the input) using an internal noise field.
-//! Same noise dial as the `noise` op (`type`, `scale-px`, `octaves`,
-//! `lacunarity`, `gain`, `seed`, `anchor`), plus `amp-px` for
-//! displacement magnitude and a boundary mode.
+//! Same noise dial as the `noise` op (`type`, `scale-px` — one value or
+//! `[x, y]` — `octaves`, `lacunarity`, `gain`, `seed`, `anchor`), plus
+//! `amp-px` for displacement magnitude and a boundary mode.
 //!
 //! With `anchor: world` (default) the noise field is sampled in global
 //! pixel coordinates so adjacent tiles agree on the displacement at
@@ -30,11 +30,11 @@ use crate::nodes::common::{
     resample_field, sample_bilinear, unwrap_raster_or_sprite, wrap_raster_like, Anchor,
     BoundaryMode, ACCEPTS_IMAGE_OR_FIELD,
 };
-use crate::nodes::raster::noise_field::{fbm, NoiseKind, Sampler, NOISE_TYPES};
+use crate::nodes::raster::noise_field::{fbm, NoiseKind, Sampler, ScalePx, NOISE_TYPES};
 
 struct WarpNode {
     kind: NoiseKind,
-    scale_px: In<f64>,
+    scale: ScalePx,
     octaves: u32,
     lacunarity: In<f64>,
     gain: In<f64>,
@@ -81,7 +81,9 @@ impl Node for WarpNode {
             .as_ref()
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
 
-        let scale_px = self.scale_px.get(ctx, inputs)?;
+        // A non-positive wavelength (from a port) leaves that axis of the
+        // displacement field constant.
+        let (inv_scale_x, inv_scale_y) = self.scale.inv(ctx, inputs)?;
         let lacunarity = self.lacunarity.get(ctx, inputs)?;
         let gain = self.gain.get(ctx, inputs)?;
         let amp_x = self.amp_x.get(ctx, inputs)?;
@@ -101,7 +103,6 @@ impl Node for WarpNode {
             Anchor::World => (ctx.tile.x as f64 * tile_size, ctx.tile.y as f64 * tile_size),
             Anchor::Tile => (0.0, 0.0),
         };
-        let inv_scale = if scale_px > 0.0 { 1.0 / scale_px } else { 0.0 };
 
         // The displacement at canvas pixel `(x, y)`. `px`/`py` are the
         // world-pixel coord at the current zoom (or tile-local if
@@ -112,16 +113,16 @@ impl Node for WarpNode {
             let py = origin_y + (y as f64) - pad;
             let dx = fbm(
                 &nx,
-                px * inv_scale,
-                py * inv_scale,
+                px * inv_scale_x,
+                py * inv_scale_y,
                 self.octaves,
                 lacunarity,
                 gain,
             ) * amp_x;
             let dy = fbm(
                 &ny,
-                px * inv_scale,
-                py * inv_scale,
+                px * inv_scale_x,
+                py * inv_scale_y,
                 self.octaves,
                 lacunarity,
                 gain,
@@ -150,7 +151,13 @@ impl Node for WarpNode {
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"warp");
         h.update(&[self.kind.tag()]);
-        self.scale_px.param_hash(h);
+        // A single wavelength hashes as the one field it used to be, so
+        // existing styles keep their cache keys; `[x, y]` adds the second.
+        self.scale.x.param_hash(h);
+        if self.scale.per_axis {
+            h.update(b"scale-y");
+            self.scale.y.param_hash(h);
+        }
         h.update(&self.octaves.to_le_bytes());
         self.lacunarity.param_hash(h);
         self.gain.param_hash(h);
@@ -204,7 +211,7 @@ impl NodeFactory for WarpFactory {
         let octaves = (read_number_or(fields, "octaves", ctx, 1.0)? as u32).clamp(1, 12);
 
         let mut r = InReader::new(fields, ctx, 1);
-        let scale_px = r.number("scale-px")?;
+        let scale = ScalePx::read(&mut r, fields)?;
         let lacunarity = r.number_or("lacunarity", 2.0)?;
         let gain = r.number_or("gain", 0.5)?;
         // `amp-px` is the shared default for the per-axis amplitudes; when
@@ -226,18 +233,6 @@ impl NodeFactory for WarpFactory {
         let amp_x = PaddingIn::from_value(amp_x, fields, "amp-x-px")?;
         let amp_y = PaddingIn::from_value(amp_y, fields, "amp-y-px")?;
         let parts = r.finish();
-
-        // scale-px must be > 0; check the static bound (literal value, or a
-        // `$param`'s declared `max`). A `@node` port has no static bound, so
-        // its value is guarded at eval (treated as no-warp when <= 0).
-        if let Some(b) = scale_px.static_bound() {
-            if b <= 0.0 {
-                return Err(FactoryError::BadField {
-                    field: "scale-px".into(),
-                    msg: "scale-px must be > 0".into(),
-                });
-            }
-        }
 
         let seed = match fields.get("seed") {
             None => None,
@@ -274,7 +269,7 @@ impl NodeFactory for WarpFactory {
         Ok(BuiltNode {
             node: Box::new(WarpNode {
                 kind,
-                scale_px,
+                scale,
                 octaves,
                 lacunarity,
                 gain,
@@ -299,7 +294,7 @@ impl NodeFactory for WarpFactory {
                     "enum": NOISE_TYPES,
                     "default": "perlin",
                 },
-                "scale-px": schema_frag::px_number(),
+                "scale-px": ScalePx::schema(),
                 "octaves": { "type": "integer", "minimum": 1, "maximum": 12, "default": 1 },
                 "lacunarity": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 2.0 })),
                 "gain": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 0.5 })),

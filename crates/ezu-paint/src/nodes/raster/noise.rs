@@ -5,8 +5,9 @@
 //!
 //! - `type`: `white` | `value` | `perlin` | `simplex` | `worley` | `cell`
 //! - `scale-px`: wavelength in pixels (required). Either a single
-//!   number (isotropic) or `[x, y]` for anisotropic noise — useful for
-//!   wood grain, brick patterns, or wave streaks.
+//!   value (isotropic; a literal, `$param` or `@node`) or `[x, y]` for
+//!   anisotropic noise — useful for wood grain, brick patterns, or wave
+//!   streaks.
 //! - `octaves` / `lacunarity` / `gain`: fBm stack (set `octaves: 1` to
 //!   disable)
 //! - `warp-amp` / `warp-freq`: optional domain warp (turbulence)
@@ -41,10 +42,8 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{
-    default_field_seed, read_number_or, read_optional_string, resolve_field, Anchor,
-};
-use crate::nodes::raster::noise_field::{fbm, NoiseKind, Sampler, NOISE_TYPES};
+use crate::nodes::common::{default_field_seed, read_number_or, read_optional_string, Anchor};
+use crate::nodes::raster::noise_field::{fbm, NoiseKind, Sampler, ScalePx, NOISE_TYPES};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OutputKind {
@@ -55,8 +54,7 @@ enum OutputKind {
 struct NoiseNode {
     kind: NoiseKind,
     out_kind: OutputKind,
-    scale_x: f64,
-    scale_y: f64,
+    scale: ScalePx,
     octaves: u32,
     lacunarity: In<f64>,
     gain: In<f64>,
@@ -126,8 +124,7 @@ impl Node for NoiseNode {
             Anchor::Tile => (0.0, 0.0),
         };
 
-        let inv_scale_x = 1.0 / self.scale_x;
-        let inv_scale_y = 1.0 / self.scale_y;
+        let (inv_scale_x, inv_scale_y) = self.scale.inv(ctx, inputs)?;
         let warp_inv_scale_x = inv_scale_x * warp_freq;
         let warp_inv_scale_y = inv_scale_y * warp_freq;
 
@@ -195,8 +192,14 @@ impl Node for NoiseNode {
             OutputKind::Raster => b"r",
             OutputKind::Scalar => b"s",
         });
-        h.update(&self.scale_x.to_le_bytes());
-        h.update(&self.scale_y.to_le_bytes());
+        // A literal axis hashes as the bare number it always did, so
+        // existing styles keep their cache keys.
+        for axis in [&self.scale.x, &self.scale.y] {
+            match axis {
+                In::Const(v) => h.update(&v.to_le_bytes()),
+                _ => axis.param_hash(h),
+            }
+        }
         h.update(&self.octaves.to_le_bytes());
         self.lacunarity.param_hash(h);
         self.gain.param_hash(h);
@@ -253,7 +256,8 @@ impl NodeFactory for NoiseFactory {
             }
         };
 
-        let (scale_x, scale_y) = read_scale_xy(fields, "scale-px", ctx)?;
+        let mut r = InReader::new(fields, ctx, 0);
+        let scale = ScalePx::read(&mut r, fields)?;
         // `octaves` is clamped to an integer range at build time and
         // stored as a `u32`, so it stays a static field rather than an
         // `In<f64>` scalar input.
@@ -280,7 +284,6 @@ impl NodeFactory for NoiseFactory {
             }
         };
 
-        let mut r = InReader::new(fields, ctx, 0);
         let lacunarity = r.number_or("lacunarity", 2.0)?;
         let gain = r.number_or("gain", 0.5)?;
         let warp_amp = r.number_or("warp-amp", 0.0)?;
@@ -294,8 +297,7 @@ impl NodeFactory for NoiseFactory {
             node: Box::new(NoiseNode {
                 kind,
                 out_kind,
-                scale_x,
-                scale_y,
+                scale,
                 octaves,
                 lacunarity,
                 gain,
@@ -326,14 +328,7 @@ impl NodeFactory for NoiseFactory {
                     "enum": ["raster", "scalar"],
                     "default": "raster",
                 },
-                "scale-px": {
-                    "description": "Noise wavelength in pixels. A single number for isotropic noise; an `[x, y]` array for anisotropic noise (larger value = longer wavelength along that axis, i.e. stretched pattern).",
-                    "oneOf": [
-                        { "type": "number", "exclusiveMinimum": 0 },
-                        { "type": "array", "items": { "type": "number", "exclusiveMinimum": 0 },
-                          "minItems": 2, "maxItems": 2 },
-                    ],
-                },
+                "scale-px": ScalePx::schema(),
                 "octaves": { "type": "integer", "minimum": 1, "maximum": 12, "default": 1 },
                 "lacunarity": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 2.0 })),
                 "gain": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 0.5 })),
@@ -351,47 +346,3 @@ impl NodeFactory for NoiseFactory {
 }
 
 ezu_graph::submit_node!(NoiseFactory);
-
-/// Read a field that may be either a single number (isotropic) or a
-/// `[x, y]` array (anisotropic). Both axis values must be > 0.
-fn read_scale_xy(
-    fields: &serde_json::Map<String, Value>,
-    name: &str,
-    ctx: &FactoryCtx<'_>,
-) -> Result<(f64, f64), FactoryError> {
-    let v = resolve_field(fields, name, ctx)?;
-    let (x, y) = if let Some(n) = v.as_f64() {
-        (n, n)
-    } else if let Some(arr) = v.as_array() {
-        if arr.len() != 2 {
-            return Err(FactoryError::BadField {
-                field: name.into(),
-                msg: format!(
-                    "expected number or [x, y], got array of length {}",
-                    arr.len()
-                ),
-            });
-        }
-        let x = arr[0].as_f64().ok_or_else(|| FactoryError::BadField {
-            field: name.into(),
-            msg: "x must be a number".into(),
-        })?;
-        let y = arr[1].as_f64().ok_or_else(|| FactoryError::BadField {
-            field: name.into(),
-            msg: "y must be a number".into(),
-        })?;
-        (x, y)
-    } else {
-        return Err(FactoryError::BadField {
-            field: name.into(),
-            msg: "expected number or [x, y] array".into(),
-        });
-    };
-    if x <= 0.0 || y <= 0.0 {
-        return Err(FactoryError::BadField {
-            field: name.into(),
-            msg: "scale components must be > 0".into(),
-        });
-    }
-    Ok((x, y))
-}

@@ -1,7 +1,10 @@
 //! Noise source and the displace/warp distortion nodes.
 
-use crate::common::{render, render_tile, render_tile_host_seeded};
-use ezu_graph::TileId;
+use crate::common::{
+    assert_number_field_drivable_plain, render, render_tile, render_tile_host_seeded,
+    render_with_params,
+};
+use ezu_graph::{ScalarValue, TileId};
 
 #[test]
 fn noise_perlin_produces_variation_and_is_deterministic() {
@@ -328,4 +331,80 @@ fn world_anchored_noise_is_not_shared_between_tiles_through_the_cache() {
         after.pixels, alone.pixels,
         "a tile rendered after its neighbour must not pick up the neighbour's noise"
     );
+}
+
+/// A `noise` and a `warp` of a disk, `%V%` in their `scale-px`.
+fn scale_doc(op: &str) -> String {
+    let node = match op {
+        "noise" => r#""out": { "op": "noise", "scale-px": %V%, "seed": 3, "anchor": "tile" }"#,
+        _ => {
+            r##""src": { "op": "circle", "color": "#000000", "radius-frac": 0.4 },
+               "out": { "op": "warp", "input": "@src", "scale-px": %V%, "amp-px": 5,
+                        "seed": 7, "anchor": "tile" }"##
+        }
+    };
+    format!(
+        r#"{{
+      "name": "demo",
+      "tile-size": 32,
+      %PARAMS%
+      "nodes": {{ %NODES% {node} }},
+      "output": "@out"
+    }}"#
+    )
+}
+
+#[test]
+fn scale_px_takes_a_param_or_a_node() {
+    for op in ["noise", "warp"] {
+        assert_number_field_drivable_plain(&scale_doc(op), 32, 0, 8.0, 20.0);
+    }
+}
+
+/// `[x, y]` stretches the pattern along one axis; `[s, s]` is the same as
+/// `s`. `warp` takes the same shape as `noise`.
+#[test]
+fn scale_px_takes_an_x_y_pair() {
+    for op in ["noise", "warp"] {
+        let doc = |v: &str| {
+            scale_doc(op)
+                .replace("%V%", v)
+                .replace("%PARAMS%", "")
+                .replace("%NODES%", "")
+        };
+        let one = render(&doc("12"), 32, 0);
+        assert_eq!(render(&doc("[12, 12]"), 32, 0).pixels, one.pixels, "{op}");
+        assert_ne!(render(&doc("[12, 40]"), 32, 0).pixels, one.pixels, "{op}");
+    }
+}
+
+/// Each entry of the pair may be a `$param`, resolved per render.
+#[test]
+fn scale_px_pair_entries_take_a_param() {
+    for op in ["noise", "warp"] {
+        let lit = |v: &str| {
+            scale_doc(op)
+                .replace("%V%", v)
+                .replace("%PARAMS%", "")
+                .replace("%NODES%", "")
+        };
+        let by_param = scale_doc(op)
+            .replace("%V%", r#"[12, "$sy"]"#)
+            .replace(
+                "%PARAMS%",
+                r#""params": { "sy": { "type": "number", "default": 12 } },"#,
+            )
+            .replace("%NODES%", "");
+        let z0 = TileId { z: 0, x: 0, y: 0 };
+        assert_eq!(
+            render_with_params(&by_param, 32, 0, z0, &[]).pixels,
+            render(&lit("[12, 12]"), 32, 0).pixels,
+            "{op}"
+        );
+        assert_eq!(
+            render_with_params(&by_param, 32, 0, z0, &[("sy", ScalarValue::Number(40.0))]).pixels,
+            render(&lit("[12, 40]"), 32, 0).pixels,
+            "{op}"
+        );
+    }
 }

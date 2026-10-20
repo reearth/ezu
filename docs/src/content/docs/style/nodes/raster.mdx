@@ -517,7 +517,7 @@ Procedural noise source. With `kind: raster` (default) the noise is mapped to RG
 | `low-color` | color \| `$param` \| `@node` | no | sRGB hex color, `$param` reference, or `@node` scalar port. |
 | `octaves` | integer (1…12) | no | — |
 | `opacity` | number (0…1) \| `$param` \| `@node` | no | — |
-| `scale-px` | number \| array of number | yes | Noise wavelength in pixels. A single number for isotropic noise; an `[x, y]` array for anisotropic noise (larger value = longer wavelength along that axis, i.e. stretched pattern). |
+| `scale-px` | number \| `$param` \| `@node` \| array of number \| string | yes | Noise wavelength in pixels. A single number for isotropic noise; an `[x, y]` array for anisotropic noise (larger value = longer wavelength along that axis, i.e. stretched pattern). A single value may be a `$param` or an `@node`; each entry of the array may be a number or a `$param`. |
 | `seed` | integer (0…∞) | no | Field seed. Omitted, `anchor: world` uses a fixed seed so every tile samples the same field, and `anchor: tile` uses the host's per-tile seed so each tile gets its own. Set it to pin either. |
 | `type` | `white` \| `value` \| `perlin` \| `simplex` \| `worley` \| `cell` | no | — |
 | `warp-amp` | number \| `$param` \| `@node` | no | — |
@@ -717,7 +717,7 @@ Domain warp via an internal noise field, on a raster, sprite or scalar field; th
 | `input` | `@node` | yes | Reference to another node (`@name`). |
 | `lacunarity` | number \| `$param` \| `@node` | no | — |
 | `octaves` | integer (1…12) | no | — |
-| `scale-px` | number (0…∞) \| `$param` \| `@node` | yes | — |
+| `scale-px` | number \| `$param` \| `@node` \| array of number \| string | yes | Noise wavelength in pixels. A single number for isotropic noise; an `[x, y]` array for anisotropic noise (larger value = longer wavelength along that axis, i.e. stretched pattern). A single value may be a `$param` or an `@node`; each entry of the array may be a number or a `$param`. |
 | `seed` | integer (0…∞) | no | Field seed. Omitted, `anchor: world` uses a fixed seed so every tile samples the same field, and `anchor: tile` uses the host's per-tile seed so each tile gets its own. Set it to pin either. |
 | `type` | `white` \| `value` \| `perlin` \| `simplex` \| `worley` \| `cell` | no | — |
 

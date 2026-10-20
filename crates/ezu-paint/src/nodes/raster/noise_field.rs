@@ -3,7 +3,9 @@
 //! Centralises the `NoiseKind` enum + `Sampler` dispatch + fBm
 //! accumulator so both ops describe the same noise space.
 
+use ezu_graph::{EvalCtx, EvalError, FactoryError, In, InReader, PortValue};
 use noise::{core::worley::ReturnType, NoiseFn, Perlin, Simplex, Value as ValueNoise, Worley};
+use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,6 +163,98 @@ pub(super) fn fbm(
         sum / norm
     } else {
         0.0
+    }
+}
+
+/// A noise wavelength, `scale-px`, as `noise` and `warp` both read it: one
+/// value for both axes, or `[x, y]` to stretch the pattern along one.
+pub(super) struct ScalePx {
+    pub(super) x: In<f64>,
+    pub(super) y: In<f64>,
+    /// Whether the field was written as `[x, y]`. A single value fills both
+    /// axes, and a node that hashed one value before keeps hashing one.
+    pub(super) per_axis: bool,
+}
+
+impl ScalePx {
+    /// Read `scale-px`. A single value may be a literal, a `$param` or an
+    /// `@node`. Each entry of an `[x, y]` pair may be a literal or a
+    /// `$param`, but not an `@node`: a scalar port is wired to a whole
+    /// field, not to one entry inside it. Each axis must be > 0 wherever
+    /// that is known at build time — a literal, or a `$param`'s `max`.
+    pub(super) fn read(
+        r: &mut InReader<'_, '_>,
+        fields: &serde_json::Map<String, Value>,
+    ) -> Result<Self, FactoryError> {
+        const NAME: &str = "scale-px";
+        let scale = match fields.get(NAME).and_then(Value::as_array) {
+            Some(arr) => {
+                if arr.len() != 2 {
+                    return Err(FactoryError::BadField {
+                        field: NAME.into(),
+                        msg: format!(
+                            "expected number or [x, y], got array of length {}",
+                            arr.len()
+                        ),
+                    });
+                }
+                ScalePx {
+                    x: r.nested("scale-px[0]", &arr[0])?,
+                    y: r.nested("scale-px[1]", &arr[1])?,
+                    per_axis: true,
+                }
+            }
+            None => {
+                let v = r.number(NAME)?;
+                ScalePx {
+                    x: v.clone(),
+                    y: v,
+                    per_axis: false,
+                }
+            }
+        };
+        for axis in [&scale.x, &scale.y] {
+            if axis.static_bound().is_some_and(|b| b <= 0.0) {
+                return Err(FactoryError::BadField {
+                    field: NAME.into(),
+                    msg: "scale-px must be > 0".into(),
+                });
+            }
+        }
+        Ok(scale)
+    }
+
+    /// The reciprocal wavelengths `(1 / x, 1 / y)` for one eval. An axis
+    /// whose value is not positive — only possible from a port or an
+    /// unbounded `$param` — gets 0, a field that does not vary along it,
+    /// rather than an infinite frequency.
+    pub(super) fn inv(
+        &self,
+        ctx: &EvalCtx<'_>,
+        inputs: &[Option<PortValue>],
+    ) -> Result<(f64, f64), EvalError> {
+        let inv = |v: f64| if v > 0.0 { 1.0 / v } else { 0.0 };
+        Ok((inv(self.x.get(ctx, inputs)?), inv(self.y.get(ctx, inputs)?)))
+    }
+
+    /// The field's schema, shared by both ops.
+    pub(super) fn schema() -> Value {
+        serde_json::json!({
+            "description": "Noise wavelength in pixels. A single number for isotropic noise; an `[x, y]` array for anisotropic noise (larger value = longer wavelength along that axis, i.e. stretched pattern). A single value may be a `$param` or an `@node`; each entry of the array may be a number or a `$param`.",
+            "oneOf": [
+                { "type": "number", "exclusiveMinimum": 0 },
+                {
+                    "type": "string",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "description": "`$param` reference or `@node` scalar port."
+                },
+                { "type": "array",
+                  "items": ezu_graph::schema_frag::nested_number(
+                      serde_json::json!({ "type": "number", "exclusiveMinimum": 0 })
+                  ),
+                  "minItems": 2, "maxItems": 2 },
+            ],
+        })
     }
 }
 
