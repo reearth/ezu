@@ -44,3 +44,70 @@ fn the_cache_budget_is_the_hosts_and_survives_a_new_cache() {
     r.set_cache_budget(None);
     assert_eq!(r.memory_usage().cache_budget, default);
 }
+
+/// A native host can let the renderer read the style's assets itself: a
+/// brush beside the style draws what binding its bytes draws, and a glyphs
+/// source relative to the style reads each range as a label needs it.
+#[cfg(feature = "http")]
+#[tokio::test]
+async fn resolved_assets_draw_what_bound_ones_draw() {
+    use ezu::renderer::{BindOptions, OutputFormat, RenderOptions, SourceSet};
+    use std::path::Path;
+
+    let styles = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/styles");
+    let watercolor = std::fs::read_to_string(styles.join("watercolor.json")).expect("reads");
+    let tile = include_bytes!("../../../go/testdata/basemap-14-14554-6454.mvt");
+    let rgba = || RenderOptions {
+        format: OutputFormat::Rgba,
+        tile_size: Some(128),
+        ..RenderOptions::default()
+    };
+    let render = |r: &Renderer| {
+        let mut set = SourceSet::new();
+        set.bind(
+            &r.load_source("basemap", tile).expect("loads"),
+            &BindOptions::default(),
+        )
+        .expect("binds");
+        r.render_tile_with(14, 14554, 6454, &set, rgba())
+            .expect("renders")
+    };
+
+    let mut bound = Renderer::new(&watercolor).expect("builds");
+    let brush = std::fs::read(styles.join("brushes/watercolor_glazing.myb")).expect("reads");
+    bound
+        .bind_source("glazing", brush, &BindOptions::default())
+        .expect("binds");
+    let mut resolved = Renderer::new(&watercolor).expect("builds");
+    resolved.resolve_assets(&styles).await.expect("resolves");
+    assert!(render(&resolved) == render(&bound));
+
+    // Glyphs: a `file:` template relative to the style, which only the
+    // resolved renderer can read.
+    let dir = std::env::temp_dir().join(format!("ezu-resolve-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("glyphs/Sans")).expect("a dir");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../ezu-core/tests/glyphs/0-255.pbf"),
+        dir.join("glyphs/Sans/0-255.pbf"),
+    )
+    .expect("copies");
+    let labels = r##"{
+        "name": "labels", "tile-size": 64,
+        "sources": { "g": { "type": "glyphs", "url": "file:glyphs/{fontstack}/{range}.pbf", "fontstack": "Sans" } },
+        "nodes": {
+            "pt": { "op": "literal-geometry", "points": [[2048, 2048]] },
+            "l": { "op": "text-labels", "features": "@pt", "font": ["g"], "text": "Ab", "size": 16, "color": "#000000" },
+            "p": { "op": "label-placement", "labels": ["@l"] },
+            "out": { "op": "text-draw", "labels": "@l", "placement": "@p" }
+        },
+        "output": "@out"
+    }"##;
+    let mut r = Renderer::new(labels).expect("builds");
+    r.resolve_assets(&dir).await.expect("resolves");
+    let drawn = r
+        .render_tile_with(1, 0, 0, &SourceSet::new(), rgba())
+        .expect("renders");
+    assert_eq!(r.memory_usage().glyph_ranges, 1, "the range was read");
+    assert!(drawn.chunks(4).any(|p| p[3] > 0), "the label drew");
+    std::fs::remove_dir_all(&dir).ok();
+}

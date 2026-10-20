@@ -93,6 +93,20 @@ let png = r.render_tile(13, 7276, 3225, RenderOptions::default())?;
 r.clear_sources();
 ```
 
+Built with the `http` feature, a native host can also leave the style's own
+assets to the renderer. `resolve_assets(base_dir)` reads or fetches every brush,
+image, sprite and font the style declares, `file:` paths against `base_dir`, and
+gives each glyphs source a stack that reads a range the first time a label needs
+it, during the render, which is how the `ezu` CLI renders. Tile data is still
+yours to fetch and load. The JS and Go packages have no such call: a browser or
+a wasm module cannot do I/O from inside a render, so there every source is
+bound.
+
+```rust
+let mut r = Renderer::new(&style_json)?;
+r.resolve_assets(Path::new("styles/")).await?;
+```
+
 A page at a print scale is `compute_frame` and `render_frame`, which render the
 tiles the page covers at the tile size that meets the scale and crop them into
 one RGBA page, the same as [`ezu frame`](/ezu/guides/bbox-and-pyramids/#a-page-at-a-print-scale):

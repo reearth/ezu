@@ -62,6 +62,13 @@ mean is spelled out in
   or less than its default 8 MiB of pixels, for a batch of neighbouring
   tiles that reuse each other's work or for a tight memory limit, and keeps
   the size across a new style.
+- A native Rust host can let the renderer read a style's assets itself.
+  `resolve_assets`, with the `http` feature, reads or fetches every brush,
+  image, sprite and font the style declares, `file:` paths against a base
+  directory, and reads each glyph range the first time a label needs it,
+  as `ezu` does, so such a host binds only its tile data. It is Rust-only:
+  the JS and Go packages run where nothing can do I/O from inside a render,
+  so there every source is bound as before.
 - `text` and `text-labels` take `anchor-expr`, a MapLibre expression that
   names a point label's anchor per feature, so one layer can put some labels
   left of their points and others right of them, or switch sides with zoom.

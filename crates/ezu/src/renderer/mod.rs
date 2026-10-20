@@ -70,14 +70,20 @@
 //! # }
 //! ```
 //!
-//! This host cannot fetch anything itself, so everything a render needs
+//! The renderer fetches nothing itself, so everything a render needs
 //! must be bound before it: [`Renderer::requested_neighbor_offsets`]
 //! names the neighbour tiles, and [`Renderer::needed_codepoints`] the
-//! glyphs.
+//! glyphs. A native host built with the `http` feature can instead let the
+//! renderer read the style's brushes, images, sprites, fonts and glyphs
+//! itself with `Renderer::resolve_assets`, glyph ranges as labels need
+//! them, which is how the `ezu` CLI renders; tile data stays the host's to
+//! fetch either way.
 //!
 //! Every fallible call returns an [`Error`] carrying an [`ErrorKind`]
 //! whose [`name`](ErrorKind::name) is what a host branches on.
 
+#[cfg(feature = "http")]
+mod assets;
 mod error;
 mod features;
 mod frame;
