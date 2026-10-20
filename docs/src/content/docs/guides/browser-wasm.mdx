@@ -169,8 +169,8 @@ r.neededCodepoints();    // exact codepoints, if you can build your own PBF
 ```
 
 Both over-approximate. `setGlyphBudget(bytes)` caps what each fontstack keeps
-resident; without it a fontstack keeps every range ever bound for the renderer's
-life.
+resident, and `clearGlyphBudget()` lifts the cap; without one a fontstack keeps
+every range ever bound for the renderer's life.
 
 `system:` font sources do not work here — there are no installed fonts in wasm.
 Use a font file URL or a `glyphs` endpoint.
@@ -283,8 +283,8 @@ only and only until the function returns or settles; used later it throws
 since the frame never reads bound tile data. Anything else that would change
 the renderer — `bindSource`, `clearSources`, `renderTile`, `trimGlyphs`,
 another `renderFrame` or `renderFrameWithFeatures`, `setStyle`, `setTileSize`,
-`clearTileSize`, `setGlyphBudget`, `setCacheBudget`, `clearCacheBudget` —
-throws `FrameInProgress`, so
+`clearTileSize`, `setGlyphBudget`, `clearGlyphBudget`, `setCacheBudget`,
+`clearCacheBudget` — throws `FrameInProgress`, so
 a request that runs while your function awaits its fetch cannot change the
 frame's tiles under it. `loadSource`, `renderTileWith` and the queries that
 only read, such as `sourceTile` and `neededCodepointsIn`, still work, and the
@@ -308,8 +308,9 @@ To render a frame's tiles yourself — spread over several renderers, say — dr
 each at `f.tileSize` (`renderTile(z, x, y, { format: "rgba", tileSize: f.tileSize })`,
 or `setTileSize` on the renderer) and copy it into the page with its top-left at
 `(x · tileSize − left, y · tileSize − top)`, cropping the tiles along the border.
-`clearTileSize()` goes back to the style's size, and so does `setStyle`. To
-gather features over such a page, `r.frameFeatures(f, request)` takes
+`clearTileSize()` goes back to the style's size, and so does `setStyle`;
+`tileSize` keeps reporting the style's own, and `renderTileSize` is the size
+renders use now. To gather features over such a page, `r.frameFeatures(f, request)` takes
 `renderFrameWithFeatures`'s request and returns a collector: render each tile
 through its `renderTile(z, x, y, set, { tileSize: f.tileSize })`, in any order,
 and `finish()` returns the pages. Every tile goes through the renderer that
@@ -361,7 +362,11 @@ server.
   timing the same way.
 - Per-node `tracing` events can be surfaced in the console by installing a
   `LogSink` once at startup — the same op/cache-hit/duration trace `--verbose`
-  prints natively.
+  prints natively. `onEvent` hears each event as it happens and `drainLines()`
+  takes what was buffered, as the Go package's `WithLogger` and `DrainLogs` do.
+- `opCount()` and `opNames()` say which node ops the module registered; zero
+  means its life-before-main constructors never ran and every style is about to
+  fail with "unknown op".
 
 The full JS API, build commands, and benchmarks live in the
 [`ezu-wasm` README](https://github.com/reearth/ezu/tree/main/crates/ezu-wasm).

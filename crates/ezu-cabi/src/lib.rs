@@ -79,6 +79,7 @@ pub const EXPORTS: &[&str] = &[
     "ezu_renderer_free",
     "ezu_set_style",
     "ezu_tile_size",
+    "ezu_render_tile_size",
     "ezu_set_tile_size",
     "ezu_compute_frame",
     "ezu_params_schema",
@@ -444,6 +445,13 @@ pub extern "C" fn ezu_set_style(handle: u32, style_ptr: u32, style_len: u32) -> 
 #[unsafe(no_mangle)]
 pub extern "C" fn ezu_tile_size(handle: u32) -> i64 {
     with_renderer(handle, |r| r.tile_size() as i64)
+}
+
+/// The tile size renders use: the one [`ezu_set_tile_size`] set, or else
+/// the style's `tile-size`.
+#[unsafe(no_mangle)]
+pub extern "C" fn ezu_render_tile_size(handle: u32) -> i64 {
+    with_renderer(handle, |r| r.render_tile_size() as i64)
 }
 
 /// Render every tile at `size` px instead of the style's `tile-size`,

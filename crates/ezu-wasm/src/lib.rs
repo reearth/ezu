@@ -278,6 +278,14 @@ impl Renderer {
         self.inner.borrow().tile_size()
     }
 
+    /// The tile size renders use: the one `setTileSize` set, or else the
+    /// style's `tile-size`. A `tileSize` in one render's options still wins
+    /// over it.
+    #[wasm_bindgen(getter, js_name = renderTileSize)]
+    pub fn render_tile_size(&self) -> u32 {
+        self.inner.borrow().render_tile_size()
+    }
+
     /// Render every tile at `size` px instead of the style's `tile-size`,
     /// without editing the style. `clearTileSize()` goes back to the
     /// style's, and so does `setStyle`.
@@ -386,8 +394,8 @@ impl Renderer {
     /// that would change what it draws — `bindSource`, `clearSources`,
     /// `renderTile`, `trimGlyphs`, another `renderFrame` or
     /// `renderFrameWithFeatures`, `setStyle`, `setTileSize`,
-    /// `clearTileSize`, `setGlyphBudget`, `setCacheBudget`,
-    /// `clearCacheBudget` — throws `FrameInProgress`, so a request running while `sources` awaits
+    /// `clearTileSize`, `setGlyphBudget`, `clearGlyphBudget`,
+    /// `setCacheBudget`, `clearCacheBudget` — throws `FrameInProgress`, so a request running while `sources` awaits
     /// cannot change the frame's tiles under it. `loadSource`,
     /// `renderTileWith` and the queries that only read (`sourceTile`,
     /// `requestedNeighborOffsets`, `neededCodepointsIn`, `boundSources`, …)
@@ -618,8 +626,9 @@ impl Renderer {
     /// names exactly what to bind, and a host that re-binds every tile
     /// (rather than tracking what it sent) needs no other change.
     ///
-    /// A budget of `0xFFFFFFFF` — the largest value this host can express,
-    /// since an address here is 32 bits — lifts the cap again, and is what
+    /// `clearGlyphBudget()` lifts the cap again. So does a budget of
+    /// `0xFFFFFFFF` — the largest value this host can express, since an
+    /// address here is 32 bits — which is what
     /// `memoryUsage().glyphBudget` reports as `Infinity`. A number that
     /// big cannot be a real ceiling: it is every byte the module could
     /// ever address.
@@ -629,6 +638,17 @@ impl Renderer {
         self.inner
             .borrow_mut()
             .set_glyph_budget((bytes != usize::MAX).then_some(bytes));
+        Ok(())
+    }
+
+    /// Lift the cap `setGlyphBudget` put on the glyph bank, back to where a
+    /// fresh renderer starts. It frees nothing: what is resident stays
+    /// resident, and stops being trimmed. Throws `FrameInProgress` while a
+    /// `renderFrame` holds the renderer.
+    #[wasm_bindgen(js_name = clearGlyphBudget)]
+    pub fn clear_glyph_budget(&self) -> Result<(), JsValue> {
+        self.idle()?;
+        self.inner.borrow_mut().set_glyph_budget(None);
         Ok(())
     }
 
@@ -2014,6 +2034,27 @@ fn parse_source_zoom_opt(obj: Option<&js_sys::Object>) -> Result<Option<u8>, JsV
         ));
     }
     Ok(Some(z as u8))
+}
+
+/// The number of node ops registered in this module. It is the smoke test
+/// for the module's life-before-main constructors: zero means they never
+/// ran, and every style is about to fail with "unknown op". The Go
+/// package's `OpCount`; a Rust host reads the registry itself, through
+/// `ezu::paint::nodes::default_registry()`.
+#[wasm_bindgen(js_name = opCount)]
+pub fn op_count() -> usize {
+    ezu::paint::nodes::default_registry().op_names().len()
+}
+
+/// Every registered node op, by name: which ops this build has, not just
+/// how many. The Go package's `OpNames`.
+#[wasm_bindgen(js_name = opNames)]
+pub fn op_names() -> Vec<String> {
+    ezu::paint::nodes::default_registry()
+        .op_names()
+        .into_iter()
+        .map(|n| n.to_string())
+        .collect()
 }
 
 /// Whether the wasm binary was compiled with `+simd128`. Lets the demo

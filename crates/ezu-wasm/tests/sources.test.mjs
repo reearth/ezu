@@ -11,7 +11,7 @@ import { createRequire } from "node:module";
 import { test } from "node:test";
 
 const require = createRequire(import.meta.url);
-const { Renderer, SourceSet } = require(
+const { Renderer, SourceSet, opCount, opNames } = require(
   process.env.EZU_WASM_NODE ?? "../../../target/ezu-wasm-node/ezu.js",
 );
 
@@ -187,6 +187,27 @@ test("the cache budget is the host's and outlives a new style", () => {
   assert.equal(r.memoryUsage().cacheBudget, 32 << 20);
   r.clearCacheBudget();
   assert.equal(r.memoryUsage().cacheBudget, fallback);
+});
+
+test("the glyph budget lifts with clearGlyphBudget as with the old sentinel", () => {
+  const r = new Renderer(stitched);
+  assert.equal(r.memoryUsage().glyphBudget, Infinity, "a fresh renderer is uncapped");
+  r.setGlyphBudget(1 << 20);
+  assert.equal(r.memoryUsage().glyphBudget, 1 << 20);
+  r.clearGlyphBudget();
+  assert.equal(r.memoryUsage().glyphBudget, Infinity);
+  r.setGlyphBudget(1 << 20);
+  r.setGlyphBudget(0xffffffff);
+  assert.equal(r.memoryUsage().glyphBudget, Infinity, "0xFFFFFFFF still lifts the cap");
+  r.free();
+});
+
+test("the module says which ops it carries, as the Go package does", () => {
+  const names = opNames();
+  assert.equal(opCount(), names.length);
+  assert.ok(names.length > 0, "the constructors ran");
+  for (const op of ["features", "fill-solid", "blur"]) assert.ok(names.includes(op), op);
+  assert.deepEqual([...names].sort(), names, "sorted");
 });
 
 test("warnings are the current style's graph's", () => {

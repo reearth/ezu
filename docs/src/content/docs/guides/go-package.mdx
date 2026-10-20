@@ -316,7 +316,8 @@ To render a frame's tiles yourself — to spread them over a `Pool`, say — dra
 each at `f.TileSize` (`ezu.Render{TileSize: f.TileSize}`, or `SetTileSize` on
 the renderer) and copy it into the page at `f.TileOffset(tile)`, cropping the
 tiles along the border. `ClearTileSize` goes back to the style's size, and so
-does `SetStyle`.
+does `SetStyle`. `TileSize` keeps reporting the style's own; `RenderTileSize`
+is the size renders use now.
 
 `RenderTileWithFeatures` renders a tile as `RenderTileWith` does and also hands
 back what the named features nodes held — the labels and the boxes placement

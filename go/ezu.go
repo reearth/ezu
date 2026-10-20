@@ -948,6 +948,16 @@ func (r *Renderer) TileSize(ctx context.Context) (uint32, error) {
 	return uint32(n), err
 }
 
+// RenderTileSize is the tile size renders use: the one
+// [Renderer.SetTileSize] set, or else the style's tile-size. A
+// [Render.TileSize] on one render still wins over it.
+func (r *Renderer) RenderTileSize(ctx context.Context) (uint32, error) {
+	n, err := r.call(ctx, func(ctx context.Context) (int64, error) {
+		return r.call1(ctx, "ezu_render_tile_size", uint64(r.handle))
+	})
+	return uint32(n), err
+}
+
 // BindSource binds raw bytes under a sources.<name> entry from the style.
 // The renderer dispatches on the source's declared type:
 //
@@ -1486,7 +1496,8 @@ func (r *Renderer) OpCount(ctx context.Context) (uint32, error) {
 	return uint32(n), err
 }
 
-// OpNames lists every registered node op.
+// OpNames lists every registered node op. OpCount and OpNames are the JS
+// package's opCount and opNames.
 func (r *Renderer) OpNames(ctx context.Context) ([]string, error) {
 	_, payload, err := r.withSlots(ctx, func(slots uint32) (int64, error) {
 		_, err := r.call1(ctx, "ezu_op_names", uint64(slots), uint64(slots+4))
@@ -1500,6 +1511,11 @@ func (r *Renderer) OpNames(ctx context.Context) ([]string, error) {
 
 // SIMDEnabled reports whether the module was compiled with +simd128. The
 // committed one is: it is both faster and smaller.
+//
+// The JS package's threadsEnabled has no counterpart here: a wasip1
+// instance has one thread and no build of this module has more, so the
+// answer would always be false. Rendering several tiles at once is several
+// renderers, which a [Pool] hands out.
 func (r *Renderer) SIMDEnabled(ctx context.Context) (bool, error) {
 	n, err := r.call(ctx, func(ctx context.Context) (int64, error) {
 		return r.call1(ctx, "ezu_simd_enabled")
@@ -1538,7 +1554,9 @@ const (
 //
 // [WithLogger] is how to hear them without asking. What follows is the pull
 // side, for a host that would rather take the lines itself — to attach them
-// to a tile in a response, say, or to assert on them in a test.
+// to a tile in a response, say, or to assert on them in a test. The JS
+// package has the same two sides on its LogSink: a callback per event, and
+// drainLines for the pull.
 
 // InitLog starts collecting the renderer's log events at the given level.
 // Idempotent per instance; the first level wins, including the one

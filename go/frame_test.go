@@ -104,11 +104,17 @@ func TestSetTileSizeRendersAtThatSize(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if size, err := renderer.RenderTileSize(ctx); err != nil || size != 512 {
+		t.Errorf("RenderTileSize is %d (%v) before SetTileSize, want the style's 512", size, err)
+	}
 	if err := renderer.SetTileSize(ctx, 93); err != nil {
 		t.Fatal(err)
 	}
 	if size, err := renderer.TileSize(ctx); err != nil || size != 512 {
 		t.Errorf("TileSize is %d (%v) after SetTileSize; it reports the style's 512", size, err)
+	}
+	if size, err := renderer.RenderTileSize(ctx); err != nil || size != 93 {
+		t.Errorf("RenderTileSize is %d (%v) after SetTileSize(93)", size, err)
 	}
 	set, err := renderer.RenderTile(ctx, g.tile, Render{Format: FormatRGBA})
 	if err != nil {
@@ -125,6 +131,9 @@ func TestSetTileSizeRendersAtThatSize(t *testing.T) {
 
 	if err := renderer.ClearTileSize(ctx); err != nil {
 		t.Fatal(err)
+	}
+	if size, err := renderer.RenderTileSize(ctx); err != nil || size != 512 {
+		t.Errorf("RenderTileSize is %d (%v) after ClearTileSize, want 512", size, err)
 	}
 	back, err := renderer.RenderTile(ctx, g.tile, Render{})
 	if err != nil {

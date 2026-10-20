@@ -274,6 +274,13 @@ mean is spelled out in
   are written as a print page's are, so a tile's longitudes are the ones a
   page holding it writes; tile units stay the default, byte for byte. The
   wasm module's ABI version is now 8.
+- The JS and Go packages answer the same diagnostics and setters. JS gains
+  `clearGlyphBudget()`, as Go's `ClearGlyphBudget` (`0xFFFFFFFF` to
+  `setGlyphBudget` still lifts the cap too), and `opCount()` and
+  `opNames()`, as Go's `OpCount` and `OpNames`. Both gain the tile size
+  renders use, which `set_tile_size` may have changed from the style's:
+  `renderTileSize` in JS and `RenderTileSize` in Go, as Rust's
+  `render_tile_size`.
 
 ### Changed
 

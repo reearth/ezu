@@ -445,6 +445,21 @@ mod loaded_sources {
     }
 
     #[test]
+    fn the_render_tile_size_follows_set_tile_size() {
+        let a = renderer();
+        let style = ezu_tile_size(a);
+        assert!(style > 0);
+        assert_eq!(ezu_render_tile_size(a), style);
+        assert_eq!(ezu_set_tile_size(a, 391), 391);
+        assert_eq!(ezu_render_tile_size(a), 391);
+        assert_eq!(ezu_tile_size(a), style, "the style's own is unchanged");
+        assert_eq!(ezu_set_tile_size(a, 0), style);
+        assert_eq!(ezu_render_tile_size(a), style);
+        assert_eq!(ezu_renderer_free(a), 0);
+        assert_eq!(ezu_render_tile_size(a), ERR_BAD_HANDLE);
+    }
+
+    #[test]
     fn a_set_with_no_entries_renders_no_tile_data() {
         let a = renderer();
         assert!(source_set(a, b"").expect("builds").is_empty());

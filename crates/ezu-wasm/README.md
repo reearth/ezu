@@ -11,6 +11,10 @@ binding buffer that mirrors the style's `sources` block.
 
 ```ts
 function simdEnabled(): boolean;
+// How many node ops the module registered, and their names. Zero means
+// its life-before-main constructors never ran.
+function opCount(): number;
+function opNames(): string[];
 // Wasm linear memory committed to the module, in bytes — what an
 // isolate's memory cap applies to. A high-water mark: it never falls,
 // since wasm cannot return pages to the host.
@@ -28,6 +32,7 @@ class Renderer {
 
   setStyle(styleJson: string): number;            // → new node count
   readonly tileSize: number;
+  readonly renderTileSize: number;  // what renders use: setTileSize's, or tileSize
 
   // JSON Schema for the current style's `params` — types, defaults,
   // ranges, descriptions. Follows `setStyle`. Generate a params panel
@@ -97,7 +102,9 @@ class Renderer {
   // Cap the glyph bytes each bound fontstack keeps resident. Unset, a
   // fontstack keeps every range ever bound for the life of the
   // renderer. Trimming runs after `renderTile`, never while binding.
+  // clearGlyphBudget() lifts the cap again.
   setGlyphBudget(bytes: number): void;
+  clearGlyphBudget(): void;
 
   // Let the render cache hold `bytes` of pixels instead of its default
   // (8 MiB); clearCacheBudget() goes back. Kept through setStyle.
@@ -350,8 +357,8 @@ that call returns or settles; used later it throws `StaleBinder`, and a
 tile-scoped source bound through it throws `UnknownSource`, since the frame
 never reads bound tile data. Anything else that would change the renderer —
 `bindSource`, `clearSources`, `renderTile`, `trimGlyphs`, another
-`renderFrame`, `setStyle`, `setTileSize`, `clearTileSize`, `setGlyphBudget`
-— throws `FrameInProgress`, so a request that runs while `sources` awaits
+`renderFrame`, `setStyle`, `setTileSize`, `clearTileSize`, `setGlyphBudget`,
+`clearGlyphBudget` — throws `FrameInProgress`, so a request that runs while `sources` awaits
 its fetch cannot change the frame's tiles under it. `loadSource`,
 `renderTileWith` and the queries that only read (`sourceTile`,
 `requestedNeighborOffsets`, `neededCodepointsIn`, `boundSources`, …) still

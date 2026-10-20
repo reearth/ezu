@@ -103,12 +103,16 @@ bytes a browser may download, so for now the choice is explicit.
 
 ```ts
 function simdEnabled(): boolean;
+// How many node ops the module registered, and their names.
+function opCount(): number;
+function opNames(): string[];
 
 class Renderer {
   constructor(styleJson: string);
 
   setStyle(styleJson: string): number;            // → new node count
   readonly tileSize: number;
+  readonly renderTileSize: number;  // what renders use: setTileSize's, or tileSize
   readonly warnings: string[];  // what building the style's graph warned about
 
   // Bind tile bytes under a `sources.<name>` entry from the style.
@@ -137,9 +141,11 @@ class Renderer {
     indexUrl?: string;          // a sprite index that is a URL, not inline
   }>;
 
-  // Cap the resident glyph bytes per fontstack. 0xFFFFFFFF lifts the cap
-  // (and reads back as `Infinity` from `memoryUsage().glyphBudget`).
+  // Cap the resident glyph bytes per fontstack. clearGlyphBudget() lifts
+  // the cap, as does 0xFFFFFFFF (it reads back as `Infinity` from
+  // `memoryUsage().glyphBudget`).
   setGlyphBudget(bytes: number): void;
+  clearGlyphBudget(): void;
 
   // Let the render cache hold `bytes` of pixels instead of its default
   // (8 MiB); clearCacheBudget() goes back. Kept through setStyle.
@@ -290,7 +296,7 @@ the `binder` you are handed, which works only for its own tile and only
 until that call returns or settles. Calls that would change the renderer —
 `bindSource`, `clearSources`, `renderTile`, `trimGlyphs`, another
 `renderFrame`, `setStyle`, `setTileSize`, `clearTileSize`,
-`setGlyphBudget` — throw `FrameInProgress` meanwhile, so another request
+`setGlyphBudget`, `clearGlyphBudget` — throw `FrameInProgress` meanwhile, so another request
 cannot change the frame's tiles under it. `loadSource`, `renderTileWith`
 and queries that only read, such as `sourceTile` and `neededCodepointsIn`,
 still work.

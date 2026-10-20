@@ -84,8 +84,10 @@ test("setTileSize renders at that size", () => {
   const style = r.renderTile(14, 14554, 6454);
   const perRender = r.renderTile(14, 14554, 6454, { format: "rgba", tileSize: 93 });
 
+  assert.equal(r.renderTileSize, 512, "renders at the style's own until told otherwise");
   r.setTileSize(93);
   assert.equal(r.tileSize, 512, "tileSize reports the style's own");
+  assert.equal(r.renderTileSize, 93, "renderTileSize reports the one renders use");
   const set = r.renderTile(14, 14554, 6454, { format: "rgba" });
   assert.equal(set.length, 93 * 93 * 4);
   assert.ok(Buffer.from(set).equals(Buffer.from(perRender)), "setTileSize(93) differs from a 93 px render");
@@ -94,6 +96,7 @@ test("setTileSize renders at that size", () => {
   assert.equal(r.renderTile(14, 14554, 6454, { format: "rgba", tileSize: 64 }).length, 64 * 64 * 4);
 
   r.clearTileSize();
+  assert.equal(r.renderTileSize, 512);
   assert.equal(sha256(r.renderTile(14, 14554, 6454)), sha256(style), "after clearTileSize");
 
   assert.throws(() => r.setTileSize(0), { name: "InvalidStyle" });
@@ -344,6 +347,7 @@ test("a frame holds the renderer until it settles", async () => {
     assert.throws(() => r.setTileSize(256), busy);
     assert.throws(() => r.clearTileSize(), busy);
     assert.throws(() => r.setGlyphBudget(1024), busy);
+    assert.throws(() => r.clearGlyphBudget(), busy);
     assert.throws(() => r.setCacheBudget(1 << 20), busy);
     assert.throws(() => r.clearCacheBudget(), busy);
     await assert.rejects(r.renderFrame(f, null), busy);

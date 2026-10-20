@@ -155,6 +155,12 @@ static GLOBAL_STATE: OnceLock<LogState> = OnceLock::new();
 /// Construct once near the top of your bootstrap, then either set a
 /// callback for live forwarding (`onEvent(e => console.log(e))`) or
 /// `drainLines()` periodically to flush into a UI panel.
+///
+/// It is the Go package's `InitLog` and `DrainLogs` (the pull side) and
+/// `WithLogger` (the push side) in one object. A class rather than two
+/// free functions, because a browser host also wants the structured
+/// records and the callback, which a wasip1 module's line buffer has no
+/// room for; a Rust host installs its own `tracing` subscriber instead.
 #[wasm_bindgen]
 pub struct LogSink {
     state: LogState,
