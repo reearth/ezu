@@ -1282,8 +1282,17 @@
                 "description": "Selects the `densify` operation."
               },
               "target-px": {
-                "minimum": 0.0,
-                "type": "number"
+                "oneOf": [
+                  {
+                    "minimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               }
             },
             "required": [
@@ -4502,8 +4511,17 @@
                 "description": "Selects the `resample` operation."
               },
               "spacing-px": {
-                "minimum": 0.0,
-                "type": "number"
+                "oneOf": [
+                  {
+                    "minimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               }
             },
             "required": [

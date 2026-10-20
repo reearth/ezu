@@ -208,6 +208,9 @@ mean is spelled out in
   `$param`'s default once at build time. `warp` takes the `[x, y]` form
   `noise` has, to stretch its displacement along one axis. Each entry of
   the pair may be a number or a `$param`.
+- `spacing-px` on `resample` and `target-px` on `densify` take a `$param`
+  that follows the value a render passes, or an `@node`, like the lengths
+  on `dash` and `medial-axis`.
 
 ### Deprecated
 

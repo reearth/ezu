@@ -131,7 +131,7 @@ Insert intermediate vertices so no segment of any polyline or polygon ring excee
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
-| `target-px` | number (0…∞) | yes | — |
+| `target-px` | number (0…∞) \| `$param` \| `@node` | yes | — |
 
 ### `dot-density`
 
@@ -222,7 +222,7 @@ Resample each polyline / polygon ring to evenly-spaced vertices at `spacing-px` 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
-| `spacing-px` | number (0…∞) | yes | — |
+| `spacing-px` | number (0…∞) \| `$param` \| `@node` | yes | — |
 
 ### `segment-to`
 

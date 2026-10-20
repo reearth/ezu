@@ -3,7 +3,7 @@
 //! `feature-boolean`, `triangulate`, `junctions`. All driven through
 //! `literal-geometry` to stay hermetic.
 
-use crate::common::render;
+use crate::common::{assert_number_field_drivable_plain, render};
 
 /// `bbox` over a sparse point set, filled, should colour the
 /// rectangle covering the points.
@@ -298,4 +298,32 @@ fn junction_ticks_cross_the_lines_they_mark() {
         !dark(12, 52) && !dark(20, 60),
         "on the bisector, not across it"
     );
+}
+
+/// A square ring through `op` (with `%V%` in `field`), smoothed once so the
+/// vertex count shows in the filled outline.
+fn density_doc(op: &str, field: &str) -> String {
+    format!(
+        r##"{{
+      "name": "demo",
+      "tile-size": 32,
+      %PARAMS%
+      "nodes": {{
+        %NODES%
+        "sq":   {{ "op": "literal-geometry",
+                   "polygons": [ {{ "exterior":
+                     [[512, 512], [3584, 512], [3584, 3584], [512, 3584], [512, 512]] }} ] }},
+        "adj":  {{ "op": "{op}", "features": "@sq", "{field}": %V% }},
+        "soft": {{ "op": "smooth", "features": "@adj", "iterations": 1 }},
+        "out":  {{ "op": "fill-solid", "features": "@soft", "fill": "#000000" }}
+      }},
+      "output": "@out"
+    }}"##
+    )
+}
+
+#[test]
+fn densify_and_resample_lengths_take_a_param_or_a_node() {
+    assert_number_field_drivable_plain(&density_doc("densify", "target-px"), 32, 0, 4.0, 10.0);
+    assert_number_field_drivable_plain(&density_doc("resample", "spacing-px"), 32, 0, 5.0, 12.0);
 }
