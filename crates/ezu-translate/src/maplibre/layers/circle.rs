@@ -86,6 +86,30 @@ pub(crate) fn convert_circle(
         spec["stroke-color-expr"] = e;
     }
 
+    // `circle-stroke-opacity` → `stroke-opacity` (constant) or
+    // `stroke-opacity-expr`. MapLibre's `circle-opacity` fades the fill
+    // alone, while the node's `opacity` also fades the ring unless the ring
+    // has an opacity of its own — so a layer that sets `circle-opacity` and
+    // draws a ring gets the default `stroke-opacity` of 1 spelled out.
+    let (so, so_expr) = resolve_number(paint.get("circle-stroke-opacity"));
+    let has_ring = sw.is_some_and(|w| w > 0.0) || spec.get("stroke-width-expr").is_some();
+    let fades_fill = opacity.is_some_and(|o| o != 1.0) || spec.get("opacity-expr").is_some();
+    match (so, so_expr) {
+        (Some(o), _) => spec["stroke-opacity"] = Value::from(o),
+        (None, Some(e)) => spec["stroke-opacity-expr"] = e,
+        (None, None) if has_ring && fades_fill => spec["stroke-opacity"] = Value::from(1.0),
+        (None, None) => {}
+    }
+
+    // `circle-blur` → `blur` (constant) or `blur-expr`.
+    let (blur, blur_expr) = resolve_number(paint.get("circle-blur"));
+    if let Some(b) = blur {
+        spec["blur"] = Value::from(b.max(0.0));
+    }
+    if let Some(e) = blur_expr {
+        spec["blur-expr"] = e;
+    }
+
     nodes.insert(circles_id.clone(), spec);
     outputs.push(circles_id);
 }

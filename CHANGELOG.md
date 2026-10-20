@@ -335,6 +335,12 @@ mean is spelled out in
   `line-pattern`. They now become the `line-stamp`'s `width-expr`,
   `opacity-expr` and `name-expr`. A `line-gap-width` on such a layer, which
   is not drawn, now warns.
+- `ezu translate` ignored `circle-stroke-opacity` and `circle-blur` without a
+  warning, and let `circle-opacity` fade the stroke ring, which MapLibre
+  leaves alone. They now become the `circles` node's `stroke-opacity` and
+  `blur` (or their `*-expr` forms), and a layer that sets `circle-opacity`
+  under a ring gets `stroke-opacity: 1`.
+
 ## 0.12.0 — 2026-10-12
 
 ### Breaking

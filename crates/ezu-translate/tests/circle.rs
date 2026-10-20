@@ -81,3 +81,63 @@ fn data_driven_radius_becomes_radius_expr() {
     let text = serde_json::to_string(&recipe).unwrap();
     ezu_style::Document::from_json(&text).expect("recipe parses as ezu Document");
 }
+
+/// The single `circles` node `paint` converts to.
+fn circles_for(paint: serde_json::Value) -> serde_json::Value {
+    let style = serde_json::json!({
+        "version": 8,
+        "name": "circles-paint",
+        "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+        "layers": [
+            { "id": "dots", "type": "circle", "source": "s", "source-layer": "pois", "paint": paint }
+        ]
+    });
+    let (recipe, report) = convert(&style, &ConvertOptions::default()).unwrap();
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    let text = serde_json::to_string(&recipe).unwrap();
+    ezu_style::Document::from_json(&text).expect("recipe parses as ezu Document");
+    let nodes = recipe["nodes"].as_object().unwrap();
+    nodes
+        .values()
+        .find(|n| n["op"] == "circles")
+        .expect("a circles node")
+        .clone()
+}
+
+#[test]
+fn circle_blur_and_stroke_opacity_carry_over() {
+    let c = circles_for(serde_json::json!({
+        "circle-radius": 6, "circle-blur": 0.4,
+        "circle-stroke-width": 2, "circle-stroke-opacity": 0.5
+    }));
+    assert_eq!(c["blur"], 0.4);
+    assert_eq!(c["stroke-opacity"], 0.5);
+
+    let blur = serde_json::json!(["interpolate", ["linear"], ["zoom"], 10, 0, 16, 1]);
+    let opacity = serde_json::json!(["match", ["get", "kind"], "faint", 0.3, 1]);
+    let c = circles_for(serde_json::json!({
+        "circle-radius": 6, "circle-blur": blur,
+        "circle-stroke-width": 2, "circle-stroke-opacity": opacity
+    }));
+    assert_eq!(c["blur-expr"], blur);
+    assert_eq!(c["stroke-opacity-expr"], opacity);
+    assert!(c.get("blur").is_none() && c.get("stroke-opacity").is_none());
+}
+
+#[test]
+fn circle_opacity_leaves_the_ring_alone() {
+    // MapLibre fades the fill alone with `circle-opacity`; the node's
+    // `opacity` would fade its ring too, so the ring's default opacity of 1
+    // is written out.
+    let c = circles_for(serde_json::json!({
+        "circle-radius": 6, "circle-opacity": 0.4, "circle-stroke-width": 2
+    }));
+    assert_eq!(c["opacity"], 0.4);
+    assert_eq!(c["stroke-opacity"], 1.0);
+
+    // Without a ring, or with a full-strength fill, there is nothing to say.
+    let c = circles_for(serde_json::json!({ "circle-radius": 6, "circle-opacity": 0.4 }));
+    assert!(c.get("stroke-opacity").is_none());
+    let c = circles_for(serde_json::json!({ "circle-radius": 6, "circle-stroke-width": 2 }));
+    assert!(c.get("stroke-opacity").is_none());
+}
