@@ -2,6 +2,7 @@ package ezu
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -204,8 +205,26 @@ func TestSourceDataBelongsToItsRenderer(t *testing.T) {
 		t.Errorf("another renderer's data gave %v, want ErrForeignSource", err)
 	}
 
+	// A Release refused because another call holds the renderer leaves the
+	// data loaded, so the retry frees it.
+	id := data.id.Load()
+	renderer.busy.Store(true)
+	err = data.Release(ctx)
+	renderer.busy.Store(false)
+	if !errors.Is(err, ErrConcurrentUse) {
+		t.Fatalf("a Release during another call gave %v, want ErrConcurrentUse", err)
+	}
+	if _, err := renderer.RenderTileWith(ctx, tile, set, Render{}); err != nil {
+		t.Errorf("after a refused Release the data gave %v", err)
+	}
 	if err := data.Release(ctx); err != nil {
 		t.Fatal(err)
+	}
+	_, err = renderer.call(ctx, func(ctx context.Context) (int64, error) {
+		return renderer.call1(ctx, "ezu_release_source", uint64(renderer.handle), uint64(id))
+	})
+	if !IsKind(err, KindUnknownSrc) {
+		t.Errorf("the module still held the data after the retried Release: %v", err)
 	}
 	if err := data.Release(ctx); err != nil {
 		t.Errorf("a second Release gave %v", err)

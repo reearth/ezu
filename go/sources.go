@@ -39,14 +39,25 @@ func (d *SourceData) Source() string { return d.name }
 
 // Release drops the decoded payload from the renderer's memory. A set that
 // still holds it fails with [ErrSourceReleased] when it is rendered from.
-// Releasing twice does nothing.
+// Releasing twice does nothing. A Release that fails, with
+// [ErrConcurrentUse] say, leaves the data loaded and usable, so it can be
+// released again.
 func (d *SourceData) Release(ctx context.Context) error {
-	id := d.id.Swap(0)
-	if id == 0 {
+	if d.id.Load() == 0 {
 		return nil
 	}
 	_, err := d.r.call(ctx, func(ctx context.Context) (int64, error) {
-		return d.r.call1(ctx, "ezu_release_source", uint64(d.r.handle), uint64(id))
+		// Read and cleared under the call's guard, so two Releases cannot
+		// both reach the module with the same id.
+		id := d.id.Load()
+		if id == 0 {
+			return 0, nil
+		}
+		got, err := d.r.call1(ctx, "ezu_release_source", uint64(d.r.handle), uint64(id))
+		if err == nil && got >= 0 {
+			d.id.Store(0)
+		}
+		return got, err
 	})
 	return err
 }
