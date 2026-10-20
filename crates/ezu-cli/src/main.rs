@@ -925,8 +925,12 @@ async fn run_graph_view(args: GraphCmd) -> Result<(), Box<dyn std::error::Error>
         // here, not worth refusing to draw over.
         strict: false,
     };
-    let doc = Document::from_json(&fetch_text(&common.style).await?)?;
-    let opened = open(&common).await?;
+    // Read once: a style at a URL is fetched once, and the diagram is of
+    // the very document that rendered.
+    let style_text = fetch_text(&common.style).await?;
+    let doc = Document::from_json(&style_text)?;
+    let byte_cache = Arc::new(TileByteCache::new(tile_cache_budget_bytes()));
+    let opened = open_style(&common, &style_text, &doc, &byte_cache).await?;
     let tiles = &opened.tiles;
 
     let canvas = CanvasInfo::square(tiles.tile_size(), tiles.pad());
