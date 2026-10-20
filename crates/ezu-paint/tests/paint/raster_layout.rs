@@ -3,7 +3,9 @@
 //! (canvas-padded). These tests use an in-memory image bank so they
 //! don't touch the filesystem.
 
-use crate::common::{disk_sprite, render_with_images, solid_sprite};
+use crate::common::{
+    assert_number_field_drivable_plain, disk_sprite, render_with_images, solid_sprite,
+};
 use ezu_graph::{build_graph, BuildError, PortKind, TileId};
 use ezu_paint::nodes::default_registry;
 use ezu_style::Document;
@@ -298,4 +300,20 @@ fn blur_passes_through_sprite_kind() {
         center[0] > 150,
         "blurred disk center should still be reddish: {center:?}"
     );
+}
+
+#[test]
+fn tiling_scale_takes_a_param_or_a_node() {
+    let doc = r##"{
+      "name": "demo",
+      "tile-size": 32,
+      %PARAMS%
+      "nodes": {
+        %NODES%
+        "src": { "op": "circle", "color": "#ff0000", "radius-frac": 0.3 },
+        "out": { "op": "tiling", "input": "@src", "anchor": "tile", "scale-px": %V% }
+      },
+      "output": "@out"
+    }"##;
+    assert_number_field_drivable_plain(doc, 32, 0, 16.0, 10.0);
 }

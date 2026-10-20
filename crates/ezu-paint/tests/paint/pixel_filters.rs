@@ -2,7 +2,7 @@
 //! `channel-shuffle`, `sharpen`. All operate as pass-through over
 //! `Raster|Sprite`.
 
-use crate::common::render;
+use crate::common::{assert_number_field_drivable_plain, render};
 
 #[test]
 fn levels_with_gamma_lifts_midtones() {
@@ -129,4 +129,37 @@ fn sharpen_amplifies_edge_contrast() {
         p_sharp[0] >= p_plain[0],
         "outside rim should stay ≥ as bright after sharpen: plain={p_plain:?} sharp={p_sharp:?}"
     );
+}
+
+/// A black-to-white ramp through `filter`, `%V%` in one of its fields.
+fn ramp_through(filter: &str) -> String {
+    format!(
+        r##"{{
+      "name": "demo",
+      "tile-size": 32,
+      %PARAMS%
+      "nodes": {{
+        %NODES%
+        "base": {{ "op": "gradient-linear", "start": [0, 0], "end": [1, 0],
+                   "stops": [ [0, "#000000"], [1, "#ffffff"] ] }},
+        "out":  {{ "op": {filter} }}
+      }},
+      "output": "@out"
+    }}"##
+    )
+}
+
+#[test]
+fn posterize_steps_take_a_param_or_a_node() {
+    let doc = ramp_through(r#""posterize", "input": "@base", "steps": %V%"#);
+    assert_number_field_drivable_plain(&doc, 32, 0, 3.0, 6.0);
+}
+
+#[test]
+fn dither_amount_takes_a_param_or_a_node() {
+    let doc = ramp_through(
+        r##""dither", "input": "@base", "method": "ordered",
+           "palette": ["#000000", "#ffffff"], "amount": %V%"##,
+    );
+    assert_number_field_drivable_plain(&doc, 32, 0, 0.25, 1.0);
 }

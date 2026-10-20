@@ -1514,11 +1514,20 @@
             "description": "Reduce to a fixed `palette` with dithering so gradients survive a small palette. `method: \"floyd-steinberg\"` (default) diffuses error to neighbours; `method: \"ordered\"` uses a 4×4 Bayer matrix with strength `amount` (0..1). Nearest-colour distance uses `space` (`lab` default / `rgb`). Alpha preserved.",
             "properties": {
               "amount": {
-                "default": 0.5,
-                "description": "Ordered-dither strength (ignored for floyd-steinberg).",
-                "maximum": 1.0,
-                "minimum": 0.0,
-                "type": "number"
+                "oneOf": [
+                  {
+                    "default": 0.5,
+                    "description": "Ordered-dither strength (ignored for floyd-steinberg).",
+                    "maximum": 1.0,
+                    "minimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "input": {
                 "description": "Reference to another node (`@name`).",
@@ -4445,10 +4454,20 @@
                 "description": "Selects the `posterize` operation."
               },
               "steps": {
-                "default": 4,
-                "maximum": 256,
-                "minimum": 2,
-                "type": "integer"
+                "oneOf": [
+                  {
+                    "default": 4,
+                    "description": "Levels per channel. A `$param` or `@node` value is rounded and held to [2, 256].",
+                    "maximum": 256,
+                    "minimum": 2,
+                    "type": "integer"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               }
             },
             "required": [
@@ -6283,9 +6302,18 @@
                 ]
               },
               "scale-px": {
-                "description": "Canvas pixels per one source repetition. Defaults to the source image's native width.",
-                "minimum": 0.5,
-                "type": "number"
+                "oneOf": [
+                  {
+                    "description": "Canvas pixels per one source repetition. Defaults to the source image's native width.",
+                    "minimum": 0.5,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               }
             },
             "required": [

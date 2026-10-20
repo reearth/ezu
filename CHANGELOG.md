@@ -213,6 +213,12 @@ mean is spelled out in
   on `dash` and `medial-axis`.
 - `min` and `max` on `contour` take a `$param` that follows the value a
   render passes, or an `@node`, like `base` and `interval` beside them.
+- `scale-px` on `tiling`, `steps` on `posterize` and `amount` on `dither`
+  take a `$param` that follows the value a render passes, or an `@node`,
+  like `scale` on `place` and `block` on `mosaic`. A `steps` that arrives
+  this way is rounded and held to [2, 256]. A `dither` `amount` that is not
+  a number, a `$param` or an `@node` now fails the build instead of quietly
+  becoming 0.5.
 
 ### Deprecated
 

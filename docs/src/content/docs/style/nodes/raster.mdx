@@ -208,7 +208,7 @@ Reduce to a fixed `palette` with dithering so gradients survive a small palette.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `amount` | number (0…1) | no | Ordered-dither strength (ignored for floyd-steinberg). |
+| `amount` | number (0…1) \| `$param` \| `@node` | no | Ordered-dither strength (ignored for floyd-steinberg). |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
 | `method` | `floyd-steinberg` \| `ordered` | no | — |
 | `palette` | array of string | yes | Each entry is `#rrggbb` / `#rrggbbaa` (alpha ignored for matching) or a `$param`, so a palette can be recoloured at render time. |
@@ -552,7 +552,7 @@ Quantise each RGB channel into `steps` evenly-spaced levels (in non-premultiplie
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
-| `steps` | integer (2…256) | no | — |
+| `steps` | integer (2…256) \| `$param` \| `@node` | no | Levels per channel. A `$param` or `@node` value is rounded and held to [2, 256]. |
 
 ### `quantize`
 
@@ -673,7 +673,7 @@ Repeat a raster across the canvas with bilinear wrap-around sampling. Primary us
 | `offset-px` | array of number | no | Pattern offset in canvas pixels [x, y]. |
 | `opacity` | number (0…1) \| `$param` \| `@node` | no | — |
 | `rotation-deg` | number \| `$param` \| `@node` | no | Rotation of the pattern in degrees (clockwise). |
-| `scale-px` | number (0.5…∞) | no | Canvas pixels per one source repetition. Defaults to the source image's native width. |
+| `scale-px` | number (0.5…∞) \| `$param` \| `@node` | no | Canvas pixels per one source repetition. Defaults to the source image's native width. |
 
 ### `vibrance`
 

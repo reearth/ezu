@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -34,7 +34,10 @@ const BAYER4: [f32; 16] = [
 struct DitherNode {
     palette: Palette,
     method: Method,
-    amount: f32,
+    /// Ordered-dither strength, clamped to [0, 1] when resolved.
+    amount: In<f64>,
+    /// `input`, then a scalar port if `amount` is wired to one.
+    ports: Vec<PortSpec>,
     param_refs: Vec<String>,
 }
 
@@ -43,12 +46,7 @@ impl Node for DitherNode {
         "dither"
     }
     fn inputs(&self) -> &[PortSpec] {
-        static SPECS: &[PortSpec] = &[PortSpec {
-            name: "input",
-            accepts: &[PortKind::Raster],
-            optional: false,
-        }];
-        SPECS
+        &self.ports
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
         PortKind::Raster
@@ -68,7 +66,10 @@ impl Node for DitherNode {
         let palette = self.palette.resolve(ctx, inputs)?;
         let mut out = RasterBuf::new(src.width, src.height);
         match self.method {
-            Method::Ordered => self.ordered(src, &palette, w, h, &mut out),
+            Method::Ordered => {
+                let amount = self.amount.get(ctx, inputs)?.clamp(0.0, 1.0) as f32;
+                self.ordered(src, &palette, amount, w, h, &mut out)
+            }
             Method::FloydSteinberg => self.floyd_steinberg(src, &palette, w, h, &mut out),
         }
         Ok(PortValue::Raster(Arc::new(out)))
@@ -79,7 +80,12 @@ impl Node for DitherNode {
             Method::FloydSteinberg => 0,
             Method::Ordered => 1,
         }]);
-        h.update(&self.amount.to_le_bytes());
+        // A literal amount hashes as the clamped number it always did, so
+        // existing styles keep their cache keys.
+        match &self.amount {
+            In::Const(v) => h.update(&(v.clamp(0.0, 1.0) as f32).to_le_bytes()),
+            amount => amount.param_hash(h),
+        }
         self.palette.hash(h);
     }
     fn param_refs(&self) -> Vec<String> {
@@ -92,6 +98,7 @@ impl DitherNode {
         &self,
         src: &RasterBuf,
         palette: &ResolvedPalette,
+        amount: f32,
         w: usize,
         h: usize,
         out: &mut RasterBuf,
@@ -104,7 +111,7 @@ impl DitherNode {
                     continue;
                 }
                 let bias = (BAYER4[(y % 4) * 4 + (x % 4)] + 0.5) / 16.0 - 0.5;
-                let d = bias * self.amount;
+                let d = bias * amount;
                 let rgb = [
                     ((src.pixels[i] as f32 / 255.0 / a) + d).clamp(0.0, 1.0),
                     ((src.pixels[i + 1] as f32 / 255.0 / a) + d).clamp(0.0, 1.0),
@@ -207,22 +214,30 @@ impl NodeFactory for DitherFactory {
                 })
             }
         };
-        let amount = fields
-            .get("amount")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.5)
-            .clamp(0.0, 1.0) as f32;
+        let amount = r.number_or("amount", 0.5)?;
+        let parts = r.finish();
+
+        let mut ports = vec![PortSpec {
+            name: "input",
+            accepts: &[PortKind::Raster],
+            optional: false,
+        }];
+        ports.extend(parts.ports);
+        let mut connections = vec![Connection {
+            port: "input".into(),
+            src: input,
+        }];
+        connections.extend(parts.connections);
+
         Ok(BuiltNode {
             node: Box::new(DitherNode {
                 palette,
                 method,
                 amount,
-                param_refs: r.finish().param_refs,
+                ports,
+                param_refs: parts.param_refs,
             }),
-            connections: vec![Connection {
-                port: "input".into(),
-                src: input,
-            }],
+            connections,
         })
     }
     fn schema(&self) -> Value {
@@ -237,7 +252,7 @@ impl NodeFactory for DitherFactory {
                     "description": "Each entry is `#rrggbb` / `#rrggbbaa` (alpha ignored for matching) or a `$param`, so a palette can be recoloured at render time.",
                 },
                 "method": { "type": "string", "enum": ["floyd-steinberg", "ordered"], "default": "floyd-steinberg" },
-                "amount": { "type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.5, "description": "Ordered-dither strength (ignored for floyd-steinberg)." },
+                "amount": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.5, "description": "Ordered-dither strength (ignored for floyd-steinberg)." })),
                 "space": { "type": "string", "enum": ["lab", "rgb"], "default": "lab" },
             },
             "required": ["input", "palette"],

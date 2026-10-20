@@ -8,18 +8,24 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    raster_or_sprite_output, read_number_or, unwrap_raster_or_sprite, wrap_raster_like,
-    ACCEPTS_RASTER_OR_SPRITE,
+    raster_or_sprite_output, unwrap_raster_or_sprite, wrap_raster_like, ACCEPTS_RASTER_OR_SPRITE,
 };
 
+/// The range `steps` is held to: a literal outside it fails the build, and
+/// a `$param` or port value is rounded and clamped into it per render.
+const STEPS_RANGE: std::ops::RangeInclusive<f64> = 2.0..=256.0;
+
 struct PosterizeNode {
-    steps: u32,
+    steps: In<f64>,
+    /// `input`, then a scalar port if `steps` is wired to one.
+    ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
 
 impl Node for PosterizeNode {
@@ -27,19 +33,14 @@ impl Node for PosterizeNode {
         "posterize"
     }
     fn inputs(&self) -> &[PortSpec] {
-        static SPECS: &[PortSpec] = &[PortSpec {
-            name: "input",
-            accepts: ACCEPTS_RASTER_OR_SPRITE,
-            optional: false,
-        }];
-        SPECS
+        &self.ports
     }
     fn output(&self, input_kinds: &[Option<PortKind>]) -> PortKind {
         raster_or_sprite_output(input_kinds)
     }
     fn eval(
         &self,
-        _ctx: &EvalCtx<'_>,
+        ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
         let input = inputs[0]
@@ -47,8 +48,14 @@ impl Node for PosterizeNode {
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
         let (src, kind) = unwrap_raster_or_sprite(input, "input")?;
         // `steps = 1` is degenerate (everything maps to 0). Clamp to
-        // ≥ 2 so the output is always banded into at least two levels.
-        let steps = self.steps.max(2);
+        // ≥ 2 so the output is always banded into at least two levels;
+        // the final `max` also catches a NaN, which casts to 0.
+        let steps = (self
+            .steps
+            .get(ctx, inputs)?
+            .round()
+            .clamp(*STEPS_RANGE.start(), *STEPS_RANGE.end()) as u32)
+            .max(2);
         let levels = (steps - 1) as f32;
         let mut out = RasterBuf::new(src.width, src.height);
         for i in (0..src.pixels.len()).step_by(4) {
@@ -68,7 +75,15 @@ impl Node for PosterizeNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"posterize");
-        h.update(&self.steps.to_le_bytes());
+        // A literal hashes as the whole number it always did, so existing
+        // styles keep their cache keys.
+        match &self.steps {
+            In::Const(v) => h.update(&(v.round() as u32).to_le_bytes()),
+            steps => steps.param_hash(h),
+        }
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -83,21 +98,37 @@ impl NodeFactory for PosterizeFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let input = take_input_ref(fields, "input")?;
-        let steps = read_number_or(fields, "steps", ctx, 4.0)?.round();
-        if !(2.0..=256.0).contains(&steps) {
-            return Err(FactoryError::BadField {
-                field: "steps".into(),
-                msg: "expected an integer in [2, 256]".into(),
-            });
+        let mut r = InReader::new(fields, ctx, 1);
+        let steps = r.number_or("steps", 4.0)?;
+        if let In::Const(v) = steps {
+            if !STEPS_RANGE.contains(&v.round()) {
+                return Err(FactoryError::BadField {
+                    field: "steps".into(),
+                    msg: "expected an integer in [2, 256]".into(),
+                });
+            }
         }
+        let parts = r.finish();
+
+        let mut ports = vec![PortSpec {
+            name: "input",
+            accepts: ACCEPTS_RASTER_OR_SPRITE,
+            optional: false,
+        }];
+        ports.extend(parts.ports);
+        let mut connections = vec![Connection {
+            port: "input".into(),
+            src: input,
+        }];
+        connections.extend(parts.connections);
+
         Ok(BuiltNode {
             node: Box::new(PosterizeNode {
-                steps: steps as u32,
+                steps,
+                ports,
+                param_refs: parts.param_refs,
             }),
-            connections: vec![Connection {
-                port: "input".into(),
-                src: input,
-            }],
+            connections,
         })
     }
     fn schema(&self) -> Value {
@@ -105,7 +136,8 @@ impl NodeFactory for PosterizeFactory {
             "description": "Quantise each RGB channel into `steps` evenly-spaced levels (in non-premultiplied sRGB). Alpha preserved. Pair with `levels` to control which tonal band gets the strongest banding.",
             "properties": {
                 "input": schema_frag::node_ref(),
-                "steps": { "type": "integer", "minimum": 2, "maximum": 256, "default": 4 },
+                "steps": schema_frag::in_number(serde_json::json!({ "type": "integer", "minimum": 2, "maximum": 256, "default": 4,
+                           "description": "Levels per channel. A `$param` or `@node` value is rounded and held to [2, 256]." })),
             },
             "required": ["input"],
         })

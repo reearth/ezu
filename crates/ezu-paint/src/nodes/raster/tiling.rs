@@ -25,14 +25,13 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    read_number_or, read_optional_string, read_xy, unwrap_raster_or_sprite, Anchor,
-    ACCEPTS_RASTER_OR_SPRITE,
+    read_optional_string, read_xy, unwrap_raster_or_sprite, Anchor, ACCEPTS_RASTER_OR_SPRITE,
 };
 
 struct TilingNode {
     anchor: Anchor,
     /// `None` → use the source raster's width as the natural period.
-    scale_px: Option<f64>,
+    scale_px: Option<In<f64>>,
     offset_px: [f64; 2],
     rotation_deg: In<f64>,
     opacity: In<f64>,
@@ -77,7 +76,11 @@ impl Node for TilingNode {
             Anchor::Tile => (0.0, 0.0),
         };
 
-        let scale = self.scale_px.unwrap_or(src.width as f64).max(0.5);
+        let scale = match &self.scale_px {
+            Some(s) => s.get(ctx, inputs)?,
+            None => src.width as f64,
+        }
+        .max(0.5);
         // Source pixels span [0, src.w/h); one full repetition covers
         // `scale` canvas pixels. So canvas_px / scale * src.w gives the
         // source-pixel coordinate before wraparound.
@@ -136,10 +139,16 @@ impl Node for TilingNode {
             Anchor::World => h.update(b"w"),
             Anchor::Tile => h.update(b"t"),
         }
-        match self.scale_px {
-            Some(s) => {
+        // A literal scale hashes as the bare number it always did, so
+        // existing styles keep their cache keys.
+        match &self.scale_px {
+            Some(In::Const(s)) => {
                 h.update(&[1]);
                 h.update(&s.to_le_bytes());
+            }
+            Some(s) => {
+                h.update(&[2]);
+                s.param_hash(h);
             }
             None => h.update(&[0]),
         }
@@ -210,14 +219,13 @@ impl NodeFactory for TilingFactory {
                 });
             }
         };
-        let scale_px = if fields.contains_key("scale-px") {
-            Some(read_number_or(fields, "scale-px", ctx, 0.0)?)
-        } else {
-            None
-        };
         let offset = read_xy(fields, "offset-px", ctx, [0.0, 0.0])?;
         let offset_px = [offset[0] as f64, offset[1] as f64];
         let mut r = InReader::new(fields, ctx, 1);
+        let scale_px = match fields.contains_key("scale-px") {
+            true => Some(r.number("scale-px")?),
+            false => None,
+        };
         let rotation_deg = r.number_or("rotation-deg", 0.0)?;
         let opacity = r.number_or("opacity", 1.0)?;
         let parts = r.finish();
@@ -254,8 +262,8 @@ impl NodeFactory for TilingFactory {
                 "input": schema_frag::node_ref(),
                 "anchor": { "type": "string", "enum": ["world", "tile"], "default": "world",
                             "description": "`world` (default) makes the pattern seamless across map tiles; `tile` restarts the pattern at every map tile's top-left." },
-                "scale-px": { "type": "number", "minimum": 0.5,
-                              "description": "Canvas pixels per one source repetition. Defaults to the source image's native width." },
+                "scale-px": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.5,
+                              "description": "Canvas pixels per one source repetition. Defaults to the source image's native width." })),
                 "offset-px": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2,
                                "description": "Pattern offset in canvas pixels [x, y]." },
                 "rotation-deg": schema_frag::in_number(serde_json::json!({ "type": "number",
