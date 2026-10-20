@@ -125,7 +125,13 @@ pub fn draw(
         halo.set_color(color_of(paint.halo_color));
         halo.anti_alias = true;
         for rect in &strikes {
-            draw_strikethrough_halo(pixmap, *rect, paint.halo_width_px, &halo);
+            draw_strikethrough_halo(
+                pixmap,
+                *rect,
+                paint.halo_width_px,
+                &halo,
+                Transform::identity(),
+            );
         }
         for g in &block.glyphs {
             // SDF glyphs are rasterized at the 24 px em, per-glyph scaled.
@@ -332,12 +338,14 @@ fn strikethrough_rects(
 /// A strikethrough bar's halo: the bar grown by `halo_px` on every side
 /// with corners rounded to `halo_px` — the shape a glyph's `2 × halo-width`
 /// round stroke makes around its outline. Filled as one path, so a
-/// translucent halo colour covers every pixel once.
+/// translucent halo colour covers every pixel once. `transform` maps the
+/// bar's frame to device px (identity for an unrotated label).
 fn draw_strikethrough_halo(
     pixmap: &mut PixmapMut<'_>,
     rect: tiny_skia::Rect,
     halo_px: f32,
     halo: &Paint<'_>,
+    transform: Transform,
 ) {
     let r = halo_px;
     let (l, t, rt, b) = (
@@ -360,7 +368,7 @@ fn draw_strikethrough_halo(
     pb.cubic_to(l, t + r - k, l + r - k, t, l + r, t);
     pb.close();
     if let Some(path) = pb.finish() {
-        pixmap.fill_path(&path, halo, FillRule::Winding, Transform::identity(), None);
+        pixmap.fill_path(&path, halo, FillRule::Winding, transform, None);
     }
 }
 
@@ -542,14 +550,90 @@ pub fn draw_line(
         return;
     }
     let size = paint.size_px;
+    draw_stamped(
+        block,
+        fonts,
+        pixmap,
+        &|i, g| line_glyph_transform(g, &placements[i], size, perp_offset_px),
+        paint,
+        sections,
+        outline,
+        None,
+    );
+}
+
+/// Draw a point-placed `block` with its anchor at `origin` (device px),
+/// turned `rotate_deg` degrees clockwise about that anchor — MapLibre's
+/// `text-rotate`, which turns every glyph quad about the label anchor, offset
+/// included. Each glyph is stamped rigidly through its own transform, as
+/// [`draw_line`] stamps a path's glyphs, and a strikethrough bar turns with
+/// the text. A zero angle draws exactly what [`draw`] draws.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_rotated(
+    block: &TextBlock,
+    fonts: &[FaceEntry<'_>],
+    pixmap: &mut PixmapMut<'_>,
+    origin: (f32, f32),
+    rotate_deg: f32,
+    paint: &TextPaint,
+    sections: &[SectionPaint],
+    outline: Option<&OutlineSdfCache>,
+) {
+    if rotate_deg == 0.0 {
+        return draw(block, fonts, pixmap, origin, paint, sections, outline);
+    }
+    if block.is_empty() || paint.size_px <= 0.0 {
+        return;
+    }
+    let size = paint.size_px;
+    let base = Transform::from_translate(origin.0, origin.1).pre_rotate(rotate_deg);
+    // The bars are laid out about the anchor and turned with it; their pixel
+    // snap then applies in the label's own frame.
+    let strikes = strikethrough_rects(block, fonts, (0.0, 0.0), paint);
+    draw_stamped(
+        block,
+        fonts,
+        pixmap,
+        &|_, g| base.pre_translate(g.x * size, g.y * size),
+        paint,
+        sections,
+        outline,
+        Some((&strikes, base)),
+    );
+}
+
+/// The two passes of [`draw_line`] / [`draw_rotated`]: every glyph's halo,
+/// then every glyph's fill, each glyph stamped through `glyph_transform`
+/// (its index and glyph → the device transform of its local frame: pen at
+/// the origin, x along the reading direction, y down). `strikes`, when set,
+/// are strikethrough bars in the frame its transform maps to device px; their
+/// halos go down before the glyph halos and their fills after the glyph
+/// fills, as in [`draw`].
+#[allow(clippy::too_many_arguments)]
+fn draw_stamped(
+    block: &TextBlock,
+    fonts: &[FaceEntry<'_>],
+    pixmap: &mut PixmapMut<'_>,
+    glyph_transform: &dyn Fn(usize, &PlacedGlyph) -> Transform,
+    paint: &TextPaint,
+    sections: &[SectionPaint],
+    outline: Option<&OutlineSdfCache>,
+    strikes: Option<(&[tiny_skia::Rect], Transform)>,
+) {
+    let size = paint.size_px;
 
     if paint.halo_width_px > 0.0 {
         let mut halo = Paint::default();
         halo.set_color(color_of(paint.halo_color));
         halo.anti_alias = true;
-        for (g, p) in block.glyphs.iter().zip(placements) {
+        if let Some((rects, t)) = strikes {
+            for rect in rects {
+                draw_strikethrough_halo(pixmap, *rect, paint.halo_width_px, &halo, t);
+            }
+        }
+        for (i, g) in block.glyphs.iter().enumerate() {
             let font_scale = size * g.scale / SDF_EM_PX;
-            let t = line_glyph_transform(g, p, size, perp_offset_px);
+            let t = glyph_transform(i, g);
             match &fonts[g.font] {
                 FaceEntry::Outline { font, face } => match outline
                     .and_then(|c| c.get(font, face, g.glyph_id))
@@ -601,10 +685,10 @@ pub fn draw_line(
         }
     }
 
-    for (g, p) in block.glyphs.iter().zip(placements) {
+    for (i, g) in block.glyphs.iter().enumerate() {
         let font_scale = size * g.scale / SDF_EM_PX;
         let color = glyph_fill(paint, sections, g.section);
-        let t = line_glyph_transform(g, p, size, perp_offset_px);
+        let t = glyph_transform(i, g);
         match &fonts[g.font] {
             FaceEntry::Outline { font, face } => {
                 match outline.and_then(|c| c.get(font, face, g.glyph_id)) {
@@ -648,6 +732,17 @@ pub fn draw_line(
                     SDF_EDGE,
                     EDGE_GAMMA / font_scale,
                 );
+            }
+        }
+    }
+
+    if let Some((rects, t)) = strikes {
+        if !rects.is_empty() {
+            let mut fill = Paint::default();
+            fill.set_color(color_of(paint.color));
+            fill.anti_alias = true;
+            for rect in rects {
+                pixmap.fill_rect(*rect, &fill, t, None);
             }
         }
     }

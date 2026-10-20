@@ -3160,7 +3160,7 @@
             "type": "object"
           },
           {
-            "description": "The boxes a `label-placement` node measured its labels by, as polygons — one per box — so any geometry and paint op can draw them: a bordered or rounded badge (`buffer` → `stroke`), an offset shadow (`transform`), or a debug overlay of placement. Reads the decisions already made, so nothing is placed twice and the boxes match what `text-draw` draws; labels placed from a neighbour tile's candidates are included, so boxes continue across tile edges. Each polygon carries the labelled feature's properties plus `part` (`text`, `icon`, `background`, `glyph` or `collision`), `placed` (false for a candidate that did not place, with `include: all`) and `label-id` (shared by every box of one label, the same on every tile). A placed label also carries `overlapped` (true when it overlaps a label placed before it, which only `overlap: always` or `fallback` permits) and `variant-index`: where the position it took sits in the list it was tried from (`anchor-offsets`, or the anchors of the deprecated `anchor-variants`), 0 for the first position, for a lone one and for a line label, and absent when the variant shown draws no text. A label that did not place carries `drop-reason` instead: `collision` when it lost its collision test, `dedupe` when its layer's `dedupe-key-expr` dropped it because a label with the same key had already placed within `dedupe-distance-px`. A point label gives its `text` block (no padding), `icon` (rotated by `icon-rotate`), `background` box (with `background-padding` or `background-color`) and the `collision` box or boxes it was tested with, padding included. A line label gives one `glyph` quad per glyph, rotated along the path, and the axis-aligned `collision` box placement tested for each glyph.",
+            "description": "The boxes a `label-placement` node measured its labels by, as polygons — one per box — so any geometry and paint op can draw them: a bordered or rounded badge (`buffer` → `stroke`), an offset shadow (`transform`), or a debug overlay of placement. Reads the decisions already made, so nothing is placed twice and the boxes match what `text-draw` draws; labels placed from a neighbour tile's candidates are included, so boxes continue across tile edges. Each polygon carries the labelled feature's properties plus `part` (`text`, `icon`, `background`, `glyph` or `collision`), `placed` (false for a candidate that did not place, with `include: all`) and `label-id` (shared by every box of one label, the same on every tile). A placed label also carries `overlapped` (true when it overlaps a label placed before it, which only `overlap: always` or `fallback` permits) and `variant-index`: where the position it took sits in the list it was tried from (`anchor-offsets`, or the anchors of the deprecated `anchor-variants`), 0 for the first position, for a lone one and for a line label, and absent when the variant shown draws no text. A label that did not place carries `drop-reason` instead: `collision` when it lost its collision test, `dedupe` when its layer's `dedupe-key-expr` dropped it because a label with the same key had already placed within `dedupe-distance-px`. A point label gives its `text` block (no padding), `icon` (rotated by `icon-rotate`), `background` box (with `background-padding` or `background-color`) and the `collision` box or boxes it was tested with, padding included. A label turned by `rotate-deg` gives its `text` and `background` as quads turned about its anchor, and its `collision` box as their axis-aligned bounds. A line label gives one `glyph` quad per glyph, rotated along the path, and the axis-aligned `collision` box placement tested for each glyph.",
             "properties": {
               "extent": {
                 "default": 4096,
@@ -5692,6 +5692,13 @@
                 "description": "Deprecated: use `anchor-offsets` entries with `radial-em`. MapLibre `text-radial-offset`: em distance each `anchor-variants` entry pushes the block away from the point in its direction. Default 0.",
                 "type": "number"
               },
+              "rotate-deg": {
+                "description": "MapLibre `text-rotate`: degrees clockwise the label turns about its anchor point, the shift from `offset-em` or `anchor-offsets` turning with it, and its background box and strikethrough with it. The label collides by the axis-aligned bounds of its turned, padded box, the envelope MapLibre takes, so a label turned 45° reserves more room than it covers; `label-boxes` reports its `text` and `background` as turned quads and its `collision` box as those bounds. An `icon-text-fit` icon fits the unturned text and turns only by `icon-rotate-deg`. Point placement only: a line label's glyphs follow the path, and the field is ignored there with a warning. Default 0.",
+                "type": "number"
+              },
+              "rotate-deg-expr": {
+                "description": "A MapLibre number expression (degrees clockwise, data-driven MapLibre `text-rotate`), evaluated per feature group with the tile's zoom; overrides `rotate-deg` for that group."
+              },
               "size": {
                 "oneOf": [
                   {
@@ -6226,6 +6233,13 @@
               "radial-offset": {
                 "description": "Deprecated: use `anchor-offsets` entries with `radial-em`. MapLibre `text-radial-offset`: em distance each `anchor-variants` entry pushes the block away from the point in its direction. Default 0.",
                 "type": "number"
+              },
+              "rotate-deg": {
+                "description": "MapLibre `text-rotate`: degrees clockwise the label turns about its anchor point, the shift from `offset-em` or `anchor-offsets` turning with it, and its background box and strikethrough with it. The label collides by the axis-aligned bounds of its turned, padded box, the envelope MapLibre takes, so a label turned 45° reserves more room than it covers; `label-boxes` reports its `text` and `background` as turned quads and its `collision` box as those bounds. An `icon-text-fit` icon fits the unturned text and turns only by `icon-rotate-deg`. Point placement only: a line label's glyphs follow the path, and the field is ignored there with a warning. Default 0.",
+                "type": "number"
+              },
+              "rotate-deg-expr": {
+                "description": "A MapLibre number expression (degrees clockwise, data-driven MapLibre `text-rotate`), evaluated per feature group with the tile's zoom; overrides `rotate-deg` for that group."
               },
               "size": {
                 "oneOf": [

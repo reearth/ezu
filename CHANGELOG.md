@@ -228,6 +228,12 @@ mean is spelled out in
   separately. `offset-em-expr` applies wherever `offset-em` does, and like it
   is ignored, with a warning, when `anchor-offsets` sets a point label's
   positions.
+- `text` and `text-labels` take `rotate-deg` and `rotate-deg-expr`, MapLibre's
+  `text-rotate`: a point label turns clockwise about its anchor, its offset,
+  background box and strikethrough with it. It collides by the axis-aligned
+  bounds of its turned box, as in MapLibre, and `label-boxes` reports its
+  `text` and `background` as turned quads. Line placement ignores it with a
+  warning.
 
 ### Changed
 

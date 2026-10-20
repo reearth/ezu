@@ -152,6 +152,12 @@ zooms in:
 "max-width-em-expr": ["interpolate", ["linear"], ["zoom"], 10, 6, 16, 10]
 ```
 
+`rotate-deg` (or `rotate-deg-expr`, per feature) turns a point label clockwise
+about its anchor, with its offset and background box, the way MapLibre's
+`text-rotate` does, so a label can follow an angle stored on its feature
+(`["get", "angle"]`). The label then collides by the axis-aligned bounds of its turned
+box, so a label at 45° reserves more room than it covers.
+
 ## Labelling areas
 
 Point placement gives each polygon one label. By default it sits at the polygon's

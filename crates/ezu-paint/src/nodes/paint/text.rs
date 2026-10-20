@@ -23,7 +23,8 @@
 //! constant-plus-`*-expr`-sibling pattern, and so do the layout knobs
 //! (justify, offset, wrapping, line height, letter spacing, case) and the
 //! point anchor. A laid-out block is reused only between groups whose
-//! layout knobs all agree.
+//! layout knobs all agree. `rotate-deg` turns a point label about its
+//! anchor; it then collides by the axis-aligned bounds of its turned box.
 //!
 //! Point placement labels each point and each polygon, at the polygon's
 //! pole of inaccessibility as MapLibre does or at its centroid
@@ -78,8 +79,8 @@ use ezu_core::text::{
 
 use super::icon_fit::{fitted_content_box, stretch_image, IconTextFit, NineSlice};
 use super::labels::{
-    draw_labels, label_rect, set_id, BackgroundDraw, FaceCache, IconDraw, LabelDraw, LabelSet,
-    PointVariant,
+    draw_labels, label_rect, rotated_bounds, set_id, BackgroundDraw, FaceCache, IconDraw,
+    LabelDraw, LabelSet, PointVariant,
 };
 
 /// Parse an optional raw MapLibre expression field, type-checked against
@@ -639,6 +640,10 @@ struct GroupPrep<'g> {
     /// The group's layout knobs: the node's constants, with any `*-expr`
     /// layout field evaluated for this group in their place.
     layout: GroupLayout,
+    /// Degrees clockwise the group's text turns about its anchor. It moves
+    /// the laid-out block without changing it, so it stays out of the
+    /// layout key.
+    rotate_deg: f32,
 }
 
 /// The layout knobs one feature group lays its label out with. Every field
@@ -1310,6 +1315,11 @@ struct TextNode {
     /// so the mistake is reported once per node rather than per label.
     justify_expr_warned: AtomicBool,
     transform_expr_warned: AtomicBool,
+    /// MapLibre `text-rotate`: degrees clockwise a point label turns about
+    /// its anchor, and its per-group expression. Point placement only (both
+    /// 0 / `None` on line placement).
+    rotate_deg: f32,
+    rotate_expr: ExprField,
     /// Labels whose rendered bbox half-extent exceeds this many px are
     /// culled (they'd overflow the canvas pad this node requested).
     max_extent_px: f32,
@@ -1599,6 +1609,7 @@ impl TextNode {
             false => 0.0,
         };
         let layout = self.group_layout(&ectx);
+        let rotate_deg = eval_number(&self.rotate_expr.0, &ectx, self.rotate_deg);
         // The icon's contribution to the neighbour band is added by the
         // caller, which knows the sprite sheet's dimensions.
         let mut reach =
@@ -1609,6 +1620,11 @@ impl TextNode {
                 .background_padding
                 .iter()
                 .fold(0.0f32, |m, &p| m.max(p));
+        }
+        // Turned about its anchor, a label reaches at most √2 times as far
+        // along either axis as the larger of its two unturned reaches.
+        if rotate_deg != 0.0 {
+            reach *= std::f32::consts::SQRT_2;
         }
         Some(GroupPrep {
             group,
@@ -1632,6 +1648,7 @@ impl TextNode {
             reach,
             font_fallback,
             layout,
+            rotate_deg,
         })
     }
 
@@ -2483,7 +2500,10 @@ impl TextNode {
                 // A label reaching past the pad this node requested would clip
                 // at tile borders — drop the text instead. The symbol's icon,
                 // if any, still places. A background box is part of the label.
-                let b = label_rect(primary, size, background.as_ref());
+                let b = rotated_bounds(
+                    label_rect(primary, size, background.as_ref()),
+                    prep.rotate_deg,
+                );
                 let half_extent = [b.min_x, b.max_x, b.min_y, b.max_y]
                     .iter()
                     .fold(0.0f32, |m, v| m.max(v.abs()));
@@ -2591,9 +2611,20 @@ impl TextNode {
             });
             // A variant's collision box at a point: its em bbox scaled to px —
             // or its background box, when it has one — offset to the point and
-            // inflated by `padding-px`.
+            // inflated by `padding-px`. A turned label collides by the bounds
+            // of its turned, padded box, as MapLibre's does.
+            let rotate_deg = prep.rotate_deg;
             let box_at = |block: &TextBlock, lpx: f32, lpy: f32| -> Aabb {
                 let rel = label_rect(block, size, background.as_ref());
+                if rotate_deg != 0.0 {
+                    let rel = rotated_bounds(rel.inflate(padding), rotate_deg);
+                    return Aabb {
+                        min_x: lpx + rel.min_x,
+                        min_y: lpy + rel.min_y,
+                        max_x: lpx + rel.max_x,
+                        max_y: lpy + rel.max_y,
+                    };
+                }
                 Aabb {
                     min_x: lpx + rel.min_x,
                     min_y: lpy + rel.min_y,
@@ -2661,6 +2692,7 @@ impl TextNode {
                     paints: paints.clone(),
                     icons: icons.iter().map(|(d, _)| d.clone()).collect(),
                     background,
+                    rotation_deg: rotate_deg,
                     properties: prep.group.properties.clone(),
                 });
             }
@@ -2887,11 +2919,18 @@ impl Node for TextNode {
         ]
         .into_iter()
         .chain(self.layout_exprs.sources())
+        .chain([(b"rotateexpr".as_slice(), &self.rotate_expr.1)])
         {
             if let Some(s) = src {
                 h.update(tag);
                 h.update(s.as_bytes());
             }
+        }
+        // Text rotation — folded only when set, so existing recipes keep
+        // their hashes.
+        if self.rotate_deg != 0.0 {
+            h.update(b"rotate");
+            h.update(&self.rotate_deg.to_le_bytes());
         }
         // Same-value dedupe distance — folded only when set, so existing
         // recipes keep their hashes.
@@ -3535,6 +3574,18 @@ fn build_text_node(
             &maplibre_expr::Type::Number,
         )?,
     };
+    // `rotate-deg` turns a point label about its anchor. A line label's
+    // glyphs already turn with the path, so it ignores the turn.
+    let mut rotate_deg = read_number_or(fields, "rotate-deg", ctx, 0.0)? as f32;
+    let mut rotate_expr =
+        parse_expr_field(fields, "rotate-deg-expr", &maplibre_expr::Type::Number)?;
+    if placement != Placement::Point
+        && (fields.contains_key("rotate-deg") || rotate_expr.0.is_some())
+    {
+        ctx.warn("`rotate-deg` / `rotate-deg-expr` apply to point placement only — ignored");
+        rotate_deg = 0.0;
+        rotate_expr = (None, None);
+    }
     let max_extent_px = read_number_or(fields, "max-extent-px", ctx, 128.0)? as f32;
     // Route outline glyphs through the SDF path for maplibre-gl-js
     // parity (it renders every glyph from an SDF). Default on.
@@ -3741,6 +3792,8 @@ fn build_text_node(
             layout_exprs,
             justify_expr_warned: AtomicBool::new(false),
             transform_expr_warned: AtomicBool::new(false),
+            rotate_deg,
+            rotate_expr,
             max_extent_px,
             outline_sdf,
             collide,
@@ -3878,6 +3931,11 @@ fn text_schema(stage: Stage) -> Value {
                                "description": "Case transform applied before shaping. Default `none`." },
                 "transform-expr": {
                     "description": "A MapLibre string expression (data-driven MapLibre `text-transform`), evaluated per feature group with the tile's zoom, naming `none`, `uppercase` or `lowercase`; takes the place of `transform` for that group. A result that names no value (reported once per node) or an evaluation error uses `transform`.",
+                },
+                "rotate-deg": { "type": "number",
+                                "description": "MapLibre `text-rotate`: degrees clockwise the label turns about its anchor point, the shift from `offset-em` or `anchor-offsets` turning with it, and its background box and strikethrough with it. The label collides by the axis-aligned bounds of its turned, padded box, the envelope MapLibre takes, so a label turned 45° reserves more room than it covers; `label-boxes` reports its `text` and `background` as turned quads and its `collision` box as those bounds. An `icon-text-fit` icon fits the unturned text and turns only by `icon-rotate-deg`. Point placement only: a line label's glyphs follow the path, and the field is ignored there with a warning. Default 0." },
+                "rotate-deg-expr": {
+                    "description": "A MapLibre number expression (degrees clockwise, data-driven MapLibre `text-rotate`), evaluated per feature group with the tile's zoom; overrides `rotate-deg` for that group.",
                 },
                 "max-extent-px": { "type": "number", "minimum": 0.0,
                                    "description": "Canvas pad this node requests; labels whose bbox half-extent exceeds it are culled with a warning. Default 128." },

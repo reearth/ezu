@@ -7,8 +7,8 @@
 use std::sync::Arc;
 
 use ezu_core::text::{
-    char_allows_ideographic_breaking, draw, layout, Anchor, FaceEntry, Font, LayoutParams,
-    StackEntry, TextBlock, TextPaint, TextTransform,
+    char_allows_ideographic_breaking, draw, draw_rotated, layout, Anchor, FaceEntry, Font,
+    LayoutParams, StackEntry, TextBlock, TextPaint, TextTransform,
 };
 
 const LATIN: &[u8] = include_bytes!("fonts/NotoSans-Regular.latin.ttf");
@@ -391,6 +391,110 @@ fn halo_sits_behind_the_fill() {
         .filter(|p| p.alpha() == 255 && p.green() > 200 && p.blue() > 200)
         .count();
     assert!(white > 20, "expected white halo pixels, got {white}");
+}
+
+/// `text` drawn at the centre of a 128 px square, turned `deg` degrees.
+fn render_rotated(text: &str, deg: f32, paint: &TextPaint) -> tiny_skia::Pixmap {
+    let fonts = [latin(), digits()];
+    let fonts = FaceEntry::prepare(&fonts);
+    let block = layout(text, &fonts, &no_wrap());
+    let mut pixmap = tiny_skia::Pixmap::new(128, 128).unwrap();
+    draw_rotated(
+        &block,
+        &fonts,
+        &mut pixmap.as_mut(),
+        (64.0, 64.0),
+        deg,
+        paint,
+        &[],
+        None,
+    );
+    pixmap
+}
+
+/// The `(width, height)` of the inked pixels' bounds.
+fn ink_size(pixmap: &tiny_skia::Pixmap) -> (u32, u32) {
+    let w = pixmap.width();
+    let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+    for (i, p) in pixmap.pixels().iter().enumerate() {
+        if p.alpha() > 0 {
+            let (x, y) = (i as u32 % w, i as u32 / w);
+            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+        }
+    }
+    (x1 + 1 - x0, y1 + 1 - y0)
+}
+
+#[test]
+fn an_unrotated_label_draws_as_draw_does() {
+    let paint = red_paint(2.0, 2.0);
+    let fonts = [latin(), digits()];
+    let fonts = FaceEntry::prepare(&fonts);
+    let block = layout("Ag", &fonts, &no_wrap());
+    let mut plain = tiny_skia::Pixmap::new(128, 128).unwrap();
+    draw(
+        &block,
+        &fonts,
+        &mut plain.as_mut(),
+        (64.0, 64.0),
+        &paint,
+        &[],
+        None,
+    );
+    assert!(plain == render_rotated("Ag", 0.0, &paint));
+}
+
+#[test]
+fn a_quarter_turn_stands_a_wide_label_on_end() {
+    let paint = red_paint(1.0, 2.0);
+    let (w, h) = ink_size(&render_rotated("AAAA", 0.0, &paint));
+    assert!(w > 2 * h, "unrotated {w}x{h}");
+    let (rw, rh) = ink_size(&render_rotated("AAAA", 90.0, &paint));
+    assert!(rh > 2 * rw, "rotated {rw}x{rh}");
+    // The ink turns, it does not grow or shrink.
+    assert!(
+        rw.abs_diff(h) <= 2 && rh.abs_diff(w) <= 2,
+        "{w}x{h} → {rw}x{rh}"
+    );
+}
+
+#[test]
+fn a_half_turn_turns_the_label_about_its_anchor() {
+    // A `left`-anchored label starts at the point and runs right; half a
+    // turn about the point sends it left instead.
+    let fonts = [latin(), digits()];
+    let fonts = FaceEntry::prepare(&fonts);
+    let params = LayoutParams {
+        anchor: Anchor::Left,
+        ..no_wrap()
+    };
+    let block = layout("AA", &fonts, &params);
+    let paint = red_paint(0.0, 0.0);
+    let ink_x = |deg: f32| {
+        let mut pixmap = tiny_skia::Pixmap::new(128, 128).unwrap();
+        draw_rotated(
+            &block,
+            &fonts,
+            &mut pixmap.as_mut(),
+            (64.0, 64.0),
+            deg,
+            &paint,
+            &[],
+            None,
+        );
+        let xs: Vec<u32> = pixmap
+            .pixels()
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.alpha() > 0)
+            .map(|(i, _)| i as u32 % 128)
+            .collect();
+        (*xs.iter().min().unwrap(), *xs.iter().max().unwrap())
+    };
+    let (x0, _) = ink_x(0.0);
+    assert!(x0 >= 63, "unrotated starts at the point: {x0}");
+    let (_, x1) = ink_x(180.0);
+    assert!(x1 <= 65, "turned ends at the point: {x1}");
 }
 
 // --- strikethrough ----------------------------------------------------------

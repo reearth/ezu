@@ -29,7 +29,9 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use super::labels::{labels_input, text_rect, LabelDraw, LabelSet, PlacedLabels, ACCEPTS_LABELS};
+use super::labels::{
+    labels_input, rotated_corners, text_rect, LabelDraw, LabelSet, PlacedLabels, ACCEPTS_LABELS,
+};
 use crate::nodes::common::{features_value_culled, FeatureGroup};
 use ezu_core::text::{
     collide::{Aabb, DEDUP_QUANTUM},
@@ -286,6 +288,7 @@ impl LabelBoxesNode {
                 paint,
                 icons,
                 background,
+                rotation_deg,
                 ..
             } => {
                 let v = variants.get(variant);
@@ -310,12 +313,23 @@ impl LabelBoxesNode {
                         Part::Icon,
                     );
                 }
+                // A turned label's text and box are quads turned about the
+                // anchor, as `text-draw` draws them.
+                let emit = |out: &mut Emitter, r: Aabb, part: Part| {
+                    if *rotation_deg == 0.0 {
+                        out.rect(at(r), &props, part);
+                    } else {
+                        let corners = rotated_corners(r, *rotation_deg)
+                            .map(|(x, y)| (anchor.0 + x, anchor.1 + y));
+                        out.ring(corners, &props, part);
+                    }
+                };
                 if let Some(block) = block {
                     if let (true, Some(bg)) = (self.wants(Part::Background), background) {
-                        out.rect(at(bg.rect(block, paint.size_px)), &props, Part::Background);
+                        emit(out, bg.rect(block, paint.size_px), Part::Background);
                     }
                     if self.wants(Part::Text) {
-                        out.rect(at(text_rect(block, paint.size_px)), &props, Part::Text);
+                        emit(out, text_rect(block, paint.size_px), Part::Text);
                     }
                 }
             }
@@ -520,7 +534,7 @@ impl NodeFactory for LabelBoxesFactory {
                 .into(),
         );
         serde_json::json!({
-            "description": "The boxes a `label-placement` node measured its labels by, as polygons — one per box — so any geometry and paint op can draw them: a bordered or rounded badge (`buffer` → `stroke`), an offset shadow (`transform`), or a debug overlay of placement. Reads the decisions already made, so nothing is placed twice and the boxes match what `text-draw` draws; labels placed from a neighbour tile's candidates are included, so boxes continue across tile edges. Each polygon carries the labelled feature's properties plus `part` (`text`, `icon`, `background`, `glyph` or `collision`), `placed` (false for a candidate that did not place, with `include: all`) and `label-id` (shared by every box of one label, the same on every tile). A placed label also carries `overlapped` (true when it overlaps a label placed before it, which only `overlap: always` or `fallback` permits) and `variant-index`: where the position it took sits in the list it was tried from (`anchor-offsets`, or the anchors of the deprecated `anchor-variants`), 0 for the first position, for a lone one and for a line label, and absent when the variant shown draws no text. A label that did not place carries `drop-reason` instead: `collision` when it lost its collision test, `dedupe` when its layer's `dedupe-key-expr` dropped it because a label with the same key had already placed within `dedupe-distance-px`. A point label gives its `text` block (no padding), `icon` (rotated by `icon-rotate`), `background` box (with `background-padding` or `background-color`) and the `collision` box or boxes it was tested with, padding included. A line label gives one `glyph` quad per glyph, rotated along the path, and the axis-aligned `collision` box placement tested for each glyph.",
+            "description": "The boxes a `label-placement` node measured its labels by, as polygons — one per box — so any geometry and paint op can draw them: a bordered or rounded badge (`buffer` → `stroke`), an offset shadow (`transform`), or a debug overlay of placement. Reads the decisions already made, so nothing is placed twice and the boxes match what `text-draw` draws; labels placed from a neighbour tile's candidates are included, so boxes continue across tile edges. Each polygon carries the labelled feature's properties plus `part` (`text`, `icon`, `background`, `glyph` or `collision`), `placed` (false for a candidate that did not place, with `include: all`) and `label-id` (shared by every box of one label, the same on every tile). A placed label also carries `overlapped` (true when it overlaps a label placed before it, which only `overlap: always` or `fallback` permits) and `variant-index`: where the position it took sits in the list it was tried from (`anchor-offsets`, or the anchors of the deprecated `anchor-variants`), 0 for the first position, for a lone one and for a line label, and absent when the variant shown draws no text. A label that did not place carries `drop-reason` instead: `collision` when it lost its collision test, `dedupe` when its layer's `dedupe-key-expr` dropped it because a label with the same key had already placed within `dedupe-distance-px`. A point label gives its `text` block (no padding), `icon` (rotated by `icon-rotate`), `background` box (with `background-padding` or `background-color`) and the `collision` box or boxes it was tested with, padding included. A label turned by `rotate-deg` gives its `text` and `background` as quads turned about its anchor, and its `collision` box as their axis-aligned bounds. A line label gives one `glyph` quad per glyph, rotated along the path, and the axis-aligned `collision` box placement tested for each glyph.",
             "properties": {
                 "placement": schema_frag::node_ref(),
                 "labels": labels,

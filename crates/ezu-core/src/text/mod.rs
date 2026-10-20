@@ -58,7 +58,7 @@ pub use collide::{
     place, place_layers, place_layers_detailed, Aabb, Grid, LabelCandidate, LayerOutcome, Overlap,
     PlaceRank, Placement, COLLISION_CELL_PX, DEDUP_QUANTUM,
 };
-pub use draw::{draw, draw_line, GlyphPlacement, SectionPaint, TextPaint};
+pub use draw::{draw, draw_line, draw_rotated, GlyphPlacement, SectionPaint, TextPaint};
 pub use font::{FaceEntry, Font, FontError, StackEntry};
 pub use layout::{
     char_allows_ideographic_breaking, layout, layout_sections, Anchor, BlockLine, EmBox, Justify,

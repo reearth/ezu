@@ -33,8 +33,8 @@ use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{canvas_into_raster, empty_raster, make_canvas, FramedImage};
 use ezu_core::text::{
-    collide, draw, draw_line, FaceEntry, Font, GlyphPlacement, LabelCandidate, OutlineSdfCache,
-    SectionPaint, StackEntry, TextBlock, TextPaint,
+    collide, draw, draw_line, draw_rotated, FaceEntry, Font, GlyphPlacement, LabelCandidate,
+    OutlineSdfCache, SectionPaint, StackEntry, TextBlock, TextPaint,
 };
 
 /// Accepts-list for a `Labels` port.
@@ -83,6 +83,9 @@ pub(super) enum LabelDraw {
         icons: Vec<Arc<IconDraw>>,
         /// The box drawn behind the text, if the layer sets one.
         background: Option<BackgroundDraw>,
+        /// MapLibre `text-rotate`: degrees clockwise the text and its box
+        /// turn about the anchor. The icon turns by its own `icon-rotate`.
+        rotation_deg: f32,
         /// The labelled feature's properties, for `label-boxes`.
         properties: Properties,
     },
@@ -194,12 +197,82 @@ pub(super) fn text_rect(block: &TextBlock, size_px: f32) -> collide::Aabb {
     }
 }
 
+/// The four corners of `rect` (relative to a label anchor) turned
+/// `rotation_deg` degrees clockwise about that anchor, clockwise from the
+/// top-left — the quad a turned label's box covers.
+pub(super) fn rotated_corners(rect: collide::Aabb, rotation_deg: f32) -> [(f32, f32); 4] {
+    let a = rotation_deg.to_radians();
+    let (s, c) = (libm::sinf(a), libm::cosf(a));
+    let at = |x: f32, y: f32| (x * c - y * s, x * s + y * c);
+    [
+        at(rect.min_x, rect.min_y),
+        at(rect.max_x, rect.min_y),
+        at(rect.max_x, rect.max_y),
+        at(rect.min_x, rect.max_y),
+    ]
+}
+
+/// What `rect` (relative to a label anchor) covers once turned
+/// `rotation_deg` degrees about that anchor, as an axis-aligned box: the
+/// bounds of the turned quad, the envelope MapLibre takes for a rotated
+/// point label's collision box. A zero angle returns `rect` unchanged.
+pub(super) fn rotated_bounds(rect: collide::Aabb, rotation_deg: f32) -> collide::Aabb {
+    if rotation_deg == 0.0 {
+        return rect;
+    }
+    let corners = rotated_corners(rect, rotation_deg);
+    let mut b = collide::Aabb {
+        min_x: f32::MAX,
+        min_y: f32::MAX,
+        max_x: f32::MIN,
+        max_y: f32::MIN,
+    };
+    for (x, y) in corners {
+        b.min_x = b.min_x.min(x);
+        b.min_y = b.min_y.min(y);
+        b.max_x = b.max_x.max(x);
+        b.max_y = b.max_y.max(y);
+    }
+    b
+}
+
 /// Fill a label's background box, its edges given in canvas px. The edges
 /// snap to whole pixels so the box stays crisp; every tile's canvas origin
 /// is a whole pixel of the same world grid, so the snap agrees across seams.
 fn fill_background(pm: &mut tiny_skia::PixmapMut<'_>, rect: collide::Aabb, bg: &BackgroundDraw) {
-    let (x0, y0) = (rect.min_x.round(), rect.min_y.round());
-    let (x1, y1) = (rect.max_x.round(), rect.max_y.round());
+    let snapped = collide::Aabb {
+        min_x: rect.min_x.round(),
+        min_y: rect.min_y.round(),
+        max_x: rect.max_x.round(),
+        max_y: rect.max_y.round(),
+    };
+    fill_background_with(pm, snapped, bg, Transform::identity());
+}
+
+/// Fill a turned label's background box: `rel` relative to the anchor at
+/// `anchor` (canvas px), turned `rotation_deg` degrees clockwise about it.
+/// A turned edge crosses pixels at an angle, so there is nothing to snap.
+fn fill_background_rotated(
+    pm: &mut tiny_skia::PixmapMut<'_>,
+    rel: collide::Aabb,
+    anchor: (f32, f32),
+    rotation_deg: f32,
+    bg: &BackgroundDraw,
+) {
+    let t = Transform::from_translate(anchor.0, anchor.1).pre_rotate(rotation_deg);
+    fill_background_with(pm, rel, bg, t);
+}
+
+/// Fill the box `rect` with `bg`'s colour and corner radius, mapped to the
+/// canvas by `transform`.
+fn fill_background_with(
+    pm: &mut tiny_skia::PixmapMut<'_>,
+    rect: collide::Aabb,
+    bg: &BackgroundDraw,
+    transform: Transform,
+) {
+    let (x0, y0) = (rect.min_x, rect.min_y);
+    let (x1, y1) = (rect.max_x, rect.max_y);
     let (w, h) = (x1 - x0, y1 - y0);
     if w <= 0.0 || h <= 0.0 || bg.color[3] <= 0.0 {
         return;
@@ -240,13 +313,7 @@ fn fill_background(pm: &mut tiny_skia::PixmapMut<'_>, rect: collide::Aabb, bg: &
     let mut paint = tiny_skia::Paint::default();
     paint.set_color(color);
     paint.anti_alias = true;
-    pm.fill_path(
-        &path,
-        &paint,
-        tiny_skia::FillRule::Winding,
-        Transform::identity(),
-        None,
-    );
+    pm.fill_path(&path, &paint, tiny_skia::FillRule::Winding, transform, None);
 }
 
 impl LabelSet {
@@ -454,6 +521,7 @@ pub(super) fn draw_labels(
                 fonts,
                 paints,
                 background,
+                rotation_deg,
                 ..
             } => {
                 // The winning variant names the laid-out block, or suppresses
@@ -468,6 +536,34 @@ pub(super) fn draw_labels(
                 };
                 let (ax, ay) = (anchor.0 + pad, anchor.1 + pad);
                 let rel = label_rect(block, paint.size_px, background.as_ref());
+                if *rotation_deg != 0.0 {
+                    let reach = rotated_bounds(rel, *rotation_deg);
+                    if set.collide {
+                        let r = reach.inflate(set.padding_px);
+                        if ax + r.max_x < 0.0
+                            || ax + r.min_x > padded_w
+                            || ay + r.max_y < 0.0
+                            || ay + r.min_y > padded_h
+                        {
+                            continue;
+                        }
+                    }
+                    if let Some(bg) = background {
+                        fill_background_rotated(&mut pm, rel, (ax, ay), *rotation_deg, bg);
+                    }
+                    let view = faces.view(fonts);
+                    draw_rotated(
+                        block,
+                        &view,
+                        &mut pm,
+                        (ax, ay),
+                        *rotation_deg,
+                        paint,
+                        paints,
+                        sdf_cache.as_ref(),
+                    );
+                    continue;
+                }
                 let rect = collide::Aabb {
                     min_x: ax + rel.min_x,
                     min_y: ay + rel.min_y,
