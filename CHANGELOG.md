@@ -69,6 +69,11 @@ mean is spelled out in
   as `ezu` does, so such a host binds only its tile data. It is Rust-only:
   the JS and Go packages run where nothing can do I/O from inside a render,
   so there every source is bound as before.
+- A Rust host can watch every node of a render: `render_tile_observed`
+  renders as `render_tile_with` does and shows each node's value, and how
+  long it took, to a `NodeObserver`. It is the hook `ezu graph --tile` draws
+  its pictures from, and Rust-only, since the values are the evaluator's
+  in-memory types.
 - `text` and `text-labels` take `anchor-expr`, a MapLibre expression that
   names a point label's anchor per feature, so one layer can put some labels
   left of their points and others right of them, or switch sides with zoom.

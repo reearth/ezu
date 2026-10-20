@@ -421,3 +421,32 @@ fn a_render_hands_back_the_features_a_node_held() {
     assert!(refused(&["nope"]).contains("no node `nope`"));
     assert!(refused(&["fill"]).contains("`fill` produces raster"));
 }
+
+#[test]
+fn an_observed_render_shows_every_node_and_draws_the_same_tile() {
+    use std::sync::Mutex;
+    struct Seen(Mutex<Vec<String>>);
+    impl ezu::graph::NodeObserver for Seen {
+        fn on_node(&self, _: ezu::graph::NodeIx, value: &ezu::graph::PortValue, _: bool, _: u128) {
+            self.0.lock().unwrap().push(format!("{:?}", value.kind()));
+        }
+    }
+    let tile = (14, 14554, 6454);
+    let r = Renderer::new(STITCHED).expect("builds");
+    let mut set = SourceSet::new();
+    set.bind(
+        &r.load_source("basemap", BASEMAP_Z14).expect("loads"),
+        &BindOptions::default(),
+    )
+    .expect("binds");
+    let plain = r
+        .render_tile_with(tile.0, tile.1, tile.2, &set, rgba())
+        .expect("renders");
+    let seen = Seen(Mutex::new(Vec::new()));
+    let observed = r
+        .render_tile_observed(tile.0, tile.1, tile.2, &set, rgba(), &seen)
+        .expect("renders");
+    assert!(observed == plain);
+    // `f`, `fill` and `out`: every node, cached or not.
+    assert_eq!(seen.0.lock().unwrap().len(), 3);
+}

@@ -842,6 +842,31 @@ impl Renderer {
         Ok((image, features))
     }
 
+    /// [`render_tile_with`](Self::render_tile_with), showing every node's
+    /// value to `observer` as the evaluator computes it or finds it in the
+    /// cache, with how long it took. A debugging hook: `ezu graph --tile`
+    /// draws each node's picture onto the graph from it.
+    ///
+    /// Only in Rust. The values are the evaluator's own in-memory types —
+    /// rasters, fields, brushes — and a callback per node into the host,
+    /// neither of which has a form across the wasm boundary the JS and Go
+    /// packages sit behind. What a host outside a debugger wants from a
+    /// node, its features, crosses that boundary through
+    /// [`render_tile_with_features`](Self::render_tile_with_features).
+    /// Node indices are the graph's, which building the same style with
+    /// [`ezu_graph::build_graph`] and the default registry reproduces.
+    pub fn render_tile_observed(
+        &self,
+        z: u8,
+        x: u32,
+        y: u32,
+        set: &SourceSet,
+        opts: RenderOptions,
+        observer: &dyn ezu_graph::NodeObserver,
+    ) -> Result<Vec<u8>, Error> {
+        self.render_from(z, x, y, set, opts, Some(observer))
+    }
+
     /// Bring every bound fontstack back under the
     /// [glyph budget](Self::set_glyph_budget). A no-op until a host sets
     /// one. [`render_tile`](Self::render_tile) does this after each
