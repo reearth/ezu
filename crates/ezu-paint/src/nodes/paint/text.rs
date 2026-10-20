@@ -20,9 +20,10 @@
 //! covering a char shapes it. `text` is a constant string or a raw
 //! MapLibre string expression evaluated per feature group; `size` /
 //! `color` / `halo-color` / `halo-width` / `opacity` follow the usual
-//! constant-plus-`*-expr`-sibling pattern. Layout knobs (justify,
-//! wrapping, spacing) are build-time constants; the point anchor may also
-//! come per feature group from `anchor-expr`.
+//! constant-plus-`*-expr`-sibling pattern, and so do the layout knobs
+//! (justify, offset, wrapping, line height, letter spacing, case) and the
+//! point anchor. A laid-out block is reused only between groups whose
+//! layout knobs all agree.
 //!
 //! Point placement labels each point and each polygon, at the polygon's
 //! pole of inaccessibility as MapLibre does or at its centroid
@@ -635,6 +636,121 @@ struct GroupPrep<'g> {
     reach: f32,
     /// A `font-expr` was set but resolved to the default stack (warned, own only).
     font_fallback: bool,
+    /// The group's layout knobs: the node's constants, with any `*-expr`
+    /// layout field evaluated for this group in their place.
+    layout: GroupLayout,
+}
+
+/// The layout knobs one feature group lays its label out with. Every field
+/// shifts a glyph or the bounding box, so a block is reused only between
+/// groups whose values all match (see [`GroupLayout::key`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct GroupLayout {
+    justify: Justify,
+    transform: TextTransform,
+    offset_em: [f32; 2],
+    max_width_em: f32,
+    line_height: f32,
+    letter_spacing_em: f32,
+}
+
+impl GroupLayout {
+    /// The values as hashable bits, for the per-eval block cache. Groups
+    /// sharing text and size but differing here must not share a block.
+    fn key(&self) -> [u32; 7] {
+        [
+            self.justify as u32,
+            self.transform as u32,
+            self.offset_em[0].to_bits(),
+            self.offset_em[1].to_bits(),
+            self.max_width_em.to_bits(),
+            self.line_height.to_bits(),
+            self.letter_spacing_em.to_bits(),
+        ]
+    }
+}
+
+/// A parsed `*-expr` field and its raw JSON text (for the param hash), both
+/// `None` when the field is absent.
+type ExprField = (Option<maplibre_expr::Expr>, Option<String>);
+
+/// The `*-expr` siblings of the build-time layout knobs.
+struct LayoutExprs {
+    justify: ExprField,
+    transform: ExprField,
+    /// An `[x, y]` em array, standing in for `offset-em`.
+    offset: ExprField,
+    max_width: ExprField,
+    line_height: ExprField,
+    letter_spacing: ExprField,
+}
+
+impl LayoutExprs {
+    /// Each field's param-hash tag and source, in a fixed order.
+    fn sources(&self) -> [(&'static [u8], &Option<String>); 6] {
+        [
+            (b"justifyexpr", &self.justify.1),
+            (b"transformexpr", &self.transform.1),
+            (b"offsetexpr", &self.offset.1),
+            (b"maxwidthexpr", &self.max_width.1),
+            (b"lineheightexpr", &self.line_height.1),
+            (b"letterspacingexpr", &self.letter_spacing.1),
+        ]
+    }
+}
+
+/// Evaluate an `[x, y]` number-array expression for a group, falling back
+/// to `fallback` when it fails or yields anything else.
+fn eval_xy(
+    expr: &Option<maplibre_expr::Expr>,
+    ectx: &maplibre_expr::EvaluationContext,
+    fallback: [f32; 2],
+) -> [f32; 2] {
+    let Some(e) = expr else {
+        return fallback;
+    };
+    match maplibre_expr::evaluate(e, ectx) {
+        Ok(maplibre_expr::Value::Array(items)) => match items.as_slice() {
+            [maplibre_expr::Value::Number(x), maplibre_expr::Value::Number(y)] => {
+                [*x as f32, *y as f32]
+            }
+            _ => fallback,
+        },
+        _ => fallback,
+    }
+}
+
+/// Evaluate a string expression naming one value of a layout enum
+/// (`justify-expr`, `transform-expr`) for a group, falling back to
+/// `fallback`. As with `anchor-expr`, an evaluation error falls back quietly,
+/// while a string that names no value is a style mistake and is reported,
+/// once per node and field.
+fn eval_name<T>(
+    expr: &Option<maplibre_expr::Expr>,
+    ectx: &maplibre_expr::EvaluationContext,
+    parse: fn(&str) -> Option<T>,
+    fallback: T,
+    field: &str,
+    warned: &AtomicBool,
+) -> T {
+    let Some(e) = expr else {
+        return fallback;
+    };
+    let Ok(maplibre_expr::Value::String(name)) = maplibre_expr::evaluate(e, ectx) else {
+        return fallback;
+    };
+    match parse(&name) {
+        Some(v) => v,
+        None => {
+            if !warned.swap(true, Ordering::Relaxed) {
+                tracing::warn!(
+                    "text: `{field}-expr` gave `{name}`, which is not a `{field}` value — \
+                     `{field}` was used for such labels"
+                );
+            }
+            fallback
+        }
+    }
 }
 
 /// Where point placement puts a group's symbols: each of its points, then
@@ -1185,6 +1301,15 @@ struct TextNode {
     max_width_em: f32,
     line_height: f32,
     letter_spacing_em: f32,
+    /// Data-driven layout knobs: MapLibre expressions evaluated per feature
+    /// group, each standing in for its constant above for that group (see
+    /// [`TextNode::group_layout`]). `offset_expr` is `None` on point
+    /// placement when `anchor-offsets` sets the positions.
+    layout_exprs: LayoutExprs,
+    /// Set once a `justify-expr` / `transform-expr` result named no value,
+    /// so the mistake is reported once per node rather than per label.
+    justify_expr_warned: AtomicBool,
+    transform_expr_warned: AtomicBool,
     /// Labels whose rendered bbox half-extent exceeds this many px are
     /// culled (they'd overflow the canvas pad this node requested).
     max_extent_px: f32,
@@ -1241,15 +1366,43 @@ struct TextNode {
 }
 
 impl TextNode {
-    fn layout_params(&self) -> LayoutParams {
+    /// The layout knobs for one group: each constant, or its `*-expr`
+    /// evaluated with the group's properties and the tile's zoom.
+    fn group_layout(&self, ectx: &maplibre_expr::EvaluationContext) -> GroupLayout {
+        let x = &self.layout_exprs;
+        GroupLayout {
+            justify: eval_name(
+                &x.justify.0,
+                ectx,
+                Justify::parse,
+                self.justify,
+                "justify",
+                &self.justify_expr_warned,
+            ),
+            transform: eval_name(
+                &x.transform.0,
+                ectx,
+                TextTransform::parse,
+                self.transform,
+                "transform",
+                &self.transform_expr_warned,
+            ),
+            offset_em: eval_xy(&x.offset.0, ectx, self.offset_em),
+            max_width_em: eval_number(&x.max_width.0, ectx, self.max_width_em),
+            line_height: eval_number(&x.line_height.0, ectx, self.line_height),
+            letter_spacing_em: eval_number(&x.letter_spacing.0, ectx, self.letter_spacing_em),
+        }
+    }
+
+    fn layout_params(&self, layout: &GroupLayout) -> LayoutParams {
         LayoutParams {
-            max_width_em: self.max_width_em,
-            line_height_em: self.line_height,
-            letter_spacing_em: self.letter_spacing_em,
+            max_width_em: layout.max_width_em,
+            line_height_em: layout.line_height,
+            letter_spacing_em: layout.letter_spacing_em,
             anchor: self.anchor,
-            justify: self.justify,
-            offset_em: self.offset_em,
-            transform: self.transform,
+            justify: layout.justify,
+            offset_em: layout.offset_em,
+            transform: layout.transform,
         }
     }
 
@@ -1261,7 +1414,12 @@ impl TextNode {
     /// inward by the padding on the anchored side: under `top-left` the box's
     /// top-left corner stays on the point and the text starts `left` px right
     /// of it and `top` px below. `size` converts that px shift to em.
-    fn variant_layout_params(&self, cand: AnchorOffset, size: f32) -> LayoutParams {
+    fn variant_layout_params(
+        &self,
+        cand: AnchorOffset,
+        size: f32,
+        layout: &GroupLayout,
+    ) -> LayoutParams {
         let AnchorOffset {
             anchor,
             mut offset_em,
@@ -1275,7 +1433,7 @@ impl TextNode {
         LayoutParams {
             anchor,
             offset_em,
-            ..self.layout_params()
+            ..self.layout_params(layout)
         }
     }
 
@@ -1284,7 +1442,7 @@ impl TextNode {
     /// advance per char — above any real glyph advance, ligatures and wide
     /// scripts included. Added on top: the collision `padding`, the halo (drawn
     /// beyond the collision box), and the widest shift an anchor candidate can
-    /// apply.
+    /// apply, which an `offset-em-expr` result may widen for its group.
     ///
     /// `cap` bounds the advance by `max-extent-px` for point placement, where
     /// labels reaching past it are culled; line placement passes `false`, since
@@ -1297,6 +1455,7 @@ impl TextNode {
         padding: f32,
         halo: f32,
         cap: bool,
+        offset_em: [f32; 2],
     ) -> f32 {
         let advance: f32 = sections
             .iter()
@@ -1307,7 +1466,12 @@ impl TextNode {
         } else {
             advance
         };
-        advance + padding + halo + self.reach_offset_em * size
+        // The constant `offset-em` is already inside `reach_offset_em`, so
+        // this only grows the bound for a group whose expression went wider.
+        let offset = self
+            .reach_offset_em
+            .max(offset_em[0].abs().max(offset_em[1].abs()));
+        advance + padding + halo + offset * size
     }
 
     /// Resolve a feature group's evaluated `text` into label sections against
@@ -1434,9 +1598,11 @@ impl TextNode {
                 .unwrap_or((STRIKETHROUGH_WIDTH_EM * size).max(1.0)),
             false => 0.0,
         };
+        let layout = self.group_layout(&ectx);
         // The icon's contribution to the neighbour band is added by the
         // caller, which knows the sprite sheet's dimensions.
-        let mut reach = self.label_reach(&sections, size, padding, halo_width, cap);
+        let mut reach =
+            self.label_reach(&sections, size, padding, halo_width, cap, layout.offset_em);
         // A background box reaches its padding past the text on each side.
         if self.background_box && !sections.is_empty() {
             reach += self
@@ -1465,6 +1631,7 @@ impl TextNode {
             strikethrough_px,
             reach,
             font_fallback,
+            layout,
         })
     }
 
@@ -1494,16 +1661,24 @@ impl TextNode {
     /// The positions a point label of `prep` tries: the node's own list, or
     /// — when `anchor-expr` picked an anchor for this group — the single
     /// fixed position re-anchored there, shifted as `offset-em` /
-    /// `radial-offset` shift it for the constant `anchor`.
+    /// `radial-offset` shift it for the constant `anchor`. An `offset-em-expr`
+    /// gives the group its own `offset-em`, so its positions are derived
+    /// again from that, exactly as the constant derives the node's.
     fn group_anchor_offsets(&self, prep: &GroupPrep<'_>) -> Cow<'_, [AnchorOffset]> {
-        match prep.anchor {
-            Some(a) => Cow::Owned(legacy_anchor_offsets(
+        match (prep.anchor, &self.layout_exprs.offset.0) {
+            (Some(a), _) => Cow::Owned(legacy_anchor_offsets(
                 a,
-                self.offset_em,
+                prep.layout.offset_em,
                 &[],
                 self.radial_offset_em,
             )),
-            None => Cow::Borrowed(&self.anchor_offsets),
+            (None, Some(_)) => Cow::Owned(legacy_anchor_offsets(
+                self.anchor,
+                prep.layout.offset_em,
+                &self.anchor_variants,
+                self.radial_offset_em,
+            )),
+            (None, None) => Cow::Borrowed(&self.anchor_offsets),
         }
     }
 
@@ -1541,15 +1716,15 @@ impl TextNode {
     /// centred so each glyph's `x` is measured from the label centre. The
     /// `offset-em` shift is applied during the walk (along + perpendicular
     /// to the line), not baked into the block.
-    fn line_layout_params(&self) -> LayoutParams {
+    fn line_layout_params(&self, layout: &GroupLayout) -> LayoutParams {
         LayoutParams {
             max_width_em: 0.0,
-            line_height_em: self.line_height,
-            letter_spacing_em: self.letter_spacing_em,
+            line_height_em: layout.line_height,
+            letter_spacing_em: layout.letter_spacing_em,
             anchor: Anchor::Center,
             justify: Justify::Center,
             offset_em: [0.0, 0.0],
-            transform: self.transform,
+            transform: layout.transform,
         }
     }
 
@@ -1649,13 +1824,13 @@ impl TextNode {
         let (extent_i, nbr_groups) = self.neighbor_groups(ctx, z, feats);
         let sx = tile_w / extent_i as f32;
         let sy = tile_h / extent_i as f32;
-        let params = self.line_layout_params();
         let (tx, ty) = (ctx.tile.x as i64, ctx.tile.y as i64);
 
         // Keyed by the content hash (sections' text/font/scale) + size, so a
         // data-driven `font-expr` or per-section `format` fonts lay the same
-        // text out against different stacks without cache collisions.
-        let mut blocks: HashMap<(u64, u32), Arc<TextBlock>> = HashMap::new();
+        // text out against different stacks without cache collisions, and by
+        // the group's layout knobs, which `*-expr` fields may vary per group.
+        let mut blocks: HashMap<(u64, u32, [u32; 7]), Arc<TextBlock>> = HashMap::new();
         let mut dropped_chars = 0usize;
         let mut missing_range_chars = 0usize;
         let mut font_fallbacks = 0usize;
@@ -1775,7 +1950,9 @@ impl TextNode {
             }
 
             let (flat_fonts, ranges, hash) = assemble_stacks(sections, registry);
-            let key = (hash, size.to_bits());
+            let layout = &prep.layout;
+            let params = self.line_layout_params(layout);
+            let key = (hash, size.to_bits(), layout.key());
             let block = match blocks.get(&key) {
                 Some(b) => b.clone(),
                 None => {
@@ -1790,8 +1967,8 @@ impl TextNode {
                         sections,
                         &ranges,
                         &view,
-                        self.transform,
-                        self.letter_spacing_em,
+                        layout.transform,
+                        layout.letter_spacing_em,
                     ) * size;
                     let mut l_max = 0.0f32;
                     for line in &group.lines {
@@ -1864,8 +2041,8 @@ impl TextNode {
             // Each glyph's horizontal-centre offset (px) from the label
             // centre, plus the along-line (`offset-em[0]`) shift; the
             // perpendicular (`offset-em[1]`) shift is handled at draw.
-            let along = self.offset_em[0] * size;
-            let perp = self.offset_em[1] * size;
+            let along = layout.offset_em[0] * size;
+            let perp = layout.offset_em[1] * size;
             let centre_offsets: Vec<f32> = block
                 .glyphs
                 .iter()
@@ -2084,8 +2261,10 @@ impl TextNode {
         // A label is laid out once per (content, size, position); a label with
         // several positions shares every other input across them, so only the
         // position (its index in its position list, plus that position's
-        // anchor, which `anchor-expr` may pick per group) varies the layout.
-        let mut blocks: HashMap<(u64, u32, usize, u8), Arc<TextBlock>> = HashMap::new();
+        // anchor, which `anchor-expr` may pick per group) varies the layout —
+        // along with the group's layout knobs, which `*-expr` fields may vary.
+        #[allow(clippy::type_complexity)]
+        let mut blocks: HashMap<(u64, u32, usize, u8, [u32; 7]), Arc<TextBlock>> = HashMap::new();
         let mut culled = 0usize;
         let mut dropped_chars = 0usize;
         let mut missing_range_chars = 0usize;
@@ -2246,11 +2425,17 @@ impl TextNode {
                     .iter()
                     .enumerate()
                     .map(|(ci, &cand)| {
-                        let pkey = (hash, size.to_bits(), ci, cand.anchor as u8);
+                        let pkey = (
+                            hash,
+                            size.to_bits(),
+                            ci,
+                            cand.anchor as u8,
+                            prep.layout.key(),
+                        );
                         if let Some(b) = blocks.get(&pkey) {
                             return b.clone();
                         }
-                        let params = self.variant_layout_params(cand, size);
+                        let params = self.variant_layout_params(cand, size, &prep.layout);
                         let build = || {
                             let specs: Vec<SectionSpec<'_>> = sections
                                 .iter()
@@ -2699,7 +2884,10 @@ impl Node for TextNode {
             (b"filterexpr".as_slice(), &self.filter_expr_src),
             (b"dedupekeyexpr".as_slice(), &self.dedupe_key_expr_src),
             (b"anchorexpr".as_slice(), &self.anchor_expr_src),
-        ] {
+        ]
+        .into_iter()
+        .chain(self.layout_exprs.sources())
+        {
             if let Some(s) = src {
                 h.update(tag);
                 h.update(s.as_bytes());
@@ -3246,6 +3434,7 @@ fn build_text_node(
                         "anchor",
                         "anchor-expr",
                         "offset-em",
+                        "offset-em-expr",
                         "anchor-variants",
                         "radial-offset",
                     ]
@@ -3323,6 +3512,29 @@ fn build_text_node(
     let max_width_em = read_number_or(fields, "max-width-em", ctx, 10.0)? as f32;
     let line_height = read_number_or(fields, "line-height", ctx, 1.2)? as f32;
     let letter_spacing_em = read_number_or(fields, "letter-spacing-em", ctx, 0.0)? as f32;
+    // The layout knobs' per-group `*-expr` siblings. `offset-em-expr` stands
+    // in for `offset-em`, so a position list that overrides one overrides
+    // the other (warned above); line placement still reads it.
+    let mut offset_expr = parse_expr_field(
+        fields,
+        "offset-em-expr",
+        &maplibre_expr::Type::Array(Box::new(maplibre_expr::Type::Number), Some(2)),
+    )?;
+    if explicit_anchor_offsets && placement == Placement::Point {
+        offset_expr = (None, None);
+    }
+    let layout_exprs = LayoutExprs {
+        justify: parse_expr_field(fields, "justify-expr", &maplibre_expr::Type::String)?,
+        transform: parse_expr_field(fields, "transform-expr", &maplibre_expr::Type::String)?,
+        offset: offset_expr,
+        max_width: parse_expr_field(fields, "max-width-em-expr", &maplibre_expr::Type::Number)?,
+        line_height: parse_expr_field(fields, "line-height-expr", &maplibre_expr::Type::Number)?,
+        letter_spacing: parse_expr_field(
+            fields,
+            "letter-spacing-em-expr",
+            &maplibre_expr::Type::Number,
+        )?,
+    };
     let max_extent_px = read_number_or(fields, "max-extent-px", ctx, 128.0)? as f32;
     // Route outline glyphs through the SDF path for maplibre-gl-js
     // parity (it renders every glyph from an SDF). Default on.
@@ -3526,6 +3738,9 @@ fn build_text_node(
             max_width_em,
             line_height,
             letter_spacing_em,
+            layout_exprs,
+            justify_expr_warned: AtomicBool::new(false),
+            transform_expr_warned: AtomicBool::new(false),
             max_extent_px,
             outline_sdf,
             collide,
@@ -3557,7 +3772,7 @@ fn build_text_node(
 /// shared `label-placement` node.
 fn text_schema(stage: Stage) -> Value {
     let mut schema = serde_json::json!({
-            "description": "Text labels (MapLibre `symbol-placement`): `placement: point` (default) labels each feature point, `line` / `line-center` walk each polyline with tangent-rotated glyphs. `font` is an ordered fallback stack of `font` and/or `glyphs` source names; `text` is a literal string or a MapLibre string expression evaluated per feature group. Paint properties have optional `*-expr` siblings; layout knobs are build-time constants in em. Collision is on by default and is deterministic across tiles: candidates come from this tile plus the 8 neighbour tiles (host-bound under `<source>.<layer>@dx,dy`), so borders stay seamless. Set `source`/`layer` (the upstream feature source) to enable neighbour gathering; without them collision is centre-tile-only. `icon-name` / `icon-name-expr` add MapLibre's `icon-image` half: the icon is placed together with the text against the same index, so a symbol shows both or neither unless `icon-optional` / `text-optional` say otherwise. `font` and `text` are required unless the symbol is icon-only.",
+            "description": "Text labels (MapLibre `symbol-placement`): `placement: point` (default) labels each feature point, `line` / `line-center` walk each polyline with tangent-rotated glyphs. `font` is an ordered fallback stack of `font` and/or `glyphs` source names; `text` is a literal string or a MapLibre string expression evaluated per feature group. Paint properties and the layout knobs (in em) have optional `*-expr` siblings evaluated per feature group. Collision is on by default and is deterministic across tiles: candidates come from this tile plus the 8 neighbour tiles (host-bound under `<source>.<layer>@dx,dy`), so borders stay seamless. Set `source`/`layer` (the upstream feature source) to enable neighbour gathering; without them collision is centre-tile-only. `icon-name` / `icon-name-expr` add MapLibre's `icon-image` half: the icon is placed together with the text against the same index, so a symbol shows both or neither unless `icon-optional` / `text-optional` say otherwise. `font` and `text` are required unless the symbol is icon-only.",
             "properties": {
                 "features": schema_frag::node_ref(),
                 "font": { "type": "array", "items": { "type": "string" },
@@ -3636,16 +3851,34 @@ fn text_schema(stage: Stage) -> Value {
                             "description": "Deprecated: use `anchor-offsets` entries with `radial-em`. MapLibre `text-radial-offset`: em distance each `anchor-variants` entry pushes the block away from the point in its direction. Default 0." },
                 "offset-em": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2,
                                "description": "Block shift [x, y] in em, applied after anchoring. Default [0, 0]. For point placement, ignored when `anchor-offsets` is set." },
+                "offset-em-expr": {
+                    "description": "A MapLibre expression yielding an [x, y] number array in em (data-driven MapLibre `text-offset`), evaluated per feature group with the tile's zoom; takes the place of `offset-em` for that group, wherever `offset-em` applies: the single fixed position (with `anchor` or `anchor-expr`), the per-anchor shift of `anchor-variants`, and the along / across shift of a line label. A result that is not two numbers, or an evaluation error, uses `offset-em`. Ignored, with a warning, on point placement when `anchor-offsets` is set.",
+                },
                 "justify": { "type": "string", "enum": ["auto", "left", "center", "right"],
                              "description": "Line alignment within the wrapped block. Default `auto` (follows the anchor's horizontal side)." },
+                "justify-expr": {
+                    "description": "A MapLibre string expression (data-driven MapLibre `text-justify`), evaluated per feature group with the tile's zoom, naming `auto`, `left`, `center` or `right`; takes the place of `justify` for that group. A result that names no value (reported once per node) or an evaluation error uses `justify`.",
+                },
                 "max-width-em": { "type": "number", "minimum": 0.0,
                                   "description": "Wrap target width in em. Default 10; 0 disables wrapping." },
+                "max-width-em-expr": {
+                    "description": "A MapLibre number expression in em (data-driven MapLibre `text-max-width`, a zoom curve say), evaluated per feature group; takes the place of `max-width-em` for that group.",
+                },
                 "line-height": { "type": "number",
                                  "description": "Baseline-to-baseline distance in em. Default 1.2." },
+                "line-height-expr": {
+                    "description": "A MapLibre number expression in em (data-driven MapLibre `text-line-height`), evaluated per feature group; takes the place of `line-height` for that group.",
+                },
                 "letter-spacing-em": { "type": "number",
                                        "description": "Extra advance per glyph in em. Default 0." },
+                "letter-spacing-em-expr": {
+                    "description": "A MapLibre number expression in em (data-driven MapLibre `text-letter-spacing`), evaluated per feature group; takes the place of `letter-spacing-em` for that group.",
+                },
                 "transform": { "type": "string", "enum": ["none", "uppercase", "lowercase"],
                                "description": "Case transform applied before shaping. Default `none`." },
+                "transform-expr": {
+                    "description": "A MapLibre string expression (data-driven MapLibre `text-transform`), evaluated per feature group with the tile's zoom, naming `none`, `uppercase` or `lowercase`; takes the place of `transform` for that group. A result that names no value (reported once per node) or an evaluation error uses `transform`.",
+                },
                 "max-extent-px": { "type": "number", "minimum": 0.0,
                                    "description": "Canvas pad this node requests; labels whose bbox half-extent exceeds it are culled with a warning. Default 128." },
                 "outline-sdf": { "type": "boolean",

@@ -219,6 +219,15 @@ mean is spelled out in
   offset, and scales and turns about the point. Left out, it stays centred.
 - `fill-solid` takes `edge-expr`, the outline colour per feature group. Its
   alpha is the outline's opacity, as the constant `edge`'s is.
+- `text` and `text-labels` take `justify-expr`, `offset-em-expr`,
+  `max-width-em-expr`, `letter-spacing-em-expr`, `line-height-expr` and
+  `transform-expr`, MapLibre expressions evaluated per feature group with the
+  tile's zoom in place of their constants, so a zoom curve on
+  `text-max-width` or a `match` on `text-justify` lays each label out the way
+  MapLibre does. Labels with the same text but different results lay out
+  separately. `offset-em-expr` applies wherever `offset-em` does, and like it
+  is ignored, with a warning, when `anchor-offsets` sets a point label's
+  positions.
 
 ### Changed
 

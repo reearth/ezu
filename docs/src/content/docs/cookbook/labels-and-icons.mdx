@@ -142,6 +142,16 @@ The same anchor can appear twice, so a label crowded out of its usual spot can
 move a little further off before trying another side. That is much better
 behaved in dense areas than a single fixed anchor.
 
+The layout fields also come per feature: `max-width-em-expr`, `line-height-expr`,
+`letter-spacing-em-expr`, `justify-expr`, `transform-expr` and `offset-em-expr`
+each take a MapLibre expression in place of the constant, evaluated with the
+feature's properties and the tile's zoom. A zoom curve widens the wrap as the map
+zooms in:
+
+```json
+"max-width-em-expr": ["interpolate", ["linear"], ["zoom"], 10, 6, 16, 10]
+```
+
 ## Labelling areas
 
 Point placement gives each polygon one label. By default it sits at the polygon's

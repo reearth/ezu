@@ -122,6 +122,8 @@ mod text_collision;
 mod text_dedupe;
 #[path = "paint/text_labels.rs"]
 mod text_labels;
+#[path = "paint/text_layout_exprs.rs"]
+mod text_layout_exprs;
 #[path = "paint/text_line_labels.rs"]
 mod text_line_labels;
 #[path = "paint/text_overlap.rs"]
