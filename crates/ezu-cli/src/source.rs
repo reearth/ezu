@@ -421,11 +421,6 @@ impl FeatureSource {
         )
     }
 
-    /// Fetch exactly `tile`, with no zoom range applied and no fallback.
-    pub async fn fetch_tile(&self, tile: TileId) -> Result<Option<Bytes>, SourceError> {
-        self.tiles.fetch(tile).await
-    }
-
     /// Fetch what draws `tile`: its [`native_tile`](Self::native_tile),
     /// walking up `max_parent_levels` more on a miss. Returns the bytes
     /// with the tile they came from, for the caller to clip into `tile`.
@@ -559,9 +554,16 @@ pub struct PyramidSource {
     /// widened by what a TileJSON or PMTiles header claims.
     max_zoom: Option<u8>,
     on_missing: ezu::style::OnMissing,
+    /// Elevation rather than imagery.
+    pub is_dem: bool,
 }
 
 impl PyramidSource {
+    /// Upstream attribution captured when the source was opened.
+    pub fn attribution(&self) -> Option<&str> {
+        self.tiles.attribution()
+    }
+
     /// The bytes that draw `tile` and the tile they belong to: the covering
     /// ancestor past the source's `max-zoom`, and under `on-missing:
     /// upsample` the nearest ancestor that exists. `None` when there is
@@ -602,9 +604,9 @@ impl PyramidSources {
         use ezu::style::SourceDecl;
         let mut out = Vec::new();
         for (name, decl) in &doc.sources {
-            let (url, max_zoom, on_missing) = match decl {
-                SourceDecl::Dem(s) => (&s.url, s.max_zoom, s.on_missing),
-                SourceDecl::Raster(s) => (&s.url, s.max_zoom, s.on_missing),
+            let (url, max_zoom, on_missing, is_dem) = match decl {
+                SourceDecl::Dem(s) => (&s.url, s.max_zoom, s.on_missing, true),
+                SourceDecl::Raster(s) => (&s.url, s.max_zoom, s.on_missing, false),
                 _ => continue,
             };
             let spec = if url.ends_with(".pmtiles") {
@@ -625,6 +627,7 @@ impl PyramidSources {
                     .map_err(|e| format!("source `{name}`: {e}"))?,
                 max_zoom,
                 on_missing,
+                is_dem,
             });
         }
         Ok(Self(out))
@@ -895,7 +898,8 @@ mod tests {
         let bytes = sources
             .get(Some("bg"))
             .unwrap()
-            .fetch_tile(TileId::new(14, 4, 8))
+            .tiles
+            .fetch(TileId::new(14, 4, 8))
             .await
             .unwrap();
         assert_eq!(bytes.as_deref(), Some(&b"bg 14"[..]));
@@ -933,20 +937,49 @@ mod tests {
         let bg = sources.get(Some("bg")).unwrap();
         let (here, absent) = (TileId::new(14, 4, 8), TileId::new(14, 4, 9));
         assert_eq!(
-            bg.fetch_tile(here).await.unwrap().as_deref(),
+            bg.tiles.fetch(here).await.unwrap().as_deref(),
             Some(&b"bg 14"[..])
         );
-        assert_eq!(bg.fetch_tile(absent).await.unwrap(), None);
+        assert_eq!(bg.tiles.fetch(absent).await.unwrap(), None);
         assert_eq!(cache.counts(), (0, 2));
 
         std::fs::remove_file(d.join("8.pbf")).unwrap();
         std::fs::write(d.join("9.pbf"), "bg 14 later").unwrap();
         assert_eq!(
-            bg.fetch_tile(here).await.unwrap().as_deref(),
+            bg.tiles.fetch(here).await.unwrap().as_deref(),
             Some(&b"bg 14"[..])
         );
-        assert_eq!(bg.fetch_tile(absent).await.unwrap(), None);
+        assert_eq!(bg.tiles.fetch(absent).await.unwrap(), None);
         assert_eq!(cache.counts(), (2, 2));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// With the cache kept for remote sources only, a local tile is read
+    /// afresh every time, so an edited tile shows up.
+    #[tokio::test]
+    async fn a_local_tile_is_read_afresh_when_only_remote_ones_are_kept() {
+        let root = std::env::temp_dir().join(format!("ezu-feature-fresh-{}", std::process::id()));
+        let d = root.join("bg/14/4");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("8.pbf"), "before").unwrap();
+
+        let cache = Arc::new(TileByteCache::new(1 << 20));
+        let sources = FeatureSources::open(&mvt_doc("file:bg/{z}/{x}/{y}.pbf"), None, &root)
+            .await
+            .unwrap()
+            .with_byte_cache(&cache, true);
+        let bg = sources.get(Some("bg")).unwrap();
+        let here = TileId::new(14, 4, 8);
+        assert_eq!(
+            bg.tiles.fetch(here).await.unwrap().as_deref(),
+            Some(&b"before"[..])
+        );
+        std::fs::write(d.join("8.pbf"), "after").unwrap();
+        assert_eq!(
+            bg.tiles.fetch(here).await.unwrap().as_deref(),
+            Some(&b"after"[..])
+        );
+        assert_eq!(cache.counts(), (0, 0), "nothing went through the cache");
         std::fs::remove_dir_all(&root).ok();
     }
 

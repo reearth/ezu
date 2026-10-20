@@ -24,6 +24,16 @@ use crate::source::{FeatureSources, PyramidSources, TileByteCache};
 
 pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
+/// A `dem` or `raster` source declaring `on-missing: error` has no tile
+/// here — the style's way of saying the tile should not be drawn at all,
+/// which `ezu serve` answers with a 404.
+#[derive(Debug, thiserror::Error)]
+#[error("source `{source_name}`: tile {}/{}/{} is missing (on-missing: error)", tile.z, tile.x, tile.y)]
+pub(crate) struct MissingTile {
+    pub source_name: Arc<str>,
+    pub tile: TileId,
+}
+
 /// One source tile a render reads, fetched.
 struct Fetched {
     source: Arc<str>,
@@ -107,6 +117,21 @@ impl TileRenderer {
         })
     }
 
+    /// The tile size every render is drawn at.
+    pub(crate) fn tile_size(&self) -> u32 {
+        self.renderer.render_tile_size()
+    }
+
+    /// The canvas margin every render is drawn with.
+    pub(crate) fn pad(&self) -> u32 {
+        self.base.pad.unwrap_or(0)
+    }
+
+    /// The style's `dem` and `raster` sources.
+    pub(crate) fn pyramids(&self) -> &PyramidSources {
+        &self.pyramids
+    }
+
     /// Render every tile at `size` px, starting a fresh render cache when
     /// that is not the size it renders at already. Only between renders:
     /// none may be in flight.
@@ -150,7 +175,19 @@ impl TileRenderer {
                     set.bind(doc, &bind)?;
                 }
             }
-            Ok(draw(&renderer, &set, opts)?)
+            let drawn = draw(&renderer, &set, opts)?;
+            if ezu::graph::mem::enabled() {
+                // Glyph ranges are read as labels need them and then kept,
+                // so on a label-heavy style they can outweigh every pixel
+                // buffer in the evaluator's own breakdown.
+                let usage = renderer.memory_usage();
+                eprintln!(
+                    "glyph ranges: {:.1} MB over {} range(s)",
+                    usage.glyph_bytes as f64 / (1024.0 * 1024.0),
+                    usage.glyph_ranges,
+                );
+            }
+            Ok(drawn)
         })
         .await?
     }
@@ -196,10 +233,10 @@ impl TileRenderer {
                         // reading it draws nothing, unless the style asked
                         // for an error instead.
                         if p.on_missing() == OnMissing::Error {
-                            return Err(format!(
-                                "source `{}`: tile {}/{}/{} is missing (on-missing: error)",
-                                p.name, tile.z, tile.x, tile.y
-                            )
+                            return Err(MissingTile {
+                                source_name: Arc::clone(&p.name),
+                                tile,
+                            }
                             .into());
                         }
                         return Ok(Vec::new());

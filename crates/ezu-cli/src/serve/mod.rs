@@ -12,6 +12,7 @@ mod state;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::http::{header::HeaderName, HeaderValue};
@@ -21,8 +22,8 @@ use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
-use crate::source::{FeatureSources, SourceSpec};
-use state::{AppState, StyleReload, StyleSnapshot};
+use crate::source::{FeatureSources, SourceSpec, TileByteCache};
+use state::{AppState, Sources, StyleReload, StyleSnapshot};
 
 #[derive(Args, Debug)]
 pub struct ServeCmd {
@@ -90,29 +91,39 @@ pub async fn run(args: ServeCmd) -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let style_text = crate::fetch_text(style_src).await?;
-    let snapshot = StyleSnapshot::build(style_text, 1, &assets_dir).await?;
-    tracing::info!(
-        "loaded style {} ({} nodes, tile={}, pad={}, {} brushes, {} images, {} dem source(s))",
-        snapshot.doc.name,
-        snapshot.doc.nodes.len(),
-        snapshot.doc.tile_size,
-        snapshot.pad,
-        snapshot.assets.bank.len(),
-        snapshot.assets.images.len(),
-        snapshot.dem_sources.len(),
-    );
+    let doc = ezu::style::Document::from_json(&style_text)?;
 
     // Open every feature-tile source the style declares. A CLI flag
     // overrides the first one's URL, but the binding names always come
     // from the style's `sources` block so the document's `features`
     // nodes can reference them. A CLI override without any matching
     // style source is an error — we'd have nothing to bind it under.
-    let feature_sources = FeatureSources::open(&snapshot.doc, cli_source, &assets_dir).await?;
+    // Remote tiles are kept once fetched; local ones are read for every
+    // request, so a tile edited on disk shows up on the next.
+    let byte_cache = Arc::new(TileByteCache::new(crate::tile_cache_budget_bytes()));
+    let feature_sources = FeatureSources::open(&doc, cli_source, &assets_dir)
+        .await?
+        .with_byte_cache(&byte_cache, true);
     if feature_sources.is_empty() {
         tracing::info!("no MVT source — `features` bindings will be empty");
     }
+    let sources = Sources {
+        assets_dir,
+        feature_sources: Arc::new(feature_sources),
+        overzoom_levels: args.overzoom_levels,
+        byte_cache,
+    };
 
-    let state = AppState::new(feature_sources, snapshot, assets_dir, args.overzoom_levels);
+    let snapshot = StyleSnapshot::build(style_text, 1, &sources).await?;
+    tracing::info!(
+        "loaded style {} ({} nodes, tile={}, pad={})",
+        snapshot.doc.name,
+        snapshot.doc.nodes.len(),
+        snapshot.doc.tile_size,
+        snapshot.pad,
+    );
+
+    let state = AppState::new(sources, snapshot);
 
     // Spawn a polling watcher when the style was loaded from a local
     // path. URL-sourced styles aren't watched (we don't know how the
@@ -225,9 +236,7 @@ async fn watch_style_file(path: PathBuf, state: AppState) {
             }
         };
         let next_version = state.style.read().await.version + 1;
-        let snap = match StyleSnapshot::build(text.clone(), next_version, state.assets_dir.as_ref())
-            .await
-        {
+        let snap = match StyleSnapshot::build(text.clone(), next_version, &state.sources).await {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!("watch: rebuild failed: {e}");

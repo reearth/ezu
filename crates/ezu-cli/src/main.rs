@@ -22,20 +22,10 @@ use std::sync::Arc;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use ezu::core::frame::{Frame, FrameRequest};
 use ezu::core::TileId as CoreTileId;
-use ezu::features::mvt;
-use ezu::graph::{
-    build_graph, Cache, CanvasInfo, Evaluator, Graph, NodeObserver, ParamValues, PortValue,
-    RasterBuf, TileId,
-};
-use ezu::paint::host::{
-    bind_dem_sources, bind_geojson_sources, bind_raster_sources, build_dem_sources,
-    build_raster_sources, pixmap_to_webp, raster_to_png, raster_to_webp,
-    requested_neighbor_offsets, BrushBankLoader, DemSourceRegistry, GeoJsonSources,
-    RasterSourceRegistry, TileLoader,
-};
+use ezu::graph::{build_graph, Cache, CanvasInfo, Graph, ParamValues};
+use ezu::paint::host::{pixmap_to_webp, BrushBankLoader};
 use ezu::paint::nodes::default_registry;
 use ezu::style::{Document, SourceDecl};
-use futures::future::try_join_all;
 use futures::stream::{StreamExt, TryStreamExt};
 use tiny_skia::{ColorU8, Pixmap};
 use tracing_subscriber::EnvFilter;
@@ -146,6 +136,17 @@ impl OutputFormat {
         match self {
             OutputFormat::Png => "png",
             OutputFormat::Webp => "webp",
+        }
+    }
+
+    /// `opts`, asking the renderer to encode in this format.
+    fn with(self, opts: ezu::renderer::RenderOptions) -> ezu::renderer::RenderOptions {
+        ezu::renderer::RenderOptions {
+            format: match self {
+                OutputFormat::Png => ezu::renderer::OutputFormat::Png,
+                OutputFormat::Webp => ezu::renderer::OutputFormat::Webp,
+            },
+            ..opts
         }
     }
 
@@ -531,108 +532,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-/// Shared one-time setup: parse the style, build the graph, load
-/// declared assets, and open the tile source. Returned components are
-/// `Arc`-wrapped so callers can hand them to concurrent render tasks.
-struct Prepared {
-    graph: Arc<Graph>,
-    cache: Arc<Cache>,
-    loader: Arc<BrushBankLoader>,
-    /// Every mvt/pmtiles source the document declares, each bound under
-    /// its own name — the name the style's `features` nodes reference.
-    feature_sources: Arc<FeatureSources>,
-    dem_sources: Arc<DemSourceRegistry>,
-    raster_sources: Arc<RasterSourceRegistry>,
-    /// The document's `geojson` sources, read once here rather than per
-    /// tile: one document covers the world, so a pyramid run fetches a
-    /// remote one exactly as often as a single tile does.
-    geojson_sources: Arc<GeoJsonSources>,
-    canvas: CanvasInfo,
-    overzoom_levels: u8,
-    params: Arc<ParamValues>,
-}
-
-async fn prepare(common: &CommonArgs) -> Result<Prepared, Box<dyn std::error::Error>> {
+/// Read the style `common` names and open it for rendering, keeping the
+/// source tiles fetched for one render for the next ones.
+async fn open(common: &CommonArgs) -> Result<Opened, Box<dyn std::error::Error>> {
     let style_text = fetch_text(&common.style).await?;
     let doc = Document::from_json(&style_text)?;
-    prepare_doc(common, doc).await
-}
-
-/// [`prepare`] for a document already read.
-async fn prepare_doc(
-    common: &CommonArgs,
-    doc: Document,
-) -> Result<Prepared, Box<dyn std::error::Error>> {
-    tracing::info!(
-        "style: {} v{} ({} nodes, tile={})",
-        doc.name,
-        doc.version,
-        doc.nodes.len(),
-        doc.tile_size,
-    );
-
-    let assets_dir = common.assets_dir.clone().unwrap_or_else(|| {
-        if is_url(&common.style) {
-            PathBuf::from(".")
-        } else {
-            Path::new(&common.style)
-                .parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or_else(|| PathBuf::from("."))
-        }
-    });
-    let loader = Arc::new(build_asset_loader(&doc, &assets_dir).await?);
-
-    let registry = default_registry();
-    let graph = Arc::new(build_graph(&doc, &registry)?);
-    report_warnings(&graph, common.strict)?;
-    report_pad(&graph, &doc);
-    let cache = Arc::new(Cache::with_limits(
-        ezu::graph::cache::DEFAULT_CAPACITY,
-        cache_budget_bytes().unwrap_or(ezu::graph::cache::DEFAULT_BYTE_BUDGET),
-    ));
-    let canvas = CanvasInfo::square(doc.tile_size, canvas_pad(&graph, &doc));
-
-    // CLI flags override the URL but keep the doc's source NAME, since
-    // the style's `features` nodes reference sources by name.
-    let cli_override = match (&common.pmtiles, &common.mvt) {
-        (Some(p), None) => Some((SourceSpec::PmTiles(p.clone()), "--pmtiles flag")),
-        (None, Some(u)) => Some((SourceSpec::Mvt(u.clone()), "--mvt flag")),
-        (None, None) => None,
-        _ => return Err("--pmtiles and --mvt are mutually exclusive".into()),
-    };
-    let feature_sources = Arc::new(FeatureSources::open(&doc, cli_override, &assets_dir).await?);
-
-    let dem_sources = Arc::new(build_dem_sources(&doc));
-    if !dem_sources.is_empty() {
-        let names: Vec<&str> = dem_sources.names().collect();
-        tracing::info!("dem sources: {}", names.join(", "));
-    }
-    let raster_sources = Arc::new(build_raster_sources(&doc, Some(assets_dir.clone())));
-    if !raster_sources.is_empty() {
-        let names: Vec<&str> = raster_sources.names().collect();
-        tracing::info!("raster sources: {}", names.join(", "));
-    }
-    let geojson_sources = Arc::new(GeoJsonSources::resolve(&doc, &assets_dir).await?);
-    if !geojson_sources.is_empty() {
-        let names: Vec<&str> = geojson_sources.names().collect();
-        tracing::info!("geojson sources: {}", names.join(", "));
-    } else if feature_sources.is_empty() {
-        tracing::info!("no mvt, pmtiles or geojson source — `features` bindings will be empty");
-    }
-
-    Ok(Prepared {
-        graph,
-        cache,
-        loader,
-        feature_sources,
-        dem_sources,
-        raster_sources,
-        geojson_sources,
-        canvas,
-        overzoom_levels: common.overzoom_levels,
-        params: Arc::new(parse_cli_params(&common.params, &doc)?),
-    })
+    let byte_cache = Arc::new(TileByteCache::new(tile_cache_budget_bytes()));
+    open_style(common, &style_text, &doc, &byte_cache).await
 }
 
 /// A style opened for rendering: the document and its graph, which is what
@@ -801,15 +707,6 @@ pub(crate) fn canvas_pad(graph: &Graph, doc: &Document) -> u32 {
         // useful answer than refusing.
         Err(_) => doc.pad,
     }
-}
-
-/// Log what the style got away with but should have spelled out. Under
-/// `--strict` the same list stops the run instead.
-fn report_warnings(graph: &Graph, strict: bool) -> Result<(), Box<dyn std::error::Error>> {
-    for w in graph.warnings() {
-        tracing::warn!("{w}");
-    }
-    strict_verdict(strict, graph.warnings())
 }
 
 /// Say what the canvas margin will be and where it came from.
@@ -1020,25 +917,21 @@ async fn run_graph_view(args: GraphCmd) -> Result<(), Box<dyn std::error::Error>
         strict: false,
     };
     let doc = Document::from_json(&fetch_text(&common.style).await?)?;
-    let prep = prepare(&common).await?;
+    let opened = open(&common).await?;
+    let tiles = &opened.tiles;
 
-    let collector = Arc::new(graph_view::Collector::new(prep.canvas, args.image_size));
-    render_one(
-        Arc::clone(&prep.graph),
-        Arc::clone(&prep.cache),
-        Arc::clone(&prep.loader),
-        Arc::clone(&prep.feature_sources),
-        Arc::clone(&prep.dem_sources),
-        Arc::clone(&prep.raster_sources),
-        Arc::clone(&prep.geojson_sources),
-        prep.canvas,
-        tile,
-        prep.overzoom_levels,
-        Arc::clone(&prep.params),
-        Some(Arc::clone(&collector) as Arc<dyn NodeObserver + Send + Sync>),
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    let canvas = CanvasInfo::square(tiles.tile_size(), tiles.pad());
+    let collector = Arc::new(graph_view::Collector::new(canvas, args.image_size));
+    let watching = Arc::clone(&collector);
+    tiles
+        .render(tile, move |r, set, mut opts| {
+            // The pictures come from the nodes; the tile's own pixels
+            // are not written, so skip encoding them.
+            opts.format = ezu::renderer::OutputFormat::Rgba;
+            r.render_tile_observed(tile.z, tile.x, tile.y, set, opts, &*watching)
+        })
+        .await
+        .map_err(|e| e.to_string())?;
 
     // One reference is held by the render that just finished; take the
     // collector back now that it has.
@@ -1062,7 +955,7 @@ async fn run_graph_view(args: GraphCmd) -> Result<(), Box<dyn std::error::Error>
     }
     let payload = collected.into_payload(
         &doc,
-        &prep.graph,
+        &opened.graph,
         &format!("{}/{}/{}", tile.z, tile.x, tile.y),
         &params,
         sidecar.as_deref(),
@@ -1073,7 +966,7 @@ async fn run_graph_view(args: GraphCmd) -> Result<(), Box<dyn std::error::Error>
         "wrote {} ({:.1} KiB, {} nodes)",
         out.display(),
         html.len() as f64 / 1024.0,
-        prep.graph.len(),
+        opened.graph.len(),
     );
     Ok(())
 }
@@ -1375,37 +1268,36 @@ fn render_mermaid(doc: &ezu::style::Document) -> String {
 }
 
 async fn run_tile(args: TileCmd) -> Result<(), Box<dyn std::error::Error>> {
-    let prep = prepare(&args.common).await?;
+    let opened = open(&args.common).await?;
     let format = args
         .format
         .unwrap_or_else(|| OutputFormat::from_path(&args.out));
-    let raster = render_one(
-        Arc::clone(&prep.graph),
-        Arc::clone(&prep.cache),
-        Arc::clone(&prep.loader),
-        Arc::clone(&prep.feature_sources),
-        Arc::clone(&prep.dem_sources),
-        Arc::clone(&prep.raster_sources),
-        Arc::clone(&prep.geojson_sources),
-        prep.canvas,
-        args.tile,
-        prep.overzoom_levels,
-        Arc::clone(&prep.params),
-        None,
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-    let bytes = match format {
-        OutputFormat::Png => raster_to_png(&raster, prep.canvas.tile_w, prep.canvas.pad)?,
-        OutputFormat::Webp => raster_to_webp(&raster, prep.canvas.tile_w, prep.canvas.pad)?,
-    };
+    let bytes = opened
+        .tiles
+        .render(args.tile, move |r, set, opts| {
+            let t = args.tile;
+            r.render_tile_with(t.z, t.x, t.y, set, format.with(opts))
+        })
+        .await
+        .map_err(|e| e.to_string())?;
     std::fs::write(&args.out, &bytes)?;
     tracing::info!("wrote {} ({} bytes)", args.out.display(), bytes.len());
     Ok(())
 }
 
+/// Render `tile` as straight RGBA, for copying into a larger image.
+async fn render_rgba(tiles: &TileRenderer, tile: CoreTileId) -> Result<Vec<u8>, render::BoxError> {
+    tiles
+        .render(tile, move |r, set, mut opts| {
+            opts.format = ezu::renderer::OutputFormat::Rgba;
+            r.render_tile_with(tile.z, tile.x, tile.y, set, opts)
+        })
+        .await
+}
+
 async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
-    let prep = prepare(&args.common).await?;
+    let opened = open(&args.common).await?;
+    let tiles = &opened.tiles;
     let format = args
         .format
         .unwrap_or_else(|| OutputFormat::from_path(&args.out));
@@ -1421,57 +1313,23 @@ async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
         y_range.end,
     );
 
-    let mut tasks = Vec::with_capacity((nx * ny) as usize);
-    for ty in y_range.clone() {
-        for tx in x_range.clone() {
-            let tile = CoreTileId::new(args.zoom, tx, ty);
-            let graph = Arc::clone(&prep.graph);
-            let cache = Arc::clone(&prep.cache);
-            let loader = Arc::clone(&prep.loader);
-            let feature_sources = Arc::clone(&prep.feature_sources);
-            let dem_sources = Arc::clone(&prep.dem_sources);
-            let raster_sources = Arc::clone(&prep.raster_sources);
-            let geojson_sources = Arc::clone(&prep.geojson_sources);
-            let canvas = prep.canvas;
-            let overzoom_levels = prep.overzoom_levels;
-            let params = Arc::clone(&prep.params);
-            tasks.push(tokio::spawn(async move {
-                let raster = render_one(
-                    graph,
-                    cache,
-                    loader,
-                    feature_sources,
-                    dem_sources,
-                    raster_sources,
-                    geojson_sources,
-                    canvas,
-                    tile,
-                    overzoom_levels,
-                    params,
-                    None,
-                )
-                .await?;
-                Ok::<(CoreTileId, Arc<RasterBuf>), Box<dyn std::error::Error + Send + Sync>>((
-                    tile, raster,
-                ))
-            }));
-        }
-    }
-
-    let mut mosaic =
-        Pixmap::new(nx * prep.canvas.tile_w, ny * prep.canvas.tile_w).ok_or("mosaic alloc")?;
-    for handle in try_join_all(tasks).await? {
-        let (tile, raster) = handle.map_err(|e| e.to_string())?;
-        let dx = (tile.x - x_range.start) as i64 * prep.canvas.tile_w as i64;
-        let dy = (tile.y - y_range.start) as i64 * prep.canvas.tile_w as i64;
-        blit_padded_into(
-            &mut mosaic,
-            &raster,
-            dx,
-            dy,
-            prep.canvas.tile_w,
-            prep.canvas.pad,
-        );
+    let t = tiles.tile_size();
+    let mut mosaic = Pixmap::new(nx * t, ny * t).ok_or("mosaic alloc")?;
+    let xr = x_range.clone();
+    let coords = y_range
+        .clone()
+        .flat_map(move |ty| xr.clone().map(move |tx| CoreTileId::new(args.zoom, tx, ty)));
+    let mut rendered =
+        futures::stream::iter(coords)
+            .map(|tile| async move {
+                Ok::<_, render::BoxError>((tile, render_rgba(tiles, tile).await?))
+            })
+            .buffer_unordered(default_concurrency());
+    while let Some(done) = rendered.next().await {
+        let (tile, rgba) = done.map_err(|e| e.to_string())?;
+        let dx = (tile.x - x_range.start) as i64 * t as i64;
+        let dy = (tile.y - y_range.start) as i64 * t as i64;
+        blit_rgba_into(&mut mosaic, &rgba, dx, dy, t);
     }
     let bytes = match format {
         OutputFormat::Png => mosaic.encode_png().map_err(|e| e.to_string())?,
@@ -1753,7 +1611,8 @@ async fn run_tiles(args: TilesCmd) -> Result<(), Box<dyn std::error::Error>> {
     if concurrency == 0 {
         return Err("--concurrency must be ≥ 1".into());
     }
-    let prep = prepare(&args.common).await?;
+    let opened = open(&args.common).await?;
+    let tiles = &opened.tiles;
 
     let mut total: u64 = 0;
     for z in args.min_zoom..=args.max_zoom {
@@ -1782,40 +1641,17 @@ async fn run_tiles(args: TilesCmd) -> Result<(), Box<dyn std::error::Error>> {
         let coords = y_range
             .clone()
             .flat_map(move |ty| xr.clone().map(move |tx| (tx, ty)));
-        let prep = &prep;
         let out = &args.out;
         let format = args.format;
         let t0 = std::time::Instant::now();
         futures::stream::iter(coords)
             .map(|(tx, ty)| async move {
                 let tile = CoreTileId::new(z, tx, ty);
-                let raster = render_one(
-                    Arc::clone(&prep.graph),
-                    Arc::clone(&prep.cache),
-                    Arc::clone(&prep.loader),
-                    Arc::clone(&prep.feature_sources),
-                    Arc::clone(&prep.dem_sources),
-                    Arc::clone(&prep.raster_sources),
-                    Arc::clone(&prep.geojson_sources),
-                    prep.canvas,
-                    tile,
-                    prep.overzoom_levels,
-                    Arc::clone(&prep.params),
-                    None,
-                )
-                .await?;
-                let bytes = tokio::task::spawn_blocking({
-                    let canvas = prep.canvas;
-                    move || match format {
-                        OutputFormat::Png => raster_to_png(&raster, canvas.tile_w, canvas.pad),
-                        OutputFormat::Webp => raster_to_webp(&raster, canvas.tile_w, canvas.pad),
-                    }
-                })
-                .await
-                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?
-                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-                    e.to_string().into()
-                })?;
+                let bytes = tiles
+                    .render(tile, move |r, set, opts| {
+                        r.render_tile_with(tile.z, tile.x, tile.y, set, format.with(opts))
+                    })
+                    .await?;
                 let dir = out.join(z.to_string()).join(tx.to_string());
                 tokio::fs::create_dir_all(&dir).await?;
                 let path = dir.join(format!("{ty}.{}", format.extension()));
@@ -1830,158 +1666,6 @@ async fn run_tiles(args: TilesCmd) -> Result<(), Box<dyn std::error::Error>> {
     }
     tracing::info!("wrote {total} tiles → {}", args.out.display());
     Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn render_one(
-    graph: Arc<Graph>,
-    cache: Arc<Cache>,
-    loader: Arc<BrushBankLoader>,
-    feature_sources: Arc<FeatureSources>,
-    dem_sources: Arc<DemSourceRegistry>,
-    raster_sources: Arc<RasterSourceRegistry>,
-    geojson_sources: Arc<GeoJsonSources>,
-    canvas: CanvasInfo,
-    tile: CoreTileId,
-    overzoom_levels: u8,
-    params: Arc<ParamValues>,
-    // Watches every node as the graph evaluates. `ezu graph --tile`
-    // uses it to collect one picture per node from this same render.
-    observer: Option<Arc<dyn NodeObserver + Send + Sync>>,
-) -> Result<Arc<RasterBuf>, Box<dyn std::error::Error + Send + Sync>> {
-    // Every feature source, each at its own zoom: one past its
-    // `max-zoom` comes from the covering ancestor, one below its
-    // `min-zoom` brings nothing. Cross-tile placement (label collision)
-    // adds only the neighbour tiles the graph actually asks for (via
-    // `@dx,dy` binding names), never the whole 3×3 window.
-    let asset_inputs = graph.asset_inputs();
-    let fetched_mvt = futures::future::try_join_all(feature_sources.iter().map(|s| {
-        let offsets = requested_neighbor_offsets(&asset_inputs, &s.name);
-        async move {
-            let centre = s.fetch(tile, overzoom_levels).await?;
-            let neighbours = if offsets.is_empty() {
-                Vec::new()
-            } else {
-                s.fetch_neighbors(tile, &offsets, overzoom_levels).await?
-            };
-            Ok::<_, source::SourceError>((Arc::clone(&s.name), centre, neighbours))
-        }
-    }))
-    .await?;
-    let tile_id = TileId {
-        z: tile.z,
-        x: tile.x,
-        y: tile.y,
-    };
-    // Pre-fetch DEM mosaics for the tile before entering spawn_blocking
-    // so the blocking path doesn't have to juggle async fetches.
-    let mut dem_bindings: Vec<(String, ezu::graph::ScalarField)> = Vec::new();
-    if !dem_sources.is_empty() {
-        let base_loader = BrushBankLoader::new();
-        let mut tmp = TileLoader::new(&base_loader, tile_id);
-        bind_dem_sources(&mut tmp, &dem_sources, tile_id, canvas).await?;
-        for name in dem_sources.names() {
-            if let Ok(ezu::graph::Asset::ScalarField(field)) =
-                ezu::graph::AssetLoader::load(&tmp, name)
-            {
-                dem_bindings.push((name.to_string(), (*field).clone()));
-            }
-        }
-    }
-    // Same dance for RGBA raster pyramids: fetch + stitch up front so
-    // the blocking render path receives ready-to-bind buffers.
-    let mut raster_bindings: Vec<(String, RasterBuf)> = Vec::new();
-    if !raster_sources.is_empty() {
-        let base_loader = BrushBankLoader::new();
-        let mut tmp = TileLoader::new(&base_loader, tile_id);
-        bind_raster_sources(&mut tmp, &raster_sources, tile_id, canvas).await?;
-        for name in raster_sources.names() {
-            if let Ok(ezu::graph::Asset::Image(buf)) = ezu::graph::AssetLoader::load(&tmp, name) {
-                raster_bindings.push((name.to_string(), (*buf).clone()));
-            }
-        }
-    }
-    let raster = tokio::task::spawn_blocking(
-        move || -> Result<Arc<RasterBuf>, Box<dyn std::error::Error + Send + Sync>> {
-            let mut tile_loader = TileLoader::new(loader.as_ref(), tile_id);
-            for (src_name, centre, neighbours) in fetched_mvt {
-                if let Some((bytes, src_tile)) = centre {
-                    let mut decoded = mvt::decode(&bytes)?;
-                    if src_tile != tile {
-                        decoded = mvt::clip_to_descendant(&decoded, src_tile, tile)?;
-                    }
-                    tile_loader.bind_mvt(&src_name, decoded);
-                }
-                for ((dx, dy), (bytes, src_tile)) in neighbours {
-                    let ntile = CoreTileId::new(
-                        tile.z,
-                        (tile.x as i64 + dx as i64).rem_euclid(1i64 << tile.z) as u32,
-                        (tile.y as i64 + dy as i64) as u32,
-                    );
-                    let mut decoded = mvt::decode(&bytes)?;
-                    if src_tile != ntile {
-                        decoded = mvt::clip_to_descendant(&decoded, src_tile, ntile)?;
-                    }
-                    tile_loader.bind_mvt_neighbor(&src_name, dx, dy, decoded);
-                }
-            }
-            for (name, field) in dem_bindings {
-                tile_loader.bind_scalar_field(name, field);
-            }
-            for (name, buf) in raster_bindings {
-                tile_loader.bind_raster(name, buf);
-            }
-            // Projected here rather than fetched: the documents were read
-            // once at style load, and each tile re-projects them into its
-            // own frame.
-            bind_geojson_sources(&mut tile_loader, &geojson_sources, &graph.asset_inputs())?;
-            let ev = Evaluator::new(&graph, &cache, &tile_loader);
-            let ev = match observer.as_deref() {
-                Some(o) => ev.with_observer(o),
-                None => ev,
-            };
-            let out = if serial_eval() {
-                ev.render(tile_id, canvas, &params, tile_seed(tile))?
-            } else {
-                ev.render_parallel(tile_id, canvas, &params, tile_seed(tile))?
-            };
-            if ezu::graph::mem::enabled() {
-                report_glyph_memory(loader.as_ref());
-            }
-            match out {
-                PortValue::Raster(r) => Ok(r),
-                other => Err(format!("expected Raster output, got {:?}", other.kind()).into()),
-            }
-        },
-    )
-    .await??;
-    Ok(raster)
-}
-
-/// Print how much each glyph fontstack is holding, alongside the
-/// evaluator's own `EZU_MEM_REPORT` breakdown. Glyph ranges are fetched
-/// lazily and then kept for the process's life, so on a label-heavy tile
-/// they can outweigh every pixel buffer in the render.
-fn report_glyph_memory(loader: &BrushBankLoader) {
-    let stacks = loader.glyphs.read().expect("glyphs bank poisoned");
-    if stacks.is_empty() {
-        return;
-    }
-    let mut total = 0usize;
-    let mut lines = String::new();
-    for (key, stack) in stacks.iter() {
-        let (ranges, bytes) = stack.loaded_size();
-        total += bytes;
-        let name = key.rsplit('/').nth(1).unwrap_or(key);
-        lines.push_str(&format!(
-            "  {name:<32} {:>8.1} MB over {ranges} range(s)\n",
-            bytes as f64 / (1024.0 * 1024.0)
-        ));
-    }
-    eprintln!(
-        "glyph ranges: {:.1} MB\n{lines}",
-        total as f64 / (1024.0 * 1024.0)
-    );
 }
 
 /// Ceiling on the pixel bytes the intermediate cache retains, from
@@ -2007,20 +1691,6 @@ fn tile_cache_budget_bytes() -> usize {
         .unwrap_or(256)
         * 1024
         * 1024
-}
-
-/// Whether to evaluate the graph on one thread, as `EZU_SERIAL=1`
-/// requests. Single-threaded evaluation is what a WebAssembly host gets,
-/// and it holds far fewer intermediates alive at once than the Rayon
-/// scheduler does, so it is the mode to reach for when reproducing a
-/// browser or Workers memory profile from the CLI.
-fn serial_eval() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
-        std::env::var("EZU_SERIAL")
-            .map(|v| v != "0" && !v.is_empty())
-            .unwrap_or(false)
-    })
 }
 
 /// Pre-resolve every entry in the style's `assets` block: each `src`
@@ -2061,44 +1731,6 @@ pub(crate) async fn fetch_text(arg: &str) -> Result<String, Box<dyn std::error::
 
 fn is_url(s: &str) -> bool {
     s.starts_with("http://") || s.starts_with("https://")
-}
-
-/// Copy the central `tile_size × tile_size` region of `raster` (which
-/// is `pad`-padded on every side) into `dst` with its top-left at
-/// `(dx, dy)`, keeping only the part that falls inside `dst`.
-///
-/// The offset may be negative or run past the far edge: a print frame
-/// takes just a corner of the tiles along its border. Rows are copied
-/// straight across rather than composited, so `dst` gets exactly the
-/// visible tile pixels and nothing of the neighbour-bleed pad; tiles never
-/// overlap, so there is nothing underneath to blend with.
-fn blit_padded_into(
-    dst: &mut Pixmap,
-    raster: &RasterBuf,
-    dx: i64,
-    dy: i64,
-    tile_size: u32,
-    pad: u32,
-) {
-    let t = tile_size as i64;
-    let (dw, dh) = (dst.width() as i64, dst.height() as i64);
-    let (x0, x1) = (dx.max(0), (dx + t).min(dw));
-    let (y0, y1) = (dy.max(0), (dy + t).min(dh));
-    if x0 >= x1 || y0 >= y1 {
-        return;
-    }
-    let src_stride = raster.width as usize * 4;
-    let dst_stride = dw as usize * 4;
-    let row_bytes = (x1 - x0) as usize * 4;
-    let src_x = (x0 - dx) as usize + pad as usize;
-    let data = dst.data_mut();
-    for y in y0..y1 {
-        let src_y = (y - dy) as usize + pad as usize;
-        let src_off = src_y * src_stride + src_x * 4;
-        let dst_off = y as usize * dst_stride + x0 as usize * 4;
-        data[dst_off..dst_off + row_bytes]
-            .copy_from_slice(&raster.pixels[src_off..src_off + row_bytes]);
-    }
 }
 
 /// Convert a lon/lat bounding box to an inclusive-min, exclusive-max
@@ -2189,20 +1821,6 @@ fn parse_bbox(s: &str) -> Result<BBox, String> {
         max_lng,
         max_lat,
     })
-}
-
-fn tile_seed(tile: CoreTileId) -> u64 {
-    let mut s = 0u64;
-    s = s
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        .wrapping_add(tile.z as u64);
-    s = s
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        .wrapping_add(tile.x as u64);
-    s = s
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        .wrapping_add(tile.y as u64);
-    s
 }
 
 #[cfg(test)]
@@ -2341,20 +1959,17 @@ mod tests {
 
     #[test]
     fn a_tile_partly_outside_the_destination_copies_only_its_overlap() {
-        // A 4×4 tile with 1 px of pad, every pixel distinct.
-        let mut raster = RasterBuf::new(6, 6);
-        for (i, px) in raster.pixels.chunks_mut(4).enumerate() {
-            px.copy_from_slice(&[i as u8, 0, 0, 255]);
-        }
-        let interior = |x: usize, y: usize| ((y + 1) * 6 + x + 1) as u8;
+        // A 4×4 tile, every pixel distinct.
+        let rgba: Vec<u8> = (0..16u8).flat_map(|i| [i, 0, 0, 255]).collect();
+        let at = |x: usize, y: usize| (y * 4 + x) as u8;
 
         let mut dst = Pixmap::new(5, 3).unwrap();
-        blit_padded_into(&mut dst, &raster, -2, -1, 4, 1);
+        blit_rgba_into(&mut dst, &rgba, -2, -1, 4);
         for y in 0..3usize {
             for x in 0..5usize {
                 let got = dst.pixel(x as u32, y as u32).unwrap();
-                if x < 2 && y < 3 {
-                    assert_eq!(got.red(), interior(x + 2, y + 1), "({x}, {y})");
+                if x < 2 {
+                    assert_eq!(got.red(), at(x + 2, y + 1), "({x}, {y})");
                     assert_eq!(got.alpha(), 255);
                 } else {
                     assert_eq!(got.alpha(), 0, "({x}, {y}) is outside the tile");
@@ -2364,12 +1979,26 @@ mod tests {
 
         // Past the far edge, and entirely outside, are both fine.
         let mut dst = Pixmap::new(5, 3).unwrap();
-        blit_padded_into(&mut dst, &raster, 3, 2, 4, 1);
-        assert_eq!(dst.pixel(3, 2).unwrap().red(), interior(0, 0));
-        assert_eq!(dst.pixel(4, 2).unwrap().red(), interior(1, 0));
-        blit_padded_into(&mut dst, &raster, -4, 0, 4, 1);
-        blit_padded_into(&mut dst, &raster, 5, 0, 4, 1);
+        blit_rgba_into(&mut dst, &rgba, 3, 2, 4);
+        assert_eq!(dst.pixel(3, 2).unwrap().red(), at(0, 0));
+        assert_eq!(dst.pixel(4, 2).unwrap().red(), at(1, 0));
+        blit_rgba_into(&mut dst, &rgba, -4, 0, 4);
+        blit_rgba_into(&mut dst, &rgba, 5, 0, 4);
         assert_eq!(dst.pixel(0, 0).unwrap().alpha(), 0);
+    }
+
+    /// The renderer hands back pixels demultiplied from its premultiplied
+    /// ones, and copying them into an image premultiplies them again. That
+    /// gives back every premultiplied pixel exactly, which is what keeps a
+    /// page or a mosaic byte-identical to the tiles it is made of.
+    #[test]
+    fn premultiplying_a_demultiplied_pixel_gives_it_back() {
+        for a in 0..=255u8 {
+            for c in 0..=a {
+                let p = tiny_skia::PremultipliedColorU8::from_rgba(c, c, c, a).unwrap();
+                assert_eq!(p.demultiply().premultiply(), p, "({c}, {a})");
+            }
+        }
     }
 
     #[test]

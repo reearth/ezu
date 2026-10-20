@@ -50,6 +50,10 @@ curl 'http://127.0.0.1:8080/tiles/13/7276/3225.png?paper=%23ffe0f0&softness=2'
   file and pushes Server-Sent Events on change. Edit in your own editor and the
   browser follows; with unsaved edits in the buffer you get a Reload banner
   instead of a silent swap.
+- **Regenerated data shows up** — tiles from a local directory or archive are
+  read again for every request, so a tile you rebuild on disk is drawn on the
+  next redraw; one whose bytes did not change is not decoded again. Tiles from
+  a URL are fetched once and kept.
 - **Open / URL / Save** — load from a local file or an http(s) URL. On Chromium
   the File System Access API lets Save write back in place.
 - **Source MVT inspector** — overlay the underlying vector tile, toggle layers,

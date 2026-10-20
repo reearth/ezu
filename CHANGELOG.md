@@ -178,14 +178,21 @@ mean is spelled out in
   reads it, so a style that stitches layers across tile borders no longer
   repeats that work for each of a tile's neighbours. A block of 4×4 stitched
   tiles renders about 30% faster on four threads.
-- `ezu frame` renders through the same renderer as the Rust, Go and JS
-  packages. Each source tile a page reads is fetched and decoded once and
-  kept for the page tiles around it and the pages after it, instead of being
-  decoded again for every tile that reads it, and raster and DEM tiles are
-  now kept within `EZU_TILE_CACHE_MB` rather than without limit. Pages are
-  byte-identical to before, except that a `dem` or `raster` source with
-  `on-missing: upsample` could come out differently from run to run when
-  tiles rendered in parallel, and now comes out the same every time.
+- Every CLI command that draws — `tile`, `tiles`, `bbox`, `frame`, `graph
+  --tile` and `serve` — renders through the same renderer as the Rust, Go
+  and JS packages. Each source tile is fetched and decoded once and kept for
+  the tiles around it and, in `frame --pages`, the pages after it, instead
+  of being decoded again for every tile that reads it, and raster and DEM
+  tiles are now kept within `EZU_TILE_CACHE_MB` rather than without limit.
+  The images and features files are byte-identical to before, except that a
+  `dem` or `raster` source with `on-missing: upsample` could come out
+  differently from run to run when tiles rendered in parallel, and now comes
+  out the same every time.
+- `ezu serve` reads tiles from a local directory or archive again for every
+  request, so a tile rebuilt on disk is drawn on the next redraw; it used to
+  keep the first bytes it read for as long as it ran. A tile whose bytes did
+  not change is not decoded again, and tiles from a URL are still fetched
+  once.
 
 ### Deprecated
 

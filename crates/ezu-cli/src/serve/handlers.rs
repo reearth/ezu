@@ -15,12 +15,7 @@ use axum::{
 };
 use ezu::core::TileId as CoreTileId;
 use ezu::features::mvt;
-use ezu::graph::{CanvasInfo, Evaluator, ParamValues, PortValue, TileId};
-use ezu::paint::host::{
-    bind_dem_sources, bind_geojson_sources, bind_raster_sources, raster_to_png, raster_to_webp,
-    requested_neighbor_offsets, BrushBankLoader, DemFetchError, DemSourceRegistry, GeoJsonSources,
-    RasterFetchError, RasterSourceRegistry, TileLoader,
-};
+use ezu::renderer::{OutputFormat, RenderOptions};
 use futures::stream::{self, Stream};
 use serde_json::json;
 use std::collections::HashMap;
@@ -28,15 +23,8 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 
 use super::state::{validate_text, AppState, StyleSnapshot};
-use crate::source::FeatureSource;
-
-/// One feature source's bytes for a tile: its name, the centre tile, and
-/// the neighbours the graph asks for, each with the tile they came from.
-type FetchedMvt = (
-    Arc<str>,
-    Option<(bytes::Bytes, CoreTileId)>,
-    Vec<((i32, i32), (bytes::Bytes, CoreTileId))>,
-);
+use crate::render::MissingTile;
+use crate::source::{FeatureSource, SourceError};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -78,12 +66,13 @@ async fn get_config(State(s): State<AppState>) -> Json<serde_json::Value> {
     // Past the source's own depth the tile handler reprojects ancestor
     // tiles, `overzoom_levels` of them, so that is exactly how much
     // deeper than the data the editor can still ask for.
+    let overzoom_levels = s.sources.overzoom_levels;
     let raster_maxzoom = match data_maxzoom {
-        Some(z) => z.saturating_add(s.overzoom_levels).min(ABSOLUTE_MAXZOOM),
+        Some(z) => z.saturating_add(overzoom_levels).min(ABSOLUTE_MAXZOOM),
         None => ABSOLUTE_MAXZOOM,
     };
     Json(serde_json::json!({
-        "overzoomLevels": s.overzoom_levels,
+        "overzoomLevels": overzoom_levels,
         "dataMaxzoom": data_maxzoom,
         "rasterMaxzoom": raster_maxzoom,
     }))
@@ -103,7 +92,7 @@ async fn put_style(
     body: String,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let next_version = { s.style.read().await.version + 1 };
-    let snap = StyleSnapshot::build(body, next_version, &s.assets_dir)
+    let snap = StyleSnapshot::build(body, next_version, &s.sources)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     let version = snap.version;
@@ -136,21 +125,20 @@ async fn get_attribution(State(s): State<AppState>) -> Json<serde_json::Value> {
             list.push(a);
         }
     };
-    for a in snap
-        .dem_sources
-        .resolve_metadata()
-        .await
-        .unwrap_or_default()
-    {
-        push(a);
-    }
-    for a in snap
-        .raster_sources
-        .resolve_metadata()
-        .await
-        .unwrap_or_default()
-    {
-        push(a);
+    // DEM sources first, then imagery, each inheriting upstream metadata
+    // only when the document's own entry declares no attribution.
+    let pyramids = snap.tiles.pyramids();
+    for dem in [true, false] {
+        for src in pyramids.iter().filter(|p| p.is_dem == dem) {
+            let declares = snap
+                .doc
+                .sources
+                .get(&*src.name)
+                .is_some_and(|d| d.attribution().is_some());
+            if let (false, Some(a)) = (declares, src.attribution()) {
+                push(a.to_string());
+            }
+        }
     }
     // Each MVT/PMTiles feature source inherits upstream metadata only
     // when the document's own entry doesn't declare attribution.
@@ -257,6 +245,26 @@ impl TileFormat {
             TileFormat::Webp => "image/webp",
         }
     }
+
+    fn encoding(self) -> OutputFormat {
+        match self {
+            TileFormat::Png => OutputFormat::Png,
+            TileFormat::Webp => OutputFormat::Webp,
+        }
+    }
+}
+
+/// The status a failed tile answers with: 404 when the style asked for a
+/// missing source tile to fail the render (`on-missing: error`), 502 when a
+/// source could not be fetched, and 500 when the render itself failed.
+fn status_of(e: &(dyn std::error::Error + 'static)) -> StatusCode {
+    if e.downcast_ref::<MissingTile>().is_some() {
+        StatusCode::NOT_FOUND
+    } else if e.downcast_ref::<SourceError>().is_some() {
+        StatusCode::BAD_GATEWAY
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
 }
 
 async fn get_tile(
@@ -281,104 +289,35 @@ async fn get_tile(
     // Take only what we need from the snapshot to keep the lock window
     // short. Query-string parameter overrides are validated against
     // the document's `params` declarations while we hold the lock.
-    let (
-        graph,
-        cache,
-        assets,
-        dem_sources,
-        raster_sources,
-        geojson_sources,
-        tile_size,
-        pad,
-        params,
-    ) = {
+    let (tiles, params) = {
         let snap = s.style.read().await;
-        let mut params = ParamValues::new();
+        let mut params = Vec::new();
         for (name, raw) in &q {
             // `v` is reserved as the editor's cache-busting version key.
             if name == "v" {
                 continue;
             }
-            let v = ezu::graph::parse_param_value(&snap.doc.params, name, raw)
+            ezu::graph::parse_param_value(&snap.doc.params, name, raw)
                 .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
-            params.set(name.clone(), v);
+            params.push((name.clone(), raw.clone()));
         }
-        (
-            Arc::clone(&snap.graph),
-            Arc::clone(&snap.cache),
-            Arc::clone(&snap.assets),
-            Arc::clone(&snap.dem_sources),
-            Arc::clone(&snap.raster_sources),
-            Arc::clone(&snap.geojson_sources),
-            snap.doc.tile_size,
-            snap.pad,
-            params,
-        )
+        (Arc::clone(&snap.tiles), params)
     };
 
-    // Every feature source, each at its own zoom. Cross-tile placement
-    // (label collision) adds only the neighbour tiles the graph asks for
-    // via `@dx,dy` binding names — never the whole 3×3 window
-    // unconditionally. Reuses the MVT cache per tile.
-    let mut fetched_mvt: Vec<FetchedMvt> = Vec::new();
-    let asset_inputs = graph.asset_inputs();
-    for src in s.feature_sources.iter() {
-        let centre = fetch_mvt(&s, src, tile).await?;
-        let mut neighbours = Vec::new();
-        let world = 1i64 << tile.z;
-        for (dx, dy) in requested_neighbor_offsets(&asset_inputs, &src.name) {
-            let ny = tile.y as i64 + dy as i64;
-            if ny < 0 || ny >= world {
-                continue;
-            }
-            let nx = (tile.x as i64 + dx as i64).rem_euclid(world) as u32;
-            if let Some(hit) = fetch_mvt(&s, src, CoreTileId::new(tile.z, nx, ny as u32)).await? {
-                neighbours.push(((dx, dy), hit));
-            }
-        }
-        fetched_mvt.push((Arc::clone(&src.name), centre, neighbours));
-    }
-
-    let canvas = CanvasInfo::square(tile_size, pad);
-    let tile_id = TileId {
-        z: tile.z,
-        x: tile.x,
-        y: tile.y,
-    };
-    let dem_bindings = fetch_dem_bindings(&dem_sources, tile_id, canvas)
+    let bytes = tiles
+        .render(tile, move |r, set, opts| {
+            let opts = RenderOptions {
+                format: format.encoding(),
+                params,
+                ..opts
+            };
+            r.render_tile_with(tile.z, tile.x, tile.y, set, opts)
+        })
         .await
-        .map_err(dem_fetch_status)?;
-    let raster_bindings = fetch_raster_bindings(&raster_sources, tile_id, canvas)
-        .await
-        .map_err(raster_fetch_status)?;
-
-    let bytes = tokio::task::spawn_blocking({
-        move || {
-            render_tile(
-                &graph,
-                &cache,
-                &assets,
-                fetched_mvt,
-                dem_bindings,
-                raster_bindings,
-                &geojson_sources,
-                tile,
-                tile_size,
-                pad,
-                format,
-                &params,
-            )
-        }
-    })
-    .await
-    .map_err(|e| {
-        tracing::error!("tile {z}/{x}/{} render task panicked: {e}", tile.y);
-        (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-    })?
-    .map_err(|e| {
-        tracing::error!("tile {z}/{x}/{}: {e}", tile.y);
-        (StatusCode::INTERNAL_SERVER_ERROR, e)
-    })?;
+        .map_err(|e| {
+            tracing::error!("tile {z}/{x}/{}: {e}", tile.y);
+            (status_of(e.as_ref()), e.to_string())
+        })?;
 
     Ok(Response::builder()
         .header(header::CONTENT_TYPE, format.content_type())
@@ -491,208 +430,16 @@ async fn get_mvt_meta(
 /// `min-zoom`, the covering ancestor past its `max-zoom`, and on a miss
 /// up to `overzoom_levels` parents further. The returned `CoreTileId`
 /// identifies which tile the bytes actually came from — equal to `tile`
-/// on a direct hit, an ancestor on overzoom. Callers that intend to
-/// render must run those bytes through
-/// [`ezu::features::mvt::clip_to_descendant`] when the IDs differ; callers
-/// that need the raw native bytes (the `/mvt` endpoint) should treat a
-/// non-matching ID as a miss.
-///
-/// Each level is cached independently, so two sibling tiles requesting
-/// the same parent share the fetch.
+/// on a direct hit, an ancestor on overzoom. Callers that need the raw
+/// native bytes (the `/mvt` endpoint) should treat a non-matching ID as a
+/// miss.
 async fn fetch_mvt(
     s: &AppState,
     source: &FeatureSource,
     tile: CoreTileId,
 ) -> Result<Option<(bytes::Bytes, CoreTileId)>, (StatusCode, String)> {
-    let Some(mut current) = source.native_tile(tile) else {
-        return Ok(None);
-    };
-    for _ in 0..=s.overzoom_levels {
-        let key = (Arc::clone(&source.name), current);
-        if let Some(b) = s.mvt_cache.get(&key).map(|r| r.clone()) {
-            return Ok(Some((b, current)));
-        }
-        match source.fetch_tile(current).await {
-            Ok(Some(b)) => {
-                s.mvt_cache.insert(key, b.clone());
-                return Ok(Some((b, current)));
-            }
-            Ok(None) => {}
-            Err(e) => return Err((StatusCode::BAD_GATEWAY, e.to_string())),
-        }
-        let Some(parent) = current.parent() else {
-            break;
-        };
-        current = parent;
-    }
-    Ok(None)
-}
-
-/// Pre-fetch the DEM mosaic for every source in the snapshot so the
-/// blocking render path receives ready-to-bind [`ScalarField`](ezu::graph::ScalarField)s
-/// without juggling async fetches.
-async fn fetch_dem_bindings(
-    registry: &DemSourceRegistry,
-    tile: TileId,
-    canvas: CanvasInfo,
-) -> Result<Vec<(String, ezu::graph::ScalarField)>, DemFetchError> {
-    if registry.is_empty() {
-        return Ok(Vec::new());
-    }
-    let base = BrushBankLoader::new();
-    let mut tmp = TileLoader::new(&base, tile);
-    bind_dem_sources(&mut tmp, registry, tile, canvas).await?;
-    let mut out = Vec::new();
-    for name in registry.names() {
-        if let Ok(ezu::graph::Asset::ScalarField(field)) = ezu::graph::AssetLoader::load(&tmp, name)
-        {
-            out.push((name.to_string(), (*field).clone()));
-        }
-    }
-    Ok(out)
-}
-
-/// Pre-fetch + stitch every raster source's mosaic for `tile`.
-async fn fetch_raster_bindings(
-    registry: &RasterSourceRegistry,
-    tile: TileId,
-    canvas: CanvasInfo,
-) -> Result<Vec<(String, ezu::graph::RasterBuf)>, RasterFetchError> {
-    if registry.is_empty() {
-        return Ok(Vec::new());
-    }
-    let base = BrushBankLoader::new();
-    let mut tmp = TileLoader::new(&base, tile);
-    bind_raster_sources(&mut tmp, registry, tile, canvas).await?;
-    let mut out = Vec::new();
-    for name in registry.names() {
-        if let Ok(ezu::graph::Asset::Image(buf)) = ezu::graph::AssetLoader::load(&tmp, name) {
-            out.push((name.to_string(), (*buf).clone()));
-        }
-    }
-    Ok(out)
-}
-
-/// `on-missing: error` misses surface as 404 for the rendered tile;
-/// everything else is an upstream failure.
-fn dem_fetch_status(e: DemFetchError) -> (StatusCode, String) {
-    match &e {
-        DemFetchError::Missing { .. } => (StatusCode::NOT_FOUND, e.to_string()),
-        _ => (StatusCode::BAD_GATEWAY, e.to_string()),
-    }
-}
-
-fn raster_fetch_status(e: RasterFetchError) -> (StatusCode, String) {
-    match &e {
-        RasterFetchError::Missing { .. } => (StatusCode::NOT_FOUND, e.to_string()),
-        _ => (StatusCode::BAD_GATEWAY, e.to_string()),
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn render_tile(
-    graph: &ezu::graph::Graph,
-    cache: &ezu::graph::Cache,
-    assets: &BrushBankLoader,
-    fetched_mvt: Vec<FetchedMvt>,
-    dem_bindings: Vec<(String, ezu::graph::ScalarField)>,
-    raster_bindings: Vec<(String, ezu::graph::RasterBuf)>,
-    geojson_sources: &GeoJsonSources,
-    tile: CoreTileId,
-    tile_size: u32,
-    pad: u32,
-    format: TileFormat,
-    params: &ParamValues,
-) -> Result<Vec<u8>, String> {
-    let tile_id = TileId {
-        z: tile.z,
-        x: tile.x,
-        y: tile.y,
-    };
-    let mut tile_loader = TileLoader::new(assets, tile_id);
-    for (src_name, centre, neighbours) in fetched_mvt {
-        if let Some((bytes, src_tile)) = centre {
-            let mut decoded = mvt::decode(&bytes).map_err(|e| format!("mvt decode: {e}"))?;
-            if src_tile != tile {
-                tracing::debug!(
-                    "overzoom clip `{src_name}` {}/{}/{} ← {}/{}/{}",
-                    tile.z,
-                    tile.x,
-                    tile.y,
-                    src_tile.z,
-                    src_tile.x,
-                    src_tile.y
-                );
-                decoded = mvt::clip_to_descendant(&decoded, src_tile, tile)
-                    .map_err(|e| format!("overzoom clip: {e}"))?;
-            }
-            tile_loader.bind_mvt(&src_name, decoded);
-        }
-        for ((dx, dy), (bytes, src_tile)) in neighbours {
-            let ntile = CoreTileId::new(
-                tile.z,
-                (tile.x as i64 + dx as i64).rem_euclid(1i64 << tile.z) as u32,
-                (tile.y as i64 + dy as i64) as u32,
-            );
-            let mut decoded = match mvt::decode(&bytes) {
-                Ok(d) => d,
-                Err(e) => {
-                    tracing::warn!("neighbour mvt decode {dx},{dy}: {e}");
-                    continue;
-                }
-            };
-            if src_tile != ntile {
-                match mvt::clip_to_descendant(&decoded, src_tile, ntile) {
-                    Ok(d) => decoded = d,
-                    Err(e) => {
-                        tracing::warn!("neighbour overzoom clip {dx},{dy}: {e}");
-                        continue;
-                    }
-                }
-            }
-            tile_loader.bind_mvt_neighbor(&src_name, dx, dy, decoded);
-        }
-    }
-    for (name, field) in dem_bindings {
-        tile_loader.bind_scalar_field(name, field);
-    }
-    for (name, buf) in raster_bindings {
-        tile_loader.bind_raster(name, buf);
-    }
-    // The documents were read when the snapshot was built; each tile only
-    // re-projects them into its own frame.
-    bind_geojson_sources(&mut tile_loader, geojson_sources, &graph.asset_inputs())?;
-    let ev = Evaluator::new(graph, cache, &tile_loader);
-    let out = ev
-        .render(
-            tile_id,
-            CanvasInfo::square(tile_size, pad),
-            params,
-            tile_seed(tile),
-        )
-        .map_err(|e| format!("render: {e}"))?;
-    let raster = match out {
-        PortValue::Raster(r) => r,
-        other => return Err(format!("expected Raster output, got {:?}", other.kind())),
-    };
-    match format {
-        TileFormat::Png => raster_to_png(&raster, tile_size, pad).map_err(|e| format!("png: {e}")),
-        TileFormat::Webp => {
-            raster_to_webp(&raster, tile_size, pad).map_err(|e| format!("webp: {e}"))
-        }
-    }
-}
-
-fn tile_seed(tile: CoreTileId) -> u64 {
-    let mut s = 0u64;
-    s = s
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        .wrapping_add(tile.z as u64);
-    s = s
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        .wrapping_add(tile.x as u64);
-    s = s
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        .wrapping_add(tile.y as u64);
-    s
+    source
+        .fetch(tile, s.sources.overzoom_levels)
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))
 }
