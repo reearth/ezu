@@ -3,7 +3,10 @@
 //! `*-optional` flags admit the half that fits, and an icon blocks other
 //! layers' labels the way its text does.
 
-use crate::common::render_with_features_and_sprite;
+use crate::common::{
+    assert_number_field_drivable, render_with_features_and_sprite,
+    render_with_features_sprite_and_params,
+};
 use ezu_features::{Feature, FeatureLayer, Geometry, Value};
 use ezu_graph::{RasterBuf, SpriteRect, SpriteSheet, TileId};
 use std::collections::HashMap;
@@ -391,4 +394,41 @@ fn a_fitted_icon_reserves_the_box_it_covers() {
         0,
         "the fitted icon's box must block the road label"
     );
+}
+
+#[test]
+fn icon_opacity_takes_a_param_or_a_node() {
+    // `icon-opacity` is resolved per render like the label's own `opacity`,
+    // so a param override or a zoom-driven node reaches the icon.
+    let template = format!(
+        r##"{{
+      "name": "icon-opacity",
+      "tile-size": {TILE},
+      "sources": {{
+        "src":   {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
+        "sheet": {{ "type": "sprite", "image": "builtin:atlas",
+                    "index": {{ "dot": {{ "x": 0, "y": 0, "width": 16, "height": 16 }} }} }}
+      }},
+      %PARAMS%
+      "nodes": {{
+        %NODES%
+        "feats": {{ "op": "features", "source": "src", "layer": "pois" }},
+        "out":   {{ "op": "text", "features": "@feats", "source": "src", "layer": "pois",
+                   {ICON}, "icon-opacity": %V% }}
+      }},
+      "output": "@out"
+    }}"##
+    );
+    assert_number_field_drivable(&template, 0.25, 0.75, &|json, tile, params| {
+        render_with_features_sprite_and_params(
+            json,
+            TILE,
+            PAD,
+            tile,
+            &[("src.pois", layer("pois", poi()))],
+            "atlas",
+            dot_sheet(),
+            params,
+        )
+    });
 }

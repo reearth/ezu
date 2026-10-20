@@ -384,7 +384,35 @@ pub fn render_with_features_and_sprite(
     sprite_key: &str,
     sheet: SpriteSheet,
 ) -> std::sync::Arc<ezu_graph::RasterBuf> {
+    render_with_features_sprite_and_params(
+        json,
+        tile_size,
+        pad,
+        tile,
+        features,
+        sprite_key,
+        sheet,
+        &[],
+    )
+}
+
+/// [`render_with_features_and_sprite`] with runtime parameter values.
+#[allow(dead_code, clippy::too_many_arguments)]
+pub fn render_with_features_sprite_and_params(
+    json: &str,
+    tile_size: u32,
+    pad: u32,
+    tile: TileId,
+    features: &[(&str, ezu_features::FeatureLayer)],
+    sprite_key: &str,
+    sheet: SpriteSheet,
+    params: &[(&str, ezu_graph::ScalarValue)],
+) -> std::sync::Arc<ezu_graph::RasterBuf> {
     use ezu_paint::host::TileLoader;
+    let mut pv = ParamValues::new();
+    for (name, value) in params {
+        pv.set(name.to_string(), *value);
+    }
     let doc = Document::from_json(json).expect("parse");
     let registry = default_registry();
     let graph = build_graph(&doc, &registry).expect("build");
@@ -397,12 +425,7 @@ pub fn render_with_features_and_sprite(
     }
     let ev = Evaluator::new(&graph, &cache, &loader);
     let out = ev
-        .render(
-            tile,
-            CanvasInfo::square(tile_size, pad),
-            &ParamValues::new(),
-            0,
-        )
+        .render(tile, CanvasInfo::square(tile_size, pad), &pv, 0)
         .expect("render");
     match out {
         PortValue::Raster(r) => r,
@@ -518,4 +541,83 @@ pub fn disk_sprite(w: u32, h: u32, radius: f32, rgba_premul: [u8; 4]) -> RasterB
         height: h,
         pixels,
     }
+}
+
+/// Renders a document at a tile with runtime param values — the shape
+/// [`assert_number_field_drivable`] calls back into.
+#[allow(dead_code)]
+pub type ParamRender<'a> = &'a dyn Fn(
+    &str,
+    TileId,
+    &[(&str, ezu_graph::ScalarValue)],
+) -> std::sync::Arc<ezu_graph::RasterBuf>;
+
+/// Check that a numeric field takes a `$param` and an `@node` exactly as it
+/// takes a literal.
+///
+/// `template` is a whole document with three markers: `%V%` where the
+/// field's value goes, `%PARAMS%` just before `"nodes"`, and `%NODES%` at
+/// the start of the `nodes` object. `a` and `b` are two literal values that
+/// must render differently. The check renders:
+///
+/// - `$v` declared with default `a`, against the literal `a`;
+/// - `$v` overridden to `b` at render time, against the literal `b` — a
+///   param read once at build time would stay at `a`;
+/// - `@node` from a `math` chain on `zoom` that yields `b` at z2, against
+///   the literal `b` rendered at z2.
+#[allow(dead_code)]
+pub fn assert_number_field_drivable(template: &str, a: f64, b: f64, render: ParamRender<'_>) {
+    use ezu_graph::ScalarValue;
+    let z0 = TileId { z: 0, x: 0, y: 0 };
+    let z2 = TileId { z: 2, x: 0, y: 0 };
+    let doc = |v: &str, params: &str, nodes: &str| {
+        template
+            .replace("%V%", v)
+            .replace("%PARAMS%", params)
+            .replace("%NODES%", nodes)
+    };
+    let literal = |v: f64| doc(&format!("{v:?}"), "", "");
+    let lit_a = render(&literal(a), z0, &[]);
+    let lit_b = render(&literal(b), z0, &[]);
+    assert_ne!(
+        lit_a.pixels, lit_b.pixels,
+        "literals {a} and {b} render the same, so the check proves nothing"
+    );
+
+    let params = format!(r#""params": {{ "v": {{ "type": "number", "default": {a:?} }} }},"#);
+    let by_param = doc(r#""$v""#, &params, "");
+    assert!(
+        render(&by_param, z0, &[]).pixels == lit_a.pixels,
+        "`$v` at its default {a} differs from the literal"
+    );
+    assert!(
+        render(&by_param, z0, &[("v", ScalarValue::Number(b))]).pixels == lit_b.pixels,
+        "`$v` overridden to {b} differs from the literal"
+    );
+
+    // zoom 2 × (b / 2) = b, exactly: halving and doubling are exact in binary.
+    let nodes = format!(
+        r#""drv_z": {{ "op": "zoom" }},
+           "drv": {{ "op": "math", "fn": "mul", "a": "@drv_z", "b": {:?} }},"#,
+        b / 2.0
+    );
+    let by_node = doc(r#""@drv""#, "", &nodes);
+    assert!(
+        render(&by_node, z2, &[]).pixels == render(&literal(b), z2, &[]).pixels,
+        "`@node` yielding {b} differs from the literal"
+    );
+}
+
+/// [`assert_number_field_drivable`] for a document that needs no assets.
+#[allow(dead_code)]
+pub fn assert_number_field_drivable_plain(
+    template: &str,
+    tile_size: u32,
+    pad: u32,
+    a: f64,
+    b: f64,
+) {
+    assert_number_field_drivable(template, a, b, &|json, tile, params| {
+        render_with_params(json, tile_size, pad, tile, params)
+    });
 }

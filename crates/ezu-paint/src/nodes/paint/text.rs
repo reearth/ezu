@@ -819,7 +819,9 @@ struct IconConfig {
     rotate_deg: f32,
     rotate_expr: Option<maplibre_expr::Expr>,
     rotate_expr_src: Option<String>,
-    opacity: f32,
+    /// MapLibre `icon-opacity`. Resolved once per eval like the text's own
+    /// `opacity`, so a `$param` or `@node` can drive it.
+    opacity: In<f64>,
     opacity_expr: Option<maplibre_expr::Expr>,
     opacity_expr_src: Option<String>,
     /// MapLibre `icon-anchor`: which part of the image sits on the point.
@@ -962,7 +964,12 @@ struct GroupIcon {
 impl IconConfig {
     /// Resolve this config for one feature group, or `None` when the group
     /// names no icon (empty / non-string result, or a zero size).
-    fn eval_group(&self, ectx: &maplibre_expr::EvaluationContext) -> Option<GroupIcon> {
+    /// `const_opacity` is `icon-opacity` resolved for this eval.
+    fn eval_group(
+        &self,
+        ectx: &maplibre_expr::EvaluationContext,
+        const_opacity: f32,
+    ) -> Option<GroupIcon> {
         let name = match &self.name_expr {
             Some(e) => match maplibre_expr::evaluate(e, ectx) {
                 Ok(maplibre_expr::Value::String(s)) => s,
@@ -981,7 +988,7 @@ impl IconConfig {
             name,
             size,
             rotate_deg: eval_number(&self.rotate_expr, ectx, self.rotate_deg),
-            opacity: eval_number(&self.opacity_expr, ectx, self.opacity).clamp(0.0, 1.0),
+            opacity: eval_number(&self.opacity_expr, ectx, const_opacity).clamp(0.0, 1.0),
             padding: eval_number(&self.padding_expr, ectx, self.padding_px).max(0.0),
         })
     }
@@ -1330,6 +1337,19 @@ impl TextNode {
         }
     }
 
+    /// `icon-opacity` for this eval, before any per-group expression
+    /// overrides it. 1 when the node draws no icon.
+    fn icon_opacity(
+        &self,
+        ctx: &EvalCtx<'_>,
+        inputs: &[Option<PortValue>],
+    ) -> Result<f32, EvalError> {
+        match &self.icon {
+            Some(cfg) => Ok(cfg.opacity.get(ctx, inputs)? as f32),
+            None => Ok(1.0),
+        }
+    }
+
     /// Evaluate a feature group once into a [`GroupPrep`] — its label sections
     /// and per-group paint/layout scalars, ready to shape — or `None` if it
     /// produces no label. `cap` matches [`Self::label_reach`]. Evaluating here
@@ -1349,6 +1369,7 @@ impl TextNode {
         const_halo_color: [f32; 4],
         const_halo_width: f32,
         const_opacity: f32,
+        const_icon_opacity: f32,
         cap: bool,
     ) -> Option<GroupPrep<'g>> {
         let ectx = crate::render::group_expr_context(group, z);
@@ -1358,7 +1379,10 @@ impl TextNode {
         // A group with no icon and nothing to say produces no symbol at all;
         // with an icon it still places, text or not (MapLibre's icon-only
         // symbol).
-        let icon = self.icon.as_ref().and_then(|c| c.eval_group(&ectx));
+        let icon = self
+            .icon
+            .as_ref()
+            .and_then(|c| c.eval_group(&ectx, const_icon_opacity));
         let mut sections = match size > 0.0 {
             true => self
                 .eval_sections(&ectx, registry, base_font_id)
@@ -1615,6 +1639,7 @@ impl TextNode {
         let const_halo_color = self.halo_color.get(ctx, inputs)?;
         let const_halo_width = (self.halo_width.get(ctx, inputs)? as f32).max(0.0);
         let const_opacity = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
+        let const_icon_opacity = self.icon_opacity(ctx, inputs)?;
 
         let tile_w = ctx.canvas.tile_w as f32;
         let tile_h = ctx.canvas.tile_h as f32;
@@ -1662,6 +1687,7 @@ impl TextNode {
                 const_halo_color,
                 const_halo_width,
                 const_opacity,
+                const_icon_opacity,
                 false,
             ) {
                 reach_max = reach_max.max(prep.reach);
@@ -1688,6 +1714,7 @@ impl TextNode {
                     const_halo_color,
                     const_halo_width,
                     const_opacity,
+                    const_icon_opacity,
                     false,
                 ) {
                     reach_max = reach_max.max(prep.reach);
@@ -2021,6 +2048,7 @@ impl TextNode {
         let const_halo_color = self.halo_color.get(ctx, inputs)?;
         let const_halo_width = (self.halo_width.get(ctx, inputs)? as f32).max(0.0);
         let const_opacity = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
+        let const_icon_opacity = self.icon_opacity(ctx, inputs)?;
         // The background box's colour and radius; the group opacity is folded
         // in per symbol below. A box without `background-color` is fully
         // transparent: it positions and collides but paints nothing.
@@ -2091,6 +2119,7 @@ impl TextNode {
                 const_halo_color,
                 const_halo_width,
                 const_opacity,
+                const_icon_opacity,
                 true,
             ) {
                 reach_max = reach_max.max(prep.reach);
@@ -2118,6 +2147,7 @@ impl TextNode {
                     const_halo_color,
                     const_halo_width,
                     const_opacity,
+                    const_icon_opacity,
                     true,
                 ) {
                     reach_max = reach_max.max(prep.reach);
@@ -2746,10 +2776,17 @@ impl Node for TextNode {
                     h.update(s.as_bytes());
                 }
             }
+            // A literal opacity hashes as the plain number it used to be, so
+            // existing styles keep their cache keys; a `$param` / `@node`
+            // one folds its own identity in below.
+            let opacity_literal = match &cfg.opacity {
+                In::Const(v) => *v as f32,
+                _ => 0.0,
+            };
             for v in [
                 cfg.size,
                 cfg.rotate_deg,
-                cfg.opacity,
+                opacity_literal,
                 cfg.offset[0],
                 cfg.offset[1],
                 cfg.padding_px,
@@ -2767,6 +2804,10 @@ impl Node for TextNode {
                 cfg.optional as u8,
                 cfg.text_fit as u8,
             ]);
+            if !matches!(cfg.opacity, In::Const(_)) {
+                h.update(b"iconopacity");
+                cfg.opacity.param_hash(h);
+            }
         }
         // Strikethrough — folded only when set, so existing recipes keep
         // their hashes.
@@ -2884,6 +2925,7 @@ fn read_box_padding(
 fn build_icon_config(
     fields: &serde_json::Map<String, Value>,
     ctx: &FactoryCtx<'_>,
+    r: &mut InReader<'_, '_>,
 ) -> Result<Option<IconConfig>, FactoryError> {
     let name = read_optional_string(fields, "icon-name")?;
     let (name_expr, name_expr_src) = match fields.get("icon-name-expr") {
@@ -2943,7 +2985,7 @@ fn build_icon_config(
         rotate_deg: read_number_or(fields, "icon-rotate-deg", ctx, 0.0)? as f32,
         rotate_expr,
         rotate_expr_src,
-        opacity: read_number_or(fields, "icon-opacity", ctx, 1.0)? as f32,
+        opacity: r.number_or("icon-opacity", 1.0)?,
         opacity_expr,
         opacity_expr_src,
         anchor,
@@ -2971,7 +3013,8 @@ fn build_text_node(
 
     // MapLibre's `icon-image` half. A symbol may be icon-only, so its
     // presence makes `font` / `text` optional.
-    let icon = build_icon_config(fields, ctx)?;
+    let mut r = InReader::new(fields, ctx, 1);
+    let icon = build_icon_config(fields, ctx, &mut r)?;
 
     // `font`: an ordered array of `font` / `glyphs` source names —
     // the fallback stack. Each resolves to its source's asset key
@@ -3103,7 +3146,6 @@ fn build_text_node(
         }
     };
 
-    let mut r = InReader::new(fields, ctx, 1);
     let size = r.number_or("size", 16.0)?;
     let color = r.color_or("color", [0.0, 0.0, 0.0, 1.0])?;
     let halo_color = r.color_or("halo-color", [1.0, 1.0, 1.0, 1.0])?;

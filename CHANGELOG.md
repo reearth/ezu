@@ -237,6 +237,9 @@ mean is spelled out in
   copy. It is now taken from what placement treats as the same label (its
   layer, text, style and anchor), so it matches across tiles as documented.
   Ids differ from 0.12.0's.
+- `icon-opacity` on `text` and `text-labels` takes a `$param` or an `@node`
+  as its schema always said. A `@node` was rejected at build time and a
+  `$param` stayed at its declared default whatever the render passed.
 
 ## 0.12.0 — 2026-10-12
 
