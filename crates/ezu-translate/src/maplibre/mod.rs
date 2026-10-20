@@ -331,8 +331,10 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
         }
         // MapLibre shows a layer for `minzoom <= z < maxzoom`. ezu recipes
         // are zoom-independent, so rather than dropping the layer at a baked
-        // zoom we thread the range onto the `features` node as a render-time
-        // gate (`min-zoom`/`max-zoom`), computed once per layer. Note the
+        // zoom we thread the range onto the node the layer reads from as a
+        // render-time gate (`min-zoom`/`max-zoom` on `features`, `raster`
+        // or `dem`; a zoom `switch` for a background), computed once per
+        // layer. Note the
         // bounds are not the same numbers — see `layer_zoom_range`.
         let Some(zoom_range) = layer_zoom_range(layer) else {
             report.warn(format!(
@@ -344,7 +346,7 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
         let ty = layer.get("type").and_then(Value::as_str).unwrap_or("");
         let out_start = outputs.len();
         match ty {
-            "background" => convert_background(id, layer, &mut nodes, &mut outputs),
+            "background" => convert_background(id, layer, &mut nodes, &mut outputs, zoom_range),
             "fill" => convert_fill(
                 id,
                 layer,
@@ -363,7 +365,9 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
                 &sources,
                 &mut report,
             ),
-            "raster" => convert_raster(id, layer, &mut nodes, &mut outputs, &mut report),
+            "raster" => {
+                convert_raster(id, layer, &mut nodes, &mut outputs, zoom_range, &mut report)
+            }
             "circle" => convert_circle(
                 id,
                 layer,
@@ -384,7 +388,9 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
                     &mut report,
                 ));
             }
-            "hillshade" => convert_hillshade(id, layer, &mut nodes, &mut outputs, &mut report),
+            "hillshade" => {
+                convert_hillshade(id, layer, &mut nodes, &mut outputs, zoom_range, &mut report)
+            }
             "fill-extrusion" => convert_fill_extrusion(
                 id,
                 layer,

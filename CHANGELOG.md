@@ -284,6 +284,11 @@ mean is spelled out in
   a `$param` set at render time, as its schema said; it used to reject the
   one and keep the other at its default. It may now be left out when both
   `spacing-x` and `spacing-y` are given.
+- `ezu translate` dropped the `minzoom` / `maxzoom` of `background`,
+  `raster` and `hillshade` layers, so they drew at every zoom. They now
+  carry over as they do for feature layers: as `min-zoom` / `max-zoom` on
+  the `raster` and `dem` nodes, and for a background as a `switch` that
+  picks a transparent fill outside the band.
 - `ezu translate` recognised a `custom` `raster-dem` encoding as Terrain-RGB
   or Terrarium only when its `baseShift` was negated (`-10000`, `-32768`).
   MapLibre subtracts `baseShift`, so its own factors for those encodings

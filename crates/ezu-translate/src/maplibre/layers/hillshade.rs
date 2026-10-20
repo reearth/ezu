@@ -3,8 +3,8 @@
 use serde_json::{Map, Value};
 
 use crate::maplibre::const_number;
-use crate::maplibre::layers::paint_of;
-use crate::maplibre::Report;
+use crate::maplibre::layers::{paint_of, with_zoom_range};
+use crate::maplibre::{Report, ZoomRange};
 
 /// A `hillshade` layer over a `raster-dem` source → an ezu `dem` node
 /// feeding a `hillshade` node. ezu already has the whole terrain stack
@@ -15,6 +15,7 @@ pub(crate) fn convert_hillshade(
     layer: &Map<String, Value>,
     nodes: &mut Map<String, Value>,
     outputs: &mut Vec<String>,
+    zoom_range: ZoomRange,
     report: &mut Report,
 ) {
     let Some(src) = layer.get("source").and_then(Value::as_str) else {
@@ -36,9 +37,14 @@ pub(crate) fn convert_hillshade(
 
     let dem_id = format!("{id}__dem");
     let hs_id = format!("{id}__hillshade");
+    // Outside the band the `dem` node reads a zero field, which `relief`
+    // turns into a fully transparent layer.
     nodes.insert(
         dem_id.clone(),
-        serde_json::json!({ "op": "dem", "source": src }),
+        with_zoom_range(
+            serde_json::json!({ "op": "dem", "source": src }),
+            zoom_range,
+        ),
     );
     nodes.insert(
         hs_id.clone(),

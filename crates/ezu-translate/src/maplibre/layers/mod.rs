@@ -22,6 +22,18 @@ pub(crate) use line::convert_line;
 pub(crate) use raster::convert_raster;
 pub(crate) use symbol::{convert_symbol, emit_label_placement};
 
+/// Put a layer's zoom band on a node that gates on `min-zoom`/`max-zoom`
+/// itself (`raster`, `dem`), leaving out a bound the layer does not set.
+pub(crate) fn with_zoom_range(mut node: Value, (min, max): crate::maplibre::ZoomRange) -> Value {
+    if let Some(z) = min {
+        node["min-zoom"] = Value::from(z);
+    }
+    if let Some(z) = max {
+        node["max-zoom"] = Value::from(z);
+    }
+    node
+}
+
 pub(crate) fn paint_of(layer: &Map<String, Value>) -> &Map<String, Value> {
     static EMPTY: std::sync::OnceLock<Map<String, Value>> = std::sync::OnceLock::new();
     layer
