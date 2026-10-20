@@ -2,8 +2,9 @@
 
 use serde_json::{Map, Value};
 
-use crate::maplibre::const_number;
+use crate::maplibre::color::parse_color;
 use crate::maplibre::layers::{paint_of, with_zoom_range};
+use crate::maplibre::{const_color, const_number};
 use crate::maplibre::{Report, ZoomRange};
 
 /// A `hillshade` layer over a `raster-dem` source → an ezu `dem` node
@@ -35,6 +36,28 @@ pub(crate) fn convert_hillshade(
         .and_then(const_number)
         .unwrap_or(0.5);
 
+    // Shadow and highlight map onto `relief`'s own colours. They are plain
+    // ports, so only a literal colour carries over. Left unset, the node
+    // keeps its defaults (black shadow, no highlight) rather than
+    // MapLibre's white highlight, so a style that does not name them
+    // renders as it always has.
+    let mut colours = Vec::new();
+    for (prop, field) in [
+        ("hillshade-shadow-color", "shadow-color"),
+        ("hillshade-highlight-color", "highlight-color"),
+    ] {
+        let Some(v) = paint.get(prop) else {
+            continue;
+        };
+        match const_color(v).and_then(|s| parse_color(&s)) {
+            Some((hex, alpha)) => colours.push((field, with_alpha(&hex, alpha))),
+            None => report.warn(format!(
+                "layer `{id}`: `{prop}` carries over only as a constant colour — \
+                 left at the hillshade node's default"
+            )),
+        }
+    }
+
     let dem_id = format!("{id}__dem");
     let hs_id = format!("{id}__hillshade");
     // Outside the band the `dem` node reads a zero field, which `relief`
@@ -46,9 +69,7 @@ pub(crate) fn convert_hillshade(
             zoom_range,
         ),
     );
-    nodes.insert(
-        hs_id.clone(),
-        serde_json::json!({
+    let mut hillshade = serde_json::json!({
             "op": "hillshade",
             "field": format!("@{dem_id}"),
             "azimuth-deg": azimuth,
@@ -58,7 +79,20 @@ pub(crate) fn convert_hillshade(
             // matching MapLibre's hillshade look over a light background
             // (vs `shade`, which greys flat ground too).
             "mode": "relief"
-        }),
-    );
+    });
+    for (field, colour) in colours {
+        hillshade[field] = Value::from(colour);
+    }
+    nodes.insert(hs_id.clone(), hillshade);
     outputs.push(hs_id);
+}
+
+/// `#rrggbb` with `alpha` folded in as `#rrggbbaa`, or left as it is when
+/// opaque.
+fn with_alpha(hex: &str, alpha: f32) -> String {
+    if alpha >= 1.0 {
+        return hex.to_string();
+    }
+    let a = (alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
+    format!("{hex}{a:02x}")
 }

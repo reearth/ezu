@@ -294,6 +294,10 @@ mean is spelled out in
   instead of upsampling; it also dropped a `raster-dem` source's
   `minzoom`. They now carry over as `min-zoom` / `max-zoom`, as they do
   for `vector` sources.
+- `ezu translate` ignored `hillshade-shadow-color` and
+  `hillshade-highlight-color`. A constant colour now becomes the
+  `hillshade` node's `shadow-color` / `highlight-color`; an expression
+  warns and leaves the node's default.
 - `ezu translate` recognised a `custom` `raster-dem` encoding as Terrain-RGB
   or Terrarium only when its `baseShift` was negated (`-10000`, `-32768`).
   MapLibre subtracts `baseShift`, so its own factors for those encodings

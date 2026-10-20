@@ -57,3 +57,46 @@ fn hillshade_layer_lowers_to_dem_and_hillshade_nodes() {
     let text = serde_json::to_string(&recipe).unwrap();
     ezu_style::Document::from_json(&text).expect("recipe parses as ezu Document");
 }
+
+fn hillshade_with_paint(paint: serde_json::Value) -> (serde_json::Value, Vec<String>) {
+    let mut style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    style["layers"][1]["paint"] = paint;
+    let (recipe, report) = convert(&style, &ConvertOptions::default()).expect("convert");
+    let text = serde_json::to_string(&recipe).unwrap();
+    let doc = ezu_style::Document::from_json(&text).expect("recipe parses as ezu Document");
+    ezu_graph::build_graph(&doc, &ezu_paint::nodes::default_registry()).expect("builds");
+    let hs = recipe["nodes"]["hills__hillshade"].clone();
+    (hs, report.warnings)
+}
+
+#[test]
+fn shadow_and_highlight_colours_carry_over() {
+    let (hs, warnings) = hillshade_with_paint(serde_json::json!({
+        "hillshade-shadow-color": "rgba(10, 20, 30, 0.5)",
+        "hillshade-highlight-color": "white"
+    }));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(hs["shadow-color"], "#0a141e80");
+    assert_eq!(hs["highlight-color"], "#ffffff");
+}
+
+#[test]
+fn unset_colours_keep_the_node_defaults() {
+    let (hs, _) = hillshade_with_paint(serde_json::json!({}));
+    assert!(hs.get("shadow-color").is_none());
+    assert!(hs.get("highlight-color").is_none());
+}
+
+#[test]
+fn a_colour_expression_warns_and_keeps_the_default() {
+    let (hs, warnings) = hillshade_with_paint(serde_json::json!({
+        "hillshade-shadow-color": ["interpolate", ["linear"], ["zoom"], 5, "#000000", 10, "#333333"]
+    }));
+    assert!(hs.get("shadow-color").is_none());
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("hillshade-shadow-color")),
+        "{warnings:?}"
+    );
+}
