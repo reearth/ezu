@@ -37,7 +37,18 @@ pub(crate) fn convert_line(
     // `line-pattern` replaces the solid stroke: repeat the named sprite icon
     // along each line, scaled to the stroke width (`line-stamp`).
     if let Some(pattern) = paint.get("line-pattern") {
-        let (opacity, _) = resolve_number(paint.get("line-opacity"));
+        if paint.get("line-gap-width").is_some() {
+            report.warn(format!(
+                "layer `{id}`: `line-gap-width` is not supported with `line-pattern` — the pattern is drawn along the centreline"
+            ));
+        }
+        let (opacity, opacity_expr) = resolve_number(paint.get("line-opacity"));
+        let paint = PatternPaint {
+            width,
+            width_expr,
+            opacity,
+            opacity_expr,
+        };
         convert_line_pattern(
             id,
             pattern,
@@ -45,8 +56,7 @@ pub(crate) fn convert_line(
             &source_layer,
             base_filter_expr,
             zoom_range,
-            width,
-            opacity,
+            paint,
             sources,
             nodes,
             outputs,
@@ -161,8 +171,20 @@ fn line_features(
     lines_id
 }
 
+/// The paint a `line-pattern` layer carries over to `line-stamp`: the
+/// constant width (the fallback the node needs), and each of `line-width` /
+/// `line-opacity` as a constant or a raw expression.
+pub(crate) struct PatternPaint {
+    pub(crate) width: f64,
+    pub(crate) width_expr: Option<Value>,
+    pub(crate) opacity: Option<f64>,
+    pub(crate) opacity_expr: Option<Value>,
+}
+
 /// `line-pattern` → repeat the named sprite icon along each line, fit to the
-/// stroke width: `features` → `icon` → `line-stamp`.
+/// stroke width: `features` → `icon` → `line-stamp`. A data-driven pattern
+/// names each feature's icon instead, through `line-stamp`'s `name-expr` over
+/// the style's sprite sheet.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn convert_line_pattern(
     id: &str,
@@ -171,24 +193,37 @@ pub(crate) fn convert_line_pattern(
     source_layer: &str,
     base_filter_expr: Option<Value>,
     zoom_range: ZoomRange,
-    width: f64,
-    opacity: Option<f64>,
+    paint: PatternPaint,
     sources: &Sources,
     nodes: &mut Map<String, Value>,
     outputs: &mut Vec<String>,
     report: &mut Report,
 ) {
-    let Some(name) = pattern.as_str() else {
-        report.warn(format!(
-            "layer `{id}`: data-driven `line-pattern` not supported — skipped"
-        ));
-        return;
+    // A constant pattern crops its icon up front (`icon` node → `image`); a
+    // data-driven one crops each feature's icon at eval time.
+    let constant = match pattern.as_str() {
+        Some(name) => {
+            let Some(icon) = sources.resolve_icon(name) else {
+                report.warn(format!(
+                    "layer `{id}`: line-pattern `{name}` needs a `sprite`, but the style declares none — skipped"
+                ));
+                return;
+            };
+            Some(icon)
+        }
+        None => None,
     };
-    let Some((sprite_src, icon_name)) = sources.resolve_icon(name) else {
-        report.warn(format!(
-            "layer `{id}`: line-pattern `{name}` needs a `sprite`, but the style declares none — skipped"
-        ));
-        return;
+    let sprite_src = match constant {
+        Some((sprite_src, _)) => sprite_src,
+        None => {
+            let Some(sprite_src) = sources.default_sprite() else {
+                report.warn(format!(
+                    "layer `{id}`: data-driven `line-pattern` needs a `sprite`, but the style declares none — skipped"
+                ));
+                return;
+            };
+            sprite_src
+        }
     };
     let lines_id = line_features(
         id,
@@ -198,18 +233,33 @@ pub(crate) fn convert_line_pattern(
         zoom_range,
         nodes,
     );
-    let icon_id = format!("{id}__icon");
-    nodes.insert(
-        icon_id.clone(),
-        serde_json::json!({ "op": "icon", "sprite": format!("@{sprite_src}"), "name": icon_name }),
-    );
     let out_id = format!("{id}__linepat");
     let mut spec = serde_json::json!({
         "op": "line-stamp", "features": format!("@{lines_id}"),
-        "image": format!("@{icon_id}"), "width-px": width
     });
-    if let Some(a) = opacity {
+    match constant {
+        Some((_, icon_name)) => {
+            let icon_id = format!("{id}__icon");
+            nodes.insert(
+                icon_id.clone(),
+                serde_json::json!({ "op": "icon", "sprite": format!("@{sprite_src}"), "name": icon_name }),
+            );
+            spec["image"] = Value::from(format!("@{icon_id}"));
+        }
+        None => {
+            spec["sprite"] = Value::from(format!("@{sprite_src}"));
+            spec["name-expr"] = pattern.clone();
+        }
+    }
+    spec["width-px"] = Value::from(paint.width);
+    if let Some(expr) = paint.width_expr {
+        spec["width-expr"] = expr;
+    }
+    if let Some(a) = paint.opacity {
         spec["opacity"] = Value::from(a);
+    }
+    if let Some(expr) = paint.opacity_expr {
+        spec["opacity-expr"] = expr;
     }
     nodes.insert(out_id.clone(), spec);
     outputs.push(out_id);

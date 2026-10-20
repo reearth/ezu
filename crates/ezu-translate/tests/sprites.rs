@@ -231,3 +231,106 @@ fn inline_sprite_index_parses() {
     let text = serde_json::to_string(&recipe).unwrap();
     ezu_style::Document::from_json(&text).expect("inline sprite index parses as ezu Document");
 }
+
+#[test]
+fn line_pattern_carries_width_and_opacity_expressions() {
+    // A zoom curve on `line-width` and an expression `line-opacity` reach the
+    // `line-stamp` as `width-expr` / `opacity-expr`; they used to become a
+    // 1 px width and full opacity without a word.
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "pattern-exprs",
+      "sprite": "https://example.com/sprites/basemap",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "rail", "type": "line", "source": "s", "source-layer": "roads",
+          "paint": {
+            "line-pattern": "rail-8",
+            "line-width": ["interpolate", ["linear"], ["zoom"], 10, 2, 16, 8],
+            "line-opacity": ["match", ["get", "kind"], "disused", 0.4, 1]
+          } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let (recipe, report) = convert(&style, &ConvertOptions::default()).unwrap();
+    let nodes = recipe["nodes"].as_object().unwrap();
+    let stamp = nodes
+        .values()
+        .find(|n| n["op"] == "line-stamp")
+        .expect("a line-stamp node");
+    assert_eq!(
+        stamp["width-expr"],
+        style["layers"][0]["paint"]["line-width"]
+    );
+    assert_eq!(
+        stamp["opacity-expr"],
+        style["layers"][0]["paint"]["line-opacity"]
+    );
+    assert!(stamp["image"].as_str().unwrap().contains("__icon"));
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+
+    let text = serde_json::to_string(&recipe).unwrap();
+    ezu_style::Document::from_json(&text).expect("recipe parses as ezu Document");
+}
+
+#[test]
+fn data_driven_line_pattern_names_each_features_icon() {
+    // A data-driven `line-pattern` becomes the `line-stamp`'s `name-expr`
+    // over the style's sprite sheet, instead of skipping the layer.
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "pattern-dd",
+      "sprite": "https://example.com/sprites/basemap",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "rail", "type": "line", "source": "s", "source-layer": "roads",
+          "paint": {
+            "line-pattern": ["match", ["get", "kind"], "tram", "tram-8", "rail-8"],
+            "line-width": 4
+          } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let (recipe, report) = convert(&style, &ConvertOptions::default()).unwrap();
+    let nodes = recipe["nodes"].as_object().unwrap();
+    let stamp = nodes
+        .values()
+        .find(|n| n["op"] == "line-stamp")
+        .expect("a line-stamp node");
+    assert_eq!(stamp["sprite"], "@default");
+    assert_eq!(
+        stamp["name-expr"],
+        style["layers"][0]["paint"]["line-pattern"]
+    );
+    assert_eq!(stamp["width-px"], 4.0);
+    assert!(stamp.get("image").is_none());
+    assert!(nodes.values().all(|n| n["op"] != "icon"));
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+
+    let text = serde_json::to_string(&recipe).unwrap();
+    ezu_style::Document::from_json(&text).expect("recipe parses as ezu Document");
+}
+
+#[test]
+fn line_pattern_warns_about_a_gap_width() {
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "pattern-gap",
+      "sprite": "https://example.com/sprites/basemap",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "rail", "type": "line", "source": "s", "source-layer": "roads",
+          "paint": { "line-pattern": "rail-8", "line-width": 4, "line-gap-width": 2 } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let (_, report) = convert(&style, &ConvertOptions::default()).unwrap();
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("line-gap-width") && w.contains("line-pattern")),
+        "{:?}",
+        report.warnings
+    );
+}

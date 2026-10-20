@@ -318,6 +318,12 @@ mean is spelled out in
 - The schema lists `$param` and `@node` for `gap-width-px` on `stroke`, which
   has always accepted them; editors that validate against the schema
   flagged them as errors.
+- `ezu translate` turned an expression `line-width` on a `line-pattern`
+  layer (usually a zoom curve) into a 1 px width and dropped an expression
+  `line-opacity`, both without a warning, and skipped a data-driven
+  `line-pattern`. They now become the `line-stamp`'s `width-expr`,
+  `opacity-expr` and `name-expr`. A `line-gap-width` on such a layer, which
+  is not drawn, now warns.
 
 ## 0.12.0 — 2026-10-12
 
