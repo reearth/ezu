@@ -351,6 +351,9 @@ mean is spelled out in
   `stamp`'s `anchor` (or `anchor-expr`) and `offset`; an expression
   `icon-offset` warns. The warning for an expression `icon-offset` on a
   point-placed icon named `text-offset`, and now names `icon-offset`.
+- `ezu translate` dropped an expression `fill-outline-color` without a
+  warning. It now becomes the `fill-solid`'s `edge-expr`, with the 1 px
+  outline a constant one gets, and a value it cannot read warns.
 
 ## 0.12.0 — 2026-10-12
 

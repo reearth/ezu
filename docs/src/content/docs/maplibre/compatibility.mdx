@@ -29,7 +29,7 @@ Two structural facts first:
 | MapLibre | ezu |
 | --- | --- |
 | `background` | `solid` |
-| `fill` (solid colour, `fill-outline-color`) | `features` + `fill-solid` (outline → `edge`) |
+| `fill` (solid colour, `fill-outline-color`) | `features` + `fill-solid` (outline → `edge`, or `edge-expr` when data-driven) |
 | `line` (+ `line-dasharray`, `line-cap`/`join`, `line-gap-width`) | `features` → `boundary` (`clip-edges: drop`) → crisp `stroke`, dash in px. On a polygon source-layer the rings are stroked without the tile-buffer clip edges, as MapLibre does. A gap renders MapLibre's casing annulus — one stroke's footprint with the corridor knocked out — so joins, caps and dash phase behave like the GL shader |
 | `circle` (+ `circle-stroke-*`, `circle-blur`) | `circles`: a crisp disk at each point with its stroke ring, each property a constant or a per-feature `*-expr`. `circle-stroke-opacity` becomes `stroke-opacity`, and `circle-blur` the `blur` fade to the edge |
 | `raster` | `raster`. The source's `minzoom` / `maxzoom` carry over as `min-zoom` / `max-zoom`, as for `vector` and `raster-dem` sources |

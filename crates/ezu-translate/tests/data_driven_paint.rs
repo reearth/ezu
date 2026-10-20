@@ -251,3 +251,54 @@ fn zoom_functions_are_emitted_raw_not_baked() {
     let text = serde_json::to_string(&recipe).unwrap();
     ezu_style::Document::from_json(&text).expect("recipe parses as ezu Document");
 }
+
+#[test]
+fn data_driven_fill_outline_color_emits_edge_expr() {
+    // An expression `fill-outline-color` becomes `edge-expr` with the 1 px
+    // outline a constant one gets; it used to be dropped without a warning.
+    let outline = json!(["match", ["get", "class"], "park", "#336633", "#333333"]);
+    let style = style_with_layer(json!({
+        "id": "polys",
+        "type": "fill",
+        "source": "src",
+        "source-layer": "land",
+        "paint": { "fill-color": "#eeeeee", "fill-outline-color": outline }
+    }));
+    let (recipe, report) = convert(&style, &ConvertOptions::default()).expect("conversion");
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+
+    let nodes = recipe["nodes"].as_object().unwrap();
+    let fill = nodes
+        .values()
+        .find(|n| n["op"] == "fill-solid")
+        .expect("a fill-solid");
+    assert_eq!(fill["edge-expr"], outline);
+    assert_eq!(fill["edge-width"], 1.0);
+    assert!(fill.get("edge").is_none());
+
+    let text = serde_json::to_string(&recipe).unwrap();
+    ezu_style::Document::from_json(&text).expect("recipe parses as ezu Document");
+}
+
+#[test]
+fn an_unreadable_fill_outline_color_warns() {
+    let style = style_with_layer(json!({
+        "id": "polys",
+        "type": "fill",
+        "source": "src",
+        "source-layer": "land",
+        "paint": { "fill-color": "#eeeeee", "fill-outline-color": "not-a-colour" }
+    }));
+    let (recipe, report) = convert(&style, &ConvertOptions::default()).expect("conversion");
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.contains("fill-outline-color")),
+        "{:?}",
+        report.warnings
+    );
+    let nodes = recipe["nodes"].as_object().unwrap();
+    let fill = nodes.values().find(|n| n["op"] == "fill-solid").unwrap();
+    assert!(fill.get("edge").is_none() && fill.get("edge-expr").is_none());
+}

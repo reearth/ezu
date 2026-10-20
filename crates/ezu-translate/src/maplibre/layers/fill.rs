@@ -48,13 +48,14 @@ pub(crate) fn convert_fill(
     // `fill-opacity` → constant `fill-alpha` (literal) else a raw expression
     // emitted as `opacity-expr`, evaluated per tile.
     let (opacity, opacity_expr) = resolve_number(paint.get("fill-opacity"));
-    // `fill-outline-color` → a 1px outline (ezu `fill-solid` `edge`). Only a
-    // literal colour is supported; an expression outline is dropped.
-    let outline: Option<String> = paint
-        .get("fill-outline-color")
-        .and_then(const_color)
-        .and_then(|v| parse_color(&v))
-        .map(|(hex, _)| hex);
+    // `fill-outline-color` → a 1px outline: ezu `fill-solid` `edge` for a
+    // literal colour, `edge-expr` for an expression.
+    let (outline, outline_expr) = resolve_paint_color(paint.get("fill-outline-color"));
+    if paint.get("fill-outline-color").is_some() && outline.is_none() && outline_expr.is_none() {
+        report.warn(format!(
+            "layer `{id}`: fill-outline-color is unsupported — drawn without an outline"
+        ));
+    }
 
     // Resolve `fill-color` into either a constant hex (literal) or a raw
     // expression emitted as `fill-expr`.
@@ -87,6 +88,10 @@ pub(crate) fn convert_fill(
     }
     if let Some(edge) = &outline {
         spec["edge"] = Value::from(edge.clone());
+        spec["edge-width"] = Value::from(1.0);
+    }
+    if let Some(expr) = outline_expr {
+        spec["edge-expr"] = expr;
         spec["edge-width"] = Value::from(1.0);
     }
     nodes.insert(fill_id.clone(), spec);
