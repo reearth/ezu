@@ -550,6 +550,8 @@ impl FeatureSources {
 pub struct PyramidSource {
     pub name: Arc<str>,
     tiles: TileSource,
+    /// The declared `min-zoom`: below it nothing is fetched.
+    min_zoom: Option<u8>,
     /// The declared `max-zoom`. Unlike a vector source's, it is not
     /// widened by what a TileJSON or PMTiles header claims.
     max_zoom: Option<u8>,
@@ -559,6 +561,13 @@ pub struct PyramidSource {
 }
 
 impl PyramidSource {
+    /// Whether the source has tiles at zoom `z`: false below its
+    /// `min-zoom`, where nothing is fetched and a missing tile is no
+    /// error.
+    pub fn serves(&self, z: u8) -> bool {
+        self.min_zoom.is_none_or(|mz| z >= mz)
+    }
+
     /// Upstream attribution captured when the source was opened.
     pub fn attribution(&self) -> Option<&str> {
         self.tiles.attribution()
@@ -569,13 +578,18 @@ impl PyramidSource {
     /// upsample` the nearest ancestor that exists. `None` when there is
     /// none, which `on-missing` says what to make of.
     pub async fn fetch(&self, tile: TileId) -> Result<Option<(Bytes, TileId)>, SourceError> {
+        if !self.serves(tile.z) {
+            return Ok(None);
+        }
         let mut z = self.max_zoom.map_or(tile.z, |mz| tile.z.min(mz));
+        // Upsampling stops at the floor: the source has nothing above it.
+        let floor = self.min_zoom.unwrap_or(0);
         loop {
             let at = tile.ancestor_at(z).unwrap_or(tile);
             if let Some(bytes) = self.tiles.fetch(at).await? {
                 return Ok(Some((bytes, at)));
             }
-            if self.on_missing == ezu::style::OnMissing::Upsample && z > 0 {
+            if self.on_missing == ezu::style::OnMissing::Upsample && z > floor {
                 z -= 1;
             } else {
                 return Ok(None);
@@ -604,9 +618,9 @@ impl PyramidSources {
         use ezu::style::SourceDecl;
         let mut out = Vec::new();
         for (name, decl) in &doc.sources {
-            let (url, max_zoom, on_missing, is_dem) = match decl {
-                SourceDecl::Dem(s) => (&s.url, s.max_zoom, s.on_missing, true),
-                SourceDecl::Raster(s) => (&s.url, s.max_zoom, s.on_missing, false),
+            let (url, on_missing, is_dem) = match decl {
+                SourceDecl::Dem(s) => (&s.url, s.on_missing, true),
+                SourceDecl::Raster(s) => (&s.url, s.on_missing, false),
                 _ => continue,
             };
             let spec = if url.ends_with(".pmtiles") {
@@ -625,7 +639,8 @@ impl PyramidSources {
                 tiles: TileSource::open(&spec, Some(base_dir))
                     .await
                     .map_err(|e| format!("source `{name}`: {e}"))?,
-                max_zoom,
+                min_zoom: decl.min_zoom(),
+                max_zoom: decl.max_zoom(),
                 on_missing,
                 is_dem,
             });
@@ -868,6 +883,40 @@ mod tests {
                 .await
                 .is_err()
         );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[tokio::test]
+    async fn a_pyramid_fetches_nothing_below_its_min_zoom() {
+        let root = std::env::temp_dir().join(format!("ezu-pyramid-floor-{}", std::process::id()));
+        for (z, x, y) in [(2u8, 1u32, 1u32), (3, 2, 2)] {
+            let d = root.join("photo").join(z.to_string()).join(x.to_string());
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join(format!("{y}.png")), format!("photo {z}")).unwrap();
+        }
+        let doc = ezu::style::Document::from_json(&format!(
+            r##"{{
+              "name": "floor",
+              "sources": {{ "photo": {{ "type": "raster", "url": "{}/photo/{{z}}/{{x}}/{{y}}.png",
+                                       "min-zoom": 3, "on-missing": "upsample" }} }},
+              "nodes": {{ "out": {{ "op": "solid", "color": "#000000" }} }},
+              "output": "@out"
+            }}"##,
+            root.display().to_string().replace('\\', "/"),
+        ))
+        .unwrap();
+        let sources = PyramidSources::open(&doc, &root).await.unwrap();
+        let photo = sources.iter().next().unwrap();
+        assert!(photo.serves(3) && !photo.serves(2));
+        // The z2 tile exists on disk, but the source does not serve z2.
+        assert_eq!(photo.fetch(TileId::new(2, 1, 1)).await.unwrap(), None);
+        assert_eq!(
+            photo.fetch(TileId::new(3, 2, 2)).await.unwrap(),
+            Some((Bytes::from_static(b"photo 3"), TileId::new(3, 2, 2)))
+        );
+        // Upsampling a missing z3 tile stops at the floor rather than
+        // reaching the z2 tile above it.
+        assert_eq!(photo.fetch(TileId::new(3, 3, 3)).await.unwrap(), None);
         std::fs::remove_dir_all(&root).ok();
     }
 

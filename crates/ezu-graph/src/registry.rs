@@ -372,6 +372,7 @@ impl NodeRegistry {
                 "base-shift": { "type": "number", "default": 0, "description": "`custom` only: subtracted from the weighted channel sum (MapLibre's `baseShift`)." },
                 "tile-size": { "type": "integer", "minimum": 1, "deprecated": true,
                                "description": "Ignored. Each tile's edge is read from its decoded image, which may be any square size; the field is still accepted so older styles load." },
+                "min-zoom": { "type": "integer", "minimum": 0, "description": "Shallowest zoom the source serves. Below it nothing is fetched or bound, so its `dem` nodes read a zero field (MapLibre's source `minzoom`)." },
                 "max-zoom": { "type": "integer", "minimum": 0, "description": "Deepest zoom the source serves. Past it, tiles are overzoomed from the covering ancestor." },
                 "neighbor-fetch": { "type": "boolean", "default": true, "description": "Fetch the 8 neighbouring tiles too and stitch them, so the pad region holds real elevations and slopes stay seamless across tile edges." },
                 "elevation-offset": { "type": "number", "default": 0, "description": "Metres subtracted from every decoded sample, to rebase a geoid-relative dataset." },
@@ -499,6 +500,7 @@ impl NodeRegistry {
                                 "properties": {
                                     "type": { "const": "raster" },
                                     "url": { "type": "string", "description": "XYZ template, TileJSON URL, or PMTiles archive (`.pmtiles`). PNG/WebP/JPEG tiles." },
+                                    "min-zoom": { "type": "integer", "minimum": 0, "description": "Shallowest zoom the source serves. Below it nothing is fetched or bound, so its `raster` nodes draw transparent pixels (MapLibre's source `minzoom`)." },
                                     "max-zoom": { "type": "integer", "minimum": 0, "description": "Deepest zoom the source serves. Past it, tiles are upsampled from the covering ancestor." },
                                     "neighbor-fetch": { "type": "boolean", "default": true, "description": "Fetch the 8 neighbouring tiles too and stitch them, so the pad region holds real pixels." },
                                     "on-missing": { "enum": ["empty", "upsample", "error"], "default": "empty", "description": "404 within zoom range: transparent pixels, upsample a parent, or fail the tile." },

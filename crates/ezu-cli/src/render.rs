@@ -232,7 +232,9 @@ impl TileRenderer {
         let pyramids = futures::future::try_join_all(
             self.pyramids
                 .iter()
-                .filter(|p| self.requested.contains(&*p.name))
+                // Below a source's `min-zoom` there is nothing to fetch,
+                // and so nothing to miss.
+                .filter(|p| self.requested.contains(&*p.name) && p.serves(tile.z))
                 .map(|p| async move {
                     let Some((bytes, from)) = p.fetch(tile).await? else {
                         // A missing centre leaves the source out: the node

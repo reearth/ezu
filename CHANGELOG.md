@@ -179,6 +179,10 @@ mean is spelled out in
   and `text` do. Outside that range a `raster` node draws transparent
   pixels and a `dem` node a zero field, which is what each yields when its
   source has no tile.
+- `dem` and `raster` sources take `min-zoom`, as `mvt` and `pmtiles` do.
+  Below it the CLI fetches nothing for the source, the renderer leaves
+  whatever is bound for it unread, and `on-missing: error` does not fire;
+  `on-missing: upsample` walks up no further than it.
 
 ### Changed
 

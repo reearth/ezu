@@ -651,6 +651,8 @@ impl SourceDecl {
         match self {
             SourceDecl::Mvt(s) => s.min_zoom,
             SourceDecl::Pmtiles(s) => s.min_zoom,
+            SourceDecl::Dem(s) => s.min_zoom,
+            SourceDecl::Raster(s) => s.min_zoom,
             _ => None,
         }
     }
@@ -907,6 +909,10 @@ pub struct DemSource {
     /// tile's edge is read from its decoded image, which may be any
     /// square size.
     pub tile_size: u32,
+    /// Shallowest zoom the source serves. Below it nothing is fetched or
+    /// bound, so its `dem` nodes read a zero field (MapLibre's source
+    /// `minzoom`).
+    pub min_zoom: Option<u8>,
     /// Highest zoom available from the source. Requests above this zoom
     /// overzoom from an ancestor tile.
     pub max_zoom: Option<u8>,
@@ -953,6 +959,8 @@ struct DemSourceFields {
     #[serde(default = "default_dem_tile_size")]
     tile_size: u32,
     #[serde(default)]
+    min_zoom: Option<u8>,
+    #[serde(default)]
     max_zoom: Option<u8>,
     #[serde(default = "default_true")]
     neighbor_fetch: bool,
@@ -995,6 +1003,7 @@ impl TryFrom<DemSourceFields> for DemSource {
             on_missing: f.on_missing,
             attribution: f.attribution,
             tile_size: f.tile_size,
+            min_zoom: f.min_zoom,
             max_zoom: f.max_zoom,
             neighbor_fetch: f.neighbor_fetch,
             elevation_offset: f.elevation_offset,
@@ -1073,6 +1082,11 @@ pub struct RasterSource {
     /// `http(s)://` URL). PNG / WebP / JPEG tiles are sniffed from
     /// content.
     pub url: String,
+    /// Shallowest zoom the source serves. Below it nothing is fetched or
+    /// bound, so its `raster` nodes draw transparent pixels (MapLibre's
+    /// source `minzoom`).
+    #[serde(default)]
+    pub min_zoom: Option<u8>,
     /// Highest zoom available from the source. Requests above this
     /// zoom upsample from the ancestor at `max-zoom`.
     #[serde(default)]
@@ -1373,7 +1387,7 @@ mod tests {
           "sources": {
             "photo":   { "type": "raster",
                          "url": "https://example.com/{z}/{x}/{y}.jpg",
-                         "max-zoom": 18, "on-missing": "upsample",
+                         "min-zoom": 4, "max-zoom": 18, "on-missing": "upsample",
                          "attribution": "© Example Sat" },
             "archive": { "type": "raster", "url": "tiles.pmtiles" },
             "basemap": { "type": "mvt", "url": "https://example.com/t.json",
@@ -1387,6 +1401,7 @@ mod tests {
             panic!("expected raster source");
         };
         assert_eq!(r.max_zoom, Some(18));
+        assert_eq!(doc.sources["photo"].min_zoom(), Some(4));
         assert_eq!(r.on_missing, OnMissing::Upsample);
         assert!(r.neighbor_fetch);
         let SourceDecl::Raster(r) = &doc.sources["archive"] else {
@@ -1425,7 +1440,10 @@ mod tests {
             })
         );
 
-        let doc = parse(r#"{ "type": "dem", "url": "t.json", "encoding": "terrarium" }"#).unwrap();
+        let doc =
+            parse(r#"{ "type": "dem", "url": "t.json", "encoding": "terrarium", "min-zoom": 5 }"#)
+                .unwrap();
+        assert_eq!(doc.sources["terrain"].min_zoom(), Some(5));
         let SourceDecl::Dem(d) = &doc.sources["terrain"] else {
             panic!("expected dem source");
         };

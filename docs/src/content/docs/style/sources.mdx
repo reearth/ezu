@@ -125,6 +125,7 @@ For `raster` and `dem`:
 
 | Field | Meaning |
 | --- | --- |
+| `min-zoom` | shallowest zoom the source has. Below it nothing is fetched or bound, so the `raster` node draws transparent pixels and the `dem` node a zero field (MapLibre's source `minzoom`) |
 | `max-zoom` | deepest zoom the source has. Deeper requests always upsample from this ancestor |
 | `neighbor-fetch` | fetch the 8 neighbouring tiles too and stitch them, so the pad region holds real pixels (and, for `dem`, slopes stay seamless across tile edges). Default `true` |
 | `on-missing` | in-range 404 policy: `empty` (default — transparent / zero elevation), `upsample` (walk up parents and upsample the covered sub-region), or `error` (fail the render, so a server can answer 404) |

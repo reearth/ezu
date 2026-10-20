@@ -631,8 +631,8 @@ impl Renderer {
     /// place; a host that hard-codes each source's maxzoom keeps a second
     /// copy of something the style already states, and the two drift.
     ///
-    /// The floor is not answered here: below an `mvt` / `pmtiles` source's
-    /// `min-zoom` the render ignores whatever is bound for it, so a host
+    /// The floor is not answered here: below a tile pyramid's `min-zoom`
+    /// the render ignores whatever is bound for it, so a host
     /// may skip the fetch, and loses nothing by not skipping it.
     ///
     /// `x` and `y` may be off the tile grid, which is what a host walking
@@ -1061,7 +1061,9 @@ impl Renderer {
                 SourceDecl::Raster(s) => s.on_missing,
                 _ => continue,
             };
-            if on_missing != OnMissing::Error || !requested.contains(name.as_str()) {
+            // Below the source's `min-zoom` there is no tile to miss.
+            let below_floor = decl.min_zoom().is_some_and(|mz| z < mz);
+            if on_missing != OnMissing::Error || below_floor || !requested.contains(name.as_str()) {
                 continue;
             }
             let has_centre = set.get(name).is_some_and(|m| m.contains_key(&(0, 0)));
@@ -1089,6 +1091,10 @@ impl Renderer {
             // Vector neighbours are collision candidates, not pixels;
             // binding only the centre is a documented degrade.
             if !matches!(decl, SourceDecl::Dem(_) | SourceDecl::Raster(_)) {
+                continue;
+            }
+            // Below `min-zoom` whatever is bound is ignored anyway.
+            if decl.min_zoom().is_some_and(|mz| z < mz) {
                 continue;
             }
             let Some(bound) = set.get(name) else {
@@ -1135,12 +1141,14 @@ impl Renderer {
                     ),
                 )
             };
+            // Below a tile pyramid's `min-zoom` it has nothing to show, so
+            // what is bound for it is left unread: its `features` draw
+            // nothing, its `raster` is transparent, its `dem` is flat.
+            if decl.min_zoom().is_some_and(|mz| z < mz) {
+                continue;
+            }
             match decl {
                 SourceDecl::Mvt(_) | SourceDecl::Pmtiles(_) => {
-                    // Below the source's `min-zoom` it has nothing to show.
-                    if decl.min_zoom().is_some_and(|mz| z < mz) {
-                        continue;
-                    }
                     // Centre under `<source>.<layer>`, any neighbours the
                     // host bound under `@dx,dy` (cross-tile collision). A
                     // host binding only the centre degrades to centre-only
@@ -1813,6 +1821,55 @@ mod tests {
             "the floor itself is in range"
         );
         assert_eq!(ink(r#", "min-zoom": 15"#), 0);
+    }
+
+    #[test]
+    fn a_raster_source_draws_nothing_below_its_declared_min_zoom() {
+        // A green tile to bind, made by rendering one.
+        let painter = Renderer::new(
+            r##"{ "name": "green", "tile-size": 8,
+                  "nodes": { "out": { "op": "solid", "color": "#00ff00" } },
+                  "output": "out" }"##,
+        )
+        .expect("builds");
+        let green = painter
+            .render_tile(0, 0, 0, RenderOptions::default())
+            .expect("renders");
+
+        let mut r = Renderer::new(
+            r##"{
+                "name": "test",
+                "tile-size": 8,
+                "sources": { "photo": { "type": "raster", "url": "https://x/{z}/{x}/{y}.png",
+                                        "min-zoom": 3, "on-missing": "error",
+                                        "neighbor-fetch": false } },
+                "nodes": { "out": { "op": "raster", "source": "photo" } },
+                "output": "out"
+            }"##,
+        )
+        .expect("builds");
+        let opts = || RenderOptions {
+            format: OutputFormat::Rgba,
+            ..RenderOptions::default()
+        };
+        let mut ink = |z: u8, bind: bool| {
+            if bind {
+                r.bind_source("photo", green.clone(), &BindOptions::default())
+                    .expect("binds");
+            }
+            let px = r.render_tile(z, 0, 0, opts());
+            r.clear_sources();
+            px.map(|px| px.chunks(4).filter(|p| p[3] > 0).count())
+        };
+        assert!(ink(3, true).unwrap() > 0, "the floor itself is in range");
+        // Below the floor the bound tile is left unread, and a missing one
+        // is no error: the source has no tiles there to miss.
+        assert_eq!(ink(2, true).unwrap(), 0);
+        assert_eq!(ink(2, false).unwrap(), 0);
+        assert!(
+            ink(3, false).is_err(),
+            "on-missing: error still holds in range"
+        );
     }
 
     #[test]

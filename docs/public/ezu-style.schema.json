@@ -7017,6 +7017,11 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "min-zoom": {
+                "description": "Shallowest zoom the source serves. Below it nothing is fetched or bound, so its `dem` nodes read a zero field (MapLibre's source `minzoom`).",
+                "minimum": 0,
+                "type": "integer"
+              },
               "neighbor-fetch": {
                 "default": true,
                 "description": "Fetch the 8 neighbouring tiles too and stitch them, so the pad region holds real elevations and slopes stay seamless across tile edges.",
@@ -7064,6 +7069,11 @@
               },
               "max-zoom": {
                 "description": "Deepest zoom the source serves. Past it, tiles are upsampled from the covering ancestor.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "min-zoom": {
+                "description": "Shallowest zoom the source serves. Below it nothing is fetched or bound, so its `raster` nodes draw transparent pixels (MapLibre's source `minzoom`).",
                 "minimum": 0,
                 "type": "integer"
               },

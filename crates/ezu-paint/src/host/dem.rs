@@ -190,6 +190,11 @@ impl DemSourceState {
         tile: TileId,
         canvas: CanvasInfo,
     ) -> Result<Option<ScalarField>, DemFetchError> {
+        // Below `min-zoom` the source has no tiles: nothing is fetched and
+        // the source stays unbound, whatever `on-missing` says.
+        if self.spec.min_zoom.is_some_and(|mz| tile.z < mz) {
+            return Ok(None);
+        }
         let world = 1u32 << tile.z;
         let neighbor_fetch = self.spec.neighbor_fetch;
         // Coordinates of the 3x3 neighbourhood, with `None` slots for
@@ -270,7 +275,11 @@ impl DemSourceState {
                     };
                     break Some(tile);
                 }
-                None if self.spec.on_missing == OnMissing::Upsample && pz > 0 => pz -= 1,
+                None if self.spec.on_missing == OnMissing::Upsample
+                    && pz > self.spec.min_zoom.unwrap_or(0) =>
+                {
+                    pz -= 1
+                }
                 None => break None,
             }
         };
