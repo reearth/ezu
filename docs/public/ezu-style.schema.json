@@ -1020,6 +1020,15 @@
                 "pattern": "^@?[A-Za-z_][A-Za-z0-9_-]*$",
                 "type": "string"
               },
+              "interpolation": {
+                "default": "linear",
+                "description": "`linear` (default) blends the colours of the two stops around a value. `step` gives a value the colour of the stop at or below it (the first stop's below them all), as MapLibre's `step` does, so the ramp paints flat bands. Ignored with `ramp-expr`.",
+                "enum": [
+                  "linear",
+                  "step"
+                ],
+                "type": "string"
+              },
               "op": {
                 "const": "color-ramp",
                 "description": "Selects the `color-ramp` operation."

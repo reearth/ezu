@@ -259,6 +259,9 @@ mean is spelled out in
 - `displace` and `warp` take `boundary: "wrap"` (or `"repeat"`): a read past
   one edge of the image comes back in at the opposite edge, as a sprite that
   repeats edge to edge needs. A scalar field still clamps at its edge.
+- `color-ramp` takes `interpolation: "step"`, which gives each value the
+  colour of the stop at or below it, as MapLibre's `step` does, so the ramp
+  paints flat bands. `linear` stays the default.
 
 ### Changed
 

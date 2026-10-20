@@ -359,3 +359,51 @@ fn missing_samples_are_transparent_not_the_first_stop() {
         r##""ramp-expr": ["interpolate", ["linear"], ["heatmap-density"], 0, "#00ff00", 1, "#ff00ff"]"##,
     );
 }
+
+// --- `interpolation` -------------------------------------------------------
+
+#[test]
+fn step_interpolation_paints_flat_bands() {
+    // Columns hold -10, 10, 30, …, 130; stops at 0, 50 and 100.
+    let stops = r##""stops": [ { "value": 0,   "color": "#ff0000" },
+                               { "value": 50,  "color": "#00ff00" },
+                               { "value": 100, "color": "#0000ff" } ]"##;
+    let r = ramp_over(
+        &format!(r#"{stops}, "interpolation": "step""#),
+        rising_field(None, None),
+    );
+    let (red, green, blue) = ([0xff, 0, 0, 0xff], [0, 0xff, 0, 0xff], [0, 0, 0xff, 0xff]);
+    let want = [red, red, red, green, green, green, blue, blue];
+    for (x, w) in want.iter().enumerate() {
+        assert_eq!(r.pixel(x as u32, 4), *w, "column {x}");
+    }
+    // `linear` is the default, and blends between the same stops.
+    let linear = ramp_over(stops, rising_field(None, None));
+    let explicit = ramp_over(
+        &format!(r#"{stops}, "interpolation": "linear""#),
+        rising_field(None, None),
+    );
+    assert_eq!(linear.pixels, explicit.pixels);
+    assert_ne!(linear.pixel(2, 4), red, "30 sits between red and green");
+}
+
+#[test]
+fn unknown_interpolation_is_an_error() {
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 8,
+      "nodes": {
+        "f":   { "op": "solid", "color": "#808080" },
+        "out": { "op": "color-ramp", "field": "@f", "interpolation": "cubic",
+                 "stops": [ { "value": 0, "color": "#000000" },
+                            { "value": 1, "color": "#ffffff" } ] }
+      },
+      "output": "@out"
+    }"##;
+    let doc = ezu_style::Document::from_json(json).expect("parse");
+    let err = match ezu_graph::build_graph(&doc, &ezu_paint::nodes::default_registry()) {
+        Ok(_) => panic!("an unknown interpolation must fail the build"),
+        Err(e) => e.to_string(),
+    };
+    assert!(err.contains("interpolation"), "{err}");
+}

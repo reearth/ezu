@@ -1,7 +1,8 @@
 //! `color-ramp` — `ScalarField | Raster -> Raster`. Map per-pixel scalar
 //! values to colour via a user-supplied stop table, interpolating between
-//! stops in a selectable colour `space`; samples outside the range clamp
-//! to the end colours. A `Raster` input is recoloured by its luminance
+//! stops in a selectable colour `space` (or, with `interpolation: step`,
+//! taking the colour of the stop below for flat bands); samples outside
+//! the range clamp to the end colours. A `Raster` input is recoloured by its luminance
 //! (Rec. 601) — a **gradient map** — preserving source coverage.
 //!
 //! A field's missing samples (NaN, or equal to its `nodata`) are written
@@ -33,7 +34,7 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::color_interp::{interpolate_converted, to_space, InterpSpace};
-use crate::nodes::common::read_space;
+use crate::nodes::common::{read_space, read_string_or};
 
 #[derive(Debug, Clone, Copy)]
 struct Stop {
@@ -51,10 +52,21 @@ struct StopIn {
     color: In<[f32; 4]>,
 }
 
+/// How a value between two stops takes its colour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Interpolation {
+    /// Blend the two stops' colours in the ramp's `space`.
+    Linear,
+    /// Take the colour of the stop at or below the value, as MapLibre's
+    /// `step` does, so the ramp paints flat bands.
+    Step,
+}
+
 struct ColorRampNode {
     /// Empty iff `ramp_expr` is set (the factory requires one of the two).
     stops: Vec<StopIn>,
     space: InterpSpace,
+    interpolation: Interpolation,
     /// Optional raw MapLibre color expression over `heatmap-density`;
     /// overrides `stops` (see the module docs for the LUT semantics).
     ramp_expr: Option<maplibre_expr::Expr>,
@@ -97,7 +109,10 @@ impl Node for ColorRampNode {
         let sample = |v: f32| -> [u8; 4] {
             match &lut {
                 Some(lut) => sample_lut(lut, v),
-                None => sample_stops(&stops, v, self.space),
+                None => match self.interpolation {
+                    Interpolation::Linear => sample_stops(&stops, v, self.space),
+                    Interpolation::Step => step_stops(&stops, v),
+                },
             }
         };
         // ScalarField: map each value through the ramp (hypsometric tint).
@@ -152,6 +167,9 @@ impl Node for ColorRampNode {
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"color-ramp");
         h.update(&[self.space.hash_tag()]);
+        if self.interpolation == Interpolation::Step {
+            h.update(b"step");
+        }
         for s in &self.stops {
             s.value.param_hash(h);
             s.color.param_hash(h);
@@ -249,6 +267,17 @@ fn sample_stops(stops: &[Stop], v: f32, space: InterpSpace) -> [u8; 4] {
     to_u8(interpolate_converted(lo.converted, hi.converted, t, space))
 }
 
+/// The colour of the last stop whose value is at or below `v`, or the
+/// first stop's below them all. `stops` is sorted by value.
+fn step_stops(stops: &[Stop], v: f32) -> [u8; 4] {
+    stops
+        .iter()
+        .rev()
+        .find(|s| s.value <= v)
+        .unwrap_or(&stops[0])
+        .rgba
+}
+
 fn to_f32(c: [u8; 4]) -> [f32; 4] {
     [
         c[0] as f32 / 255.0,
@@ -298,6 +327,19 @@ impl NodeFactory for ColorRampFactory {
             None => (None, None),
         };
         let space = read_space(fields)?;
+        let interpolation = match read_string_or(fields, "interpolation", ctx, "linear")?.as_str() {
+            "linear" => Interpolation::Linear,
+            "step" => Interpolation::Step,
+            other => {
+                return Err(FactoryError::BadField {
+                    field: "interpolation".into(),
+                    msg: format!("expected `linear` or `step`, got `{other}`"),
+                })
+            }
+        };
+        if ramp_expr.is_some() && fields.contains_key("interpolation") {
+            ctx.warn("`interpolation` ignored: `ramp-expr` sets the ramp");
+        }
         // One reader for the whole node, so a `$param` inside `stops`
         // lands in the same `param_refs` the evaluator keys the cache on.
         let mut r = InReader::new(fields, ctx, 1);
@@ -324,6 +366,7 @@ impl NodeFactory for ColorRampFactory {
             node: Box::new(ColorRampNode {
                 stops,
                 space,
+                interpolation,
                 ramp_expr,
                 ramp_expr_src,
                 opacity,
@@ -355,6 +398,7 @@ impl NodeFactory for ColorRampFactory {
                     },
                     "description": "Either half of a stop may be a `$param`, so a ramp can be recoloured or rescaled at render time. The table is sorted by `value` on every eval, so a param may reorder it.",
                 },
+                "interpolation": { "type": "string", "enum": ["linear", "step"], "default": "linear", "description": "`linear` (default) blends the colours of the two stops around a value. `step` gives a value the colour of the stop at or below it (the first stop's below them all), as MapLibre's `step` does, so the ramp paints flat bands. Ignored with `ramp-expr`." },
                 "space": { "type": "string", "enum": ["rgb", "hsl", "hsv", "hcl", "lab"], "default": "rgb", "description": "Colour space the stops interpolate in. `rgb` (default) is a straight sRGB lerp; `hsl`/`hsv`/`hcl` interpolate hue on the shortest path; `hcl`/`lab` are perceptual (ported from the MapLibre style spec)." },
                 "opacity": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0, "maximum": 1.0,
                              "description": "Uniform output-alpha multiplier (layer opacity). Default 1.0. Feed an `expr` node via `@node` for a zoom curve." })),
