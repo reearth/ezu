@@ -51,7 +51,7 @@ fn every_error_kind_has_its_own_code() {
 }
 
 mod options {
-    use crate::options::{parse_bind, parse_frame, parse_render};
+    use crate::options::{parse_bind, parse_frame, parse_render, parse_set};
     use ezu::renderer::{OutputFormat, PngCompression};
 
     #[test]
@@ -92,6 +92,61 @@ mod options {
             assert_eq!(
                 e.name(),
                 "UnknownSource",
+                "for {}",
+                String::from_utf8_lossy(payload)
+            );
+        }
+    }
+
+    #[test]
+    fn a_source_set_is_read_entry_by_entry() {
+        assert!(parse_set(b"").expect("empty is []").is_empty());
+        assert!(parse_set(b"null").expect("null is []").is_empty());
+        assert!(parse_set(b"[]").expect("parses").is_empty());
+
+        let set = parse_set(
+            br#"[{"data":7},
+                 {"data":8,"coord":[1,-1]},
+                 {"data":3,"coord":[0,1],"sourceZoom":13,"newerField":true}]"#,
+        )
+        .expect("parses");
+        let got: Vec<_> = set
+            .iter()
+            .map(|e| (e.data, e.opts.coord, e.opts.source_zoom))
+            .collect();
+        assert_eq!(
+            got,
+            [(7, (0, 0), None), (8, (1, -1), None), (3, (0, 1), Some(13))]
+        );
+        assert!(set.iter().all(|e| e.opts.index.is_none()));
+    }
+
+    /// An entry is refused the way the bind options are: a bad place is
+    /// `UnknownSource`, and so is an entry that names no loaded data. A
+    /// payload that is not a list of objects is malformed, `InvalidStyle`.
+    #[test]
+    fn refused_source_sets_carry_the_bind_options_names() {
+        for payload in [
+            &br#"[{"data":1,"coord":[2,0]}]"#[..],
+            &br#"[{"data":1,"sourceZoom":99}]"#[..],
+            &br#"[{"coord":[0,0]}]"#[..],
+            &br#"[{"data":0}]"#[..],
+            &br#"[{"data":-3}]"#[..],
+            &br#"[{"data":"7"}]"#[..],
+        ] {
+            let e = parse_set(payload).expect_err("refused");
+            assert_eq!(
+                e.name(),
+                "UnknownSource",
+                "for {}",
+                String::from_utf8_lossy(payload)
+            );
+        }
+        for payload in [&br#"{"data":1}"#[..], &br#"[1]"#[..], &br#"[{"#[..]] {
+            let e = parse_set(payload).expect_err("refused");
+            assert_eq!(
+                e.name(),
+                "InvalidStyle",
                 "for {}",
                 String::from_utf8_lossy(payload)
             );
@@ -185,6 +240,80 @@ mod options {
                 String::from_utf8_lossy(payload)
             );
         }
+    }
+}
+
+/// Loaded data belongs to the renderer that loaded it. None of this needs
+/// a pointer, so it can be held natively: a renderer goes into the table
+/// the way `ezu_renderer_new` puts it there, and the data the way
+/// `ezu_load_source` files it.
+mod loaded_sources {
+    use super::*;
+
+    const STAINED_GLASS: &str = include_str!("../../ezu/examples/styles/stained-glass.json");
+    const BASEMAP_Z13: &[u8] = include_bytes!("../../../go/testdata/basemap-13-7277-3227.mvt");
+
+    fn renderer() -> u32 {
+        let handle = NEXT_HANDLE.with(|n| {
+            let mut n = n.borrow_mut();
+            let h = *n;
+            *n += 1;
+            h
+        });
+        let r = Renderer::new(STAINED_GLASS).expect("builds");
+        RENDERERS.with(|t| t.borrow_mut().insert(handle, r));
+        handle
+    }
+
+    fn load(handle: u32) -> u32 {
+        let data = RENDERERS.with(|t| {
+            t.borrow()[&handle]
+                .load_source("basemap", BASEMAP_Z13)
+                .expect("loads")
+        });
+        keep_source(handle, data)
+    }
+
+    fn last_error() -> (&'static str, String) {
+        LAST_ERROR.with(|slot| std::mem::take(&mut *slot.borrow_mut()))
+    }
+
+    #[test]
+    fn a_set_names_only_data_its_renderer_holds() {
+        let (a, b) = (renderer(), renderer());
+        let id = load(a);
+        let set = format!(r#"[{{"data":{id}}},{{"data":{id},"coord":[1,0],"sourceZoom":13}}]"#);
+
+        let built = source_set(a, set.as_bytes()).expect("builds");
+        assert!(built.contains("basemap"));
+
+        let unknown = code_of(ErrorKind::UnknownSource);
+        assert_eq!(source_set(b, set.as_bytes()).err(), Some(unknown));
+        assert_eq!(last_error().0, "UnknownSource");
+        assert_eq!(ezu_release_source(b, id), unknown, "b did not load it");
+
+        assert_eq!(ezu_release_source(a, id), 0);
+        assert_eq!(ezu_release_source(a, id), unknown, "released twice");
+        assert_eq!(source_set(a, set.as_bytes()).err(), Some(unknown));
+        let (name, message) = last_error();
+        assert_eq!(name, "UnknownSource");
+        assert!(message.contains(&id.to_string()), "{message}");
+
+        // Freeing a renderer drops what it loaded, and nothing else.
+        let (kept, dropped) = (load(b), load(a));
+        assert_eq!(ezu_renderer_free(a), 0);
+        assert!(SOURCES.with(|s| !s.borrow().contains_key(&dropped)));
+        assert!(SOURCES.with(|s| s.borrow().contains_key(&kept)));
+        assert_eq!(ezu_renderer_free(b), 0);
+    }
+
+    #[test]
+    fn a_set_with_no_entries_renders_no_tile_data() {
+        let a = renderer();
+        assert!(source_set(a, b"").expect("builds").is_empty());
+        assert_eq!(ezu_trim_glyphs(a), 0);
+        assert_eq!(ezu_renderer_free(a), 0);
+        assert_eq!(ezu_trim_glyphs(a), ERR_BAD_HANDLE);
     }
 }
 

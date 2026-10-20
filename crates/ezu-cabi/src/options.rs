@@ -47,6 +47,72 @@ pub fn parse_bind(raw: &[u8]) -> Result<BindOptions, Error> {
     })
 }
 
+/// One entry of a source set: which loaded data, and where it sits.
+#[derive(Debug)]
+pub struct SetEntry {
+    /// The id `ezu_load_source` answered with.
+    pub data: u32,
+    /// `coord` and `sourceZoom`, read as the bind options read them.
+    pub opts: BindOptions,
+}
+
+/// `[{"data": <id>, "coord": [dx, dy], "sourceZoom": <z>}, …]`, the set
+/// one render reads. An empty payload is the empty set.
+///
+/// No entry names its source: the data was loaded for one, and a second
+/// copy of the name could only disagree with it. `coord` and `sourceZoom`
+/// mean what they do in the bind options and are refused the same way,
+/// with `UnknownSource`, as is an entry without a data id. A payload that
+/// is not a JSON array is `InvalidStyle`, as for every other malformed
+/// option.
+pub fn parse_set(raw: &[u8]) -> Result<Vec<SetEntry>, Error> {
+    if raw.is_empty() {
+        return Ok(Vec::new());
+    }
+    let entries =
+        match serde_json::from_slice::<Value>(raw).map_err(|e| err(ErrorKind::InvalidStyle, e))? {
+            Value::Array(entries) => entries,
+            Value::Null => return Ok(Vec::new()),
+            other => {
+                return Err(err(
+                    ErrorKind::InvalidStyle,
+                    format!("the source set must be a JSON array, got {other}"),
+                ))
+            }
+        };
+    entries
+        .iter()
+        .enumerate()
+        .map(|(i, entry)| {
+            let obj = entry.as_object().ok_or_else(|| {
+                err(
+                    ErrorKind::InvalidStyle,
+                    format!("source set entry {i} must be a JSON object, got {entry}"),
+                )
+            })?;
+            let data = obj
+                .get("data")
+                .and_then(Value::as_u64)
+                .and_then(|n| u32::try_from(n).ok())
+                .filter(|n| *n != 0)
+                .ok_or_else(|| {
+                    err(
+                        ErrorKind::UnknownSource,
+                        format!("source set entry {i} needs data, the id ezu_load_source returned"),
+                    )
+                })?;
+            Ok(SetEntry {
+                data,
+                opts: BindOptions {
+                    coord: parse_coord(obj.get("coord"))?,
+                    source_zoom: parse_source_zoom(obj.get("sourceZoom"))?,
+                    index: None,
+                },
+            })
+        })
+        .collect()
+}
+
 /// Which tile of the 3×3 neighbourhood the bytes are. Refused values carry
 /// `UnknownSource`, matching the JS shell.
 fn parse_coord(value: Option<&Value>) -> Result<(i32, i32), Error> {

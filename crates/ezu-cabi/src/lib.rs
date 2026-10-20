@@ -20,7 +20,9 @@
 //! - Non-negative returns are results. Negative returns are error codes,
 //!   with the detail in [`ezu_last_error`].
 //! - A renderer is a handle: a non-zero `u32` index into a module-global
-//!   table. Handles are never reused.
+//!   table. Handles are never reused. Tile data decoded with
+//!   [`ezu_load_source`] is a handle too, owned by the renderer that
+//!   loaded it, and never reused either.
 //! - Anything richer than a number or a byte string crosses as JSON text:
 //!   option objects in, schema/legend/usage documents out. The field names
 //!   are the ones `ezu-wasm` uses, so the two shells are readable against
@@ -49,13 +51,13 @@ mod options;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use ezu::renderer::{Error, ErrorKind, Renderer};
+use ezu::renderer::{Error, ErrorKind, Renderer, SourceData, SourceSet};
 
 /// Incremented whenever the surface changes — a signature, a format, a
 /// code's meaning, or an export appearing or leaving. The Go package
 /// checks it at instantiation, which is what catches a committed module
 /// that was not rebuilt.
-pub const ABI_VERSION: u32 = 3;
+pub const ABI_VERSION: u32 = 4;
 
 /// Every function this shell exports, in one list, so a test can compare
 /// it with what the committed module actually carries. The linker's own
@@ -91,8 +93,14 @@ pub const EXPORTS: &[&str] = &[
     "ezu_requested_neighbor_offsets",
     "ezu_needed_codepoints",
     "ezu_needed_glyph_ranges",
+    "ezu_needed_codepoints_in",
+    "ezu_needed_glyph_ranges_in",
     "ezu_memory_usage",
+    "ezu_load_source",
+    "ezu_release_source",
     "ezu_render_tile",
+    "ezu_render_tile_with",
+    "ezu_trim_glyphs",
 ];
 
 /// The negative return for a failure of `kind`.
@@ -137,6 +145,12 @@ thread_local! {
         const { RefCell::new(("", String::new())) };
     static RENDERERS: RefCell<HashMap<u32, Renderer>> = RefCell::new(HashMap::new());
     static NEXT_HANDLE: RefCell<u32> = const { RefCell::new(1) };
+    /// Loaded tile data by id, with the handle of the renderer that loaded
+    /// it. One table for the module rather than one per renderer, so an id
+    /// names one payload whichever renderer it is handed to, and handing it
+    /// to the wrong one is an error rather than another renderer's data.
+    static SOURCES: RefCell<HashMap<u32, (u32, SourceData)>> = RefCell::new(HashMap::new());
+    static NEXT_SOURCE: RefCell<u32> = const { RefCell::new(1) };
 }
 
 /// Record a failure and return its code.
@@ -383,11 +397,13 @@ pub extern "C" fn ezu_renderer_new(style_ptr: u32, style_len: u32) -> i64 {
     handle as i64
 }
 
-/// Drop a renderer and everything it holds.
+/// Drop a renderer and everything it holds, including the tile data it
+/// loaded.
 #[unsafe(no_mangle)]
 pub extern "C" fn ezu_renderer_free(handle: u32) -> i64 {
     RENDERERS.with(|r| {
         if r.borrow_mut().remove(&handle).is_some() {
+            SOURCES.with(|s| s.borrow_mut().retain(|_, (owner, _)| *owner != handle));
             0
         } else {
             bad_handle(handle)
@@ -706,6 +722,54 @@ pub extern "C" fn ezu_needed_glyph_ranges(handle: u32, out_ptr: u32, out_len: u3
     })
 }
 
+/// [`ezu_needed_codepoints`] for the features in a source set rather than
+/// the ones bound to the renderer. `set` is the JSON
+/// [`ezu_render_tile_with`] takes, so a host asks about exactly the set it
+/// is about to render.
+#[unsafe(no_mangle)]
+pub extern "C" fn ezu_needed_codepoints_in(
+    handle: u32,
+    set_ptr: u32,
+    set_len: u32,
+    out_ptr: u32,
+    out_len: u32,
+) -> i64 {
+    let raw = unsafe { input(set_ptr, set_len) };
+    with_renderer(handle, |r| match source_set(handle, raw) {
+        Ok(set) => unsafe {
+            reply_json(
+                out_ptr,
+                out_len,
+                glyph_units_json(r.needed_codepoints_in(&set)),
+            )
+        },
+        Err(code) => code,
+    })
+}
+
+/// [`ezu_needed_glyph_ranges`] for the features in a source set rather than
+/// the ones bound to the renderer. `set` is as for [`ezu_render_tile_with`].
+#[unsafe(no_mangle)]
+pub extern "C" fn ezu_needed_glyph_ranges_in(
+    handle: u32,
+    set_ptr: u32,
+    set_len: u32,
+    out_ptr: u32,
+    out_len: u32,
+) -> i64 {
+    let raw = unsafe { input(set_ptr, set_len) };
+    with_renderer(handle, |r| match source_set(handle, raw) {
+        Ok(set) => unsafe {
+            reply_json(
+                out_ptr,
+                out_len,
+                glyph_units_json(r.needed_glyph_ranges_in(&set)),
+            )
+        },
+        Err(code) => code,
+    })
+}
+
 fn glyph_units_json(map: std::collections::BTreeMap<&str, Vec<u32>>) -> String {
     serde_json::to_string(&map).unwrap_or_else(|_| "{}".into())
 }
@@ -800,6 +864,97 @@ pub extern "C" fn ezu_bind_source(
     })
 }
 
+/// Decode a tile-scoped source's bytes — `mvt`, `pmtiles`, `dem`, `raster`,
+/// or remote `geojson` — once, and keep them under a positive id that any
+/// number of [`ezu_render_tile_with`] sets can name.
+///
+/// This is the stateless way to render: nothing is bound, so there is
+/// nothing to clear, and a tile that is also its neighbours' neighbour is
+/// decoded once rather than each time it is bound. The data belongs to
+/// this renderer — a set naming it on another renderer is refused — and
+/// stays until [`ezu_release_source`] or [`ezu_renderer_free`].
+///
+/// Fails with `UnknownSource` if `name` is not declared or is a kind bound
+/// with [`ezu_bind_source`] (brush, image, sprite, font, glyphs); with the
+/// matching decode kind if the payload does not parse. A DEM or imagery
+/// payload is decoded here, so its decode error surfaces here too.
+#[unsafe(no_mangle)]
+pub extern "C" fn ezu_load_source(
+    handle: u32,
+    name_ptr: u32,
+    name_len: u32,
+    bytes_ptr: u32,
+    bytes_len: u32,
+) -> i64 {
+    let name = match unsafe { input_str(name_ptr, name_len, "source name") } {
+        Ok(n) => n,
+        Err(code) => return code,
+    };
+    let bytes = unsafe { input(bytes_ptr, bytes_len) };
+    with_renderer(handle, |r| match r.load_source(name, bytes) {
+        Ok(data) => keep_source(handle, data) as i64,
+        Err(e) => fail_err(e),
+    })
+}
+
+/// File `data` under a fresh id, owned by `handle`.
+fn keep_source(handle: u32, data: SourceData) -> u32 {
+    let id = NEXT_SOURCE.with(|n| {
+        let mut n = n.borrow_mut();
+        let id = *n;
+        *n += 1;
+        id
+    });
+    SOURCES.with(|s| s.borrow_mut().insert(id, (handle, data)));
+    id
+}
+
+/// Drop the data [`ezu_load_source`] answered `id` with. A set that names
+/// it afterwards is refused with `UnknownSource`, and so is releasing it
+/// twice, or releasing it through a renderer that did not load it.
+#[unsafe(no_mangle)]
+pub extern "C" fn ezu_release_source(handle: u32, id: u32) -> i64 {
+    with_renderer(handle, |_| {
+        SOURCES.with(|s| {
+            let mut s = s.borrow_mut();
+            match s.get(&id) {
+                Some((owner, _)) if *owner == handle => {
+                    s.remove(&id);
+                    0
+                }
+                _ => fail(ErrorKind::UnknownSource, unknown_data(handle, id)),
+            }
+        })
+    })
+}
+
+fn unknown_data(handle: u32, id: u32) -> String {
+    format!("renderer {handle} holds no loaded source data with id {id}; it was released, or loaded by another renderer")
+}
+
+/// Build the [`SourceSet`] a set payload describes, out of the data
+/// `handle` loaded, or record why it cannot be built.
+fn source_set(handle: u32, raw: &[u8]) -> Result<SourceSet, i64> {
+    let entries = options::parse_set(raw).map_err(fail_err)?;
+    SOURCES.with(|s| {
+        let s = s.borrow();
+        let mut set = SourceSet::new();
+        for entry in entries {
+            let data = match s.get(&entry.data) {
+                Some((owner, data)) if *owner == handle => data,
+                _ => {
+                    return Err(fail(
+                        ErrorKind::UnknownSource,
+                        unknown_data(handle, entry.data),
+                    ))
+                }
+            };
+            set.bind(data, &entry.opts).map_err(fail_err)?;
+        }
+        Ok(set)
+    })
+}
+
 /// Drop every pending tile-scoped binding, keeping the persistent banks.
 /// Call between tile renders.
 #[unsafe(no_mangle)]
@@ -883,6 +1038,82 @@ pub extern "C" fn ezu_render_tile(
             0
         }
         Err(e) => fail_err(e),
+    })
+}
+
+/// Render one tile from a source set — tile data loaded with
+/// [`ezu_load_source`] — instead of from what is bound, and hand the
+/// encoded bytes back as [`ezu_render_tile`] does.
+///
+/// `set` is JSON, and may be empty for a render with no tile data:
+///
+/// ```json
+/// [
+///   { "data": 7, "coord": [0, 0] },
+///   { "data": 8, "coord": [1, 0] },
+///   { "data": 3, "coord": [0, 1], "sourceZoom": 13 }
+/// ]
+/// ```
+///
+/// Each entry puts the data with that id at `coord` in the 3×3
+/// neighbourhood of its own source — `[0, 0]`, the default, is the tile
+/// being rendered — and `sourceZoom` says it is an ancestor's, exactly as
+/// in the bind options. The same id may appear in any number of sets, which
+/// is the point: the tile a host fetched once is the centre of one render
+/// and a neighbour of the next eight. A later entry at the same source and
+/// `coord` replaces an earlier one. An id this renderer does not hold, and
+/// two kinds of data under one source, fail with `UnknownSource`.
+///
+/// Nothing bound with [`ezu_bind_source`] that is tile-scoped is read; the
+/// persistent banks — fonts, sprites, glyphs — are. `opts` is as for
+/// [`ezu_render_tile`].
+///
+/// Unlike `ezu_render_tile` this does not bring the glyph banks back under
+/// a budget set with [`ezu_set_glyph_budget`]; call [`ezu_trim_glyphs`]
+/// when a batch of renders is done.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn ezu_render_tile_with(
+    handle: u32,
+    z: u32,
+    x: u32,
+    y: u32,
+    set_ptr: u32,
+    set_len: u32,
+    opts_ptr: u32,
+    opts_len: u32,
+    out_ptr: u32,
+    out_len: u32,
+) -> i64 {
+    let opts = match options::parse_render(unsafe { input(opts_ptr, opts_len) }) {
+        Ok(o) => o,
+        Err(e) => return fail_err(e),
+    };
+    let raw = unsafe { input(set_ptr, set_len) };
+    with_renderer(handle, |r| {
+        let set = match source_set(handle, raw) {
+            Ok(set) => set,
+            Err(code) => return code,
+        };
+        match r.render_tile_with(z as u8, x, y, &set, opts) {
+            Ok(bytes) => {
+                unsafe { reply(out_ptr, out_len, bytes) };
+                0
+            }
+            Err(e) => fail_err(e),
+        }
+    })
+}
+
+/// Bring every bound fontstack back under the budget
+/// [`ezu_set_glyph_budget`] set; a no-op without one. [`ezu_render_tile`]
+/// does this after each render, and a host rendering with
+/// [`ezu_render_tile_with`] calls it itself.
+#[unsafe(no_mangle)]
+pub extern "C" fn ezu_trim_glyphs(handle: u32) -> i64 {
+    with_renderer(handle, |r| {
+        r.trim_glyphs();
+        0
     })
 }
 
