@@ -226,3 +226,44 @@ fn dash_unit_width_scales_the_dashes_by_each_groups_width() {
         render_line("wide", r#""width-px": 4, "dasharray": [4, 2]"#),
     );
 }
+
+#[test]
+fn offset_draws_the_line_beside_itself() {
+    // East-bound at mid-tile; 6 px to the right of travel is 6 px down,
+    // where the same line drawn 6 px lower lands (64 extent units per px).
+    let at = |y: i32, fields: &str| {
+        let json = format!(
+            r##"{{
+      "name": "offset",
+      "tile-size": 64,
+      "sources": {{ "src": {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }} }},
+      "nodes": {{
+        "feats": {{ "op": "features", "source": "src", "layer": "roads" }},
+        "out":   {{ "op": "stroke", "features": "@feats", "color": "#000000", "width-px": 2 {fields} }}
+      }},
+      "output": "@out"
+    }}"##
+        );
+        render_with_features(
+            &json,
+            64,
+            0,
+            TileId { z: 0, x: 0, y: 0 },
+            &[("src.roads", one_line_layer("roads", "minor", y))],
+        )
+        .pixels
+        .clone()
+    };
+    let lower = at(2048 + 6 * 64, "");
+    assert_ne!(lower, at(2048, ""));
+    assert_eq!(at(2048, r#", "offset-px": 6"#), lower);
+    assert_eq!(
+        at(
+            2048,
+            r#", "offset-expr": ["match", ["get", "class"], "minor", 6, 0]"#
+        ),
+        lower
+    );
+    // Negative goes left of travel: up.
+    assert_eq!(at(2048, r#", "offset-px": -6"#), at(2048 - 6 * 64, ""));
+}

@@ -365,6 +365,11 @@ mean is spelled out in
   which take a `$param` or an `@node`): a shift in canvas pixels, converted
   to feature units for the tile being drawn, so it looks the same at every
   tile size. It adds to `translate`, which stays in feature units.
+- `stroke` takes `offset-px` and `offset-expr`, MapLibre's `line-offset`:
+  the line is drawn that many pixels to the right of its direction of
+  travel, or to the left when negative, its corners mitred out to twice
+  the offset and bevelled past that. `ezu translate` carries
+  `line-offset` over to them; it used to drop it silently.
 
 ### Changed
 

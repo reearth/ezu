@@ -42,10 +42,12 @@ pub(crate) fn convert_line(
                 "layer `{id}`: `line-gap-width` is not supported with `line-pattern` — the pattern is drawn along the centreline"
             ));
         }
-        if paint.get("line-translate").is_some() {
-            report.warn(format!(
-                "layer `{id}`: `line-translate` is not supported with `line-pattern` — drawn unshifted"
-            ));
+        for prop in ["line-translate", "line-offset"] {
+            if paint.get(prop).is_some() {
+                report.warn(format!(
+                    "layer `{id}`: `{prop}` is not supported with `line-pattern` — drawn unshifted"
+                ));
+            }
         }
         let (opacity, opacity_expr) = resolve_number(paint.get("line-opacity"));
         let paint = PatternPaint {
@@ -128,6 +130,15 @@ pub(crate) fn convert_line(
     }
     if let Some(expr) = gap_expr {
         spec["gap-width-expr"] = expr;
+    }
+    // `line-offset` → `offset-px` / `offset-expr`: the line drawn beside
+    // itself, to the right of its direction of travel.
+    let (offset, offset_expr) = resolve_number(paint.get("line-offset"));
+    if let Some(o) = offset.filter(|o| *o != 0.0) {
+        spec["offset-px"] = Value::from(o);
+    }
+    if let Some(expr) = offset_expr {
+        spec["offset-expr"] = expr;
     }
     if let Some(a) = opacity {
         spec["opacity"] = Value::from(a);

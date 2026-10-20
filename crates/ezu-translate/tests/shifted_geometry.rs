@@ -1,6 +1,7 @@
 //! Paint properties that move a layer's geometry rather than colour it:
 //! `circle-translate` / `fill-translate` / `line-translate` become a
-//! `transform` node shifting the features by that many pixels.
+//! `transform` node shifting the features by that many pixels, and
+//! `line-offset` the `stroke`'s `offset-px` / `offset-expr`.
 
 use ezu_translate::maplibre::{convert, ConvertOptions};
 use serde_json::{json, Value};
@@ -96,4 +97,23 @@ fn an_expression_translate_warns_and_draws_unshifted() {
         warnings.iter().any(|w| w.contains("circle-translate")),
         "{warnings:?}"
     );
+}
+
+#[test]
+fn line_offset_draws_the_line_beside_itself() {
+    let (nodes, warnings) = convert_layer(json!({
+        "id": "l", "type": "line", "source": "s", "source-layer": "x",
+        "paint": { "line-width": 2, "line-offset": -3 }
+    }));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(nodes["l__stroke"]["offset-px"], -3.0);
+
+    let offset = json!(["interpolate", ["linear"], ["zoom"], 12, 1, 16, 4]);
+    let (nodes, warnings) = convert_layer(json!({
+        "id": "l", "type": "line", "source": "s", "source-layer": "x",
+        "paint": { "line-width": 2, "line-offset": offset }
+    }));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(nodes["l__stroke"]["offset-expr"], offset);
+    assert!(nodes["l__stroke"].get("offset-px").is_none());
 }
