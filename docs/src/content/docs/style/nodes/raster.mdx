@@ -14,7 +14,7 @@ Image-processing ops over `Raster` (and, where noted, `Sprite`): generators, com
 
 ### `blend`
 
-Composite `over` onto `base` with a W3C blend mode. `clip: true` clips result to base alpha (Photoshop-style clipping mask, i.e. source-atop): the result *takes* the base's alpha, so clipping onto a 0.12-alpha wash caps the whole overlay at 0.12 — when you mean "restrict this to an area", give an opaque shape as `mask` instead. `composite: "destination-out"` makes `over` erase `base` (brush-eraser effect when `over` is a brush-shaped raster). Optional `mask` raster's alpha modulates source coverage.
+Composite `over` onto `base` with a W3C blend mode and a Porter-Duff operator (`composite`, default `source-over`). The mode mixes the colours where both are present; the operator decides how much of each survives, as in the W3C Compositing and Blending spec. `composite: "source-atop"` clips the result to base alpha (Photoshop-style clipping mask): the result *takes* the base's alpha, so clipping onto a 0.12-alpha wash caps the whole overlay at 0.12 — when you mean "restrict this to an area", give an opaque shape as `mask` instead. `composite: "destination-out"` makes `over` erase `base` (brush-eraser effect when `over` is a brush-shaped raster). Optional `mask` raster's alpha modulates source coverage.
 
 <figure class="op-demo op-demo--pair">
   <div class="op-demo__images">
@@ -27,8 +27,8 @@ Composite `over` onto `base` with a W3C blend mode. `clip: true` clips result to
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `base` | `@node` | yes | Reference to another node (`@name`). |
-| `clip` | boolean \| `$param` \| `@node` | no | — |
-| `composite` | `over` \| `source-over` \| `destination-out` \| `dest-out` \| `erase` | no | — |
+| `clip` | boolean \| `$param` \| `@node` | no | Deprecated: use `"composite": "source-atop"`, which is what `true` means. Ignored when `composite` is set. |
+| `composite` | `clear` \| `copy` \| `destination` \| `source-over` \| `destination-over` \| `source-in` \| `destination-in` \| `source-out` \| `destination-out` \| `source-atop` \| `destination-atop` \| `xor` \| `over` \| `source` \| `dest-out` \| `erase` | no | Porter-Duff operator, by its W3C Compositing name. `over`, `source`, and `dest-out` / `erase` are accepted for `source-over`, `copy` and `destination-out`. |
 | `mask` | `@node` | no | Reference to another node (`@name`). |
 | `mode` | `normal` \| `multiply` \| `screen` \| `overlay` \| `darken` \| `lighten` \| `color-dodge` \| `color-burn` \| `hard-light` \| `soft-light` \| `difference` \| `exclusion` \| `hue` \| `saturation` \| `color` \| `luminosity` | no | — |
 | `opacity` | number (0…1) \| `$param` \| `@node` | no | — |

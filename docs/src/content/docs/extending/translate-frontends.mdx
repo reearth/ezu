@@ -45,7 +45,7 @@ easier *and* more faithful than translating them.
 
 **Map the model, not the properties.** An ordered layer list becomes a `blend`
 chain; a casing annulus becomes one stroke's footprint with the corridor knocked
-out; a `fill-pattern` becomes `icon` → `tiling` clipped by `blend { clip: true }`.
+out; a `fill-pattern` becomes `icon` → `tiling` clipped by `blend { composite: "source-atop" }`.
 Each of those is a structural translation, not a property rename, and each is a
 place where a naive mapping looks subtly wrong.
 

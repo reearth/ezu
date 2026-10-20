@@ -241,6 +241,13 @@ mean is spelled out in
   layer to `rotate-deg` / `rotate-deg-expr`. They used to warn and fall back
   to the default. `text-rotate` on a line-placed layer still warns, as does
   an expression `text-offset` alongside `text-variable-anchor`.
+- `blend`'s `composite` takes all twelve Porter-Duff operators by their W3C
+  Compositing names: `clear`, `copy`, `destination`, `source-over`,
+  `destination-over`, `source-in`, `destination-in`, `source-out`,
+  `destination-out`, `source-atop`, `destination-atop` and `xor`. The blend
+  mode mixes the colours where both inputs are present, and the operator
+  decides how much of each survives, as the spec combines them. `over`,
+  `dest-out` and `erase` still work, and `source` names `copy`.
 
 ### Changed
 
@@ -305,6 +312,10 @@ mean is spelled out in
 - `allow-overlap` on `text` and `text-labels`, for `overlap`: `true` is
   `"always"` and `false` is `"never"`. It still works, with a warning naming
   the replacement; when both are set, `overlap` is used.
+- `clip` on `blend`, for `"composite": "source-atop"`, which is what
+  `clip: true` did. It still works, with a warning naming the replacement;
+  when both are set, `composite` is used. `ezu translate` writes
+  `composite` for a `fill-pattern`.
 
 ### Fixed
 

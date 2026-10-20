@@ -85,14 +85,14 @@
       "base": "@toned",
       "over": "@grain",
       "mode": "overlay",
-      "clip": true
+      "composite": "source-atop"
     },
     "stones_lit": {
       "op": "blend",
       "base": "@grained",
       "over": "@relief",
       "mode": "multiply",
-      "clip": true
+      "composite": "source-atop"
     },
     "joints": {
       "op": "solid",

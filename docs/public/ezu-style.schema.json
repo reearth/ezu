@@ -371,7 +371,7 @@
             "type": "object"
           },
           {
-            "description": "Composite `over` onto `base` with a W3C blend mode. `clip: true` clips result to base alpha (Photoshop-style clipping mask, i.e. source-atop): the result *takes* the base's alpha, so clipping onto a 0.12-alpha wash caps the whole overlay at 0.12 — when you mean \"restrict this to an area\", give an opaque shape as `mask` instead. `composite: \"destination-out\"` makes `over` erase `base` (brush-eraser effect when `over` is a brush-shaped raster). Optional `mask` raster's alpha modulates source coverage.",
+            "description": "Composite `over` onto `base` with a W3C blend mode and a Porter-Duff operator (`composite`, default `source-over`). The mode mixes the colours where both are present; the operator decides how much of each survives, as in the W3C Compositing and Blending spec. `composite: \"source-atop\"` clips the result to base alpha (Photoshop-style clipping mask): the result *takes* the base's alpha, so clipping onto a 0.12-alpha wash caps the whole overlay at 0.12 — when you mean \"restrict this to an area\", give an opaque shape as `mask` instead. `composite: \"destination-out\"` makes `over` erase `base` (brush-eraser effect when `over` is a brush-shaped raster). Optional `mask` raster's alpha modulates source coverage.",
             "properties": {
               "base": {
                 "description": "Reference to another node (`@name`).",
@@ -380,6 +380,8 @@
               },
               "clip": {
                 "default": false,
+                "deprecated": true,
+                "description": "Deprecated: use `\"composite\": \"source-atop\"`, which is what `true` means. Ignored when `composite` is set.",
                 "oneOf": [
                   {
                     "type": "boolean"
@@ -391,11 +393,23 @@
                 ]
               },
               "composite": {
-                "default": "over",
+                "default": "source-over",
+                "description": "Porter-Duff operator, by its W3C Compositing name. `over`, `source`, and `dest-out` / `erase` are accepted for `source-over`, `copy` and `destination-out`.",
                 "enum": [
-                  "over",
+                  "clear",
+                  "copy",
+                  "destination",
                   "source-over",
+                  "destination-over",
+                  "source-in",
+                  "destination-in",
+                  "source-out",
                   "destination-out",
+                  "source-atop",
+                  "destination-atop",
+                  "xor",
+                  "over",
+                  "source",
                   "dest-out",
                   "erase"
                 ],

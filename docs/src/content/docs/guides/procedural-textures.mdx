@@ -270,7 +270,7 @@ its own. `voronoi-fracture` gives every cell a property, `random`: a number in
 
 Because the value comes from the seed's world position, a stone on a tile border
 is the same grey in both tiles. A fine noise blended with `overlay` and
-`clip: true` adds grain inside the stones, and the relief is multiplied over
+`composite: "source-atop"` adds grain inside the stones, and the relief is multiplied over
 them.
 
 ## Brick: regularity is a recipe too

@@ -1,16 +1,21 @@
 //! `blend` — composite `over` onto `base` with a Photoshop-style blend
-//! mode, optional clipping (source-atop), and optional alpha mask.
+//! mode, a Porter-Duff operator, and optional alpha mask.
 //!
 //! Blend math follows the W3C *Compositing and Blending Level 1*
 //! reference. Inputs are premultiplied sRGB8; the implementation
 //! demultiplies, applies the blend in non-premultiplied space, then
-//! recomposites with source-over (or source-atop when `clip` is set).
+//! recomposites with the chosen operator (source-over by default).
 //!
 //! Modes implemented (16, full W3C set):
 //! - Separable: `normal`, `multiply`, `screen`, `overlay`, `darken`,
 //!   `lighten`, `color-dodge`, `color-burn`, `hard-light`, `soft-light`,
 //!   `difference`, `exclusion`
 //! - Non-separable: `hue`, `saturation`, `color`, `luminosity`
+//!
+//! Operators implemented (12, the full Porter-Duff set): `clear`, `copy`,
+//! `destination`, `source-over`, `destination-over`, `source-in`,
+//! `destination-in`, `source-out`, `destination-out`, `source-atop`,
+//! `destination-atop`, `xor`.
 
 use std::sync::Arc;
 
@@ -92,34 +97,102 @@ impl BlendMode {
     }
 }
 
-/// Porter-Duff compositing operator. Defaults to `Over` (the usual
-/// "draw on top"). `DestinationOut` is the eraser: keeps base where
-/// `over` is transparent, drops it where `over` is opaque.
+/// Porter-Duff compositing operator, by its W3C Compositing name.
+/// Defaults to `SourceOver` (the usual "draw on top"). `DestinationOut`
+/// is the eraser: keeps base where `over` is transparent, drops it where
+/// `over` is opaque. `SourceAtop` is the clipping mask: `over` shows only
+/// where base is, and the result keeps base's alpha.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Composite {
-    Over,
+    Clear,
+    Copy,
+    Destination,
+    SourceOver,
+    DestinationOver,
+    SourceIn,
+    DestinationIn,
+    SourceOut,
     DestinationOut,
+    SourceAtop,
+    DestinationAtop,
+    Xor,
 }
 
 impl Composite {
     fn parse(s: &str) -> Option<Self> {
         Some(match s {
-            "over" | "source-over" => Self::Over,
+            "clear" => Self::Clear,
+            "copy" | "source" => Self::Copy,
+            "destination" => Self::Destination,
+            "source-over" | "over" => Self::SourceOver,
+            "destination-over" => Self::DestinationOver,
+            "source-in" => Self::SourceIn,
+            "destination-in" => Self::DestinationIn,
+            "source-out" => Self::SourceOut,
             "destination-out" | "dest-out" | "erase" => Self::DestinationOut,
+            "source-atop" => Self::SourceAtop,
+            "destination-atop" => Self::DestinationAtop,
+            "xor" => Self::Xor,
             _ => return None,
         })
     }
     fn as_tag(self) -> &'static [u8] {
         match self {
-            Self::Over => b"over",
+            Self::Clear => b"clear",
+            Self::Copy => b"copy",
+            Self::Destination => b"destination",
+            Self::SourceOver => b"over",
+            Self::DestinationOver => b"destination-over",
+            Self::SourceIn => b"source-in",
+            Self::DestinationIn => b"destination-in",
+            Self::SourceOut => b"source-out",
             Self::DestinationOut => b"destination-out",
+            Self::SourceAtop => b"source-atop",
+            Self::DestinationAtop => b"destination-atop",
+            Self::Xor => b"xor",
         }
+    }
+    /// The Porter-Duff coverage factors `(Fa, Fb)` for source alpha `sa`
+    /// and backdrop alpha `ba`: the result is `Fa` of the (blended)
+    /// source plus `Fb` of the backdrop.
+    #[inline]
+    fn factors(self, sa: f32, ba: f32) -> (f32, f32) {
+        match self {
+            Self::Clear => (0.0, 0.0),
+            Self::Copy => (1.0, 0.0),
+            Self::Destination => (0.0, 1.0),
+            Self::SourceOver => (1.0, 1.0 - sa),
+            Self::DestinationOver => (1.0 - ba, 1.0),
+            Self::SourceIn => (ba, 0.0),
+            Self::DestinationIn => (0.0, sa),
+            Self::SourceOut => (1.0 - ba, 0.0),
+            Self::DestinationOut => (0.0, 1.0 - sa),
+            Self::SourceAtop => (ba, 1.0 - sa),
+            Self::DestinationAtop => (1.0 - ba, sa),
+            Self::Xor => (1.0 - ba, 1.0 - sa),
+        }
+    }
+    /// Whether a fully transparent source leaves the backdrop as it is
+    /// (`Fb` is 1 when the source alpha is 0). Under the others an empty
+    /// source clears the backdrop.
+    fn keeps_base_under_empty_source(self) -> bool {
+        matches!(
+            self,
+            Self::Destination
+                | Self::SourceOver
+                | Self::DestinationOver
+                | Self::DestinationOut
+                | Self::SourceAtop
+                | Self::Xor
+        )
     }
 }
 
 struct BlendNode {
     mode: BlendMode,
-    composite: Composite,
+    /// The operator the style names. `None` leaves it to the deprecated
+    /// `clip` flag: source-atop when it is true, source-over otherwise.
+    composite: Option<Composite>,
     opacity: In<f64>,
     clip: In<bool>,
     has_mask: bool,
@@ -173,22 +246,35 @@ impl Node for BlendNode {
             }
         }
         let op = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
-        let clip = self.clip.get(ctx, inputs)?;
+        let composite = match self.composite {
+            Some(c) => c,
+            None if self.clip.get(ctx, inputs)? => Composite::SourceAtop,
+            None => Composite::SourceOver,
+        };
+
+        // The backdrop alone, or nothing at all: no pixel of `over` counts.
+        if composite == Composite::Destination {
+            return Ok(base_in.clone());
+        }
+        if composite == Composite::Clear {
+            let out = RasterBuf::new(base.width, base.height);
+            return Ok(wrap_raster_like(Arc::new(out), kind));
+        }
 
         // Fast path: `over` is fully transparent (all bytes zero), so
-        // there is nothing to composite. Every mode/composite reduces to
-        // "keep base" when the source alpha is zero (mask and opacity only
-        // scale that already-zero alpha), so the result is `base` verbatim.
-        if over.is_blank() {
+        // there is nothing to composite. Every mode reduces to "keep base"
+        // when the source alpha is zero (mask and opacity only scale that
+        // already-zero alpha) under the operators that keep the backdrop
+        // there, so the result is `base` verbatim.
+        if over.is_blank() && composite.keeps_base_under_empty_source() {
             return Ok(base_in.clone());
         }
 
         // Fast path: plain source-over of premultiplied bytes — the common
-        // Normal / over / no-clip / no-mask case. Skip the demultiply →
+        // Normal / source-over / no-mask case. Skip the demultiply →
         // W3C blend → recomposite round-trip and work in integer space.
         if self.mode == BlendMode::Normal
-            && self.composite == Composite::Over
-            && !clip
+            && composite == Composite::SourceOver
             && mask_ref.is_none()
         {
             // Base is transparent everywhere: source-over onto nothing is
@@ -200,13 +286,16 @@ impl Node for BlendNode {
             return Ok(wrap_raster_like(Arc::new(out), kind));
         }
 
-        let out = blend_general(&base, &over, mask_ref, self.mode, self.composite, op, clip);
+        let out = blend_general(&base, &over, mask_ref, self.mode, composite, op);
         Ok(wrap_raster_like(Arc::new(out), kind))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"blend");
         h.update(self.mode.as_tag());
-        h.update(self.composite.as_tag());
+        match self.composite {
+            Some(c) => h.update(c.as_tag()),
+            None => h.update(b"clip-flag"),
+        }
         self.opacity.param_hash(h);
         self.clip.param_hash(h);
         h.update(&[self.has_mask as u8]);
@@ -217,8 +306,8 @@ impl Node for BlendNode {
 }
 
 /// General blend loop: demultiply, apply the W3C blend function in
-/// non-premultiplied space, then recomposite with source-over (or
-/// source-atop when `clip` is set, or destination-out for the eraser).
+/// non-premultiplied space, then recomposite with the Porter-Duff
+/// operator `composite`.
 fn blend_general(
     base: &RasterBuf,
     over: &RasterBuf,
@@ -226,7 +315,6 @@ fn blend_general(
     mode: BlendMode,
     composite: Composite,
     op: f32,
-    clip: bool,
 ) -> RasterBuf {
     let mut out = RasterBuf::new(base.width, base.height);
     for i in (0..base.pixels.len()).step_by(4) {
@@ -257,21 +345,33 @@ fn blend_general(
         let bsr = (1.0 - ba) * sr + ba * mr;
         let bsg = (1.0 - ba) * sg + ba * mg;
         let bsb = (1.0 - ba) * sb + ba * mb;
-        // Composite. `clip` switches source-over -> source-atop.
-        let (or, og, ob, oa) = if clip {
-            // source-atop: αo = αb, co = αs*αb*Cs' + (1-αs)*αb*Cb
-            let oa = ba;
-            let or = sa * ba * bsr + (1.0 - sa) * ba * br;
-            let og = sa * ba * bsg + (1.0 - sa) * ba * bg;
-            let ob = sa * ba * bsb + (1.0 - sa) * ba * bb;
-            (or, og, ob, oa)
-        } else {
-            // source-over: αo = αs + αb*(1-αs)
-            let oa = sa + ba * (1.0 - sa);
-            let or = sa * bsr + (1.0 - sa) * ba * br;
-            let og = sa * bsg + (1.0 - sa) * ba * bg;
-            let ob = sa * bsb + (1.0 - sa) * ba * bb;
-            (or, og, ob, oa)
+        // Composite. Source-over and source-atop keep their own spelled-out
+        // arithmetic so styles written before the other operators existed
+        // round to the same bytes; the rest use the general Porter-Duff
+        // form co = αs*Fa*Cs' + αb*Fb*Cb, αo = αs*Fa + αb*Fb.
+        let (or, og, ob, oa) = match composite {
+            Composite::SourceAtop => {
+                // source-atop: αo = αb, co = αs*αb*Cs' + (1-αs)*αb*Cb
+                let oa = ba;
+                let or = sa * ba * bsr + (1.0 - sa) * ba * br;
+                let og = sa * ba * bsg + (1.0 - sa) * ba * bg;
+                let ob = sa * ba * bsb + (1.0 - sa) * ba * bb;
+                (or, og, ob, oa)
+            }
+            Composite::SourceOver => {
+                // source-over: αo = αs + αb*(1-αs)
+                let oa = sa + ba * (1.0 - sa);
+                let or = sa * bsr + (1.0 - sa) * ba * br;
+                let og = sa * bsg + (1.0 - sa) * ba * bg;
+                let ob = sa * bsb + (1.0 - sa) * ba * bb;
+                (or, og, ob, oa)
+            }
+            other => {
+                let (fa, fb) = other.factors(sa, ba);
+                let s = sa * fa;
+                let b = ba * fb;
+                (s * bsr + b * br, s * bsg + b * bg, s * bsb + b * bb, s + b)
+            }
         };
         // `or`/`og`/`ob` are already premultiplied (multiplied by
         // alphas in the composite step). Pack back into u8.
@@ -287,7 +387,7 @@ fn blend_general(
 /// space: `out_c = s_c + d_c * (255 - s_a) / 255`. When `op < 1`, the
 /// premultiplied source is first scaled by `op` (scaling every channel,
 /// alpha included, keeps it premultiplied). Matches [`blend_general`] for
-/// `mode = Normal`, `composite = Over`, no clip and no mask, to within a
+/// `mode = Normal`, `composite = SourceOver` and no mask, to within a
 /// rounding step per channel.
 fn normal_over(base: &RasterBuf, over: &RasterBuf, op: f32) -> RasterBuf {
     let mut out = RasterBuf::new(base.width, base.height);
@@ -347,11 +447,35 @@ impl NodeFactory for BlendFactory {
             field: "mode".into(),
             msg: format!("unknown blend mode `{mode_str}`"),
         })?;
-        let composite_str = read_string_or(fields, "composite", ctx, "over")?;
-        let composite = Composite::parse(&composite_str).ok_or_else(|| FactoryError::BadField {
-            field: "composite".into(),
-            msg: format!("unknown composite op `{composite_str}`"),
-        })?;
+        let composite = if fields.contains_key("composite") {
+            let s = read_string_or(fields, "composite", ctx, "source-over")?;
+            let c = Composite::parse(&s).ok_or_else(|| FactoryError::BadField {
+                field: "composite".into(),
+                msg: format!("unknown composite op `{s}`"),
+            })?;
+            Some(c)
+        } else {
+            None
+        };
+        // `clip` predates the operator list; `clip: true` is source-atop.
+        // It still works on its own, and gives way to `composite`.
+        if let Some(clip) = fields.get("clip") {
+            if composite.is_some() {
+                ctx.warn("`clip` ignored: `composite` sets the operator");
+            } else {
+                match clip.as_bool() {
+                    Some(true) => ctx.warn(
+                        "`clip` is deprecated: write \"composite\": \"source-atop\" instead",
+                    ),
+                    Some(false) => ctx.warn(
+                        "`clip` is deprecated: drop it (\"composite\": \"source-over\" is the default)",
+                    ),
+                    None => ctx.warn(
+                        "`clip` is deprecated: write \"composite\": \"source-atop\" where it is true",
+                    ),
+                }
+            }
+        }
         let has_mask = mask.is_some();
         // Scalar port indices start after the three fixed ports
         // (base, over, mask) — `mask` always occupies index 2 even
@@ -413,7 +537,7 @@ impl NodeFactory for BlendFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Composite `over` onto `base` with a W3C blend mode. `clip: true` clips result to base alpha (Photoshop-style clipping mask, i.e. source-atop): the result *takes* the base's alpha, so clipping onto a 0.12-alpha wash caps the whole overlay at 0.12 — when you mean \"restrict this to an area\", give an opaque shape as `mask` instead. `composite: \"destination-out\"` makes `over` erase `base` (brush-eraser effect when `over` is a brush-shaped raster). Optional `mask` raster's alpha modulates source coverage.",
+            "description": "Composite `over` onto `base` with a W3C blend mode and a Porter-Duff operator (`composite`, default `source-over`). The mode mixes the colours where both are present; the operator decides how much of each survives, as in the W3C Compositing and Blending spec. `composite: \"source-atop\"` clips the result to base alpha (Photoshop-style clipping mask): the result *takes* the base's alpha, so clipping onto a 0.12-alpha wash caps the whole overlay at 0.12 — when you mean \"restrict this to an area\", give an opaque shape as `mask` instead. `composite: \"destination-out\"` makes `over` erase `base` (brush-eraser effect when `over` is a brush-shaped raster). Optional `mask` raster's alpha modulates source coverage.",
             "properties": {
                 "base": schema_frag::node_ref(),
                 "over": schema_frag::node_ref(),
@@ -430,10 +554,24 @@ impl NodeFactory for BlendFactory {
                 },
                 "composite": {
                     "type": "string",
-                    "enum": ["over", "source-over", "destination-out", "dest-out", "erase"],
-                    "default": "over"
+                    "enum": [
+                        "clear", "copy", "destination",
+                        "source-over", "destination-over",
+                        "source-in", "destination-in",
+                        "source-out", "destination-out",
+                        "source-atop", "destination-atop",
+                        "xor",
+                        "over", "source", "dest-out", "erase"
+                    ],
+                    "default": "source-over",
+                    "description": "Porter-Duff operator, by its W3C Compositing name. `over`, `source`, and `dest-out` / `erase` are accepted for `source-over`, `copy` and `destination-out`."
                 },
-                "clip": { "oneOf": [{"type": "boolean"}, {"type": "string", "pattern": "^[$@].+"}], "default": false },
+                "clip": {
+                    "oneOf": [{"type": "boolean"}, {"type": "string", "pattern": "^[$@].+"}],
+                    "default": false,
+                    "deprecated": true,
+                    "description": "Deprecated: use `\"composite\": \"source-atop\"`, which is what `true` means. Ignored when `composite` is set."
+                },
                 "opacity": schema_frag::unit_number(),
             },
             "required": ["base", "over"],
@@ -633,9 +771,8 @@ mod tests {
             &over,
             None,
             BlendMode::Normal,
-            Composite::Over,
+            Composite::SourceOver,
             1.0,
-            false,
         );
         assert_close(&fast, &reference, 1);
     }
@@ -650,9 +787,8 @@ mod tests {
             &over,
             None,
             BlendMode::Normal,
-            Composite::Over,
+            Composite::SourceOver,
             0.5,
-            false,
         );
         assert_close(&fast, &reference, 1);
     }
@@ -670,10 +806,115 @@ mod tests {
             &over,
             None,
             BlendMode::Normal,
-            Composite::Over,
+            Composite::SourceOver,
             1.0,
-            false,
         );
         assert_eq!(out.pixels, base.pixels);
+    }
+
+    /// One pixel each of a half-transparent red source and a
+    /// three-quarter-opaque blue backdrop, composited with `c`.
+    fn one_pixel(c: Composite, mode: BlendMode) -> [u8; 4] {
+        let mut base = RasterBuf::new(1, 1);
+        base.pixels.copy_from_slice(&[0, 0, 191, 191]);
+        let mut over = RasterBuf::new(1, 1);
+        over.pixels.copy_from_slice(&[128, 0, 0, 128]);
+        let out = blend_general(&base, &over, None, mode, c, 1.0);
+        [out.pixels[0], out.pixels[1], out.pixels[2], out.pixels[3]]
+    }
+
+    #[test]
+    fn every_operator_follows_its_porter_duff_factors() {
+        // αs = 128/255, αb = 191/255; premultiplied red cs = 128 and blue
+        // cb = 191. With `normal` the blended source is the source itself,
+        // so each channel is cs*Fa + cb*Fb.
+        let sa = 128.0 / 255.0;
+        let ba = 191.0 / 255.0;
+        let cases = [
+            (Composite::Clear, 0.0, 0.0),
+            (Composite::Copy, 1.0, 0.0),
+            (Composite::Destination, 0.0, 1.0),
+            (Composite::SourceOver, 1.0, 1.0 - sa),
+            (Composite::DestinationOver, 1.0 - ba, 1.0),
+            (Composite::SourceIn, ba, 0.0),
+            (Composite::DestinationIn, 0.0, sa),
+            (Composite::SourceOut, 1.0 - ba, 0.0),
+            (Composite::DestinationOut, 0.0, 1.0 - sa),
+            (Composite::SourceAtop, ba, 1.0 - sa),
+            (Composite::DestinationAtop, 1.0 - ba, sa),
+            (Composite::Xor, 1.0 - ba, 1.0 - sa),
+        ];
+        for (c, fa, fb) in cases {
+            let px = one_pixel(c, BlendMode::Normal);
+            let want = [
+                (128.0 * fa as f32).round() as i32,
+                0,
+                (191.0 * fb as f32).round() as i32,
+                ((128.0 * fa + 191.0 * fb) as f32).round() as i32,
+            ];
+            for k in 0..4 {
+                assert!(
+                    (px[k] as i32 - want[k]).abs() <= 1,
+                    "{c:?}: got {px:?}, want {want:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn blend_mode_reaches_the_source_part_of_every_operator() {
+        // Multiply of red onto blue is black where they overlap, so under
+        // `source-in`, which keeps only the overlap, the source loses red.
+        let normal = one_pixel(Composite::SourceIn, BlendMode::Normal);
+        let multiplied = one_pixel(Composite::SourceIn, BlendMode::Multiply);
+        assert_eq!(normal[3], multiplied[3], "the operator alone sets alpha");
+        assert!(multiplied[0] < normal[0], "{multiplied:?} vs {normal:?}");
+        // Under `destination-in` the source contributes no colour, so the
+        // mode changes nothing.
+        assert_eq!(
+            one_pixel(Composite::DestinationIn, BlendMode::Normal),
+            one_pixel(Composite::DestinationIn, BlendMode::Multiply),
+        );
+    }
+
+    #[test]
+    fn aliases_name_the_same_operators() {
+        assert_eq!(Composite::parse("over"), Some(Composite::SourceOver));
+        assert_eq!(Composite::parse("source"), Some(Composite::Copy));
+        assert_eq!(
+            Composite::parse("dest-out"),
+            Some(Composite::DestinationOut)
+        );
+        assert_eq!(Composite::parse("erase"), Some(Composite::DestinationOut));
+        assert_eq!(Composite::parse("plus"), None);
+    }
+
+    #[test]
+    fn empty_source_keeps_base_exactly_where_the_operator_says_so() {
+        let base = random_premul(9, 7, 0xbeef);
+        let over = RasterBuf::new(9, 7);
+        for c in [
+            Composite::Clear,
+            Composite::Copy,
+            Composite::Destination,
+            Composite::SourceOver,
+            Composite::DestinationOver,
+            Composite::SourceIn,
+            Composite::DestinationIn,
+            Composite::SourceOut,
+            Composite::DestinationOut,
+            Composite::SourceAtop,
+            Composite::DestinationAtop,
+            Composite::Xor,
+        ] {
+            let out = blend_general(&base, &over, None, BlendMode::Normal, c, 1.0);
+            if c.keeps_base_under_empty_source() {
+                // Within a rounding step: the eval fast path returns base
+                // itself, which the general loop matches.
+                assert_close(&out, &base, 1);
+            } else {
+                assert!(out.is_blank(), "{c:?} should clear under an empty source");
+            }
+        }
     }
 }

@@ -46,11 +46,11 @@
                      "space": "hcl", "opacity": 0.7 },
 
     "land_glass":  { "op": "blend", "base": "@land_flat", "over": "@pane_tint",
-                     "mode": "overlay", "clip": true },
+                     "mode": "overlay", "composite": "source-atop" },
     "green_glass": { "op": "blend", "base": "@green_flat", "over": "@pane_tint",
-                     "mode": "overlay", "clip": true },
+                     "mode": "overlay", "composite": "source-atop" },
     "water_glass": { "op": "blend", "base": "@water_flat", "over": "@pane_tint",
-                     "mode": "soft-light", "clip": true },
+                     "mode": "soft-light", "composite": "source-atop" },
 
     "glass":       { "op": "stack", "layers": ["@land_glass", "@water_glass", "@green_glass"] },
     "bleed":       { "op": "blur", "input": "@glass", "sigma": 6.0 },

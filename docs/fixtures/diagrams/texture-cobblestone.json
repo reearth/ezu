@@ -29,8 +29,8 @@
       "low-color": "#00000050",
       "high-color": "#ffffff40"
     },
-    "grained": { "op": "blend", "base": "@toned", "over": "@grain", "mode": "overlay", "clip": true },
-    "stones_lit": { "op": "blend", "base": "@grained", "over": "@relief", "mode": "multiply", "clip": true },
+    "grained": { "op": "blend", "base": "@toned", "over": "@grain", "mode": "overlay", "composite": "source-atop" },
+    "stones_lit": { "op": "blend", "base": "@grained", "over": "@relief", "mode": "multiply", "composite": "source-atop" },
     "joints": { "op": "solid", "color": "#3a3128" },
     "out": { "op": "stack", "layers": ["@joints", "@stones_lit"] }
   },

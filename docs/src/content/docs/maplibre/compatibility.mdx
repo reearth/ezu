@@ -83,7 +83,7 @@ once the style is migrated (`--migrate`, see below).
 
 | MapLibre | ezu |
 | --- | --- |
-| `fill-pattern` (constant) | `icon` → `tiling`, clipped to the fill shape via `blend { clip: true }` |
+| `fill-pattern` (constant) | `icon` → `tiling`, clipped to the fill shape via `blend { composite: "source-atop" }` |
 | `line-pattern` (constant) | `icon` → `line-stamp` (over `boundary`, so polygon rings too), repeated along the line and fitted to `line-width`. An expression `line-width` or `line-opacity` becomes `width-expr` / `opacity-expr`; `line-gap-width` is not drawn and warns |
 | `line-pattern` (data-driven) | `line-stamp` with the style's sprite sheet and the pattern expression as `name-expr`, cropping each feature's icon |
 | top-level `sprite` (single URL or `[{id, url}]`) | one `sprite` source per sheet — atlas `<url>.png` plus index `<url>.json`, or an inline index. `sheet:icon` names supported |

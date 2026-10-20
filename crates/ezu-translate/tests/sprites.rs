@@ -57,13 +57,13 @@ fn sprite_source_icons_and_pattern_convert() {
 
     let icons = by_op("icon");
 
-    // fill-pattern → fill-solid shape + icon + tiling + blend(clip:true).
+    // fill-pattern → fill-solid shape + icon + tiling + blend(source-atop).
     assert!(icons.iter().any(|n| n["name"] == "hatch-16"));
     assert!(by_op("tiling")
         .iter()
         .any(|n| n["input"].as_str().unwrap().contains("__icon")));
     let blends = by_op("blend");
-    assert!(blends.iter().any(|n| n["clip"] == true));
+    assert!(blends.iter().any(|n| n["composite"] == "source-atop"));
 
     // line-pattern → icon + line-stamp fit to the stroke width.
     assert!(icons.iter().any(|n| n["name"] == "dash-8"));

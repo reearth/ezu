@@ -193,8 +193,9 @@ pub(crate) fn convert_fill_extrusion(
 
 /// `fill-pattern` → tile the named sprite icon across the canvas and clip it
 /// to the polygon coverage: `fill-solid` (opaque shape) as the clip base,
-/// `icon` → `tiling` as the pattern, composed with `blend { clip: true }`
-/// (source-atop keeps the pattern only inside the polygons).
+/// `icon` → `tiling` as the pattern, composed with
+/// `blend { composite: "source-atop" }` (which keeps the pattern only
+/// inside the polygons).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn convert_fill_pattern(
     id: &str,
@@ -246,7 +247,7 @@ pub(crate) fn convert_fill_pattern(
         out_id.clone(),
         serde_json::json!({
             "op": "blend", "base": format!("@{shape_id}"),
-            "over": format!("@{tile_id}"), "clip": true
+            "over": format!("@{tile_id}"), "composite": "source-atop"
         }),
     );
     outputs.push(out_id);

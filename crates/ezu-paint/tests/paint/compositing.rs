@@ -178,3 +178,108 @@ fn blend_destination_out_erases_base_under_over() {
         "corner untouched: {corner:?}"
     );
 }
+
+/// Opaque red `over` on the right 60% composited onto opaque blue `base`
+/// on the left 60%, with the blend fields `extra`. Columns 7, 16 and 29
+/// sit in the base-only, overlap and over-only bands.
+fn two_bands(extra: &str) -> String {
+    format!(
+        r##"{{
+      "name": "demo",
+      "tile-size": 32,
+      "nodes": {{
+        "base": {{ "op": "gradient-linear", "stops": [[0, "#0000ff"], [0.6, "#0000ff"], [0.61, "#0000ff00"], [1, "#0000ff00"]] }},
+        "over": {{ "op": "gradient-linear", "stops": [[0, "#ff000000"], [0.39, "#ff000000"], [0.4, "#ff0000"], [1, "#ff0000"]] }},
+        "out":  {{ "op": "blend", "base": "@base", "over": "@over"{extra} }}
+      }},
+      "output": "@out"
+    }}"##
+    )
+}
+
+fn build_warnings(json: &str) -> Vec<String> {
+    let doc = ezu_style::Document::from_json(json).expect("parses");
+    ezu_graph::build_graph(&doc, &ezu_paint::nodes::default_registry())
+        .expect("builds")
+        .warnings()
+        .to_vec()
+}
+
+#[test]
+fn composite_source_atop_matches_clip_true_byte_for_byte() {
+    let clipped = render(&two_bands(r#", "clip": true"#), 32, 0);
+    let atop = render(&two_bands(r#", "composite": "source-atop""#), 32, 0);
+    assert_eq!(clipped.pixels, atop.pixels);
+}
+
+#[test]
+fn clip_warns_with_the_composite_that_replaces_it() {
+    let w = build_warnings(&two_bands(r#", "clip": true"#));
+    assert!(
+        w.iter()
+            .any(|m| m.contains("\"composite\": \"source-atop\"")),
+        "{w:?}"
+    );
+    assert!(build_warnings(&two_bands(r#", "composite": "source-atop""#)).is_empty());
+}
+
+#[test]
+fn composite_wins_over_clip() {
+    let both = two_bands(r#", "clip": true, "composite": "source-over""#);
+    let w = build_warnings(&both);
+    assert!(w.iter().any(|m| m.contains("`clip` ignored")), "{w:?}");
+    let over = render(&two_bands(""), 32, 0);
+    assert_eq!(render(&both, 32, 0).pixels, over.pixels);
+}
+
+#[test]
+fn porter_duff_operators_keep_the_right_regions() {
+    // Probe three regions: base only (left of centre), both (centre right),
+    // over only (far right).
+    let (base_only, both, over_only) = ((7, 16), (18, 16), (29, 16));
+    let px = |c: &str| render(&two_bands(&format!(r#", "composite": "{c}""#)), 32, 0);
+
+    let r = px("destination-over");
+    assert_eq!(
+        r.pixel(both.0, both.1),
+        [0, 0, 0xff, 0xff],
+        "base stays on top"
+    );
+    assert_eq!(r.pixel(over_only.0, over_only.1), [0xff, 0, 0, 0xff]);
+
+    let r = px("source-in");
+    assert_eq!(r.pixel(base_only.0, base_only.1)[3], 0);
+    assert_eq!(r.pixel(both.0, both.1), [0xff, 0, 0, 0xff]);
+    assert_eq!(r.pixel(over_only.0, over_only.1)[3], 0);
+
+    let r = px("destination-in");
+    assert_eq!(r.pixel(base_only.0, base_only.1)[3], 0);
+    assert_eq!(r.pixel(both.0, both.1), [0, 0, 0xff, 0xff]);
+
+    let r = px("source-out");
+    assert_eq!(r.pixel(both.0, both.1)[3], 0);
+    assert_eq!(r.pixel(over_only.0, over_only.1), [0xff, 0, 0, 0xff]);
+
+    let r = px("destination-atop");
+    assert_eq!(r.pixel(base_only.0, base_only.1)[3], 0);
+    assert_eq!(r.pixel(both.0, both.1), [0, 0, 0xff, 0xff]);
+    assert_eq!(r.pixel(over_only.0, over_only.1), [0xff, 0, 0, 0xff]);
+
+    let r = px("xor");
+    assert_eq!(r.pixel(base_only.0, base_only.1), [0, 0, 0xff, 0xff]);
+    assert_eq!(r.pixel(both.0, both.1)[3], 0);
+    assert_eq!(r.pixel(over_only.0, over_only.1), [0xff, 0, 0, 0xff]);
+
+    let r = px("copy");
+    assert_eq!(r.pixel(base_only.0, base_only.1)[3], 0);
+    assert_eq!(r.pixel(both.0, both.1), [0xff, 0, 0, 0xff]);
+    assert_eq!(px("source").pixels, r.pixels, "`source` is `copy`");
+
+    assert!(px("clear").pixels.iter().all(|&b| b == 0));
+    let base = render(
+        &two_bands(r#", "composite": "source-atop", "opacity": 0"#),
+        32,
+        0,
+    );
+    assert_eq!(px("destination").pixels, base.pixels);
+}

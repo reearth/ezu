@@ -73,7 +73,7 @@ For many layers at once, `stack` composites a list in one node.
   <figcaption>Three layers stacked as a `blend` chain — the shape `ezu translate` emits from an ordered MapLibre layer list.</figcaption>
 </figure>
 
-**Masking.** `blend` with `clip: true` clips the result to the base's alpha —
+**Masking.** `blend` with `composite: "source-atop"` clips the result to the base's alpha —
 Photoshop's clipping mask, and how a `fill-pattern` gets confined to its polygon.
 
 **Toggling a branch.** `switch` selects between two inputs, which is how
