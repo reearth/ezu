@@ -580,3 +580,20 @@ fn lattice_spacing_may_be_left_out_when_both_axes_are_given() {
         assert!(err.contains("spacing"), "{op}: {err}");
     }
 }
+
+#[test]
+fn stroke_gap_width_takes_a_param_or_a_node() {
+    let doc = r##"{
+      "name": "demo",
+      "tile-size": 32,
+      %PARAMS%
+      "nodes": {
+        %NODES%
+        "shape": { "op": "literal-geometry", "lines": [ [[0, 2048], [4096, 2048]] ] },
+        "out":   { "op": "stroke", "features": "@shape", "color": "#000000",
+                   "width-px": 2, "gap-width-px": %V% }
+      },
+      "output": "@out"
+    }"##;
+    assert_number_field_drivable_plain(doc, 32, 0, 2.0, 6.0);
+}

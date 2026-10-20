@@ -418,11 +418,11 @@ impl NodeFactory for StrokeFactory {
                 "width-expr": {
                     "description": "A MapLibre number expression (JSON array, e.g. [\"interpolate\", [\"linear\"], [\"zoom\"], 10, 1, 16, 4]) giving stroke width in pixels, evaluated per feature group at paint time. When present it overrides the constant `width-px`; a group whose expression doesn't resolve to a number falls back to `width-px`.",
                 },
-                "gap-width-px": {
+                "gap-width-px": schema_frag::in_number(serde_json::json!({
                     "type": "number",
                     "default": 0,
                     "description": "MapLibre `line-gap-width`: when > 0 the stroke becomes a casing — two parallel bands of `width-px` each, their inner edges this many pixels apart (outer footprint `gap + 2 * width`, centred on the line). `0` strokes the centreline.",
-                },
+                })),
                 "gap-width-expr": {
                     "description": "A MapLibre number expression (JSON array) giving the casing gap in pixels, evaluated per feature group at paint time. When present it overrides the constant `gap-width-px`; a group whose expression doesn't resolve to a number falls back to `gap-width-px`.",
                 },

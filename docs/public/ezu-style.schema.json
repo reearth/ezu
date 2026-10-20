@@ -4952,9 +4952,18 @@
                 "description": "A MapLibre number expression (JSON array) giving the casing gap in pixels, evaluated per feature group at paint time. When present it overrides the constant `gap-width-px`; a group whose expression doesn't resolve to a number falls back to `gap-width-px`."
               },
               "gap-width-px": {
-                "default": 0,
-                "description": "MapLibre `line-gap-width`: when > 0 the stroke becomes a casing — two parallel bands of `width-px` each, their inner edges this many pixels apart (outer footprint `gap + 2 * width`, centred on the line). `0` strokes the centreline.",
-                "type": "number"
+                "oneOf": [
+                  {
+                    "default": 0,
+                    "description": "MapLibre `line-gap-width`: when > 0 the stroke becomes a casing — two parallel bands of `width-px` each, their inner edges this many pixels apart (outer footprint `gap + 2 * width`, centred on the line). `0` strokes the centreline.",
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "join": {
                 "default": "miter",

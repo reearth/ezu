@@ -244,6 +244,9 @@ mean is spelled out in
   a `$param` set at render time, as its schema said; it used to reject the
   one and keep the other at its default. It may now be left out when both
   `spacing-x` and `spacing-y` are given.
+- The schema lists `$param` and `@node` for `gap-width-px` on `stroke`, which
+  has always accepted them; editors that validate against the schema
+  flagged them as errors.
 
 ## 0.12.0 — 2026-10-12
 
