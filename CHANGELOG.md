@@ -234,6 +234,13 @@ mean is spelled out in
   bounds of its turned box, as in MapLibre, and `label-boxes` reports its
   `text` and `background` as turned quads. Line placement ignores it with a
   warning.
+- `ezu translate` carries expression forms of `text-offset`,
+  `text-max-width`, `text-letter-spacing`, `text-justify`,
+  `text-line-height` and `text-transform`, zoom curves included, to the
+  `text` node's matching `*-expr` fields, and `text-rotate` on a point-placed
+  layer to `rotate-deg` / `rotate-deg-expr`. They used to warn and fall back
+  to the default. `text-rotate` on a line-placed layer still warns, as does
+  an expression `text-offset` alongside `text-variable-anchor`.
 
 ### Changed
 

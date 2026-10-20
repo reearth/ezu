@@ -654,8 +654,6 @@ fn convert_text(
         spec["opacity-expr"] = e;
     }
 
-    // Layout constants. The `text` node takes these at build time, so an
-    // expression here falls back to the default with a warning.
     // The positions a point label tries: `text-variable-anchor-offset`, else
     // `text-variable-anchor` with its offsets, become `anchor-offsets`, which
     // takes over from `anchor` / `offset-em`. Line placement has no
@@ -681,29 +679,68 @@ fn convert_text(
                 }
             }
         }
-        if let Some(offset) = const_offset(get("text-offset"), "text-offset", id, report) {
-            spec["offset-em"] = serde_json::json!(offset);
+        // A data-driven `text-offset` (a zoom curve, a `match`) goes to
+        // `offset-em-expr`, which the node evaluates per feature.
+        match get("text-offset") {
+            Some(v) if is_expr(v) && !is_const_pair(v) => spec["offset-em-expr"] = v.clone(),
+            v => {
+                if let Some(offset) = const_offset(v, "text-offset", id, report) {
+                    spec["offset-em"] = serde_json::json!(offset);
+                }
+            }
         }
     }
-    if let Some(justify) = const_string(get("text-justify"), "text-justify", id, report) {
-        spec["justify"] = Value::from(justify);
+    // The other layout knobs: a constant stays a plain field, an expression
+    // becomes the `*-expr` sibling the node evaluates per feature.
+    for (prop, field, expr_field) in [
+        ("text-justify", "justify", "justify-expr"),
+        ("text-transform", "transform", "transform-expr"),
+    ] {
+        match get(prop) {
+            Some(v) if is_expr(v) => spec[expr_field] = v.clone(),
+            v => {
+                if let Some(s) = const_string(v, prop, id, report) {
+                    spec[field] = Value::from(s);
+                }
+            }
+        }
     }
-    if let Some(transform) = const_string(get("text-transform"), "text-transform", id, report) {
-        spec["transform"] = Value::from(transform);
+    for (prop, field, expr_field) in [
+        ("text-max-width", "max-width-em", "max-width-em-expr"),
+        ("text-line-height", "line-height", "line-height-expr"),
+        (
+            "text-letter-spacing",
+            "letter-spacing-em",
+            "letter-spacing-em-expr",
+        ),
+    ] {
+        match get(prop) {
+            Some(v) if is_expr(v) => spec[expr_field] = v.clone(),
+            v => {
+                if let Some(n) = const_number(v, prop, id, report) {
+                    spec[field] = Value::from(n);
+                }
+            }
+        }
     }
-    if let Some(w) = const_number(get("text-max-width"), "text-max-width", id, report) {
-        spec["max-width-em"] = Value::from(w);
-    }
-    if let Some(h) = const_number(get("text-line-height"), "text-line-height", id, report) {
-        spec["line-height"] = Value::from(h);
-    }
-    if let Some(s) = const_number(
-        get("text-letter-spacing"),
-        "text-letter-spacing",
-        id,
-        report,
-    ) {
-        spec["letter-spacing-em"] = Value::from(s);
+    // `text-rotate` turns a point label about its anchor. On a line MapLibre
+    // adds it to each glyph's angle along the path, which the `text` node
+    // does not do.
+    if let Some(v) = get("text-rotate") {
+        if placement == "point" {
+            match v {
+                v if is_expr(v) => spec["rotate-deg-expr"] = v.clone(),
+                v => {
+                    if let Some(deg) = const_number(Some(v), "text-rotate", id, report) {
+                        spec["rotate-deg"] = Value::from(deg);
+                    }
+                }
+            }
+        } else {
+            report.warn(format!(
+                "layer `{id}`: `text-rotate` on line placement not supported — glyphs follow the line"
+            ));
+        }
     }
 
     // Line placement and its layout knobs (point placement is the node
@@ -1244,6 +1281,12 @@ fn const_anchor_list(v: Option<&Value>, id: &str, report: &mut Report) -> Option
             None
         }
     }
+}
+
+/// Whether `v` is a literal `[x, y]` pair of numbers rather than an
+/// expression: both are JSON arrays.
+fn is_const_pair(v: &Value) -> bool {
+    matches!(v, Value::Array(a) if a.len() == 2 && a.iter().all(Value::is_number))
 }
 
 /// A constant `[x, y]` offset (`text-offset` in em, `icon-offset` in px),

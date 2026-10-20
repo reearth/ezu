@@ -1275,3 +1275,104 @@ fn a_style_without_label_layers_emits_no_placement_node() {
     let (recipe, _) = convert(&style, &ConvertOptions::default()).unwrap();
     assert!(recipe["nodes"].get("__label_placement").is_none());
 }
+
+#[test]
+fn expression_layout_properties_route_to_their_expr_fields() {
+    // Zoom curves and data-driven values on the layout knobs become the text
+    // node's `*-expr` fields, constants stay plain fields, and `text-rotate`
+    // turns a point label but warns on a line.
+    const STYLE: &str = r##"{
+      "version": 8,
+      "name": "layout-exprs",
+      "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+      "layers": [
+        { "id": "places", "type": "symbol", "source": "s", "source-layer": "place",
+          "layout": {
+            "text-field": "{name}",
+            "text-font": ["F"],
+            "text-offset": ["interpolate", ["linear"], ["zoom"], 4, ["literal", [0, 0.5]], 10, ["literal", [0, 1]]],
+            "text-max-width": ["interpolate", ["linear"], ["zoom"], 4, 6, 10, 10],
+            "text-letter-spacing": ["step", ["zoom"], 0, 8, 0.1],
+            "text-line-height": ["match", ["get", "kind"], "city", 1.4, 1.2],
+            "text-justify": ["match", ["get", "kind"], "city", "left", "center"],
+            "text-transform": ["step", ["zoom"], "none", 6, "uppercase"],
+            "text-rotate": ["get", "angle"]
+          } },
+        { "id": "flat", "type": "symbol", "source": "s", "source-layer": "poi",
+          "layout": {
+            "text-field": "{name}",
+            "text-font": ["F"],
+            "text-offset": [0, 1],
+            "text-max-width": 8,
+            "text-justify": "right",
+            "text-rotate": 15
+          } },
+        { "id": "streets", "type": "symbol", "source": "s", "source-layer": "street",
+          "layout": {
+            "text-field": "{name}",
+            "text-font": ["F"],
+            "symbol-placement": "line",
+            "text-offset": ["step", ["zoom"], ["literal", [0, 0]], 12, ["literal", [0, 1]]],
+            "text-rotate": 30
+          } }
+      ]
+    }"##;
+    let style: serde_json::Value = serde_json::from_str(STYLE).unwrap();
+    let opts = opts_with_fonts(&[("F", "https://fonts.example/F.ttf")]);
+    let (recipe, report) = convert(&style, &opts).unwrap();
+    let nodes = recipe["nodes"].as_object().unwrap();
+    let layout = &style["layers"][0]["layout"];
+
+    let places = &nodes["places__labels"];
+    for (prop, field) in [
+        ("text-offset", "offset-em-expr"),
+        ("text-max-width", "max-width-em-expr"),
+        ("text-letter-spacing", "letter-spacing-em-expr"),
+        ("text-line-height", "line-height-expr"),
+        ("text-justify", "justify-expr"),
+        ("text-transform", "transform-expr"),
+        ("text-rotate", "rotate-deg-expr"),
+    ] {
+        assert_eq!(places[field], layout[prop], "{field}: {places}");
+        let constant = field.trim_end_matches("-expr");
+        assert!(places.get(constant).is_none(), "{constant}: {places}");
+    }
+
+    let flat = &nodes["flat__labels"];
+    assert_eq!(flat["offset-em"], serde_json::json!([0.0, 1.0]));
+    assert_eq!(flat["max-width-em"], 8.0);
+    assert_eq!(flat["justify"], "right");
+    assert_eq!(flat["rotate-deg"], 15.0);
+    for field in [
+        "offset-em-expr",
+        "max-width-em-expr",
+        "justify-expr",
+        "rotate-deg-expr",
+    ] {
+        assert!(flat.get(field).is_none(), "{field}: {flat}");
+    }
+
+    let streets = &nodes["streets__labels"];
+    assert_eq!(
+        streets["offset-em-expr"],
+        style["layers"][2]["layout"]["text-offset"]
+    );
+    assert!(
+        streets.get("rotate-deg").is_none() && streets.get("rotate-deg-expr").is_none(),
+        "{streets}"
+    );
+
+    // Only the line's rotation is left unsupported.
+    let unsupported: Vec<&String> = report
+        .warnings
+        .iter()
+        .filter(|w| w.contains("not supported"))
+        .collect();
+    assert_eq!(unsupported.len(), 1, "{unsupported:?}");
+    assert!(
+        unsupported[0].contains("`streets`") && unsupported[0].contains("text-rotate"),
+        "{unsupported:?}"
+    );
+    let warnings = build_warnings(&recipe);
+    assert!(warnings.is_empty(), "{warnings:?}");
+}

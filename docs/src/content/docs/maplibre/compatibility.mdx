@@ -51,8 +51,11 @@ Icon-only symbol layers place too. Line-placed icons lower to a collision-free
 
 **Text.** `symbol-placement: point` / `line` / `line-center` with `text-field`,
 `-size`/`-color`/`-halo-*`/`-opacity`, anchor, offset, justify, wrapping,
-transform, spacing, a data-driven `text-anchor` on point placement (lowered to
-`anchor-expr`), `text-variable-anchor` (with `text-radial-offset` and
+line height, letter spacing, transform, spacing, each of those layout
+properties as an expression too (a zoom curve on `text-max-width`, a `match` on
+`text-justify`), lowered to the matching `*-expr` field, a data-driven
+`text-anchor` on point placement (lowered to `anchor-expr`), `text-rotate` on
+point placement (`rotate-deg` / `rotate-deg-expr`), `text-variable-anchor` (with `text-radial-offset` and
 per-anchor offset mirroring) and `text-variable-anchor-offset`, both lowered to
 `anchor-offsets`, and on lines `symbol-spacing` / `text-max-angle` /
 `text-keep-upright`. Collision: `text-allow-overlap`/`-ignore-placement`/

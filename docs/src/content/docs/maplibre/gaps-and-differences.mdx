@@ -48,6 +48,12 @@ fractional-zoom interpolation for smooth growth will look stepped between levels
 - SDF (recolourable) icons: an `sdf: true` sprite entry is drawn as its raw RGBA,
   and `icon-color` tinting is not applied.
 - An expression-valued `icon-text-fit-padding` warns — constant only.
+- `text-rotate` on line placement warns and is dropped — line-placed glyphs
+  follow the line only. On point placement it converts.
+- With `text-variable-anchor` or `text-variable-anchor-offset`, an
+  expression-valued `text-offset`, `text-radial-offset`, variable-anchor list or
+  offset list warns and falls back — the positions a label tries are
+  constants. Without variable anchors, an expression `text-offset` converts.
 - A layer whose `text-font` has no `--font` mapping **and** whose style declares no
   `glyphs` endpoint skips its text entirely.
 
