@@ -3,7 +3,7 @@
 
 use serde_json::{Map, Value};
 
-use crate::maplibre::color::parse_color;
+use crate::maplibre::color::{parse_color, with_alpha};
 use crate::maplibre::filter;
 use crate::maplibre::layers::{paint_of, translated};
 use crate::maplibre::sources::{features_node, resolve_layer_source, Sources};
@@ -123,7 +123,9 @@ pub(crate) fn convert_fill(
 
 /// Route a colour paint property into ezu paint. Returns
 /// `(constant_hex, color_expr)`:
-/// - a literal colour string → `(Some(hex), None)` (the constant field).
+/// - a literal colour string → `(Some(hex), None)` (the constant field),
+///   a translucent colour's alpha kept as `#rrggbbaa`: every node's opacity
+///   multiplies the colour's own alpha, as MapLibre's does.
 /// - any function/expression (array or legacy object) → `(None, Some(raw))`
 ///   so it can be emitted as an `*-expr` field, evaluated per tile.
 /// - a bare unsupported value → `(None, None)`.
@@ -134,8 +136,8 @@ pub(crate) fn resolve_paint_color(value: Option<&Value>) -> (Option<String>, Opt
     if is_expr(v) {
         return (None, Some(v.clone()));
     }
-    if let Some((hex, _)) = const_color(v).and_then(|s| parse_color(&s)) {
-        return (Some(hex), None);
+    if let Some((hex, alpha)) = const_color(v).and_then(|s| parse_color(&s)) {
+        return (Some(with_alpha(&hex, alpha)), None);
     }
     (None, None)
 }

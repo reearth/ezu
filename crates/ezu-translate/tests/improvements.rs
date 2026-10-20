@@ -169,3 +169,34 @@ fn redundant_leading_background_does_not_emit_a_self_blend() {
         serde_json::json!(["@bg__bg", "@shown__fill"])
     );
 }
+
+#[test]
+fn a_translucent_constant_colour_keeps_its_alpha() {
+    // `rgba()` / `hsla()` / `#rrggbbaa` carry their alpha as `#rrggbbaa`,
+    // which each node multiplies by its own opacity as MapLibre does.
+    let style = serde_json::json!({
+        "version": 8,
+        "name": "alpha",
+        "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+        "layers": [
+            { "id": "f", "type": "fill", "source": "s", "source-layer": "a",
+              "paint": { "fill-color": "rgba(255, 0, 0, 0.5)", "fill-outline-color": "#00000080" } },
+            { "id": "l", "type": "line", "source": "s", "source-layer": "a",
+              "paint": { "line-color": "hsla(0, 0%, 0%, 0.3)" } },
+            { "id": "c", "type": "circle", "source": "s", "source-layer": "a",
+              "paint": { "circle-color": "rgba(0, 0, 255, 0.25)", "circle-stroke-width": 1,
+                         "circle-stroke-color": "#fff" } }
+        ]
+    });
+    let (recipe, report) = convert(&style, &ConvertOptions::default()).unwrap();
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    let nodes = &recipe["nodes"];
+    assert_eq!(nodes["f__fill"]["fill"], "#ff000080");
+    assert_eq!(nodes["f__fill"]["edge"], "#00000080");
+    assert_eq!(nodes["l__stroke"]["color"], "#0000004d");
+    assert_eq!(nodes["c__circles"]["color"], "#0000ff40");
+    // An opaque colour stays `#rrggbb`.
+    assert_eq!(nodes["c__circles"]["stroke-color"], "#ffffff");
+    let text = serde_json::to_string(&recipe).unwrap();
+    ezu_style::Document::from_json(&text).expect("recipe parses as ezu Document");
+}

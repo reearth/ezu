@@ -540,6 +540,12 @@ mean is spelled out in
   feeding the `solid`'s `color`, a constant `background-opacity` and the
   colour's own alpha are folded into the colour, and an expression
   opacity, an opacity beside an expression colour, or a pattern warns.
+- `ezu translate` dropped the alpha of a constant `rgba()`, `hsla()` or
+  `#rrggbbaa` colour on `fill-color`, `fill-outline-color`,
+  `fill-extrusion-color`, `line-color`, `circle-color`,
+  `circle-stroke-color`, `text-color` and `text-halo-color`, so a
+  translucent colour drew opaque. It now carries over as `#rrggbbaa`, which
+  the node's opacity multiplies, as MapLibre's does.
 - `icon-rotate-deg` on `text` and `text-labels` turned the icon about its
   own centre, so an icon with an `icon-anchor` other than `center`, or an
   `icon-offset`, spun in place where MapLibre swings it round the anchor
