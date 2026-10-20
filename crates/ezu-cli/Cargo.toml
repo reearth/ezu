@@ -41,5 +41,9 @@ tower-http = { version = "0.6", features = ["cors", "trace", "fs", "set-header"]
 # `--features heap-profile` only: writes dhat-heap.json for a heap profile.
 dhat = { version = "0.3", optional = true }
 
+# The allocator of the musl build; see `ALLOC` in main.rs.
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = { version = "0.1.52", default-features = false }
+
 [features]
 heap-profile = ["dep:dhat"]

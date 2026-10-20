@@ -78,6 +78,42 @@ jobs:
       - run: cargo build --workspace --all-features
       - run: cargo test  --workspace --all-features
 
+  # The static musl CLI the release ships for Alpine, built the way the
+  # release builds it, so a dependency that stops building for musl shows
+  # up here rather than on a release tag. It renders a page on Alpine to
+  # prove the binary, and its allocator, run there.
+  musl:
+    name: musl build (ezu-cli on Alpine)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+        with:
+          key: x86_64-unknown-linux-musl
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --release --locked -p ezu-cli --target x86_64-unknown-linux-musl
+        env:
+          CC_x86_64_unknown_linux_musl: musl-gcc
+      - name: Render a page on Alpine
+        run: |
+          mkdir -p mvt/13/7277
+          cp go/testdata/basemap-13-7277-3227.mvt mvt/13/7277/3227.mvt
+          docker run --rm -v "$PWD:/w" -w /w alpine:3 \
+            target/x86_64-unknown-linux-musl/release/ezu frame \
+              --style crates/ezu/examples/styles/watercolor.json \
+              --mvt 'mvt/{z}/{x}/{y}.mvt' \
+              --center 139.81201171875,35.62158189955968 --scale 7338.69 --dpi 96 \
+              --size-px 1024x1024 --zoom 15 --out page.png
+          test -s page.png
+
   wasm:
     name: wasm32 build (ezu-wasm)
     runs-on: ubuntu-latest

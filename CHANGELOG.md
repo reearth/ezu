@@ -13,6 +13,12 @@ mean is spelled out in
 
 ### Added
 
+- Each release ships a static musl build of the CLI, for Alpine and any Linux
+  without glibc: `ezu-<tag>-x86_64-unknown-linux-musl.tar.gz` and
+  `ezu-<tag>-aarch64-unknown-linux-musl.tar.gz`. They allocate through
+  mimalloc, since musl's own allocator made a brush-heavy page take about
+  twice as long as the glibc build; with it they render as fast, and to the
+  same bytes.
 - The Rust renderer, the Go package and the npm package render print pages
   the way `ezu frame` does. `compute_frame` (`ComputeFrame`, `computeFrame`)
   works out the zoom, tile size and covered tiles for a scale, dpi, page size

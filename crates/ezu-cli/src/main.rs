@@ -475,6 +475,13 @@ struct BBox {
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
+/// musl's own allocator serialises the renderer's threads on one lock: a
+/// brush-heavy page took twice as long as the same binary built against
+/// glibc. mimalloc gives the musl build glibc's speed back.
+#[cfg(all(target_env = "musl", not(feature = "heap-profile")))]
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[tokio::main]
 async fn main() {
     #[cfg(feature = "heap-profile")]

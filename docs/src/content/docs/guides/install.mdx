@@ -44,9 +44,12 @@ curl -fsSL "https://github.com/reearth/ezu/releases/download/$v/ezu-$v-$t.tar.gz
 sudo mv "ezu-$v-$t/ezu" /usr/local/bin/
 ```
 
-`SHA256SUMS` in the same release lists a checksum for each archive. The Linux
-builds link against glibc 2.35, so they run on Ubuntu 22.04, Debian 12, RHEL 9
-and anything newer.
+`SHA256SUMS` in the same release lists a checksum for each archive. The
+`-linux-gnu` builds link against glibc 2.35, so they run on Ubuntu 22.04,
+Debian 12, RHEL 9 and anything newer. On Alpine, or any Linux without glibc,
+take the `-linux-musl` build instead (`x86_64-unknown-linux-musl` or
+`aarch64-unknown-linux-musl`): it is statically linked and renders as fast as the
+glibc one.
 
 ### From source
 

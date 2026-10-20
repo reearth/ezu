@@ -110,13 +110,20 @@ jobs:
         include:
           # Linux builds run on 22.04 rather than the latest image so the
           # binaries link against glibc 2.35 and still run on Ubuntu 22.04,
-          # Debian 12 and RHEL 9. A musl build would drop the glibc floor
-          # entirely, at the cost of musl's allocator on a renderer that
-          # allocates hard across threads.
+          # Debian 12 and RHEL 9.
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-22.04
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-22.04-arm
+          # Static musl builds, for Alpine and any Linux without glibc. They
+          # allocate through mimalloc, since musl's allocator halves the
+          # renderer's speed across threads.
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-22.04
+            musl: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-22.04-arm
+            musl: true
           # Both macOS slices build on the arm64 image; every dependency is
           # pure Rust or builds with the Apple toolchain's cross support.
           - target: aarch64-apple-darwin
@@ -141,6 +148,17 @@ jobs:
       - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
         with:
           key: ${{ matrix.target }}
+
+      # The C in the tree (aws-lc for TLS, mimalloc) compiles with musl-gcc
+      # for a musl target; the runner's gcc would link it against glibc.
+      - name: Install the musl toolchain
+        if: matrix.musl
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          echo "CC_${TARGET//-/_}=musl-gcc" >> "$GITHUB_ENV"
+        env:
+          TARGET: ${{ matrix.target }}
 
       - name: Build
         run: cargo build --release --locked -p ezu-cli --target ${{ matrix.target }}
@@ -172,6 +190,12 @@ jobs:
         if: matrix.target != 'x86_64-apple-darwin'
         shell: bash
         run: ./ezu-${GITHUB_REF_NAME}-${{ matrix.target }}/ezu --version
+
+      - name: Smoke-test the binary on Alpine
+        if: matrix.musl
+        run: |
+          docker run --rm -v "$PWD/ezu-${GITHUB_REF_NAME}-${{ matrix.target }}:/ezu:ro" \
+            alpine:3 /ezu/ezu --version
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
