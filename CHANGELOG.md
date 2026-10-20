@@ -59,7 +59,10 @@ mean is spelled out in
   `renderFrameWithFeatures`) does the same for a print page: each node's
   features gathered over the page's tiles, copies that neighbouring tiles
   both saw collapsed by an optional key, in lon/lat or page pixels, written
-  as the same bytes `ezu frame --features` writes.
+  as the same bytes `ezu frame --features` writes. A host that renders a
+  page's tiles itself gathers the same pages through `frame_features`
+  (`FrameFeatures`, `frameFeatures`): a collector that takes each tile, in
+  any order, and assembles the pages at the end.
 - The renderer answers what building the style's graph warned about, in
   Rust, Go and JS: `warnings()` (`Warnings`, `warnings`), for a host that
   reports them or refuses a style with any, as `ezu check --strict` does. A

@@ -299,7 +299,12 @@ To render a frame's tiles yourself — spread over several renderers, say — dr
 each at `f.tileSize` (`renderTile(z, x, y, { format: "rgba", tileSize: f.tileSize })`,
 or `setTileSize` on the renderer) and copy it into the page with its top-left at
 `(x · tileSize − left, y · tileSize − top)`, cropping the tiles along the border.
-`clearTileSize()` goes back to the style's size, and so does `setStyle`.
+`clearTileSize()` goes back to the style's size, and so does `setStyle`. To
+gather features over such a page, `r.frameFeatures(f, request)` takes
+`renderFrameWithFeatures`'s request and returns a collector: render each tile
+through its `renderTile(z, x, y, set, { tileSize: f.tileSize })`, in any order,
+and `finish()` returns the pages. Every tile goes through the renderer that
+made the collector.
 
 ## Memory and lifetime
 

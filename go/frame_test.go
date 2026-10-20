@@ -335,6 +335,85 @@ func TestRenderFrameWithFeaturesWritesTheCLIsFiles(t *testing.T) {
 	}
 }
 
+// A host that renders a frame's tiles itself, in its own order, gathers
+// through a collector what RenderFrameWithFeatures gathers.
+func TestFrameFeatureCollectorGathersWhatTheFrameDoes(t *testing.T) {
+	ctx, renderer := open(t, stainedGlassStyle)
+	f, err := renderer.ComputeFrame(ctx, FrameRequest{
+		CenterLon: 139.812, CenterLat: 35.6216,
+		Scale: 40000, DPI: 200,
+		Width: 500, Height: 400,
+	}, AtZoom(14))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := renderer.LoadSource(ctx, "basemap", readFile(t, "testdata/basemap-13-7277-3227.mvt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Release(ctx)
+	var set SourceSet
+	if err := set.Bind(parent, FromZoom(13)); err != nil {
+		t.Fatal(err)
+	}
+	nodes := []FrameFeatureNode{{Node: "roads_f"}, {Node: "water_f", Key: []string{"kind"}}}
+
+	c, err := renderer.FrameFeatures(ctx, f, FrameFeatures{Nodes: nodes, Coords: CoordsPx})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tiles := f.Tiles()
+	for i := len(tiles) - 1; i >= 0; i-- {
+		px, err := c.RenderTile(ctx, tiles[i], set, Render{Format: FormatRGBA, TileSize: f.TileSize})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(px) != int(f.TileSize*f.TileSize*4) {
+			t.Fatalf("tile %v came back as %d bytes", tiles[i], len(px))
+		}
+	}
+	pages, err := c.Finish(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) != 2 {
+		t.Fatalf("pages for %+v", pages)
+	}
+	for _, p := range pages {
+		if sum := sha256.Sum256(p.GeoJSON); hex.EncodeToString(sum[:]) != cornerFeatures[CoordsPx][p.Node] {
+			t.Errorf("%s gathered tile by tile is not the CLI's file", p.Node)
+		}
+	}
+	if _, err := c.Finish(ctx); !errors.Is(err, ErrCollectorFinished) {
+		t.Errorf("a second Finish gave %v", err)
+	}
+	if _, err := c.RenderTile(ctx, tiles[0], set, Render{}); !errors.Is(err, ErrCollectorFinished) {
+		t.Errorf("a tile after Finish gave %v", err)
+	}
+	if err := c.Release(ctx); err != nil {
+		t.Errorf("releasing a finished collector gave %v", err)
+	}
+
+	// Dropped part way, it is gone.
+	c, err = renderer.FrameFeatures(ctx, f, FrameFeatures{Nodes: nodes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.RenderTile(ctx, tiles[0], set, Render{TileSize: f.TileSize}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Release(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Finish(ctx); !errors.Is(err, ErrCollectorFinished) {
+		t.Errorf("Finish after Release gave %v", err)
+	}
+
+	if _, err := renderer.FrameFeatures(ctx, f, FrameFeatures{Nodes: []FrameFeatureNode{{Node: "out"}}}); !IsKind(err, KindInvalidStyle) {
+		t.Errorf("a node that is not features gave %v, want InvalidStyle", err)
+	}
+}
+
 // A frame holds the renderer until it returns: another goroutine reaching
 // for it while a tile's sources fetches is refused anything that would change
 // what the frame draws but may still load data and render from a set, a

@@ -178,10 +178,11 @@ impl PageFeatures {
 /// for [`nodes`](Self::nodes), [`add`](Self::add) what comes back in
 /// whatever order the tiles finish, and [`finish`](Self::finish).
 ///
-/// Only in Rust. The JS and Go packages render a frame one tile at a time
-/// inside their `renderFrameWithFeatures`, which collects for them; their
-/// module instances are single-threaded, so there is no concurrent tile
-/// loop for a collector to serve.
+/// The JS and Go packages have it as `frameFeatures` (`FrameFeatures`),
+/// in a different shape: there a tile renders through the collector's
+/// `renderTile` (`RenderTile`) instead of being added after, since the
+/// values live in the module's memory and are kept there rather than
+/// copied out to the host and back.
 #[derive(Clone)]
 pub struct FrameFeatureCollector {
     frame: Frame,

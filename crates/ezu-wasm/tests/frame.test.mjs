@@ -253,6 +253,36 @@ test("renderFrameWithFeatures writes the CLI's features files", async () => {
   r.free();
 });
 
+// A host that renders a frame's tiles itself, in its own order, gathers
+// through a collector what renderFrameWithFeatures gathers.
+test("a frame features collector gathers what the frame does", () => {
+  const r = new Renderer(stainedGlass());
+  const f = r.computeFrame(cornerRequest);
+  const parent = r.loadSource("basemap", read("go/testdata/basemap-13-7277-3227.mvt"));
+  const set = new SourceSet();
+  set.bind(parent, { sourceZoom: 13 });
+  const nodes = [{ node: "roads_f" }, { node: "water_f", key: ["kind"] }];
+
+  const collector = r.frameFeatures(f, { nodes, coords: "px" });
+  const tiles = [];
+  for (let y = f.tilesY[0]; y < f.tilesY[1]; y++) {
+    for (let x = f.tilesX[0]; x < f.tilesX[1]; x++) tiles.push([x, y]);
+  }
+  for (const [x, y] of tiles.reverse()) {
+    const px = collector.renderTile(f.zoom, x, y, set, { format: "rgba", tileSize: f.tileSize });
+    assert.equal(px.length, f.tileSize * f.tileSize * 4);
+  }
+  const pages = collector.finish();
+  assert.deepEqual(pages.map((p) => p.node), ["roads_f", "water_f"]);
+  for (const p of pages) {
+    assert.equal(sha256(p.geojson), cornerFeatures.px[p.node], p.node);
+  }
+  assert.throws(() => r.frameFeatures(f, { nodes: [{ node: "out" }] }), { name: "InvalidStyle" });
+  set.free();
+  parent.free();
+  r.free();
+});
+
 test("renderFrame refuses what contradicts the frame and passes a sources error on", async () => {
   const r = new Renderer(stainedGlass());
   const f = r.computeFrame(cornerRequest);

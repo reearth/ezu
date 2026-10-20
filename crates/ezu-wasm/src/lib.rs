@@ -111,8 +111,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
 use ezu::renderer::{
-    BindOptions, Error, ErrorKind, FeatureCoords, Frame, FrameFeatureCollector, FrameFeatureNode,
-    FrameFeatures, FrameRequest, OutputFormat, PngCompression, RenderOptions,
+    BindOptions, Error, ErrorKind, FeatureCoords, Frame, FrameFeatureNode, FrameFeatures,
+    FrameRequest, OutputFormat, PngCompression, RenderOptions,
 };
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -481,17 +481,41 @@ impl Renderer {
             state.open_tile.set(0);
             state.busy.set(false);
             let image = result?;
-            let list = js_sys::Array::new();
-            for page in collector.finish() {
-                let entry = js_sys::Object::new();
-                js_sys::Reflect::set(&entry, &"node".into(), &page.node().into())?;
-                js_sys::Reflect::set(&entry, &"geojson".into(), &page.to_geojson().into())?;
-                list.push(&entry);
-            }
             let out = js_sys::Object::new();
             js_sys::Reflect::set(&out, &"image".into(), &image)?;
-            js_sys::Reflect::set(&out, &"features".into(), &list)?;
+            let features = page_list(collector)?;
+            js_sys::Reflect::set(&out, &"features".into(), &features)?;
             Ok(out.into())
+        })
+    }
+
+    /// Start gathering what features nodes hold over `frame`'s page, for a
+    /// host that renders the frame's tiles itself — with `tileSize` set to
+    /// the frame's, say — rather than through `renderFrameWithFeatures`,
+    /// which makes and drives one of its own. `request` is
+    /// `renderFrameWithFeatures`'s `{ nodes: [{ node, key? }], coords? }`.
+    /// Render each of the frame's tiles with the collector's `renderTile`,
+    /// in any order, then `finish()`.
+    ///
+    /// It changes nothing about what the renderer draws, so it works while
+    /// a `renderFrame` holds the renderer. Throws `InvalidStyle` for what
+    /// `renderFrameWithFeatures` refuses, here, before anything renders.
+    #[wasm_bindgen(js_name = frameFeatures)]
+    pub fn frame_features(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "Frame")] frame: js_sys::Object,
+        #[wasm_bindgen(unchecked_param_type = "FrameFeatures")] request: js_sys::Object,
+    ) -> Result<FrameFeatureCollector, JsValue> {
+        let frame = parse_frame(&frame)?;
+        let request = parse_frame_features(&request)?;
+        let inner = self
+            .inner
+            .borrow()
+            .frame_features(&frame, &request)
+            .map_err(js_err)?;
+        Ok(FrameFeatureCollector {
+            renderer: Rc::clone(&self.inner),
+            inner,
         })
     }
 
@@ -1157,6 +1181,70 @@ impl SourceSet {
     }
 }
 
+/// What `frameFeatures` returns: features nodes' values gathered over the
+/// tiles of a frame a host renders itself, assembled into the pages
+/// `renderFrameWithFeatures` hands back.
+///
+/// The Rust renderer's collector is handed each tile's values after the
+/// render; here the tile renders through the collector, so the values stay
+/// in the module rather than crossing to JS and back. It keeps the
+/// renderer that made it alive until it is finished or freed.
+#[wasm_bindgen]
+pub struct FrameFeatureCollector {
+    renderer: Rc<RefCell<ezu::renderer::Renderer>>,
+    inner: ezu::renderer::FrameFeatureCollector,
+}
+
+#[wasm_bindgen]
+impl FrameFeatureCollector {
+    /// `renderTileWith` for one of the frame's tiles, also keeping what the
+    /// collector's nodes held. Pass `tileSize: frame.tileSize` in `opts` to
+    /// draw the tile `renderFrame` draws. Like `renderTileWith` it works
+    /// while a `renderFrame` holds the renderer, and leaves the glyph
+    /// budget to `trimGlyphs()`.
+    #[wasm_bindgen(js_name = renderTile)]
+    pub fn render_tile(
+        &mut self,
+        z: u8,
+        x: u32,
+        y: u32,
+        set: &SourceSet,
+        opts: Option<js_sys::Object>,
+    ) -> Result<Vec<u8>, JsValue> {
+        let parsed = parse_render_options(opts.as_ref())?;
+        let nodes: Vec<String> = self.inner.nodes().into_iter().map(String::from).collect();
+        let names: Vec<&str> = nodes.iter().map(String::as_str).collect();
+        let (image, values) = self
+            .renderer
+            .borrow()
+            .render_tile_with_features(z, x, y, &set.inner, parsed, &names)
+            .map_err(js_err)?;
+        self.inner.add(ezu::renderer::TileId::new(z, x, y), &values);
+        Ok(image)
+    }
+
+    /// The pages: one `{ node, geojson }` per entry of the request's
+    /// `nodes`, in that order, as `renderFrameWithFeatures` hands them
+    /// back. Tiles are read rows top to bottom, then left to right,
+    /// whatever order they rendered in. The collector is used up.
+    #[wasm_bindgen(unchecked_return_type = "PageFeatures[]")]
+    pub fn finish(self) -> Result<js_sys::Array, JsValue> {
+        page_list(self.inner)
+    }
+}
+
+/// The pages `collector` assembled, as `{ node, geojson }` objects.
+fn page_list(collector: ezu::renderer::FrameFeatureCollector) -> Result<js_sys::Array, JsValue> {
+    let list = js_sys::Array::new();
+    for page in collector.finish() {
+        let entry = js_sys::Object::new();
+        js_sys::Reflect::set(&entry, &"node".into(), &page.node().into())?;
+        js_sys::Reflect::set(&entry, &"geojson".into(), &page.to_geojson().into())?;
+        list.push(&entry);
+    }
+    Ok(list)
+}
+
 impl Renderer {
     /// `FrameInProgress` while a `renderFrame` holds the renderer.
     fn idle(&self) -> Result<(), JsValue> {
@@ -1248,7 +1336,7 @@ async fn render_frame_tiles(
     frame: &js_sys::Object,
     sources: Option<js_sys::Function>,
     opts: Option<js_sys::Object>,
-    mut collector: Option<&mut FrameFeatureCollector>,
+    mut collector: Option<&mut ezu::renderer::FrameFeatureCollector>,
 ) -> Result<js_sys::Uint8Array, JsValue> {
     let frame = parse_frame(frame)?;
     let opts = frame_render_options(opts.as_ref(), frame.tile_size)?;

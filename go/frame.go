@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"image"
 	"math"
+	"sync/atomic"
 )
 
 // A printed map is asked for as "1:1000 at 200 dpi, 245 × 174 mm, centred
@@ -307,7 +308,7 @@ func (r *Renderer) RenderFrame(ctx context.Context, f Frame, sources func(ctx co
 		return nil, ErrFrameInProgress
 	}
 	defer r.endFrame()
-	img, err := r.renderFrameTiles(ctx, f, sources, opts, 0)
+	img, err := r.renderFrameTiles(ctx, f, sources, opts, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -418,6 +419,68 @@ func (r *Renderer) RenderFrameWithFeatures(ctx context.Context, f Frame, sources
 		return nil, nil, ErrFrameInProgress
 	}
 	defer r.endFrame()
+	c, err := r.newFrameFeatureCollector(ctx, reqJSON)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Dropped with the frame however it ends — a sources callback that
+	// panics included — unless Finish took it first.
+	defer c.Release(ctx)
+	img, err := r.renderFrameTiles(ctx, f, sources, opts, c)
+	if err != nil {
+		return nil, nil, err
+	}
+	pages, err := c.Finish(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return img, pages, nil
+}
+
+// FrameFeatureCollector gathers features nodes' values over the tiles of a
+// frame and assembles them into [PageFeatures], for a host that renders a
+// frame's tiles itself — with [Render.TileSize] set to the frame's, say —
+// rather than through [Renderer.RenderFrameWithFeatures], which makes and
+// drives one of its own. Make one with [Renderer.FrameFeatures], render
+// each of the frame's tiles with [FrameFeatureCollector.RenderTile], in
+// any order, and [FrameFeatureCollector.Finish].
+//
+// The Rust renderer's collector is handed each tile's values after the
+// render; here the tile renders through the collector instead, since the
+// values live in the renderer's wasm instance and are kept there rather
+// than copied out and back. Like a [SourceData], it lives in that instance,
+// so it belongs to the renderer that made it. It stays until Finish or
+// [FrameFeatureCollector.Release], or until the renderer is closed.
+type FrameFeatureCollector struct {
+	r *Renderer
+	// The module's id for the gathering, or 0 once finished or released.
+	id atomic.Uint32
+}
+
+// ErrCollectorFinished is returned by a [FrameFeatureCollector] used after
+// [FrameFeatureCollector.Finish] or [FrameFeatureCollector.Release].
+var ErrCollectorFinished = errors.New("ezu: this FrameFeatureCollector has been finished or released")
+
+// FrameFeatures starts gathering what the nodes features names hold over
+// the frame f, for a host that renders f's tiles itself; see
+// [FrameFeatureCollector]. It changes nothing about what the renderer
+// draws, so it works while [Renderer.RenderFrame] holds the renderer.
+//
+// A name that is not a node of the style, or names one that produces
+// something other than features, and a key that names no property, fail
+// with [KindInvalidStyle] here, before anything renders.
+func (r *Renderer) FrameFeatures(ctx context.Context, f Frame, features FrameFeatures) (*FrameFeatureCollector, error) {
+	if f.TileSize == 0 || f.Width == 0 || f.Height == 0 {
+		return nil, errors.New("ezu: the frame has no size; compute it with ComputeFrame")
+	}
+	reqJSON, err := frameFeaturesJSON(f, features)
+	if err != nil {
+		return nil, err
+	}
+	return r.newFrameFeatureCollector(ctx, reqJSON)
+}
+
+func (r *Renderer) newFrameFeatureCollector(ctx context.Context, reqJSON []byte) (*FrameFeatureCollector, error) {
 	id, err := r.call(ctx, func(ctx context.Context) (int64, error) {
 		ptr, err := r.writeBytes(ctx, reqJSON)
 		if err != nil {
@@ -427,43 +490,85 @@ func (r *Renderer) RenderFrameWithFeatures(ctx context.Context, f Frame, sources
 		return r.call1(ctx, "ezu_frame_features_new", uint64(r.handle), uint64(ptr), uint64(len(reqJSON)))
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	// Until finish takes it, the gathering is dropped with the frame,
-	// however the frame ends — a sources callback that panics included; a
-	// renderer that died took it along.
-	finished := false
-	defer func() {
-		if !finished {
-			_, _ = r.call(ctx, func(ctx context.Context) (int64, error) {
-				return r.call1(ctx, "ezu_frame_features_free", uint64(r.handle), uint64(id))
-			})
-		}
-	}()
-	img, err := r.renderFrameTiles(ctx, f, sources, opts, uint32(id))
-	if err != nil {
-		return nil, nil, err
+	c := &FrameFeatureCollector{r: r}
+	c.id.Store(uint32(id))
+	return c, nil
+}
+
+// RenderTile is [Renderer.RenderTileWith] for one of the frame's tiles,
+// also keeping what the collector's nodes held. The tile is the frame's to
+// render as the host likes: at the frame's tile size, which is
+// [Render.TileSize] set to [Frame.TileSize], to draw the page
+// [Renderer.RenderFrame] draws. Like RenderTileWith it works while a frame
+// holds the renderer, and leaves the glyph budget to
+// [Renderer.TrimGlyphs].
+func (c *FrameFeatureCollector) RenderTile(ctx context.Context, tile Tile, set SourceSet, opts Render) ([]byte, error) {
+	id := c.id.Load()
+	if id == 0 {
+		return nil, ErrCollectorFinished
 	}
-	finished = true
+	return c.r.renderGatheredTile(ctx, id, tile, set, opts)
+}
+
+// Finish assembles what the tiles rendered so far held: one
+// [PageFeatures] per entry of the request's Nodes, in that order, as
+// [Renderer.RenderFrameWithFeatures] returns them. Tiles are read rows top
+// to bottom, then left to right, whatever order they rendered in. The
+// collector is done with afterwards.
+func (c *FrameFeatureCollector) Finish(ctx context.Context) ([]PageFeatures, error) {
+	// The module drops the gathering whatever it answers, so the id goes
+	// now, and comes back only if the call never reached the module.
+	id := c.id.Swap(0)
+	if id == 0 {
+		return nil, ErrCollectorFinished
+	}
+	r := c.r
 	_, reply, err := r.withSlots(ctx, func(slots uint32) (int64, error) {
 		return r.call1(ctx, "ezu_frame_features_finish", uint64(r.handle), uint64(id),
 			uint64(slots), uint64(slots+4))
 	})
+	if errors.Is(err, ErrConcurrentUse) {
+		c.id.CompareAndSwap(0, id)
+	}
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	var wire []struct {
 		Node    string `json:"node"`
 		GeoJSON string `json:"geojson"`
 	}
 	if err := json.Unmarshal(reply, &wire); err != nil {
-		return nil, nil, fmt.Errorf("ezu: reading the page features: %w", err)
+		return nil, fmt.Errorf("ezu: reading the page features: %w", err)
 	}
 	out := make([]PageFeatures, len(wire))
 	for i, p := range wire {
 		out[i] = PageFeatures{Node: p.Node, GeoJSON: []byte(p.GeoJSON)}
 	}
-	return img, out, nil
+	return out, nil
+}
+
+// Release drops what the collector gathered without assembling it, for a
+// frame that stopped part way. Releasing a finished or released collector
+// does nothing. A Release that fails, with [ErrConcurrentUse] say, leaves
+// the collector as it was, so it can be released again.
+func (c *FrameFeatureCollector) Release(ctx context.Context) error {
+	if c.id.Load() == 0 {
+		return nil
+	}
+	_, err := c.r.call(ctx, func(ctx context.Context) (int64, error) {
+		id := c.id.Load()
+		if id == 0 {
+			return 0, nil
+		}
+		got, err := c.r.call1(ctx, "ezu_frame_features_free", uint64(c.r.handle), uint64(id))
+		if err == nil && got >= 0 {
+			c.id.Store(0)
+		}
+		return got, err
+	})
+	return err
 }
 
 // frameFeaturesJSON is the module's spelling of a frame features request.
@@ -509,9 +614,9 @@ func frameFeaturesJSON(f Frame, features FrameFeatures) ([]byte, error) {
 	return b, nil
 }
 
-// renderFrameTiles renders f's tiles into one image. A non-zero gathering
+// renderFrameTiles renders f's tiles into one image. A non-nil gathering
 // renders each tile through it, so it keeps what its nodes held.
-func (r *Renderer) renderFrameTiles(ctx context.Context, f Frame, sources func(ctx context.Context, tile Tile, b *FrameBinder) (SourceSet, error), opts Render, gathering uint32) (*image.NRGBA, error) {
+func (r *Renderer) renderFrameTiles(ctx context.Context, f Frame, sources func(ctx context.Context, tile Tile, b *FrameBinder) (SourceSet, error), opts Render, gathering *FrameFeatureCollector) (*image.NRGBA, error) {
 	img := image.NewNRGBA(image.Rect(0, 0, int(f.Width), int(f.Height)))
 	t := int(f.TileSize)
 	var tileScoped map[string]bool
@@ -540,10 +645,10 @@ func (r *Renderer) renderFrameTiles(ctx context.Context, f Frame, sources func(c
 		}
 		var px []byte
 		var err error
-		if gathering == 0 {
+		if gathering == nil {
 			px, err = r.RenderTileWith(ctx, tile, set, opts)
 		} else {
-			px, err = r.renderGatheredTile(ctx, gathering, tile, set, opts)
+			px, err = gathering.RenderTile(ctx, tile, set, opts)
 		}
 		// Trimmed whether or not the tile rendered, as RenderTile does: the
 		// glyphs were bound for it either way.

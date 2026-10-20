@@ -337,8 +337,12 @@ img, pages, err := r.RenderFrameWithFeatures(ctx, f, sources, ezu.FrameFeatures{
 os.WriteFile("labels.geojson", pages[0].GeoJSON, 0o644)
 ```
 
-The gathering runs inside the module, so it works only through the frame's own
-tile loop; a frame spread over a `Pool` gathers its features itself.
+A host that renders a frame's tiles itself gathers the same pages through a
+collector: `r.FrameFeatures(ctx, f, features)` starts one, its `RenderTile`
+renders each tile (at `Render{TileSize: f.TileSize}`) in any order, and
+`Finish` hands back the pages. The gathering lives in that renderer's module,
+so every tile goes through the renderer that made the collector; a frame spread
+over a `Pool` gathers its features itself.
 
 ## Hearing that a tile came out wrong
 
