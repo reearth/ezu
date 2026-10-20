@@ -98,7 +98,7 @@ Solid polygon fill with optional outline and Gaussian blur.
 | `features` | `@node` | yes | Reference to another node (`@name`). |
 | `fill` | color \| `$param` \| `@node` | yes | sRGB hex color, `$param` reference, or `@node` scalar port. |
 | `fill-alpha` | number (0…1) \| `$param` \| `@node` | no | — |
-| `fill-expr` | — | no | A MapLibre color expression (JSON array, e.g. ["match", ["get", "class"], "water", "#88c", "#ccc"] or ["interpolate", ["linear"], ["get", "area"], 0, "#eef", 1000, "#049"]), evaluated per feature group at paint time. When present it overrides the constant `fill`; a group whose expression doesn't resolve to a color is not painted. Unlocks continuous data-driven fills that constant `fill` can't express. |
+| `fill-expr` | — | no | A MapLibre color expression (JSON array, e.g. ["match", ["get", "class"], "water", "#88c", "#ccc"] or ["interpolate", ["linear"], ["get", "area"], 0, "#eef", 1000, "#049"]), evaluated per feature group at paint time. When present it overrides the constant `fill`; a group whose expression doesn't resolve to a color falls back to `fill`. Unlocks continuous data-driven fills that constant `fill` can't express. |
 | `opacity-expr` | — | no | A MapLibre number expression (JSON array) giving fill opacity, evaluated per feature group at paint time. When present it overrides the constant `fill-alpha`; a group whose expression doesn't resolve to a number falls back to `fill-alpha`. |
 
 ### `label-boxes`

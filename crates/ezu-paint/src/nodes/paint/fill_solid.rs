@@ -284,7 +284,7 @@ impl NodeFactory for FillSolidFactory {
                 "features": schema_frag::node_ref(),
                 "fill": schema_frag::color(),
                 "fill-expr": {
-                    "description": "A MapLibre color expression (JSON array, e.g. [\"match\", [\"get\", \"class\"], \"water\", \"#88c\", \"#ccc\"] or [\"interpolate\", [\"linear\"], [\"get\", \"area\"], 0, \"#eef\", 1000, \"#049\"]), evaluated per feature group at paint time. When present it overrides the constant `fill`; a group whose expression doesn't resolve to a color is not painted. Unlocks continuous data-driven fills that constant `fill` can't express.",
+                    "description": "A MapLibre color expression (JSON array, e.g. [\"match\", [\"get\", \"class\"], \"water\", \"#88c\", \"#ccc\"] or [\"interpolate\", [\"linear\"], [\"get\", \"area\"], 0, \"#eef\", 1000, \"#049\"]), evaluated per feature group at paint time. When present it overrides the constant `fill`; a group whose expression doesn't resolve to a color falls back to `fill`. Unlocks continuous data-driven fills that constant `fill` can't express.",
                 },
                 "fill-alpha": schema_frag::unit_number(),
                 "opacity-expr": {

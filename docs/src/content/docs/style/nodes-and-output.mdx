@@ -107,8 +107,10 @@ known only once evaluated, so the branches from it on are rendered alongside it.
 - `Features`, `Brush`, `Scalar`, `Labels` and `ScalarField` cannot be the output
   either. `color-ramp` is the usual way to turn a `ScalarField` into a `Raster`.
 
-Nodes not reachable from `output` are still validated but never evaluated — handy
-for commenting a branch out, cheap to leave in place.
+Nodes not reachable from `output` are still validated, and still evaluated on
+every render, so a branch left unconnected costs as much as one in use. To turn a
+branch off without deleting it, put it behind a `switch`: a render skips only the
+nodes that nothing reads but a branch a `switch` did not pick.
 
 ## Inspecting a graph
 
