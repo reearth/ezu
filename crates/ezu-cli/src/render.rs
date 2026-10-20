@@ -42,6 +42,8 @@ struct Fetched {
     bytes: Bytes,
     /// Where in the rendered tile's 3×3 neighbourhood the bytes go.
     coord: (i32, i32),
+    /// A vector tile, rather than a `dem` or `raster` one.
+    vector: bool,
 }
 
 /// What [`TileRenderer::open`] needs besides the style.
@@ -163,7 +165,26 @@ impl TileRenderer {
         tokio::task::spawn_blocking(move || -> Result<T, BoxError> {
             let mut set = SourceSet::new();
             for f in fetched {
-                let data = decoded.load(&renderer, &f.source, f.from, &f.bytes)?;
+                let data = match decoded.load(&renderer, &f.source, f.from, &f.bytes) {
+                    Ok(data) => data,
+                    // A vector neighbour only lends the tile what crosses
+                    // its edge, so one that will not decode is left out,
+                    // as a missing one is, rather than failing a tile
+                    // whose own data is fine. A broken centre tile, or a
+                    // broken DEM or imagery tile, still fails it.
+                    Err(e) if f.vector && f.coord != (0, 0) => {
+                        let (dx, dy) = f.coord;
+                        tracing::warn!(
+                            "source `{}`: neighbour {dx},{dy} of {}/{}/{} left out: {e}",
+                            f.source,
+                            tile.z,
+                            tile.x,
+                            tile.y,
+                        );
+                        continue;
+                    }
+                    Err(e) => return Err(e.into()),
+                };
                 let bind = BindOptions {
                     coord: f.coord,
                     source_zoom: (f.from.z < tile.z).then_some(f.from.z),
@@ -212,6 +233,7 @@ impl TileRenderer {
                     from,
                     bytes,
                     coord: (0, 0),
+                    vector: true,
                 }),
                 // A tile the source should have and does not, where the
                 // style asked for that to fail; below its `min-zoom` there
@@ -241,6 +263,7 @@ impl TileRenderer {
                         from,
                         bytes,
                         coord,
+                        vector: true,
                     });
                 }
             }
@@ -271,6 +294,7 @@ impl TileRenderer {
                         from,
                         bytes,
                         coord: (0, 0),
+                        vector: false,
                     }];
                     let world = 1i64 << tile.z;
                     let neighbours = self
@@ -297,6 +321,7 @@ impl TileRenderer {
                             from,
                             bytes,
                             coord,
+                            vector: false,
                         });
                     }
                     Ok::<_, BoxError>(got)

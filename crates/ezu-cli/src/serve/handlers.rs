@@ -443,3 +443,122 @@ async fn fetch_mvt(
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path as FsPath, PathBuf};
+
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    use super::*;
+    use crate::serve::state::Sources;
+    use crate::source::{FeatureSources, TileByteCache};
+
+    fn testdata(name: &str) -> Vec<u8> {
+        let path = FsPath::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../go/testdata")
+            .join(name);
+        std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    }
+
+    /// A fresh directory for one test's tiles.
+    fn scratch(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("ezu-serve-{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn write_tile(root: &FsPath, dir: &str, (z, x, y): (u8, u32, u32), ext: &str, bytes: &[u8]) {
+        let d = root.join(dir).join(z.to_string()).join(x.to_string());
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join(format!("{y}.{ext}")), bytes).unwrap();
+    }
+
+    /// What `ezu serve` holds for `style`, its files under `root`.
+    async fn serve(style: &str, root: &FsPath) -> Result<AppState, String> {
+        let doc = ezu::style::Document::from_json(style).map_err(|e| e.to_string())?;
+        let byte_cache = Arc::new(TileByteCache::new(1 << 20));
+        let feature_sources = FeatureSources::open(&doc, None, root)
+            .await
+            .map_err(|e| e.to_string())?
+            .with_byte_cache(&byte_cache, true);
+        let sources = Sources {
+            assets_dir: root.to_path_buf(),
+            feature_sources: Arc::new(feature_sources),
+            overzoom_levels: 0,
+            byte_cache,
+        };
+        let snapshot = StyleSnapshot::build(style.to_string(), 1, &sources)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(AppState::new(sources, snapshot))
+    }
+
+    async fn request(
+        state: &AppState,
+        method: &str,
+        uri: &str,
+        body: &str,
+    ) -> (StatusCode, Vec<u8>) {
+        let response = router()
+            .with_state(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, bytes.to_vec())
+    }
+
+    /// Water stitched across tile borders, so the graph reads the
+    /// neighbours.
+    const STITCHED: &str = r##"{
+      "name": "stitched",
+      "tile-size": 64,
+      "sources": { "bg": { "type": "mvt", "url": "file:bg/{z}/{x}/{y}.mvt" } },
+      "nodes": {
+        "f": { "op": "features", "source": "bg", "layer": "water", "stitch": "merge" },
+        "fill": { "op": "fill-solid", "features": "@f", "fill": "#204080" },
+        "out": { "op": "blur", "input": "@fill", "sigma": 3.0 }
+      },
+      "output": "@out"
+    }"##;
+
+    #[tokio::test]
+    async fn a_neighbour_that_does_not_decode_is_left_out() {
+        let root = scratch("neighbour");
+        let centre = (14, 14554, 6454);
+        write_tile(
+            &root,
+            "bg",
+            centre,
+            "mvt",
+            &testdata("basemap-14-14554-6454.mvt"),
+        );
+        let state = serve(STITCHED, &root).await.unwrap();
+        let uri = "/tiles/14/14554/6454.png";
+
+        let (status, alone) = request(&state, "GET", uri, "").await;
+        assert_eq!(status, StatusCode::OK);
+        // A broken neighbour draws as a missing one.
+        write_tile(&root, "bg", (14, 14555, 6454), "mvt", b"not a tile");
+        let (status, beside) = request(&state, "GET", uri, "").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(alone, beside);
+        // A broken centre still fails the tile.
+        write_tile(&root, "bg", centre, "mvt", b"not a tile either");
+        let (status, _) = request(&state, "GET", uri, "").await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        std::fs::remove_dir_all(&root).ok();
+    }
+}
