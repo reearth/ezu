@@ -191,6 +191,66 @@ of tiles that are wrong rather than missing:
   can assemble its own PBF; on CJK labels that is the difference between a few
   thousand glyphs and tens of megabytes.
 
+## Decoding a tile once for several renders
+
+Binding decodes the bytes each time they are bound, and a block of tiles reads
+most of its tiles more than once: the centre of one render is a neighbour of the
+next eight. `LoadSource` decodes a tile-scoped payload once into a
+`*ezu.SourceData`, a `SourceSet` says which of them one render reads and where,
+and `RenderTileWith` renders from the set and from nothing that is bound:
+
+```go
+loaded := map[ezu.Tile]*ezu.SourceData{} // each fetched tile, decoded once
+defer func() {
+    for _, d := range loaded {
+        d.Release(ctx)
+    }
+}()
+load := func(t ezu.Tile) (*ezu.SourceData, error) {
+    if d, ok := loaded[t]; ok {
+        return d, nil
+    }
+    body, err := fetch(tileURL(basemapURL, t))
+    if err != nil {
+        return nil, err
+    }
+    d, err := r.LoadSource(ctx, "basemap", body)
+    if err == nil {
+        loaded[t] = d
+    }
+    return d, err
+}
+
+for _, tile := range block {
+    var set ezu.SourceSet
+    centre, err := load(tile)
+    if err != nil {
+        return err
+    }
+    set.Bind(centre)
+    for _, o := range offsets { // RequestedNeighborOffsets, as above
+        if n, err := load(tile.Add(o)); err == nil {
+            set.Bind(n, ezu.AtOffset(o))
+        }
+    }
+    png, err := r.RenderTileWith(ctx, tile, set, ezu.Render{})
+    // …
+}
+```
+
+A set takes the same `AtOffset` and `FromZoom` a bind does, and draws the same
+bytes as binding the same data in the same places. There is nothing to clear
+between tiles. `NeededCodepointsIn` and `NeededGlyphRangesIn` answer for a set,
+and the glyphs, fonts and sprites it needs are bound with `BindSource` as
+before. `RenderTileWith` leaves a glyph budget for `TrimGlyphs` to apply when
+the batch is done.
+
+A `SourceData` lives in the wasm instance of the renderer that loaded it, so a
+set holding it renders only there; on another renderer it fails with
+`ezu.ErrForeignSource`, and after `Release` with `ezu.ErrSourceReleased`.
+With a `Pool`, load inside `Do`, on the renderer you render with, and release
+before giving it back.
+
 ## A page at a print scale
 
 A printed page is asked for as "1:1000 at 200 dpi, 245 × 174 mm, centred
@@ -208,13 +268,21 @@ f, err := r.ComputeFrame(ctx, ezu.FrameRequest{
 })
 // f.Zoom 19, f.TileSize 489, f.TilesX/f.TilesY: the 5 × 4 tiles to render
 
-img, err := r.RenderFrame(ctx, f, func(ctx context.Context, tile ezu.Tile, b *ezu.FrameBinder) error {
-    // The bind loop above, for this tile, binding through b.
-    mvt, err := fetchMVT(ctx, tile)
+img, err := r.RenderFrame(ctx, f, func(ctx context.Context, tile ezu.Tile, b *ezu.FrameBinder) (ezu.SourceSet, error) {
+    // The set loop above, for this tile, with `load` keeping what it
+    // decodes for the tiles around it.
+    var set ezu.SourceSet
+    centre, err := load(tile)
     if err != nil {
-        return err
+        return set, err
     }
-    return b.BindSource(ctx, "basemap", mvt)
+    set.Bind(centre)
+    // Glyphs go into the renderer, through b.
+    needed, err := r.NeededGlyphRangesIn(ctx, set)
+    if err != nil {
+        return set, err
+    }
+    return set, bindGlyphsThrough(ctx, b, needed)
 }, ezu.Render{})
 // img is a 1929 × 1370 *image.NRGBA; png.Encode it, or draw it into a PDF page
 ```
@@ -222,21 +290,27 @@ img, err := r.RenderFrame(ctx, f, func(ctx context.Context, tile ezu.Tile, b *ez
 `ComputeFrame` changes nothing on the renderer; it aims the tile size at the
 style's own unless `StyleTileSize` names another, and `ezu.AtZoom(z)` fixes the
 zoom as the CLI's `--zoom` does. `RenderFrame` renders the tiles one after
-another, calling your function before each to bind it — the same bind loop as a
-single tile, so neighbours, overzoom and glyphs work as above, and the tile size
-changes nothing about what you fetch. It draws at `f.TileSize` per render, so
-the renderer's own tile size is untouched.
+another, calling your function before each for the `SourceSet` it renders from —
+the same loop as for [a block of tiles](#decoding-a-tile-once-for-several-renders),
+so neighbours and overzoom work as above, and the tile size changes nothing
+about what you fetch. A page's tiles border each other, so keeping each
+`SourceData` for the tiles around it decodes every fetched tile once. It draws
+at `f.TileSize` per render, so the renderer's own tile size is untouched, and
+trims glyphs to a budget after each tile.
 
-Until `RenderFrame` returns, the renderer is the frame's. Your function binds
-through the `*ezu.FrameBinder` it is handed, which works for that tile only and
+Until `RenderFrame` returns, the renderer is the frame's. What a set needs
+bound into the renderer — glyphs, typically — goes through the
+`*ezu.FrameBinder` your function is handed, which works for that tile only and
 only until the function returns; kept and used later it fails with
-`ezu.ErrStaleBinder`. Anything else that would change the renderer —
-`BindSource`, `ClearSources`, `RenderTile`, another `RenderFrame`, `SetStyle`,
-`SetTileSize`, `SetGlyphBudget` and their clearing counterparts — fails with
-`ezu.ErrFrameInProgress`, so a goroutine that reaches for the renderer while
-your function fetches cannot land its bindings in the page. Queries that only
-read, such as `SourceTile` and `NeededCodepoints`, still answer, and the
-renderer is given back with nothing bound however the frame ends.
+`ezu.ErrStaleBinder`, and a tile-scoped source bound through it is refused,
+since the frame never reads bound tile data. Anything else that would change
+the renderer — `BindSource`, `ClearSources`, `RenderTile`, `TrimGlyphs`,
+another `RenderFrame`, `SetStyle`, `SetTileSize`, `SetGlyphBudget` and their
+clearing counterparts — fails with `ezu.ErrFrameInProgress`, so a goroutine
+that reaches for the renderer while your function fetches cannot change the
+page under it. `LoadSource`, `RenderTileWith` and the queries that only read,
+such as `SourceTile` and `NeededCodepointsIn`, still work. The frame binds no
+tile data, so it leaves nothing bound however it ends.
 
 To render a frame's tiles yourself — to spread them over a `Pool`, say — draw
 each at `f.TileSize` (`ezu.Render{TileSize: f.TileSize}`, or `SetTileSize` on

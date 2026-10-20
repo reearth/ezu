@@ -18,6 +18,22 @@
 //	png, err := r.RenderTile(ctx, ezu.Tile{Z: 14, X: 14554, Y: 6454}, ezu.Render{})
 //	r.ClearSources(ctx)
 //
+// # Rendering from loaded data
+//
+// Binding is state to reset between tiles, and it decodes the bytes each
+// time they are bound. [Renderer.LoadSource] decodes a tile once into a
+// [SourceData]; a [SourceSet] says which of them one render reads, and
+// where; [Renderer.RenderTileWith] renders from it. A tile that several
+// renders read — the centre of one, a neighbour of the next — is loaded
+// once and put into each of their sets:
+//
+//	data, err := r.LoadSource(ctx, "basemap", mvtBytes)
+//	defer data.Release(ctx)
+//
+//	var set ezu.SourceSet
+//	set.Bind(data)
+//	png, err := r.RenderTileWith(ctx, ezu.Tile{Z: 14, X: 14554, Y: 6454}, set, ezu.Render{})
+//
 // # Concurrency
 //
 // One [Renderer] is one wasm instance, and a wasm instance is
@@ -44,8 +60,8 @@
 // A page asked for by scale, dpi and paper size rather than by zoom is a
 // frame: [Renderer.ComputeFrame] picks the zoom and tile size that meet the
 // scale, and [Renderer.RenderFrame] renders the tiles it covers, calling you
-// back to bind each one, and crops them into one image — what `ezu frame`
-// writes, pixel for pixel.
+// back for each one's [SourceSet], and crops them into one image — what
+// `ezu frame` writes, pixel for pixel.
 //
 // # The module
 //
@@ -404,10 +420,10 @@ type Renderer struct {
 	dead atomic.Bool
 
 	// Set while [Renderer.RenderFrame] holds the renderer. busy guards one
-	// call; this guards the whole frame, across the bind calls in which
-	// the renderer is otherwise idle.
+	// call; this guards the whole frame, across the callbacks in which the
+	// renderer is otherwise idle.
 	framing atomic.Bool
-	// The [FrameBinder] whose tile is being bound, or 0 between and outside
+	// The [FrameBinder] whose tile's callback is running, or 0 between and outside
 	// them, and how many binders have been handed out, so no two share a
 	// number.
 	openTile atomic.Uint64

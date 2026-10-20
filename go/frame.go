@@ -257,27 +257,35 @@ func (r *Renderer) setTileSize(ctx context.Context, size uint32) error {
 // (un-premultiplied) RGBA, as [FormatRGBA] is, so it encodes to the PNG the
 // CLI writes.
 //
-// Binding stays yours, tile by tile, as for [Renderer.RenderTile], but it
-// goes through the [FrameBinder] the frame hands you. Before each tile
-// RenderFrame clears the tile-scoped sources and calls bind with the tile
-// about to render; bind fetches what that tile needs — the tile itself, the
+// The tile data stays yours to fetch, tile by tile, but it is handed over as
+// a value rather than bound: before each tile RenderFrame calls sources with
+// the tile about to render, and renders the tile from the [SourceSet] it
+// returns, as [Renderer.RenderTileWith] does — the tile itself, the
 // neighbours [Renderer.RequestedNeighborOffsets] names, the ancestor
-// [Renderer.SourceTile] answers past a source's max-zoom, the glyphs
-// [Renderer.NeededCodepoints] lists — and binds it with
-// [FrameBinder.BindSource]. A bind that returns an error stops the frame with
-// that error. bind may be nil for a style that needs nothing bound per tile.
-// Persistent sources (fonts, sprites, brushes, images) are bound once,
-// before the call, as usual.
+// [Renderer.SourceTile] answers past a source's max-zoom. A frame's tiles
+// border each other, so keep the [SourceData] that [Renderer.LoadSource]
+// gives you and put each one into the set of every tile that reads it: each
+// fetched tile is then decoded once, not once per tile around it. Release
+// them when the frame returns.
+//
+// The [FrameBinder] sources is handed binds into the renderer what a set
+// turns out to need — the glyphs [Renderer.NeededCodepointsIn] lists for it.
+// A sources that returns an error stops the frame with that error. sources
+// may be nil for a style that needs no tile data. Persistent sources (fonts,
+// sprites, brushes, images) can equally be bound once, before the call.
+// Nothing bound with [Renderer.BindSource] that is tile-scoped is read, and
+// RenderFrame binds nothing itself. After each tile it trims the glyph banks
+// to [Renderer.SetGlyphBudget]'s budget, as [Renderer.RenderTile] does.
 //
 // Until RenderFrame returns, the renderer is the frame's. Everything that
 // would change what it draws — [Renderer.BindSource],
-// [Renderer.ClearSources], [Renderer.RenderTile], another RenderFrame,
-// [Renderer.SetStyle], [Renderer.SetTileSize], [Renderer.ClearTileSize],
-// [Renderer.SetGlyphBudget], [Renderer.ClearGlyphBudget] — fails with
-// [ErrFrameInProgress], so a goroutine that reaches for the renderer while
-// bind is fetching cannot land its bindings in the frame's tiles. Queries
-// that only read, which bind needs, still answer. However the frame ends,
-// the renderer is given back with nothing of its tiles bound.
+// [Renderer.ClearSources], [Renderer.RenderTile], [Renderer.TrimGlyphs],
+// another RenderFrame, [Renderer.SetStyle], [Renderer.SetTileSize],
+// [Renderer.ClearTileSize], [Renderer.SetGlyphBudget],
+// [Renderer.ClearGlyphBudget] — fails with [ErrFrameInProgress], so a
+// goroutine that reaches for the renderer while sources is fetching cannot
+// change the frame's tiles under it. Loading, releasing and rendering from a
+// set, and queries that only read, which sources needs, still work.
 //
 // The tiles render at f.TileSize through [Render.TileSize], so the renderer's
 // own tile size is left as it was. opts carries the rest of a render — Pad,
@@ -286,8 +294,9 @@ func (r *Renderer) setTileSize(ctx context.Context, size uint32) error {
 //
 // Tiles render one after another on this renderer, so a frame takes
 // TileCount renders' time. Rendering several frames at once means several
-// renderers, as ever; a [Pool] hands them out.
-func (r *Renderer) RenderFrame(ctx context.Context, f Frame, bind func(ctx context.Context, tile Tile, b *FrameBinder) error, opts Render) (*image.NRGBA, error) {
+// renderers, as ever; a [Pool] hands them out, and the data each frame loads
+// belongs to the renderer it was loaded on.
+func (r *Renderer) RenderFrame(ctx context.Context, f Frame, sources func(ctx context.Context, tile Tile, b *FrameBinder) (SourceSet, error), opts Render) (*image.NRGBA, error) {
 	if f.TileSize == 0 || f.Width == 0 || f.Height == 0 {
 		return nil, errors.New("ezu: the frame has no size; compute it with ComputeFrame")
 	}
@@ -304,13 +313,8 @@ func (r *Renderer) RenderFrame(ctx context.Context, f Frame, bind func(ctx conte
 	if !r.framing.CompareAndSwap(false, true) {
 		return nil, ErrFrameInProgress
 	}
-	img, err := r.renderFrameTiles(ctx, f, bind, opts)
+	img, err := r.renderFrameTiles(ctx, f, sources, opts)
 	r.openTile.Store(0)
-	// Leave nothing of the last tile bound, as a tile loop would, whether
-	// or not the frame made it.
-	if clearErr := r.clearSources(ctx); err == nil {
-		err = clearErr
-	}
 	r.framing.Store(false)
 	if err != nil {
 		return nil, err
@@ -318,26 +322,41 @@ func (r *Renderer) RenderFrame(ctx context.Context, f Frame, bind func(ctx conte
 	return img, nil
 }
 
-func (r *Renderer) renderFrameTiles(ctx context.Context, f Frame, bind func(ctx context.Context, tile Tile, b *FrameBinder) error, opts Render) (*image.NRGBA, error) {
+func (r *Renderer) renderFrameTiles(ctx context.Context, f Frame, sources func(ctx context.Context, tile Tile, b *FrameBinder) (SourceSet, error), opts Render) (*image.NRGBA, error) {
 	img := image.NewNRGBA(image.Rect(0, 0, int(f.Width), int(f.Height)))
 	t := int(f.TileSize)
+	var tileScoped map[string]bool
+	if sources != nil {
+		declared, err := r.Sources(ctx)
+		if err != nil {
+			return nil, err
+		}
+		tileScoped = make(map[string]bool, len(declared))
+		for _, s := range declared {
+			tileScoped[s.Name] = s.TileScoped
+		}
+	}
 	for _, tile := range f.Tiles() {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if err := r.clearSources(ctx); err != nil {
-			return nil, err
-		}
-		if bind != nil {
-			b := &FrameBinder{r: r, tile: r.issued.Add(1)}
+		var set SourceSet
+		if sources != nil {
+			b := &FrameBinder{r: r, tile: r.issued.Add(1), tileScoped: tileScoped}
 			r.openTile.Store(b.tile)
-			err := bind(ctx, tile, b)
+			var err error
+			set, err = sources(ctx, tile, b)
 			r.openTile.Store(0)
 			if err != nil {
-				return nil, fmt.Errorf("ezu: binding tile %d/%d/%d: %w", tile.Z, tile.X, tile.Y, err)
+				return nil, fmt.Errorf("ezu: sources for tile %d/%d/%d: %w", tile.Z, tile.X, tile.Y, err)
 			}
 		}
-		px, err := r.renderTile(ctx, tile, opts)
+		px, err := r.RenderTileWith(ctx, tile, set, opts)
+		// Trimmed whether or not the tile rendered, as RenderTile does: the
+		// glyphs were bound for it either way.
+		if trimErr := r.trimGlyphs(ctx); err == nil {
+			err = trimErr
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -351,33 +370,46 @@ func (r *Renderer) renderFrameTiles(ctx context.Context, f Frame, bind func(ctx 
 	return img, nil
 }
 
-// FrameBinder is what [Renderer.RenderFrame] hands each tile's bind: the way
-// to bind sources while the frame holds the renderer.
+// FrameBinder is what [Renderer.RenderFrame] hands each tile's sources: the
+// way to bind into the renderer — the glyphs a tile turns out to need, or a
+// font, sprite, brush or image — while the frame holds it.
 //
-// It binds for its own tile only, and only until that tile's bind returns;
-// kept and used later it fails with [ErrStaleBinder].
+// It binds for its own tile only, and only until that tile's sources
+// returns; kept and used later it fails with [ErrStaleBinder].
 type FrameBinder struct {
-	r    *Renderer
-	tile uint64
+	r          *Renderer
+	tile       uint64
+	tileScoped map[string]bool
 }
 
-// BindSource is [Renderer.BindSource] for the tile this binder was handed
-// with.
+// BindSource is [Renderer.BindSource] for the sources bound into the
+// renderer itself. A tile-scoped source is refused with [KindUnknownSrc]:
+// the frame renders each tile from the set sources returns and never reads
+// what is bound, so tile data bound here would be dropped without a word.
+// Load it and put it in the set instead.
 func (b *FrameBinder) BindSource(ctx context.Context, name string, data []byte, opts ...BindOption) error {
 	if b.r.openTile.Load() != b.tile {
 		return ErrStaleBinder
+	}
+	if b.tileScoped[name] {
+		return &Error{
+			Name:    KindUnknownSrc,
+			Message: fmt.Sprintf("source `%s` is tile-scoped; load it and put it in the set the tile's sources returns", name),
+			Code:    -13,
+		}
 	}
 	return b.r.bindSource(ctx, name, data, opts...)
 }
 
 // ErrFrameInProgress is returned by a call that would change a renderer
-// while [Renderer.RenderFrame] holds it. Bind the frame's tiles through the
-// [FrameBinder] it passes, and wait for it to return for anything else.
-var ErrFrameInProgress = errors.New("ezu: the renderer is rendering a frame; bind its tiles through the FrameBinder RenderFrame passes, and wait for it to return for anything else")
+// while [Renderer.RenderFrame] holds it. Bind what a frame's tiles need
+// through the [FrameBinder] it passes, and wait for it to return for
+// anything else.
+var ErrFrameInProgress = errors.New("ezu: the renderer is rendering a frame; bind what its tiles need through the FrameBinder RenderFrame passes, and wait for it to return for anything else")
 
-// ErrStaleBinder is returned by a [FrameBinder] used after its tile's bind
-// has returned.
-var ErrStaleBinder = errors.New("ezu: this FrameBinder's tile is no longer being bound; bind only from inside that tile's bind")
+// ErrStaleBinder is returned by a [FrameBinder] used after its tile's
+// sources has returned.
+var ErrStaleBinder = errors.New("ezu: this FrameBinder's tile is no longer being rendered; bind only from inside that tile's sources")
 
 // blitTile copies a t×t straight-RGBA tile into dst with its top-left at
 // (dx, dy), keeping only the part inside dst. Rows are copied, not

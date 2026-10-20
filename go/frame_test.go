@@ -183,21 +183,49 @@ func TestRenderFrameMatchesTheCLI(t *testing.T) {
 		t.Fatalf("the frame is %+v; the CLI renders 2 × 2 z14 tiles from 14554/6454 at 391 px", f)
 	}
 
+	// All four tiles overzoom the same parent. A host keeps what it loads,
+	// keyed by the tile it fetched, and puts it into the set of every frame
+	// tile that reads it, so the parent is fetched and decoded once.
 	parent := readFile(t, "testdata/basemap-13-7277-3227.mvt")
-	var bound []Tile
-	bind := func(ctx context.Context, tile Tile, b *FrameBinder) error {
-		bound = append(bound, tile)
-		return b.BindSource(ctx, "basemap", parent, FromZoom(13))
+	loaded := map[Tile]*SourceData{}
+	defer func() {
+		for _, d := range loaded {
+			d.Release(ctx)
+		}
+	}()
+	var asked []Tile
+	sources := func(ctx context.Context, tile Tile, b *FrameBinder) (SourceSet, error) {
+		asked = append(asked, tile)
+		var set SourceSet
+		fetch := Tile{Z: 13, X: tile.X / 2, Y: tile.Y / 2}
+		data, ok := loaded[fetch]
+		if !ok {
+			if fetch != (Tile{13, 7277, 3227}) {
+				t.Fatalf("the fetch went to %v", fetch)
+			}
+			var err error
+			if data, err = renderer.LoadSource(ctx, "basemap", parent); err != nil {
+				return set, err
+			}
+			loaded[fetch] = data
+		}
+		return set, set.Bind(data, FromZoom(fetch.Z))
 	}
-	img, err := renderer.RenderFrame(ctx, f, bind, Render{})
+	img, err := renderer.RenderFrame(ctx, f, sources, Render{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if b := img.Bounds(); b != image.Rect(0, 0, 500, 400) {
 		t.Fatalf("the frame image is %v, want 500 × 400", b)
 	}
-	if len(bound) != 4 || bound[0] != (Tile{14, 14554, 6454}) || bound[3] != (Tile{14, 14555, 6455}) {
-		t.Errorf("bind saw %v; want the four tiles, row by row", bound)
+	if len(asked) != 4 || asked[0] != (Tile{14, 14554, 6454}) || asked[3] != (Tile{14, 14555, 6455}) {
+		t.Errorf("sources saw %v; want the four tiles, row by row", asked)
+	}
+	if len(loaded) != 1 {
+		t.Errorf("%d tiles were loaded for one parent", len(loaded))
+	}
+	if b, err := renderer.BoundSources(ctx); err != nil || len(b) != 0 {
+		t.Errorf("the frame left %v bound (%v)", b, err)
 	}
 	sum := sha256.Sum256(img.Pix)
 	if got := hex.EncodeToString(sum[:]); got != cornerFramePixels {
@@ -212,17 +240,18 @@ func TestRenderFrameMatchesTheCLI(t *testing.T) {
 		t.Errorf("after RenderFrame a tile is %d bytes (%v), want the style's 512 px", len(px), err)
 	}
 
-	if _, err := renderer.RenderFrame(ctx, f, bind, Render{Format: FormatPNG}); err == nil {
+	if _, err := renderer.RenderFrame(ctx, f, sources, Render{Format: FormatPNG}); err == nil {
 		t.Error("RenderFrame accepted a PNG format")
 	}
-	if _, err := renderer.RenderFrame(ctx, f, bind, Render{TileSize: 256}); err == nil {
+	if _, err := renderer.RenderFrame(ctx, f, sources, Render{TileSize: 256}); err == nil {
 		t.Error("RenderFrame accepted a tile size other than the frame's")
 	}
 }
 
 // A frame holds the renderer until it returns: another goroutine reaching
-// for it while a bind fetches is refused, a binder kept past its tile's bind
-// is refused, and the renderer comes back usable, with nothing bound,
+// for it while a tile's sources fetches is refused anything that would change
+// what the frame draws but may still load data and render from a set, a
+// binder kept past its tile is refused, and the renderer comes back usable
 // however the frame ended.
 func TestRenderFrameHoldsTheRenderer(t *testing.T) {
 	ctx, renderer := open(t, stainedGlassStyle)
@@ -234,20 +263,34 @@ func TestRenderFrameHoldsTheRenderer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parent := readFile(t, "testdata/basemap-13-7277-3227.mvt")
+	parentBytes := readFile(t, "testdata/basemap-13-7277-3227.mvt")
+	parent, err := renderer.LoadSource(ctx, "basemap", parentBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Release(ctx)
+	setFor := func() SourceSet {
+		var set SourceSet
+		if err := set.Bind(parent, FromZoom(13)); err != nil {
+			t.Fatal(err)
+		}
+		return set
+	}
 
 	var kept *FrameBinder
-	bind := func(ctx context.Context, tile Tile, b *FrameBinder) error {
-		// What another goroutine would hit while this bind fetches. It runs
-		// on its own goroutine, and between the frame's calls into the
-		// module, so it meets the frame rather than a call in progress.
+	sources := func(ctx context.Context, tile Tile, b *FrameBinder) (SourceSet, error) {
+		// What another goroutine would hit while this tile's data is
+		// fetched. It runs on its own goroutine, and between the frame's
+		// calls into the module, so it meets the frame rather than a call
+		// in progress.
 		refusals := make(chan []error)
+		allowed := make(chan []error)
 		go func() {
 			_, styleErr := renderer.SetStyle(ctx, readFile(t, stainedGlassStyle))
 			_, renderErr := renderer.RenderTile(ctx, tile, Render{})
 			_, frameErr := renderer.RenderFrame(ctx, f, nil, Render{})
 			refusals <- []error{
-				renderer.BindSource(ctx, "basemap", parent),
+				renderer.BindSource(ctx, "basemap", parentBytes),
 				renderer.ClearSources(ctx),
 				renderErr,
 				frameErr,
@@ -256,26 +299,44 @@ func TestRenderFrameHoldsTheRenderer(t *testing.T) {
 				renderer.ClearTileSize(ctx),
 				renderer.SetGlyphBudget(ctx, 1024),
 				renderer.ClearGlyphBudget(ctx),
+				renderer.TrimGlyphs(ctx),
 			}
+			// None of these changes what the frame draws.
+			loaded, loadErr := renderer.LoadSource(ctx, "basemap", parentBytes)
+			var releaseErr error
+			if loadErr == nil {
+				releaseErr = loaded.Release(ctx)
+			}
+			_, withErr := renderer.RenderTileWith(ctx, tile, setFor(), Render{})
+			allowed <- []error{loadErr, releaseErr, withErr}
 		}()
 		for i, err := range <-refusals {
 			if !errors.Is(err, ErrFrameInProgress) {
 				t.Errorf("call %d during the frame gave %v, want ErrFrameInProgress", i, err)
 			}
 		}
-		// Reading is still fine: a bind needs these.
+		for i, err := range <-allowed {
+			if err != nil {
+				t.Errorf("allowed call %d during the frame gave %v", i, err)
+			}
+		}
+		// Reading is still fine: a fetch needs these.
 		if got, err := renderer.SourceTile(ctx, "basemap", tile); err != nil || got != tile {
 			t.Errorf("SourceTile during the frame gave %v (%v)", got, err)
 		}
 		if kept != nil {
-			if err := kept.BindSource(ctx, "basemap", parent); !errors.Is(err, ErrStaleBinder) {
+			if err := kept.BindSource(ctx, "basemap", parentBytes); !errors.Is(err, ErrStaleBinder) {
 				t.Errorf("the previous tile's binder gave %v, want ErrStaleBinder", err)
 			}
 		}
 		kept = b
-		return b.BindSource(ctx, "basemap", parent, FromZoom(13))
+		// Tile data bound would never be read, so the binder refuses it.
+		if err := b.BindSource(ctx, "basemap", parentBytes, FromZoom(13)); !IsKind(err, KindUnknownSrc) {
+			t.Errorf("binding tile data through the binder gave %v, want %s", err, KindUnknownSrc)
+		}
+		return setFor(), nil
 	}
-	img, err := renderer.RenderFrame(ctx, f, bind, Render{})
+	img, err := renderer.RenderFrame(ctx, f, sources, Render{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,25 +344,22 @@ func TestRenderFrameHoldsTheRenderer(t *testing.T) {
 	if got := hex.EncodeToString(sum[:]); got != cornerFramePixels {
 		t.Errorf("frame pixels %s, the CLI's are %s", got, cornerFramePixels)
 	}
-	if err := kept.BindSource(ctx, "basemap", parent); !errors.Is(err, ErrStaleBinder) {
+	if err := kept.BindSource(ctx, "basemap", parentBytes); !errors.Is(err, ErrStaleBinder) {
 		t.Errorf("a binder after the frame gave %v, want ErrStaleBinder", err)
 	}
 
-	// A frame that fails gives the renderer back too, with nothing bound.
+	// A frame that fails gives the renderer back too.
 	failure := errors.New("fetch failed")
-	_, err = renderer.RenderFrame(ctx, f, func(ctx context.Context, tile Tile, b *FrameBinder) error {
-		if err := b.BindSource(ctx, "basemap", parent, FromZoom(13)); err != nil {
-			return err
-		}
-		return failure
+	_, err = renderer.RenderFrame(ctx, f, func(ctx context.Context, tile Tile, b *FrameBinder) (SourceSet, error) {
+		return setFor(), failure
 	}, Render{})
 	if !errors.Is(err, failure) {
-		t.Errorf("a failing bind gave %v", err)
+		t.Errorf("a failing sources gave %v", err)
 	}
 	if bound, err := renderer.BoundSources(ctx); err != nil || len(bound) != 0 {
 		t.Errorf("after a failed frame %v is bound (%v)", bound, err)
 	}
-	if err := renderer.BindSource(ctx, "basemap", parent, FromZoom(13)); err != nil {
+	if err := renderer.BindSource(ctx, "basemap", parentBytes, FromZoom(13)); err != nil {
 		t.Errorf("after a failed frame BindSource gave %v", err)
 	}
 	if _, err := renderer.RenderTile(ctx, Tile{Z: 14, X: 14554, Y: 6454}, Render{}); err != nil {

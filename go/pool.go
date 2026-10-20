@@ -29,6 +29,21 @@ import (
 // sprite or glyph range bound to one is unknown to the others. Bind what a
 // style needs to each of them, or bind per tile — [Renderer.NeededCodepoints]
 // names exactly what a tile wants, so the second is cheaper than it sounds.
+//
+// Data loaded with [Renderer.LoadSource] is per renderer too: it lives in
+// the instance that decoded it, and a set holding it renders only there. So
+// load inside [Pool.Do], on the renderer you render with, and release it
+// before handing the renderer back. A job that renders a block of tiles —
+// a frame, or a tile and its neighbours — on one acquired renderer is where
+// loading once pays: each fetched tile is decoded once for every render in
+// the job that reads it.
+//
+//	err := pool.Do(ctx, func(r *ezu.Renderer) error {
+//	    data, err := r.LoadSource(ctx, "basemap", mvtBytes)
+//	    if err != nil { return err }
+//	    defer data.Release(ctx)
+//	    …
+//	})
 type Pool struct {
 	free chan *Renderer
 	all  []*Renderer
