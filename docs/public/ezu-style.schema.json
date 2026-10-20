@@ -1151,12 +1151,30 @@
                 "type": "array"
               },
               "max": {
-                "description": "Emit no level above this value.",
-                "type": "number"
+                "oneOf": [
+                  {
+                    "description": "Emit no level above this value.",
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "min": {
-                "description": "Emit no level below this value.",
-                "type": "number"
+                "oneOf": [
+                  {
+                    "description": "Emit no level below this value.",
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "op": {
                 "const": "contour",

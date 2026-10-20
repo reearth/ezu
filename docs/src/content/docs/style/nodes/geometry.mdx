@@ -88,8 +88,8 @@ Isolines from a ScalarField (marching squares with linear sub-cell interpolation
 | `field` | `@node` | yes | Reference to another node (`@name`). |
 | `interval` | number \| `$param` \| `@node` | no | Spacing between levels, in field units. Required unless `levels` is given. |
 | `levels` | array of number \| string | no | Explicit levels to extract; overrides `interval`/`base`. A level may be a `$param`; the list is sorted and de-duplicated per render. |
-| `max` | number | no | Emit no level above this value. |
-| `min` | number | no | Emit no level below this value. |
+| `max` | number \| `$param` \| `@node` | no | Emit no level above this value. |
+| `min` | number \| `$param` \| `@node` | no | Emit no level below this value. |
 
 ### `convex-hull`
 

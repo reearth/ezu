@@ -211,6 +211,8 @@ mean is spelled out in
 - `spacing-px` on `resample` and `target-px` on `densify` take a `$param`
   that follows the value a render passes, or an `@node`, like the lengths
   on `dash` and `medial-axis`.
+- `min` and `max` on `contour` take a `$param` that follows the value a
+  render passes, or an `@node`, like `base` and `interval` beside them.
 
 ### Deprecated
 

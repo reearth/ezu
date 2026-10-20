@@ -27,7 +27,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{features_value, read_number, FeatureGroup};
+use crate::nodes::common::{features_value, FeatureGroup};
 
 /// Extent of the emitted tile-local coordinates. 4096 is the MVT
 /// convention; at a 512px tile that is 8 units per pixel, so the
@@ -44,8 +44,8 @@ struct ContourNode {
     /// Explicit level list; overrides `interval` / `base` when present.
     levels: Option<Vec<In<f64>>>,
     /// Clamp on which levels are emitted.
-    min: Option<f64>,
-    max: Option<f64>,
+    min: Option<In<f64>>,
+    max: Option<In<f64>>,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
 }
@@ -131,10 +131,18 @@ impl Node for ContourNode {
                 l.param_hash(h);
             }
         }
-        for (tag, bound) in [(b"min".as_slice(), self.min), (b"max".as_slice(), self.max)] {
+        for (tag, bound) in [
+            (b"min".as_slice(), &self.min),
+            (b"max".as_slice(), &self.max),
+        ] {
             if let Some(v) = bound {
                 h.update(tag);
-                h.update(&v.to_le_bytes());
+                // A literal bound hashes as the bare number it always did,
+                // so existing styles keep their cache keys.
+                match v {
+                    In::Const(c) => h.update(&c.to_le_bytes()),
+                    _ => v.param_hash(h),
+                }
             }
         }
     }
@@ -153,7 +161,9 @@ impl ContourNode {
         inputs: &[Option<PortValue>],
         field: &ScalarField,
     ) -> Result<Vec<f64>, EvalError> {
-        let keep = |l: f64| self.min.is_none_or(|m| l >= m) && self.max.is_none_or(|m| l <= m);
+        let min = self.min.as_ref().map(|m| m.get(ctx, inputs)).transpose()?;
+        let max = self.max.as_ref().map(|m| m.get(ctx, inputs)).transpose()?;
+        let keep = |l: f64| min.is_none_or(|m| l >= m) && max.is_none_or(|m| l <= m);
         if let Some(levels) = &self.levels {
             // A level may be a `$param`, so resolve before filtering and
             // sorting — the order is only knowable now.
@@ -389,11 +399,10 @@ impl NodeFactory for ContourFactory {
                 }
             }
         }
-        let read_opt = |name: &str| -> Result<Option<f64>, FactoryError> {
-            if fields.contains_key(name) {
-                Ok(Some(read_number(fields, name, ctx)?))
-            } else {
-                Ok(None)
+        let mut read_opt = |name: &'static str| -> Result<Option<In<f64>>, FactoryError> {
+            match fields.contains_key(name) {
+                true => Ok(Some(r.number(name)?)),
+                false => Ok(None),
             }
         };
         let min = read_opt("min")?;
@@ -437,8 +446,8 @@ impl NodeFactory for ContourFactory {
                 "levels": { "type": "array", "minItems": 1,
                             "items": schema_frag::nested_number(serde_json::json!({ "type": "number" })),
                             "description": "Explicit levels to extract; overrides `interval`/`base`. A level may be a `$param`; the list is sorted and de-duplicated per render." },
-                "min": { "type": "number", "description": "Emit no level below this value." },
-                "max": { "type": "number", "description": "Emit no level above this value." },
+                "min": schema_frag::in_number(serde_json::json!({ "type": "number", "description": "Emit no level below this value." })),
+                "max": schema_frag::in_number(serde_json::json!({ "type": "number", "description": "Emit no level above this value." })),
             },
             "required": ["field"],
         })

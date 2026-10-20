@@ -3,7 +3,7 @@
 //! coordinate round-trip: contour converts canvas px → tile units, and
 //! stroke scales them back onto the same pixels).
 
-use crate::common::render_with_scalar_fields;
+use crate::common::{assert_number_field_drivable_plain, render_with_scalar_fields};
 use ezu_graph::{ScalarField, TileId};
 
 const TILE: TileId = TileId { z: 0, x: 0, y: 0 };
@@ -173,4 +173,28 @@ fn tile_local_round_trip_survives_pad() {
     for col in [8u32, 16] {
         assert_eq!(alpha(&r, col, 20), 0, "column {col} must stay clean");
     }
+}
+
+/// Isolines of a scalar noise field every 0.1, with `%V%` in `bound`.
+fn bounded_doc(bound: &str) -> String {
+    format!(
+        r##"{{
+      "name": "demo",
+      "tile-size": 32,
+      %PARAMS%
+      "nodes": {{
+        %NODES%
+        "n":   {{ "op": "noise", "kind": "scalar", "scale-px": 16, "seed": 5, "anchor": "tile" }},
+        "iso": {{ "op": "contour", "field": "@n", "interval": 0.1, "{bound}": %V% }},
+        "out": {{ "op": "stroke", "features": "@iso", "color": "#000000", "width-px": 1 }}
+      }},
+      "output": "@out"
+    }}"##
+    )
+}
+
+#[test]
+fn min_and_max_take_a_param_or_a_node() {
+    assert_number_field_drivable_plain(&bounded_doc("min"), 32, 0, -0.5, 0.25);
+    assert_number_field_drivable_plain(&bounded_doc("max"), 32, 0, 0.5, -0.25);
 }
