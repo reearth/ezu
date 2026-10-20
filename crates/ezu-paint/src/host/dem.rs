@@ -1,6 +1,6 @@
 //! Per-tile raster-DEM fetch + decode + stitch.
 //!
-//! A [`DemSourceRegistry`] holds one [`DemSourceState`] per `sources`
+//! A [`DemSourceRegistry`] holds one `DemSourceState` per `sources`
 //! entry in the style document. For every tile rendered, the host calls
 //! [`bind_dem_sources`] which:
 //!

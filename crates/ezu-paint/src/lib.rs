@@ -45,7 +45,7 @@ use tiny_skia::{
 /// A raster canvas backed by a premultiplied RGBA `Pixmap`.
 ///
 /// The canvas optionally has a padding ring around the tile area; all paint
-/// operations work in the padded coordinate space, and [`encode_png`] crops
+/// operations work in the padded coordinate space, and [`host::raster_to_png`] crops
 /// back down to the actual tile.
 pub mod host;
 pub mod legend;

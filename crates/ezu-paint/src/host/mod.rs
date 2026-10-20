@@ -1129,7 +1129,7 @@ fn decode_image_file(path: &std::path::Path) -> Result<RasterBuf, String> {
 
 /// Decode image bytes (PNG / WebP / anything `image` sniffs from the
 /// content header) into a premultiplied-RGBA8 [`RasterBuf`]. The
-/// twin of [`decode_image_file`] for callers that already have the
+/// twin of `decode_image_file` for callers that already have the
 /// raw bytes in memory (e.g. an HTTP body).
 pub fn decode_image_bytes(bytes: &[u8]) -> Result<RasterBuf, String> {
     let img = image::load_from_memory(bytes)
@@ -1457,7 +1457,7 @@ pub fn crop_to_rgba8(buf: &RasterBuf, crop_w: u32, crop_h: u32, pad: u32) -> Vec
 // ---------------------------------------------------------------------------
 // URL-aware asset prefetch (feature `http`)
 
-/// Walk a [`Document`]'s `assets` block and stage every entry into the
+/// Walk a [`Document`](ezu_style::Document)'s `assets` block and stage every entry into the
 /// given [`BrushBankLoader`]: brushes (`hokusai::Brush`), images
 /// (`RasterBuf`). Each entry's `src` may be a plain file path resolved
 /// against `base_dir` or an `http(s)://` URL fetched via `reqwest`.

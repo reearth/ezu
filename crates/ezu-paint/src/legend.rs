@@ -121,7 +121,7 @@ pub enum SwatchError {
 ///
 /// `cache` may be shared across the entries of a legend; entries that
 /// share upstream nodes then share the work. Sharing is safe because the
-/// entry's identity reaches the cache key — see [`SwatchLoader::hash`].
+/// entry's identity reaches the cache key — see `SwatchLoader::hash`.
 pub fn render_swatch(
     doc: &Document,
     entry: &LegendEntry,

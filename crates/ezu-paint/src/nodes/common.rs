@@ -27,7 +27,7 @@ use crate::Canvas;
 /// `maplibre-expr` value form and shared behind an `Arc`, so cloning a group —
 /// e.g. propagating it through a geometry transform — is a refcount bump, not
 /// a deep copy. Data-driven paint nodes evaluate a per-feature expression
-/// against these properties (see [`crate::render::group_expr_context`]).
+/// against these properties (see `group_expr_context` in the crate's `render` module).
 ///
 /// Synthetic geometry (e.g. `literal-geometry`) and merge-style geometry
 /// transforms (e.g. `convex-hull`) emit a single group with empty properties.

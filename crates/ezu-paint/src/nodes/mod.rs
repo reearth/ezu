@@ -2,20 +2,20 @@
 //!
 //! Ops are grouped into category submodules:
 //!
-//! - [`raster`] — raster utility ops (`solid`, `circle`, `noise`,
+//! - `raster` — raster utility ops (`solid`, `circle`, `noise`,
 //!   `blur`, `blend`, `warp`, `displace`, `hsl`, …) plus the
 //!   `Sprite`-consuming `place` and `tiling` placement ops
-//! - [`source`] — feature / sprite sources, either bound by the host
+//! - `source` — feature / sprite sources, either bound by the host
 //!   (MVT, GeoJSON, …) or synthesized (`features`, `literal-geometry`,
 //!   `tile-bounds`, `point-grid`, `image`)
-//! - [`paint`] — paint features onto a canvas (`fill-solid`,
+//! - `paint` — paint features onto a canvas (`fill-solid`,
 //!   `fill-dabs`, `line`, `stamp`, `brush-file`)
-//! - [`brush`] — `() -> Brush` sources: load a brush asset
+//! - `brush` — `() -> Brush` sources: load a brush asset
 //!   (`brush-file`) or synthesize one (`brush-solid`)
-//! - [`geometry`] — `Features -> Features` transforms (`centroid`,
+//! - `geometry` — `Features -> Features` transforms (`centroid`,
 //!   `boundary`, `simplify`, `convex-hull`, `buffer`, `hatch`,
 //!   `dash`, `wave`)
-//! - [`scalar`] — `Scalar` number producers (`math`, `zoom`) consumed
+//! - `scalar` — `Scalar` number producers (`math`, `zoom`) consumed
 //!   by other nodes' `In<T>` fields via `@node` references
 //!
 //! The `Sprite` port kind carries a raster at the asset's native
@@ -36,7 +36,7 @@
 //! rendering.
 //!
 //! Shared helpers (parameter parsing, color conversion, Canvas
-//! plumbing, payload downcasting) live in [`common`].
+//! plumbing, payload downcasting) live in `common`.
 
 use ezu_graph::NodeRegistry;
 
