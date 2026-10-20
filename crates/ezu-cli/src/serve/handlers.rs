@@ -256,11 +256,16 @@ impl TileFormat {
 
 /// The status a failed tile answers with: 404 when the style asked for a
 /// missing source tile to fail the render (`on-missing: error`), 502 when a
-/// source could not be fetched, and 500 when the render itself failed.
+/// source could not be fetched or sent a DEM or imagery tile that does not
+/// decode, and 500 when the render itself failed.
 fn status_of(e: &(dyn std::error::Error + 'static)) -> StatusCode {
+    use ezu::renderer::{Error, ErrorKind};
     if e.downcast_ref::<MissingTile>().is_some() {
         StatusCode::NOT_FOUND
-    } else if e.downcast_ref::<SourceError>().is_some() {
+    } else if e.downcast_ref::<SourceError>().is_some()
+        || e.downcast_ref::<Error>()
+            .is_some_and(|e| matches!(e.kind(), ErrorKind::DemDecode | ErrorKind::RasterDecode))
+    {
         StatusCode::BAD_GATEWAY
     } else {
         StatusCode::INTERNAL_SERVER_ERROR
@@ -559,6 +564,48 @@ mod tests {
         write_tile(&root, "bg", centre, "mvt", b"not a tile either");
         let (status, _) = request(&state, "GET", uri, "").await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    fn dem_style(url: &str, read: bool) -> String {
+        let out = if read {
+            r#""dem": { "op": "dem", "source": "terrain" },
+               "out": { "op": "hillshade", "field": "@dem" }"#
+        } else {
+            r##""out": { "op": "solid", "color": "#336699" }"##
+        };
+        format!(
+            r##"{{
+              "name": "dem",
+              "tile-size": 64,
+              "sources": {{ "terrain": {{ "type": "dem", "url": "{url}", "encoding": "terrarium" }} }},
+              "nodes": {{ {out} }},
+              "output": "@out"
+            }}"##
+        )
+    }
+
+    #[tokio::test]
+    async fn a_dem_tile_that_does_not_decode_is_a_bad_gateway() {
+        let root = scratch("dem-decode");
+        let tile = (10, 909, 402);
+        write_tile(
+            &root,
+            "dem",
+            tile,
+            "webp",
+            &testdata("terrain-10-909-402.webp"),
+        );
+        let state = serve(&dem_style("file:dem/{z}/{x}/{y}.webp", true), &root)
+            .await
+            .unwrap();
+        let uri = "/tiles/10/909/402.png";
+        assert_eq!(request(&state, "GET", uri, "").await.0, StatusCode::OK);
+        write_tile(&root, "dem", tile, "webp", b"not an image");
+        assert_eq!(
+            request(&state, "GET", uri, "").await.0,
+            StatusCode::BAD_GATEWAY
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 }
