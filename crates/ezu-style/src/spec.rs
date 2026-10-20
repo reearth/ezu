@@ -881,50 +881,182 @@ pub struct PmtilesSource {
 }
 
 /// Raster-DEM source. Tiles encode elevation in the RGB channels using
-/// either the Mapzen / Terrarium scheme
-/// (`h = (R*256 + G + B/256) - 32768`) or the Mapbox / MapLibre Terrain-RGB
-/// scheme (`h = -10000 + (R*65536 + G*256 + B) * 0.1`).
+/// the Mapzen / Terrarium scheme (`h = (R*256 + G + B/256) - 32768`), the
+/// Mapbox / MapLibre Terrain-RGB scheme
+/// (`h = -10000 + (R*65536 + G*256 + B) * 0.1`), or factors of the style's
+/// own choosing (`custom`).
 #[derive(Debug, Deserialize, Clone)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+#[serde(try_from = "DemSourceFields")]
 pub struct DemSource {
-    /// XYZ URL template with `{z}`, `{x}`, `{y}` placeholders, or a
-    /// TileJSON document URL (anything ending in `.json`). PNG and
-    /// WebP tiles are both supported (sniffed from content).
+    /// XYZ URL template with `{z}`, `{x}`, `{y}` placeholders, a TileJSON
+    /// document URL (anything ending in `.json`), or a PMTiles archive
+    /// (anything ending in `.pmtiles`; local path or `http(s)://` URL).
+    /// PNG and WebP tiles are both supported (sniffed from content).
     pub url: String,
     pub encoding: DemEncoding,
+    /// The channel factors and shift a `custom` encoding decodes with;
+    /// `None` for the other encodings, which fix their own.
+    pub custom: Option<DemFactors>,
     /// What a 404 within the zoom range means — empty (zero
     /// elevation), upsample from a parent, or fail the render.
-    #[serde(default)]
     pub on_missing: OnMissing,
     /// Explicit attribution. When absent and `url` is a TileJSON,
     /// hosts inherit its `attribution` field.
-    #[serde(default)]
     pub attribution: Option<String>,
     /// Ignored, and kept only so styles that declare it still load: each
     /// tile's edge is read from its decoded image, which may be any
     /// square size.
-    #[serde(default = "default_dem_tile_size")]
     pub tile_size: u32,
     /// Highest zoom available from the source. Requests above this zoom
     /// overzoom from an ancestor tile.
-    #[serde(default)]
     pub max_zoom: Option<u8>,
     /// If true, fetch the 8 neighbouring tiles in addition to the
     /// centre tile and stitch them so gradient-based ops (e.g.
     /// `hillshade`) have seam-free samples in the pad region.
-    #[serde(default = "default_true")]
     pub neighbor_fetch: bool,
     /// Value subtracted from each decoded sample (metres). Useful for
     /// rebasing geoid-relative datasets.
-    #[serde(default)]
     pub elevation_offset: f32,
 }
 
+impl DemSource {
+    /// How this source's pixels turn into heights.
+    pub fn decoding(&self) -> DemDecoding {
+        match (self.encoding, self.custom) {
+            (DemEncoding::Terrarium, _) => DemDecoding::Terrarium,
+            (DemEncoding::MapboxRgb, _) => DemDecoding::MapboxRgb,
+            (DemEncoding::Custom, f) => DemDecoding::Custom(f.unwrap_or_default()),
+        }
+    }
+}
+
+/// The fields a `dem` source is written with. The custom factors sit
+/// beside `encoding` as MapLibre's `raster-dem` has them, and are checked
+/// against it once the whole declaration is read.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct DemSourceFields {
+    url: String,
+    encoding: DemEncoding,
+    #[serde(default)]
+    red_factor: Option<f64>,
+    #[serde(default)]
+    green_factor: Option<f64>,
+    #[serde(default)]
+    blue_factor: Option<f64>,
+    #[serde(default)]
+    base_shift: Option<f64>,
+    #[serde(default)]
+    on_missing: OnMissing,
+    #[serde(default)]
+    attribution: Option<String>,
+    #[serde(default = "default_dem_tile_size")]
+    tile_size: u32,
+    #[serde(default)]
+    max_zoom: Option<u8>,
+    #[serde(default = "default_true")]
+    neighbor_fetch: bool,
+    #[serde(default)]
+    elevation_offset: f32,
+}
+
+impl TryFrom<DemSourceFields> for DemSource {
+    type Error = String;
+
+    fn try_from(f: DemSourceFields) -> Result<Self, String> {
+        let given = [
+            ("red-factor", f.red_factor),
+            ("green-factor", f.green_factor),
+            ("blue-factor", f.blue_factor),
+            ("base-shift", f.base_shift),
+        ];
+        let custom = if f.encoding == DemEncoding::Custom {
+            let d = DemFactors::default();
+            Some(DemFactors {
+                red: f.red_factor.unwrap_or(d.red),
+                green: f.green_factor.unwrap_or(d.green),
+                blue: f.blue_factor.unwrap_or(d.blue),
+                base_shift: f.base_shift.unwrap_or(d.base_shift),
+            })
+        } else {
+            // A factor beside a fixed encoding would be silently ignored,
+            // which hides a style that meant `custom`.
+            if let Some((key, _)) = given.iter().find(|(_, v)| v.is_some()) {
+                return Err(format!(
+                    "`{key}` is only read with `\"encoding\": \"custom\"`"
+                ));
+            }
+            None
+        };
+        Ok(DemSource {
+            url: f.url,
+            encoding: f.encoding,
+            custom,
+            on_missing: f.on_missing,
+            attribution: f.attribution,
+            tile_size: f.tile_size,
+            max_zoom: f.max_zoom,
+            neighbor_fetch: f.neighbor_fetch,
+            elevation_offset: f.elevation_offset,
+        })
+    }
+}
+
+/// How a `dem` source's RGB channels encode height.
 #[derive(Debug, Deserialize, PartialEq, Eq, Clone, Copy)]
 #[serde(rename_all = "kebab-case")]
 pub enum DemEncoding {
+    /// Mapzen / Terrarium: `R*256 + G + B/256 - 32768`.
+    Terrarium,
+    /// Mapbox / MapLibre Terrain-RGB: `(R*65536 + G*256 + B) * 0.1 - 10000`.
+    MapboxRgb,
+    /// `R*red-factor + G*green-factor + B*blue-factor - base-shift`, with
+    /// the factors declared on the source — MapLibre's `custom` encoding.
+    Custom,
+}
+
+/// The factors of a `custom` DEM encoding:
+/// `h = R*red + G*green + B*blue - base_shift`, the channels read as
+/// 0–255. Defaults match MapLibre's (`1, 1, 1, 0`).
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub struct DemFactors {
+    pub red: f64,
+    pub green: f64,
+    pub blue: f64,
+    /// Subtracted from the weighted sum, as MapLibre's `baseShift` is.
+    pub base_shift: f64,
+}
+
+impl Default for DemFactors {
+    fn default() -> Self {
+        DemFactors {
+            red: 1.0,
+            green: 1.0,
+            blue: 1.0,
+            base_shift: 0.0,
+        }
+    }
+}
+
+/// A DEM encoding resolved to everything decoding needs: the two fixed
+/// schemes, or a `custom` one with its factors.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum DemDecoding {
     Terrarium,
     MapboxRgb,
+    Custom(DemFactors),
+}
+
+impl From<DemEncoding> for DemDecoding {
+    /// A bare `custom` decodes with MapLibre's default factors; use
+    /// [`DemSource::decoding`] to pick up the ones a source declares.
+    fn from(e: DemEncoding) -> Self {
+        match e {
+            DemEncoding::Terrarium => DemDecoding::Terrarium,
+            DemEncoding::MapboxRgb => DemDecoding::MapboxRgb,
+            DemEncoding::Custom => DemDecoding::Custom(DemFactors::default()),
+        }
+    }
 }
 
 /// RGBA raster tile pyramid (satellite imagery, pre-rendered
@@ -1263,6 +1395,54 @@ mod tests {
         assert_eq!(r.on_missing, OnMissing::Empty);
         // Dedup: the doc attribution and basemap's identical one merge.
         assert_eq!(doc.attributions(), ["Style © Demo", "© Example Sat"]);
+    }
+
+    #[test]
+    fn parses_custom_dem_encoding() {
+        let parse = |decl: &str| {
+            Document::from_json(&format!(
+                r##"{{ "name": "demo", "sources": {{ "terrain": {decl} }},
+                     "nodes": {{ "out": {{ "op": "solid", "color": "#000000" }} }},
+                     "output": "@out" }}"##
+            ))
+        };
+        let doc = parse(
+            r#"{ "type": "dem", "url": "t/{z}/{x}/{y}.png", "encoding": "custom",
+                 "red-factor": 0.5, "base-shift": -20 }"#,
+        )
+        .unwrap();
+        let SourceDecl::Dem(d) = &doc.sources["terrain"] else {
+            panic!("expected dem source");
+        };
+        // Unset factors take MapLibre's defaults.
+        assert_eq!(
+            d.decoding(),
+            DemDecoding::Custom(DemFactors {
+                red: 0.5,
+                green: 1.0,
+                blue: 1.0,
+                base_shift: -20.0,
+            })
+        );
+
+        let doc = parse(r#"{ "type": "dem", "url": "t.json", "encoding": "terrarium" }"#).unwrap();
+        let SourceDecl::Dem(d) = &doc.sources["terrain"] else {
+            panic!("expected dem source");
+        };
+        assert_eq!(d.custom, None);
+        assert_eq!(d.decoding(), DemDecoding::Terrarium);
+
+        // A factor next to a fixed encoding would do nothing.
+        let err = parse(
+            r#"{ "type": "dem", "url": "t.json", "encoding": "mapbox-rgb", "blue-factor": 2 }"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("blue-factor"), "{err}");
+        // Unknown fields are still refused.
+        assert!(parse(
+            r#"{ "type": "dem", "url": "t.json", "encoding": "custom", "redFactor": 2 }"#
+        )
+        .is_err());
     }
 
     #[test]

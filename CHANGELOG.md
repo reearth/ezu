@@ -169,6 +169,12 @@ mean is spelled out in
   fetches its shared background tiles once. Each page is byte-identical to a
   single-page run of it. The file is checked before anything renders, and a
   mistake names the page.
+- A `dem` source takes `"encoding": "custom"` with `red-factor`,
+  `green-factor`, `blue-factor` and `base-shift`, and decodes each pixel as
+  `R*red-factor + G*green-factor + B*blue-factor - base-shift`, as MapLibre's
+  `custom` encoding does, for elevation tiles that use neither Terrarium nor
+  Terrain-RGB. The factors default to 1 and the shift to 0; giving one with
+  another encoding fails to load, since it would do nothing.
 
 ### Changed
 

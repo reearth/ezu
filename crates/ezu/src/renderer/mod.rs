@@ -575,12 +575,12 @@ impl Renderer {
                 // The tile id only names the tile in an error message, and
                 // `Decode` carries it separately, so drop it from the one
                 // reported here.
-                let t = decode_dem_tile(bytes, spec.encoding, 0, 0, 0).map_err(|e| match e {
+                let t = decode_dem_tile(bytes, spec.decoding(), 0, 0, 0).map_err(|e| match e {
                     ezu_paint::host::DemDecodeError::Decode { msg, .. } => {
                         err(DemDecode, format!("source `{name}`: {msg}"))
                     }
                 })?;
-                Payload::Dem(Arc::new(t), spec.encoding)
+                Payload::Dem(Arc::new(t), spec.decoding())
             }
             SourceDecl::Raster(_) => {
                 let buf = ezu_paint::host::decode_image_bytes(bytes)
@@ -1199,14 +1199,15 @@ impl Renderer {
                         let oz = resolve_overzoom(here, dx, dy, placed.source_zoom)
                             .map_err(|e| err(UnknownSource, e))?;
                         let t = match &placed.data.payload {
-                            Payload::Dem(t, encoding) if *encoding == spec.encoding => t.clone(),
+                            Payload::Dem(t, encoding) if *encoding == spec.decoding() => t.clone(),
                             Payload::DemBytes(bytes) => {
                                 // Decode errors name the tile the host
                                 // actually fetched, which under overzoom is
                                 // the ancestor.
                                 let src = oz.from.map_or(oz.target, |(a, _)| a);
-                                let t = decode_dem_tile(bytes, spec.encoding, src.z, src.x, src.y)
-                                    .map_err(|e| err(DemDecode, e))?;
+                                let t =
+                                    decode_dem_tile(bytes, spec.decoding(), src.z, src.x, src.y)
+                                        .map_err(|e| err(DemDecode, e))?;
                                 Arc::new(t)
                             }
                             _ => return Err(mismatch()),

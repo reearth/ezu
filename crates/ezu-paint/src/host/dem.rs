@@ -317,7 +317,7 @@ impl DemSourceState {
             msg: format!("{url}: {e}"),
         })?;
         let decoded =
-            decode_dem_tile(&bytes, self.spec.encoding, z, x, y).map_err(|e| match e {
+            decode_dem_tile(&bytes, self.spec.decoding(), z, x, y).map_err(|e| match e {
                 crate::host::dem_decode::DemDecodeError::Decode { z, x, y, msg } => {
                     DemFetchError::Decode {
                         name: self.name.clone(),

@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use ezu_paint::host::{DemTile, RasterTile};
 use ezu_paint::render::SharedLayer;
-use ezu_style::DemEncoding;
+use ezu_style::DemDecoding;
 
 use super::{already_bound_otherwise, BindOptions, Error};
 
@@ -68,7 +68,7 @@ pub(super) enum Payload {
     Mvt(Arc<[Arc<SharedLayer>]>),
     /// Elevations, with the encoding they were decoded with: the same
     /// bytes read as another encoding are different heights.
-    Dem(Arc<DemTile>, DemEncoding),
+    Dem(Arc<DemTile>, DemDecoding),
     Raster(Arc<RasterTile>),
     GeoJson(Arc<serde_json::Value>),
     /// DEM or imagery bytes bound with `bind_source`, which has always

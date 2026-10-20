@@ -73,8 +73,22 @@ covering ancestor at `max-zoom`, its geometry reprojected into the requested til
 **`pmtiles`** — a PMTiles archive (local path or `http(s)://`). Layers bind exactly
 as `mvt`, and it takes the same `min-zoom` / `max-zoom`.
 
-**`dem`** — a raster-DEM pyramid. `encoding` is `terrarium` or `mapbox-rgb` and
-must match the data, since the RGB channels mean different things. The host
+**`dem`** — a raster-DEM pyramid. `url` may be an XYZ template, a TileJSON
+document, or a `.pmtiles` archive. `encoding` is `terrarium`, `mapbox-rgb` or
+`custom` and must match the data, since the RGB channels mean different things.
+`custom` decodes each pixel as
+`R*red-factor + G*green-factor + B*blue-factor - base-shift`, MapLibre's
+`custom` encoding; the factors default to `1` and `base-shift` to `0`, and
+they may only be given with `custom`:
+
+```json
+"terrain": { "type": "dem", "url": "https://example.com/dem/{z}/{x}/{y}.png",
+             "encoding": "custom",
+             "red-factor": 6553.6, "green-factor": 25.6, "blue-factor": 0.1,
+             "base-shift": 10000 }
+```
+
+The host
 stitches the 3×3 neighbourhood into a per-tile `ScalarField` with `geo_scale`
 populated, so `hillshade` and `slope` produce real-world angles, and binds it
 under `tile.<source-name>` for the `dem` node.

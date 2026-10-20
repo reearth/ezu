@@ -359,6 +359,26 @@ impl NodeRegistry {
                 "attribution": { "type": "string" }
             }
         });
+        let dem_source = json!({
+            "type": "object",
+            "required": ["type", "url", "encoding"],
+            "properties": {
+                "type": { "const": "dem" },
+                "url": { "type": "string", "description": "XYZ template, TileJSON URL, or PMTiles archive (`.pmtiles`). PNG/WebP tiles." },
+                "encoding": { "enum": ["terrarium", "mapbox-rgb", "custom"], "description": "How the RGB channels encode height. `custom` decodes `R*red-factor + G*green-factor + B*blue-factor - base-shift`, as MapLibre's `custom` encoding does." },
+                "red-factor": { "type": "number", "default": 1, "description": "`custom` only: multiplier on the red channel (0–255)." },
+                "green-factor": { "type": "number", "default": 1, "description": "`custom` only: multiplier on the green channel (0–255)." },
+                "blue-factor": { "type": "number", "default": 1, "description": "`custom` only: multiplier on the blue channel (0–255)." },
+                "base-shift": { "type": "number", "default": 0, "description": "`custom` only: subtracted from the weighted channel sum (MapLibre's `baseShift`)." },
+                "tile-size": { "type": "integer", "minimum": 1, "deprecated": true,
+                               "description": "Ignored. Each tile's edge is read from its decoded image, which may be any square size; the field is still accepted so older styles load." },
+                "max-zoom": { "type": "integer", "minimum": 0, "description": "Deepest zoom the source serves. Past it, tiles are overzoomed from the covering ancestor." },
+                "neighbor-fetch": { "type": "boolean", "default": true, "description": "Fetch the 8 neighbouring tiles too and stitch them, so the pad region holds real elevations and slopes stay seamless across tile edges." },
+                "elevation-offset": { "type": "number", "default": 0, "description": "Metres subtracted from every decoded sample, to rebase a geoid-relative dataset." },
+                "on-missing": { "enum": ["empty", "upsample", "error"], "default": "empty", "description": "404 within zoom range: zero elevation, upsample a parent, or fail the tile." },
+                "attribution": { "type": "string" }
+            }
+        });
 
         json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -472,22 +492,7 @@ impl NodeRegistry {
                                     "max-zoom": { "type": "integer", "minimum": 0, "description": "Deepest zoom the source serves. Past it, tiles are overzoomed from the covering ancestor (MapLibre's source `maxzoom`)." }
                                 }
                             },
-                            {
-                                "type": "object",
-                                "required": ["type", "url", "encoding"],
-                                "properties": {
-                                    "type": { "const": "dem" },
-                                    "url": { "type": "string", "description": "XYZ template or TileJSON URL." },
-                                    "encoding": { "enum": ["terrarium", "mapbox-rgb"] },
-                                    "tile-size": { "type": "integer", "minimum": 1, "deprecated": true,
-                                                   "description": "Ignored. Each tile's edge is read from its decoded image, which may be any square size; the field is still accepted so older styles load." },
-                                    "max-zoom": { "type": "integer", "minimum": 0, "description": "Deepest zoom the source serves. Past it, tiles are overzoomed from the covering ancestor." },
-                                    "neighbor-fetch": { "type": "boolean", "default": true, "description": "Fetch the 8 neighbouring tiles too and stitch them, so the pad region holds real elevations and slopes stay seamless across tile edges." },
-                                    "elevation-offset": { "type": "number", "default": 0, "description": "Metres subtracted from every decoded sample, to rebase a geoid-relative dataset." },
-                                    "on-missing": { "enum": ["empty", "upsample", "error"], "default": "empty", "description": "404 within zoom range: zero elevation, upsample a parent, or fail the tile." },
-                                    "attribution": { "type": "string" }
-                                }
-                            },
+                            dem_source,
                             {
                                 "type": "object",
                                 "required": ["type", "url"],

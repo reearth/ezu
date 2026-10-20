@@ -6960,16 +6960,33 @@
               "attribution": {
                 "type": "string"
               },
+              "base-shift": {
+                "default": 0,
+                "description": "`custom` only: subtracted from the weighted channel sum (MapLibre's `baseShift`).",
+                "type": "number"
+              },
+              "blue-factor": {
+                "default": 1,
+                "description": "`custom` only: multiplier on the blue channel (0–255).",
+                "type": "number"
+              },
               "elevation-offset": {
                 "default": 0,
                 "description": "Metres subtracted from every decoded sample, to rebase a geoid-relative dataset.",
                 "type": "number"
               },
               "encoding": {
+                "description": "How the RGB channels encode height. `custom` decodes `R*red-factor + G*green-factor + B*blue-factor - base-shift`, as MapLibre's `custom` encoding does.",
                 "enum": [
                   "terrarium",
-                  "mapbox-rgb"
+                  "mapbox-rgb",
+                  "custom"
                 ]
+              },
+              "green-factor": {
+                "default": 1,
+                "description": "`custom` only: multiplier on the green channel (0–255).",
+                "type": "number"
               },
               "max-zoom": {
                 "description": "Deepest zoom the source serves. Past it, tiles are overzoomed from the covering ancestor.",
@@ -6990,6 +7007,11 @@
                   "error"
                 ]
               },
+              "red-factor": {
+                "default": 1,
+                "description": "`custom` only: multiplier on the red channel (0–255).",
+                "type": "number"
+              },
               "tile-size": {
                 "deprecated": true,
                 "description": "Ignored. Each tile's edge is read from its decoded image, which may be any square size; the field is still accepted so older styles load.",
@@ -7000,7 +7022,7 @@
                 "const": "dem"
               },
               "url": {
-                "description": "XYZ template or TileJSON URL.",
+                "description": "XYZ template, TileJSON URL, or PMTiles archive (`.pmtiles`). PNG/WebP tiles.",
                 "type": "string"
               }
             },

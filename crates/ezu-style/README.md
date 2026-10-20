@@ -77,7 +77,8 @@ carry a `src` URI, tile-scoped variants a `url` template.
 
 Tile-scoped source kinds:
 
-- `dem` — raster-DEM tile pyramid (terrarium or mapbox-rgb encoding).
+- `dem` — raster-DEM tile pyramid (terrarium, mapbox-rgb, or custom
+  channel factors).
   The host stitches the 3×3 neighbourhood into a per-tile
   `ScalarField` (with `geo_scale` populated) and binds it under
   `tile.<source-name>`, ready for the `dem` source node to pick up.

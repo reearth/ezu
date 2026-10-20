@@ -188,7 +188,7 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 | Op | Inputs → Output | Notes |
 |---|---|---|
 | `features` | `() → Features` | Samples a host-bound vector tile layer. `source` (optional, matches a `mvt`/`pmtiles` entry in the document's `sources` block; defaults to the single such entry) + `layer` (the MVT layer name). Looked up as `<source>.<layer>` on the AssetLoader |
-| `dem` | `() → ScalarField` | Samples a host-bound DEM mosaic. `source` (optional, matches a `dem` entry in `sources`; defaults to the single such entry) — looked up by bare source name. The host fetches + decodes raster-DEM tiles (terrarium / mapbox-rgb) and binds the stitched scalar field (with `geo_scale` populated) per render |
+| `dem` | `() → ScalarField` | Samples a host-bound DEM mosaic. `source` (optional, matches a `dem` entry in `sources`; defaults to the single such entry) — looked up by bare source name. The host fetches + decodes raster-DEM tiles (terrarium / mapbox-rgb / custom) and binds the stitched scalar field (with `geo_scale` populated) per render |
 | `raster` | `() → Raster` | Samples a host-bound RGBA imagery mosaic (satellite photos, pre-rendered basemaps). `source` (optional, matches a `raster` entry in `sources`; defaults to the single such entry) — looked up by bare source name. The host fetches PNG/WebP/JPEG tiles (XYZ / TileJSON / PMTiles), stitches the 3×3 neighbourhood onto the padded canvas, and binds it per render; unbound tiles (`on-missing: empty`) emit transparent pixels |
 | `image` | `() → Sprite` | Load a PNG / WebP asset from the document's `sources` block at its native dimensions |
 | `icon` | `() → Sprite` | Crop one named icon out of a `sprite` atlas — the feed for `stamp` (symbol icons), `tiling` (`fill-pattern`) and `line-stamp` (`line-pattern`) |
@@ -446,7 +446,7 @@ covers non-tile-sized outputs (e.g. CLI bbox mosaics).
 
 `host::dem` ports the same `sources`-driven pattern to raster-DEM
 tiles. `build_dem_sources(doc)` walks the style's `sources` block,
-building one fetcher (terrarium or mapbox-rgb, PNG or WebP) per
+building one fetcher (terrarium, mapbox-rgb or custom, PNG or WebP) per
 declared source; `bind_dem_sources(&mut tile_loader, &registry, tile,
 canvas)` fetches the 3×3 neighbourhood (date-line-wrapping in X,
 edge-clamping in Y), bilinear-resamples it onto the padded canvas,

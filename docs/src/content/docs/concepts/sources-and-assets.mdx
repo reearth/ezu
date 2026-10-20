@@ -78,7 +78,8 @@ tile's local frame.
 - **`error`** — fail the render, so a tile server can answer 404
 
 Requests past `max-zoom` always upsample from the `max-zoom` ancestor, whatever
-the policy says. `dem` also needs an `encoding` (`terrarium` or `mapbox-rgb`) —
+the policy says. `dem` also needs an `encoding` (`terrarium`, `mapbox-rgb`, or
+`custom` with its channel factors) —
 get it wrong and the terrain is noise, since the RGB channels mean different
 things.
 

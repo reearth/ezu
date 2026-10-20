@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use ezu_core::coord::metres_per_world_unit;
 use ezu_graph::{CanvasInfo, GeoScale, ScalarField, TileId};
-use ezu_style::DemEncoding;
+use ezu_style::DemDecoding;
 
 /// One decoded DEM tile at the source's native pixel size.
 pub struct DemTile {
@@ -23,16 +23,19 @@ pub enum DemDecodeError {
     Decode { z: u8, x: u32, y: u32, msg: String },
 }
 
-/// Decode a single raster-DEM tile (PNG / WebP bytes, terrarium or
-/// mapbox-rgb encoding) into a flat elevation grid. `(z, x, y)` is
+/// Decode a single raster-DEM tile (PNG / WebP bytes) into a flat
+/// elevation grid. `encoding` is a bare [`DemEncoding`](ezu_style::DemEncoding)
+/// or, to honour a `custom` source's factors,
+/// [`DemSource::decoding`](ezu_style::DemSource::decoding). `(z, x, y)` is
 /// used only for error messages.
 pub fn decode_dem_tile(
     bytes: &[u8],
-    encoding: DemEncoding,
+    encoding: impl Into<DemDecoding>,
     z: u8,
     x: u32,
     y: u32,
 ) -> Result<DemTile, DemDecodeError> {
+    let encoding = encoding.into();
     let img = image::load_from_memory(bytes)
         .map_err(|e| DemDecodeError::Decode {
             z,
@@ -158,11 +161,17 @@ pub fn upsample_subregion(
 }
 
 #[inline]
-fn decode_sample(enc: DemEncoding, r: u8, g: u8, b: u8) -> f32 {
+fn decode_sample(enc: DemDecoding, r: u8, g: u8, b: u8) -> f32 {
     match enc {
-        DemEncoding::Terrarium => (r as f32) * 256.0 + (g as f32) + (b as f32) / 256.0 - 32768.0,
-        DemEncoding::MapboxRgb => {
+        DemDecoding::Terrarium => (r as f32) * 256.0 + (g as f32) + (b as f32) / 256.0 - 32768.0,
+        DemDecoding::MapboxRgb => {
             -10000.0 + ((r as f32) * 65536.0 + (g as f32) * 256.0 + (b as f32)) * 0.1
+        }
+        // MapLibre's unpack. Summed in f64 so large factors (a red channel
+        // worth 65536 units, say) keep their low bits until the one
+        // rounding to f32 at the end.
+        DemDecoding::Custom(f) => {
+            (r as f64 * f.red + g as f64 * f.green + b as f64 * f.blue - f.base_shift) as f32
         }
     }
 }
@@ -197,4 +206,67 @@ fn split_fraction(t: f32) -> (i32, f32) {
 /// Latitude (radians) of a Web Mercator tile's vertical centre.
 fn tile_centre_world_y(tile: TileId) -> f64 {
     (tile.y as f64 + 0.5) / (1u64 << tile.z) as f64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ezu_style::{DemEncoding, DemFactors};
+
+    #[test]
+    fn custom_factors_decode_as_maplibre_unpacks() {
+        let f = DemFactors {
+            red: 0.5,
+            green: 2.0,
+            blue: 0.25,
+            base_shift: 100.0,
+        };
+        assert_eq!(
+            decode_sample(DemDecoding::Custom(f), 10, 20, 40),
+            10.0 * 0.5 + 20.0 * 2.0 + 40.0 * 0.25 - 100.0
+        );
+        // MapLibre's defaults read the channel sum.
+        assert_eq!(decode_sample(DemEncoding::Custom.into(), 1, 2, 3), 6.0);
+    }
+
+    #[test]
+    fn custom_with_a_fixed_scheme_factors_lands_on_the_same_heights() {
+        // MapLibre's own factors for its two fixed encodings.
+        let mapbox = DemFactors {
+            red: 6553.6,
+            green: 25.6,
+            blue: 0.1,
+            base_shift: 10000.0,
+        };
+        let terrarium = DemFactors {
+            red: 256.0,
+            green: 1.0,
+            blue: 1.0 / 256.0,
+            base_shift: 32768.0,
+        };
+        for (r, g, b) in [(0, 0, 0), (1, 134, 160), (128, 0, 77), (255, 255, 255)] {
+            let fixed = decode_sample(DemDecoding::MapboxRgb, r, g, b);
+            let custom = decode_sample(DemDecoding::Custom(mapbox), r, g, b);
+            assert!((fixed - custom).abs() < 0.01, "{fixed} vs {custom}");
+            let fixed = decode_sample(DemDecoding::Terrarium, r, g, b);
+            let custom = decode_sample(DemDecoding::Custom(terrarium), r, g, b);
+            assert!((fixed - custom).abs() < 0.01, "{fixed} vs {custom}");
+        }
+    }
+
+    #[test]
+    fn decode_dem_tile_reads_the_custom_factors() {
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([3, 2, 1, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let f = DemFactors {
+            red: 100.0,
+            green: 10.0,
+            blue: 1.0,
+            base_shift: 21.0,
+        };
+        let t = decode_dem_tile(&png, DemDecoding::Custom(f), 0, 0, 0).unwrap();
+        assert_eq!(t.elev, vec![300.0; 4]);
+    }
 }
