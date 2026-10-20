@@ -25,6 +25,7 @@ use ezu::core::TileId as CoreTileId;
 use ezu::graph::{build_graph, Cache, CanvasInfo, Graph, ParamValues};
 use ezu::paint::host::{pixmap_to_webp, BrushBankLoader};
 use ezu::paint::nodes::default_registry;
+use ezu::renderer::FrameFeatureCollector;
 use ezu::style::{Document, SourceDecl};
 use futures::stream::{StreamExt, TryStreamExt};
 use tiny_skia::{ColorU8, Pixmap};
@@ -1442,7 +1443,8 @@ async fn render_pages(
 
     let started = std::time::Instant::now();
     let mut state: Option<Opened> = None;
-    let mut resolved: Vec<(Vec<frame_features::Export>, Vec<String>)> = Vec::new();
+    let mut collectors: Vec<Option<FrameFeatureCollector>> = Vec::new();
+    let mut paths: Vec<Vec<PathBuf>> = Vec::new();
     for (i, (page, frame)) in pages.iter().zip(&frames).enumerate() {
         let page_started = std::time::Instant::now();
         let counts_before = byte_cache.counts();
@@ -1454,16 +1456,28 @@ async fn render_pages(
         opened.tiles.set_tile_size(frame.tile_size)?;
         // Every page's features are checked against the graph as soon as
         // there is one, before the first page renders.
-        if resolved.is_empty() {
-            for (j, p) in pages.iter().enumerate() {
-                let r = frame_features::resolve(&opened.graph, &p.features, &p.features_key)
-                    .map_err(|e| on_page(j, e.into()))?;
-                resolved.push(r);
+        if collectors.is_empty() {
+            for (j, (p, f)) in pages.iter().zip(&frames).enumerate() {
+                let exports =
+                    frame_features::exports(&p.features, &p.features_key, p.features_coords)
+                        .map_err(|e| on_page(j, e.into()))?;
+                let collector = match exports.paths.is_empty() {
+                    true => None,
+                    false => Some(
+                        opened
+                            .tiles
+                            .renderer()
+                            .frame_features(f, &exports.request)
+                            .map_err(|e| on_page(j, format!("--features: {e}").into()))?,
+                    ),
+                };
+                collectors.push(collector);
+                paths.push(exports.paths);
             }
         }
-        let (exports, watched) = &resolved[i];
+        let mut collector = collectors[i].take();
 
-        let (image, mut captures) = render_frame(&opened.tiles, frame, concurrency, watched)
+        let image = render_frame(&opened.tiles, frame, concurrency, collector.as_mut())
             .await
             .map_err(|e| on_page(i, e))?;
         let bytes = match page.format {
@@ -1472,18 +1486,14 @@ async fn render_pages(
         };
         std::fs::write(&page.out, &bytes).map_err(|e| on_page(i, e.into()))?;
         tracing::info!("wrote {} ({} bytes)", page.out.display(), bytes.len());
-        for export in exports {
-            let text = frame_features::feature_collection(
-                frame,
-                &mut captures,
-                export,
-                page.features_coords,
-            )?;
-            std::fs::write(&export.path, &text).map_err(|e| on_page(i, e.into()))?;
+        let written = collector.map(FrameFeatureCollector::finish);
+        for (features, path) in written.iter().flatten().zip(&paths[i]) {
+            let text = features.to_geojson();
+            std::fs::write(path, &text).map_err(|e| on_page(i, e.into()))?;
             tracing::info!(
                 "wrote {} (features of `{}`, {} bytes)",
-                export.path.display(),
-                export.node,
+                path.display(),
+                features.node(),
                 text.len()
             );
         }
@@ -1546,17 +1556,21 @@ fn log_frame(frame: &Frame, style_tile_size: u32, scale: f64) {
 /// around it, and at most `concurrency` rendered tiles are held at once:
 /// each is copied in as it finishes and dropped.
 ///
-/// The values of the `watched` nodes are kept from every tile, in the order
-/// the tiles finished.
+/// With a `collector`, every tile also renders the nodes it gathers and
+/// hands it their values, in whatever order the tiles finish.
 async fn render_frame(
     tiles: &TileRenderer,
     frame: &Frame,
     concurrency: usize,
-    watched: &[String],
-) -> Result<(Pixmap, Vec<frame_features::TileCapture>), Box<dyn std::error::Error>> {
+    mut collector: Option<&mut FrameFeatureCollector>,
+) -> Result<Pixmap, Box<dyn std::error::Error>> {
     let mut image = Pixmap::new(frame.width, frame.height)
         .ok_or_else(|| format!("cannot allocate a {}×{} image", frame.width, frame.height))?;
-    let mut captures = Vec::new();
+    let watched: Vec<String> = collector
+        .as_ref()
+        .map(|c| c.nodes().into_iter().map(String::from).collect())
+        .unwrap_or_default();
+    let watched = &watched;
     let xr = frame.tiles_x.clone();
     let coords = frame
         .tiles_y
@@ -1585,17 +1599,13 @@ async fn render_frame(
         .buffer_unordered(concurrency);
     while let Some(done) = rendered.next().await {
         let (tx, ty, rgba, values) = done.map_err(|e| e.to_string())?;
-        if !watched.is_empty() {
-            captures.push(frame_features::TileCapture {
-                x: tx,
-                y: ty,
-                values,
-            });
+        if let Some(c) = collector.as_deref_mut() {
+            c.add(CoreTileId::new(frame.zoom, tx, ty), &values);
         }
         let (dx, dy) = frame.tile_offset(tx, ty);
         blit_rgba_into(&mut image, &rgba, dx, dy, frame.tile_size);
     }
-    Ok((image, captures))
+    Ok(image)
 }
 
 /// Millimetres of paper to whole pixels at `dpi`.

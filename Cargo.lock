@@ -715,7 +715,6 @@ dependencies = [
  "dhat",
  "ezu",
  "futures",
- "maplibre-expr",
  "pmtiles",
  "reqwest",
  "serde",

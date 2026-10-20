@@ -1,30 +1,15 @@
 //! `ezu frame --features`: a features node's value, gathered over every tile
 //! a print frame renders, written as one GeoJSON file.
 //!
-//! A print pipeline wants a machine-readable list of what is on the page —
-//! every label, say, with what placement did to it — next to the image. The
-//! node is evaluated per tile, so the same label shows up in each tile that
-//! sees it; an optional key collapses those copies to one. The file must be
-//! byte-identical across runs of the same input, so tiles are read in a fixed
-//! order whatever order they finished in, and numbers are written at a fixed
-//! precision.
+//! The gathering and the file are the renderer's
+//! ([`ezu::renderer::FrameFeatureCollector`]), so the Go and JS packages
+//! write the same bytes; what is here is reading the flags into its request.
 
-use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashSet};
-use std::fmt::Write as _;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use clap::ValueEnum;
-use ezu::core::frame::Frame;
-use ezu::graph::{Graph, NodeIx, PortKind};
-use ezu::renderer::{FeatureGroup, NodeFeatures};
-use maplibre_expr::Value;
-
-/// Decimal places for longitude and latitude: about 1 cm on the ground,
-/// finer than any print pixel.
-const LONLAT_DECIMALS: usize = 7;
-/// Decimal places for output-image pixels.
-const PX_DECIMALS: usize = 2;
+use ezu::renderer::{FrameFeatureNode, FrameFeatures};
 
 /// Coordinate system of the written GeoJSON.
 // The variants carry plain comments, not doc comments: clap would turn
@@ -39,13 +24,20 @@ pub(crate) enum FeatureCoords {
     Px,
 }
 
-/// One `--features NODE=PATH`, resolved against the graph.
-pub(crate) struct Export {
-    pub node: String,
-    pub path: PathBuf,
-    /// Where the node's value lands in each tile's captures.
-    pub slot: usize,
-    pub key: Option<Vec<String>>,
+impl From<FeatureCoords> for ezu::renderer::FeatureCoords {
+    fn from(c: FeatureCoords) -> Self {
+        match c {
+            FeatureCoords::Lonlat => Self::LonLat,
+            FeatureCoords::Px => Self::Px,
+        }
+    }
+}
+
+/// One page's `--features` and `--features-key`, as the request the
+/// renderer gathers them by, and the file each of its entries is written to.
+pub(crate) struct Exports {
+    pub request: FrameFeatures,
+    pub paths: Vec<PathBuf>,
 }
 
 /// `NODE=PATH`.
@@ -69,13 +61,14 @@ pub(crate) fn parse_node_key(s: &str) -> Result<(String, Vec<String>), String> {
     Ok((node.to_string(), props))
 }
 
-/// Check every requested node exists and yields features, and pair each with
-/// its key. Done before anything renders, so a typo costs nothing.
-pub(crate) fn resolve(
-    graph: &Graph,
+/// Pair every `--features` with its key. Whether each names a features
+/// node of the style is the renderer's to check, which it does before
+/// anything renders.
+pub(crate) fn exports(
     features: &[(String, PathBuf)],
     keys: &[(String, Vec<String>)],
-) -> Result<(Vec<Export>, Vec<String>), String> {
+    coords: FeatureCoords,
+) -> Result<Exports, String> {
     let mut key_of: BTreeMap<&str, &Vec<String>> = BTreeMap::new();
     for (node, props) in keys {
         if !features.iter().any(|(n, _)| n == node) {
@@ -87,412 +80,19 @@ pub(crate) fn resolve(
             return Err(format!("--features-key is given twice for `{node}`"));
         }
     }
-    let mut nodes: Vec<String> = Vec::new();
-    let mut exports = Vec::with_capacity(features.len());
-    for (node, path) in features {
-        let ix: NodeIx = graph
-            .index_of(node)
-            .ok_or_else(|| format!("--features: the style has no node `{node}`"))?;
-        let kind = graph.output_kind(ix);
-        if kind != PortKind::Features {
-            return Err(format!(
-                "--features: node `{node}` produces {kind}, not features"
-            ));
-        }
-        let slot = match nodes.iter().position(|n| n == node) {
-            Some(slot) => slot,
-            None => {
-                nodes.push(node.clone());
-                nodes.len() - 1
-            }
-        };
-        exports.push(Export {
-            node: node.clone(),
-            path: path.clone(),
-            slot,
-            key: key_of.get(node.as_str()).map(|k| (*k).clone()),
-        });
-    }
-    Ok((exports, nodes))
-}
-
-/// The watched nodes' values from tile `(x, y)`, one per node in the order
-/// [`resolve`] lists them.
-pub(crate) struct TileCapture {
-    pub x: u32,
-    pub y: u32,
-    pub values: Vec<NodeFeatures>,
-}
-
-/// One group, projected and ready to write.
-struct Item<'a> {
-    properties: &'a BTreeMap<String, Value>,
-    geometry: String,
-}
-
-/// The GeoJSON FeatureCollection for `export`, from `tiles` (any order).
-///
-/// Tiles are read rows top to bottom, then left to right, and each tile's
-/// groups in their own order. A group whose bounding box lies wholly outside
-/// the frame is dropped; one that reaches into it is written whole, not
-/// clipped. With a key, groups whose key properties are all equal are one
-/// feature: the first in that reading order is kept, and the result is sorted
-/// by the key. Without one, every group of every tile is written, so a
-/// feature several tiles see appears once per tile, and a shape cut at tile
-/// edges appears as its pieces.
-pub(crate) fn feature_collection(
-    frame: &Frame,
-    tiles: &mut [TileCapture],
-    export: &Export,
-    coords: FeatureCoords,
-) -> Result<String, String> {
-    tiles.sort_by_key(|t| (t.y, t.x));
-    let mut items: Vec<(Vec<Option<&Value>>, Item<'_>)> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-    for tile in tiles.iter() {
-        let Some(feats) = tile
-            .values
-            .get(export.slot)
-            .and_then(NodeFeatures::features)
-        else {
-            continue;
-        };
-        let project = Projection::new(frame, tile.x, tile.y, feats.extent, coords);
-        for group in &feats.groups {
-            let Some(bounds) = project.frame_bounds(group) else {
-                continue;
-            };
-            if !bounds.reaches_into(frame) {
-                continue;
-            }
-            let key: Vec<Option<&Value>> = match &export.key {
-                Some(props) => props.iter().map(|p| group.properties.get(p)).collect(),
-                None => Vec::new(),
-            };
-            if export.key.is_some() && !seen.insert(identity(&key)) {
-                continue;
-            }
-            items.push((
-                key,
-                Item {
-                    properties: &group.properties,
-                    geometry: project.geometry(group),
-                },
-            ));
-        }
-    }
-    if export.key.is_some() {
-        // Stable, so equal keys keep the reading order.
-        items.sort_by(|a, b| compare_keys(&a.0, &b.0));
-    }
-
-    let mut out = String::from(r#"{"type":"FeatureCollection","features":["#);
-    for (i, (_, item)) in items.iter().enumerate() {
-        out.push_str(if i == 0 { "\n" } else { ",\n" });
-        let props: serde_json::Map<String, serde_json::Value> = item
-            .properties
-            .iter()
-            .map(|(k, v)| (k.clone(), to_json(v)))
-            .collect();
-        let props = serde_json::to_string(&props).map_err(|e| e.to_string())?;
-        let _ = write!(
-            out,
-            r#"{{"type":"Feature","geometry":{},"properties":{props}}}"#,
-            item.geometry
-        );
-    }
-    if !items.is_empty() {
-        out.push('\n');
-    }
-    out.push_str("]}\n");
-    Ok(out)
-}
-
-/// A key as text, distinct for every distinct key: an absent property
-/// differs from a `null` one, and `1` equals `1.0`.
-fn identity(key: &[Option<&Value>]) -> String {
-    let mut s = String::new();
-    for v in key {
-        match v {
-            None => s.push('-'),
-            Some(v) => {
-                s.push('=');
-                s.push_str(&to_json(v).to_string());
-            }
-        }
-        s.push('\u{1f}');
-    }
-    s
-}
-
-/// Missing values first, then null, booleans, numbers (numerically),
-/// strings, and anything else by its JSON text.
-fn compare_keys(a: &[Option<&Value>], b: &[Option<&Value>]) -> Ordering {
-    fn rank(v: Option<&Value>) -> u8 {
-        match v {
-            None => 0,
-            Some(Value::Null) => 1,
-            Some(Value::Bool(_)) => 2,
-            Some(Value::Number(_)) => 3,
-            Some(Value::String(_)) => 4,
-            Some(_) => 5,
-        }
-    }
-    for (x, y) in a.iter().zip(b) {
-        let ord = rank(*x).cmp(&rank(*y)).then_with(|| match (x, y) {
-            (Some(Value::Bool(x)), Some(Value::Bool(y))) => x.cmp(y),
-            (Some(Value::Number(x)), Some(Value::Number(y))) => x.total_cmp(y),
-            (Some(Value::String(x)), Some(Value::String(y))) => x.cmp(y),
-            (Some(x), Some(y)) => to_json(x).to_string().cmp(&to_json(y).to_string()),
-            _ => Ordering::Equal,
-        });
-        if ord != Ordering::Equal {
-            return ord;
-        }
-    }
-    Ordering::Equal
-}
-
-/// A property value as JSON. A whole number is written without a fraction,
-/// so a feature id reads `12`, not `12.0`; kinds JSON has no form for
-/// (colours, formatted text) are written as their text.
-fn to_json(v: &Value) -> serde_json::Value {
-    use serde_json::Value as J;
-    match v {
-        Value::Null => J::Null,
-        Value::Bool(b) => J::Bool(*b),
-        Value::Number(n) => number(*n),
-        Value::String(s) => J::String(s.clone()),
-        Value::Array(a) => J::Array(a.iter().map(to_json).collect()),
-        Value::Object(o) => J::Object(o.iter().map(|(k, v)| (k.clone(), to_json(v))).collect()),
-        Value::NumberArray(a) => J::Array(a.iter().map(|n| number(*n)).collect()),
-        Value::Padding(a) => J::Array(a.iter().map(|n| number(*n)).collect()),
-        other => J::String(other.to_string()),
-    }
-}
-
-fn number(n: f64) -> serde_json::Value {
-    // Exactly representable integers only: past 2^53 an f64 no longer
-    // holds every integer, and the shortest decimal form is the honest one.
-    const EXACT: f64 = 9_007_199_254_740_992.0;
-    if n.fract() == 0.0 && n.abs() < EXACT {
-        serde_json::Value::from(n as i64)
-    } else {
-        serde_json::Number::from_f64(n).map_or(serde_json::Value::Null, Into::into)
-    }
-}
-
-/// Bounding box in output-image pixels.
-struct Bounds {
-    min: (f64, f64),
-    max: (f64, f64),
-}
-
-impl Bounds {
-    fn reaches_into(&self, frame: &Frame) -> bool {
-        self.max.0 >= 0.0
-            && self.max.1 >= 0.0
-            && self.min.0 <= frame.width as f64
-            && self.min.1 <= frame.height as f64
-    }
-}
-
-/// From one tile's geometry units to the written coordinates.
-struct Projection {
-    /// Tile origin in output-image pixels.
-    origin: (f64, f64),
-    /// Output-image pixels per geometry unit.
-    per_unit: f64,
-    /// Frame corner in world pixels, and the world's width in them.
-    left: f64,
-    top: f64,
-    world: f64,
-    coords: FeatureCoords,
-}
-
-impl Projection {
-    fn new(frame: &Frame, x: u32, y: u32, extent: u32, coords: FeatureCoords) -> Self {
-        let (ox, oy) = frame.tile_offset(x, y);
-        let t = frame.tile_size as f64;
-        Projection {
-            origin: (ox as f64, oy as f64),
-            per_unit: t / extent.max(1) as f64,
-            left: frame.left as f64,
-            top: frame.top as f64,
-            world: t * (1u64 << frame.zoom) as f64,
-            coords,
-        }
-    }
-
-    /// `(u, v)` in geometry units → output-image pixels.
-    fn px(&self, (u, v): (i32, i32)) -> (f64, f64) {
-        (
-            self.origin.0 + u as f64 * self.per_unit,
-            self.origin.1 + v as f64 * self.per_unit,
-        )
-    }
-
-    fn frame_bounds(&self, g: &FeatureGroup) -> Option<Bounds> {
-        let all = g
-            .polygons
-            .iter()
-            .flat_map(|p| p.exterior.iter())
-            .chain(g.lines.iter().flatten())
-            .chain(g.points.iter());
-        let mut b: Option<Bounds> = None;
-        for &c in all {
-            let (x, y) = self.px(c);
-            let b = b.get_or_insert(Bounds {
-                min: (x, y),
-                max: (x, y),
-            });
-            b.min = (b.min.0.min(x), b.min.1.min(y));
-            b.max = (b.max.0.max(x), b.max.1.max(y));
-        }
-        b
-    }
-
-    /// One position as GeoJSON text.
-    fn position(&self, out: &mut String, c: (i32, i32)) {
-        let (x, y) = self.px(c);
-        let (a, b, decimals) = match self.coords {
-            FeatureCoords::Px => (x, y, PX_DECIMALS),
-            FeatureCoords::Lonlat => (
-                ezu::core::coord::world_x_to_lon((x + self.left) / self.world),
-                ezu::core::coord::world_y_to_lat((y + self.top) / self.world),
-                LONLAT_DECIMALS,
-            ),
-        };
-        out.push('[');
-        out.push_str(&fixed(a, decimals));
-        out.push(',');
-        out.push_str(&fixed(b, decimals));
-        out.push(']');
-    }
-
-    fn positions(&self, out: &mut String, cs: impl IntoIterator<Item = (i32, i32)>) {
-        out.push('[');
-        for (i, c) in cs.into_iter().enumerate() {
-            if i > 0 {
-                out.push(',');
-            }
-            self.position(out, c);
-        }
-        out.push(']');
-    }
-
-    /// A ring closed and wound as RFC 7946 asks — exterior anticlockwise,
-    /// holes clockwise, as seen on a north-up map — whatever order the
-    /// node emitted it in.
-    fn ring(&self, out: &mut String, ring: &[(i32, i32)], exterior: bool) {
-        let mut pts = ring.to_vec();
-        if pts.len() > 1 && pts.first() != pts.last() {
-            pts.push(pts[0]);
-        }
-        // Shoelace in y-down units: positive is clockwise on screen.
-        let area: i128 = pts
-            .windows(2)
-            .map(|w| w[0].0 as i128 * w[1].1 as i128 - w[1].0 as i128 * w[0].1 as i128)
-            .sum();
-        if (area > 0) == exterior {
-            pts.reverse();
-        }
-        self.positions(out, pts);
-    }
-
-    fn polygon(&self, out: &mut String, p: &ezu::features::Polygon) {
-        out.push('[');
-        self.ring(out, &p.exterior, true);
-        for hole in &p.holes {
-            out.push(',');
-            self.ring(out, hole, false);
-        }
-        out.push(']');
-    }
-
-    /// Each kind present in `g`, as a single geometry when it has one item
-    /// and a multi geometry otherwise.
-    fn parts(&self, g: &FeatureGroup) -> Vec<String> {
-        let mut parts = Vec::new();
-        let mut s = String::new();
-        match g.polygons.as_slice() {
-            [] => {}
-            [p] => {
-                s.push_str(r#"{"type":"Polygon","coordinates":"#);
-                self.polygon(&mut s, p);
-                s.push('}');
-                parts.push(std::mem::take(&mut s));
-            }
-            ps => {
-                s.push_str(r#"{"type":"MultiPolygon","coordinates":["#);
-                for (i, p) in ps.iter().enumerate() {
-                    if i > 0 {
-                        s.push(',');
-                    }
-                    self.polygon(&mut s, p);
-                }
-                s.push_str("]}");
-                parts.push(std::mem::take(&mut s));
-            }
-        }
-        match g.lines.as_slice() {
-            [] => {}
-            [l] => {
-                s.push_str(r#"{"type":"LineString","coordinates":"#);
-                self.positions(&mut s, l.iter().copied());
-                s.push('}');
-                parts.push(std::mem::take(&mut s));
-            }
-            ls => {
-                s.push_str(r#"{"type":"MultiLineString","coordinates":["#);
-                for (i, l) in ls.iter().enumerate() {
-                    if i > 0 {
-                        s.push(',');
-                    }
-                    self.positions(&mut s, l.iter().copied());
-                }
-                s.push_str("]}");
-                parts.push(std::mem::take(&mut s));
-            }
-        }
-        match g.points.as_slice() {
-            [] => {}
-            [p] => {
-                s.push_str(r#"{"type":"Point","coordinates":"#);
-                self.position(&mut s, *p);
-                s.push('}');
-                parts.push(std::mem::take(&mut s));
-            }
-            ps => {
-                s.push_str(r#"{"type":"MultiPoint","coordinates":"#);
-                self.positions(&mut s, ps.iter().copied());
-                s.push('}');
-                parts.push(std::mem::take(&mut s));
-            }
-        }
-        parts
-    }
-
-    /// `g`'s geometry; a group mixing kinds becomes a GeometryCollection.
-    fn geometry(&self, g: &FeatureGroup) -> String {
-        let mut parts = self.parts(g);
-        if parts.len() == 1 {
-            return parts.pop().unwrap_or_default();
-        }
-        format!(
-            r#"{{"type":"GeometryCollection","geometries":[{}]}}"#,
-            parts.join(",")
-        )
-    }
-}
-
-/// `v` to `decimals` places, never as `-0.00`.
-fn fixed(v: f64, decimals: usize) -> String {
-    let s = format!("{v:.decimals$}");
-    match s.strip_prefix('-') {
-        Some(rest) if rest.bytes().all(|b| b == b'0' || b == b'.') => rest.to_string(),
-        _ => s,
-    }
+    Ok(Exports {
+        request: FrameFeatures {
+            nodes: features
+                .iter()
+                .map(|(node, _)| FrameFeatureNode {
+                    node: node.clone(),
+                    key: key_of.get(node.as_str()).map(|k| (*k).clone()),
+                })
+                .collect(),
+            coords: coords.into(),
+        },
+        paths: features.iter().map(|(_, path)| path.clone()).collect(),
+    })
 }
 
 #[cfg(test)]
@@ -500,7 +100,7 @@ mod tests {
     use super::*;
     use crate::{run_frame, CommonArgs, FrameCmd};
     use ezu::core::coord::{lat_to_world_y, lon_to_world_x, world_x_to_lon, world_y_to_lat};
-    use ezu::core::frame::FrameRequest;
+    use ezu::core::frame::{Frame, FrameRequest};
     use std::path::Path;
 
     /// 1:5000 at 96 dpi: tiles of ~188 px at z=17, and a 300×200 frame
@@ -820,40 +420,5 @@ mod tests {
             Ok(("boxes".into(), vec!["label-id".into(), "part".into()]))
         );
         assert!(parse_node_key("boxes=label-id,").is_err());
-    }
-
-    #[test]
-    fn numbers_are_written_at_a_fixed_precision() {
-        assert_eq!(fixed(139.7, 7), "139.7000000");
-        assert_eq!(fixed(-0.000_000_01, 7), "0.0000000");
-        assert_eq!(fixed(-1.005, 2), "-1.00");
-        assert_eq!(to_json(&Value::Number(12.0)).to_string(), "12");
-        assert_eq!(to_json(&Value::Number(0.5)).to_string(), "0.5");
-    }
-
-    #[test]
-    fn keys_order_missing_first_then_numbers_numerically() {
-        let (two, ten, a) = (
-            Value::Number(2.0),
-            Value::Number(10.0),
-            Value::String("a".into()),
-        );
-        let mut keys = [
-            vec![Some(&a)],
-            vec![Some(&ten)],
-            vec![None],
-            vec![Some(&two)],
-        ];
-        keys.sort_by(|x, y| compare_keys(x, y));
-        assert_eq!(
-            keys,
-            [
-                vec![None],
-                vec![Some(&two)],
-                vec![Some(&ten)],
-                vec![Some(&a)]
-            ]
-        );
-        assert_ne!(identity(&[None]), identity(&[Some(&Value::Null)]));
     }
 }

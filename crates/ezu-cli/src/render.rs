@@ -122,6 +122,11 @@ impl TileRenderer {
         self.renderer.render_tile_size()
     }
 
+    /// The renderer every render goes through.
+    pub(crate) fn renderer(&self) -> &Renderer {
+        &self.renderer
+    }
+
     /// The canvas margin every render is drawn with.
     pub(crate) fn pad(&self) -> u32 {
         self.base.pad.unwrap_or(0)
