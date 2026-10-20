@@ -15,7 +15,8 @@
 //! `sides: both` walks both ways from the pixel. `sides: forward` walks
 //! only upstream, against the field: a pixel then gathers what lies
 //! behind it, so a bright speck in `input` trails downstream, the way
-//! the field points.
+//! the field points. `sides: backward` walks only downstream, so the
+//! speck trails upstream instead.
 //!
 //! The usual chain is `dem → flow-field → flow-smear` over a `noise`
 //! raster, then `threshold` or `color-ramp` to turn the streaks into
@@ -55,6 +56,7 @@ const HANN_STEPS: usize = 256;
 enum Sides {
     Both,
     Forward,
+    Backward,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,9 +136,12 @@ impl Node for FlowSmearNode {
                     };
                     let (dx, dy) = (vx / mag, vy / mag);
                     // Gathering from upstream is what carries the input
-                    // downstream, so `forward` walks against the field.
-                    walk.run(-dx, -dy, &mut acc, &mut weight_sum);
-                    if self.sides == Sides::Both {
+                    // downstream, so `forward` walks against the field
+                    // and `backward` with it.
+                    if self.sides != Sides::Backward {
+                        walk.run(-dx, -dy, &mut acc, &mut weight_sum);
+                    }
+                    if self.sides != Sides::Forward {
                         walk.run(dx, dy, &mut acc, &mut weight_sum);
                     }
                 }
@@ -154,6 +159,7 @@ impl Node for FlowSmearNode {
         h.update(match self.sides {
             Sides::Both => b"bo",
             Sides::Forward => b"fw",
+            Sides::Backward => b"bw",
         });
         h.update(match self.taper {
             Taper::Flat => b"fl",
@@ -274,10 +280,11 @@ impl NodeFactory for FlowSmearFactory {
         let sides = match read_string_or(fields, "sides", ctx, "both")?.as_str() {
             "both" => Sides::Both,
             "forward" => Sides::Forward,
+            "backward" => Sides::Backward,
             other => {
                 return Err(FactoryError::BadField {
                     field: "sides".into(),
-                    msg: format!("expected `both` or `forward`, got `{other}`"),
+                    msg: format!("expected `both`, `forward` or `backward`, got `{other}`"),
                 });
             }
         };
@@ -341,8 +348,8 @@ impl NodeFactory for FlowSmearFactory {
                 "length-px": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0, "default": 12,
                                 "description": "Walk length in px each way, at full field length." })),
                 "length-px-max": { "type": "number", "minimum": 0.0, "description": "Upper bound on `length-px` for padding, required when `length-px` is an `@node` port. Values above it are clamped." },
-                "sides": { "type": "string", "enum": ["both", "forward"], "default": "both",
-                           "description": "`both` smears each way along the field, so a speck becomes a stroke centred on it; `forward` smears only the way the field points, so a speck trails a comet tail downstream." },
+                "sides": { "type": "string", "enum": ["both", "forward", "backward"], "default": "both",
+                           "description": "`both` smears each way along the field, so a speck becomes a stroke centred on it; `forward` smears only the way the field points, so a speck trails a comet tail downstream; `backward` smears only against it, so the tail runs upstream." },
                 "taper": { "type": "string", "enum": ["flat", "smooth"], "default": "flat",
                            "description": "`flat` weights every sample alike; `smooth` fades them towards the ends of the walk (a Hann window), softening the stroke ends." },
             },

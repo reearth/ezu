@@ -2355,10 +2355,11 @@
               },
               "sides": {
                 "default": "both",
-                "description": "`both` smears each way along the field, so a speck becomes a stroke centred on it; `forward` smears only the way the field points, so a speck trails a comet tail downstream.",
+                "description": "`both` smears each way along the field, so a speck becomes a stroke centred on it; `forward` smears only the way the field points, so a speck trails a comet tail downstream; `backward` smears only against it, so the tail runs upstream.",
                 "enum": [
                   "both",
-                  "forward"
+                  "forward",
+                  "backward"
                 ],
                 "type": "string"
               },

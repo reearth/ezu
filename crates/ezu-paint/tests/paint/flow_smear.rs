@@ -104,6 +104,32 @@ fn forward_smears_only_downstream() {
 }
 
 #[test]
+fn backward_smears_only_upstream() {
+    let back = smear(
+        r#", "length-px": 5, "sides": "backward""#,
+        dot(16, 16),
+        field(|_, _| (1.0, 0.0)),
+    );
+    for x in 11..=16 {
+        assert!(grey(&back, x, 16) > 30, "x={x} upstream should be lit");
+    }
+    for x in 17..23 {
+        assert!(grey(&back, x, 16) < 3, "x={x} downstream must stay dark");
+    }
+    // Along the row, the mirror image of `forward` on a field that points
+    // the other way. (Off the row the two differ by the field's 8-bit
+    // rounding, which is not symmetric about zero.)
+    let fwd = smear(
+        r#", "length-px": 5, "sides": "forward""#,
+        dot(16, 16),
+        field(|_, _| (-1.0, 0.0)),
+    );
+    for x in 0..SIZE {
+        assert_eq!(grey(&back, x, 16), grey(&fwd, x, 16), "x={x}");
+    }
+}
+
+#[test]
 fn zero_field_is_the_identity() {
     let img = dot(16, 16);
     let r = smear(r#", "length-px": 8"#, img.clone(), field(|_, _| (0.0, 0.0)));

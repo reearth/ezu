@@ -280,7 +280,7 @@ Smears `input` along the streamlines of a direction `field` (line integral convo
 | `input` | `@node` | yes | Reference to another node (`@name`). |
 | `length-px` | number (0…∞) \| `$param` \| `@node` | no | Walk length in px each way, at full field length. |
 | `length-px-max` | number (0…∞) | no | Upper bound on `length-px` for padding, required when `length-px` is an `@node` port. Values above it are clamped. |
-| `sides` | `both` \| `forward` | no | `both` smears each way along the field, so a speck becomes a stroke centred on it; `forward` smears only the way the field points, so a speck trails a comet tail downstream. |
+| `sides` | `both` \| `forward` \| `backward` | no | `both` smears each way along the field, so a speck becomes a stroke centred on it; `forward` smears only the way the field points, so a speck trails a comet tail downstream; `backward` smears only against it, so the tail runs upstream. |
 | `taper` | `flat` \| `smooth` | no | `flat` weights every sample alike; `smooth` fades them towards the ends of the walk (a Hann window), softening the stroke ends. |
 
 ### `gradient-conic`

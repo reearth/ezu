@@ -252,6 +252,8 @@ mean is spelled out in
   `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sign`, `fract`,
   `step` and `smoothstep`. Angles are in radians, and the results are the
   same bytes on every host.
+- `flow-smear` takes `sides: "backward"`, which smears only against the
+  field, so a speck trails upstream where `forward` trails it downstream.
 
 ### Changed
 
