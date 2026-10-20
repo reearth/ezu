@@ -28,6 +28,8 @@ mod contour;
 mod data_driven_circle;
 #[path = "paint/data_driven_fill.rs"]
 mod data_driven_fill;
+#[path = "paint/data_driven_fill_dabs.rs"]
+mod data_driven_fill_dabs;
 #[path = "paint/data_driven_icon.rs"]
 mod data_driven_icon;
 #[path = "paint/data_driven_line.rs"]

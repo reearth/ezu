@@ -206,6 +206,9 @@ mean is spelled out in
   feature group. The groups share one brush surface and the pressure jitter
   stays seeded by world position, so a style that resolves every group to
   the constants draws exactly what the constants draw.
+- `fill-dabs` takes `color-expr` and `opacity-expr`, evaluated per feature
+  group. The dabs land and jitter where they did, and each takes the paint
+  of the group whose polygon covers its centre.
 
 ### Changed
 

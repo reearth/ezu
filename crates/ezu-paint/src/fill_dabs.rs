@@ -77,15 +77,80 @@ pub fn paint_polygons_dabs(
     tile: TileId,
     style: &DabFillStyle,
 ) {
-    let pw = canvas.width();
-    let ph = canvas.height();
-    if pw == 0 || ph == 0 || polygons.is_empty() {
+    if canvas.width() == 0 || canvas.height() == 0 || polygons.is_empty() {
         return;
     }
+    let mask: Vec<u32> = rasterize_mask(polygons, extent, canvas)
+        .into_iter()
+        .map(u32::from)
+        .collect();
+    scatter(canvas, &mask, &[(style.color, style.opacity)], tile, style);
+}
 
+/// One group of polygons for [`paint_polygon_groups_dabs`], with the color
+/// and opacity its dabs carry.
+pub(crate) struct DabGroup<'a> {
+    pub(crate) polygons: &'a [Polygon],
+    pub(crate) color: RgbaF32,
+    pub(crate) opacity: f32,
+}
+
+/// [`paint_polygons_dabs`] for polygons that do not all share one color and
+/// opacity. The lattice is scattered once over the union of the groups, and
+/// each dab takes the paint of the group whose polygon covers its centre —
+/// the last such group, as the last-drawn polygon is the one on top. So the
+/// dabs land, and jitter, exactly where one call over all the polygons puts
+/// them, and only their paint differs: every other field of `style` is
+/// shared, and its own `color` and `opacity` are not used.
+pub(crate) fn paint_polygon_groups_dabs(
+    canvas: &mut Canvas,
+    groups: &[DabGroup<'_>],
+    extent: u32,
+    tile: TileId,
+    style: &DabFillStyle,
+) {
+    let pw = canvas.width();
+    let ph = canvas.height();
+    if pw == 0 || ph == 0 || groups.iter().all(|g| g.polygons.is_empty()) {
+        return;
+    }
+    let mut mask = vec![0u32; (pw * ph) as usize];
+    let mut scratch = tiny_skia::Pixmap::new(pw, ph).expect("non-zero mask size");
+    for (i, group) in groups.iter().enumerate() {
+        let Some(rect) = fill_mask_pixmap(&mut scratch, group.polygons, extent, canvas) else {
+            continue;
+        };
+        // Only the group's own bounds were drawn, so only they are read back
+        // and cleared for the next group.
+        let index = i as u32 + 1;
+        for y in rect.top() as u32..rect.bottom() as u32 {
+            for x in rect.left() as u32..rect.right() as u32 {
+                let at = (y * pw + x) as usize;
+                if scratch.pixels()[at].alpha() > 0 {
+                    mask[at] = index;
+                }
+                scratch.pixels_mut()[at] = tiny_skia::PremultipliedColorU8::TRANSPARENT;
+            }
+        }
+    }
+    let paints: Vec<(RgbaF32, f32)> = groups.iter().map(|g| (g.color, g.opacity)).collect();
+    scatter(canvas, &mask, &paints, tile, style);
+}
+
+/// Scatter the world-anchored dab lattice over `canvas`, drawing a dab
+/// wherever `mask` is non-zero at its centre, in the color and opacity
+/// `paints[mask - 1]` gives it; `style` supplies everything else.
+fn scatter(
+    canvas: &mut Canvas,
+    mask: &[u32],
+    paints: &[(RgbaF32, f32)],
+    tile: TileId,
+    style: &DabFillStyle,
+) {
+    let pw = canvas.width();
+    let ph = canvas.height();
     let tile_w = canvas.tile_width();
     let pad = canvas.pad();
-    let mask = rasterize_mask(polygons, extent, canvas);
     let mut surface = MemSurface::new();
 
     let spacing = style.spacing_px.max(0.5) as f64;
@@ -126,9 +191,11 @@ pub fn paint_polygons_dabs(
             }
             let ix = dab_x as u32;
             let iy = dab_y as u32;
-            if !mask[(iy * pw + ix) as usize] {
+            let index = mask[(iy * pw + ix) as usize];
+            if index == 0 {
                 continue;
             }
+            let (color, opacity) = paints[index as usize - 1];
 
             let size_mult = 1.0 + (next_unit(&mut state) - 0.5) * 2.0 * style.size_jitter;
             let opacity_mult = 1.0 + (next_unit(&mut state) - 0.5) * 2.0 * style.opacity_jitter;
@@ -139,12 +206,12 @@ pub fn paint_polygons_dabs(
                 y: dab_y,
                 radius: (style.radius_px * size_mult).max(0.5),
                 color: RgbaF32 {
-                    r: (style.color.r + value_jit).clamp(0.0, 1.0),
-                    g: (style.color.g + value_jit).clamp(0.0, 1.0),
-                    b: (style.color.b + value_jit).clamp(0.0, 1.0),
+                    r: (color.r + value_jit).clamp(0.0, 1.0),
+                    g: (color.g + value_jit).clamp(0.0, 1.0),
+                    b: (color.b + value_jit).clamp(0.0, 1.0),
                     a: 1.0,
                 },
-                opaque: (style.opacity * opacity_mult).clamp(0.0, 1.0),
+                opaque: (opacity * opacity_mult).clamp(0.0, 1.0),
                 hardness: style.hardness,
                 alpha_eraser: 1.0,
                 aspect_ratio: 1.0,
@@ -176,6 +243,22 @@ fn rasterize_mask(polygons: &[Polygon], extent: u32, canvas: &Canvas) -> Vec<boo
     let pw = canvas.width();
     let ph = canvas.height();
     let mut pixmap = tiny_skia::Pixmap::new(pw, ph).expect("non-zero mask size");
+    fill_mask_pixmap(&mut pixmap, polygons, extent, canvas);
+    pixmap.pixels().iter().map(|p| p.alpha() > 0).collect()
+}
+
+/// Fill `polygons` into `pixmap` (canvas-sized) the way the mask is drawn:
+/// opaque white, without anti-aliasing, even-odd. Returns the pixel rect the
+/// fills can have touched, clamped to the pixmap, or `None` when there is
+/// none.
+fn fill_mask_pixmap(
+    pixmap: &mut tiny_skia::Pixmap,
+    polygons: &[Polygon],
+    extent: u32,
+    canvas: &Canvas,
+) -> Option<tiny_skia::IntRect> {
+    let pw = canvas.width();
+    let ph = canvas.height();
     let mut paint = Paint::default();
     paint.set_color(Color::WHITE);
     paint.anti_alias = false;
@@ -184,8 +267,14 @@ fn rasterize_mask(polygons: &[Polygon], extent: u32, canvas: &Canvas) -> Vec<boo
     let sy = canvas.tile_height() as f32 / extent as f32;
     let ox = canvas.pad() as f32;
     let oy = canvas.pad() as f32;
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
     for poly in polygons {
         if let Some(path) = build_polygon_path(poly, sx, sy, ox, oy) {
+            let b = path.bounds();
+            x0 = x0.min(b.left());
+            y0 = y0.min(b.top());
+            x1 = x1.max(b.right());
+            y1 = y1.max(b.bottom());
             pixmap.fill_path(
                 &path,
                 &paint,
@@ -195,6 +284,14 @@ fn rasterize_mask(polygons: &[Polygon], extent: u32, canvas: &Canvas) -> Vec<boo
             );
         }
     }
-
-    pixmap.pixels().iter().map(|p| p.alpha() > 0).collect()
+    if x0 > x1 || y0 > y1 {
+        return None;
+    }
+    // One pixel of slack either side covers the rounding of the fill's
+    // pixel coverage at the bounds' edges.
+    let left = (x0.floor() as i64 - 1).clamp(0, pw as i64) as u32;
+    let top = (y0.floor() as i64 - 1).clamp(0, ph as i64) as u32;
+    let right = (x1.ceil() as i64 + 1).clamp(0, pw as i64) as u32;
+    let bottom = (y1.ceil() as i64 + 1).clamp(0, ph as i64) as u32;
+    tiny_skia::IntRect::from_ltrb(left as i32, top as i32, right as i32, bottom as i32)
 }
