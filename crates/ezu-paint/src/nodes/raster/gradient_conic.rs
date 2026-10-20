@@ -11,13 +11,13 @@ use xxhash_rust::xxh3::Xxh3;
 
 use crate::color_interp::InterpSpace;
 use crate::nodes::common::{
-    anchor_schema, hash_stops, read_space, read_stops, read_xy, resolve_stops, sample_stops,
-    space_schema, Anchor, StopsIn, ANCHORS,
+    anchor_schema, hash_stops, read_space, read_xy, resolve_stops, sample_stops, space_schema,
+    Anchor, StopsIn, ANCHORS,
 };
 use crate::nodes::raster::generator_kind::{
     generator_kind_schema, parse_generator_kind, GeneratorKind,
 };
-use crate::nodes::raster::gradient_common::render_gradient;
+use crate::nodes::raster::gradient_common::{read_gradient_stops, render_gradient, stops_required};
 
 struct GradientConicNode {
     center: [f32; 2],
@@ -38,10 +38,7 @@ impl Node for GradientConicNode {
         &self.ports
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
-        match self.out_kind {
-            GeneratorKind::Raster => PortKind::Raster,
-            GeneratorKind::Sprite { .. } => PortKind::Sprite,
-        }
+        self.out_kind.port_kind()
     }
     fn coord_space(&self) -> CoordSpace {
         // Descriptive only, so the declared anchor stands for whatever a
@@ -64,14 +61,14 @@ impl Node for GradientConicNode {
         let space = self.space.get(ctx)?;
         let anchor = self.anchor.get(ctx)?;
         let stops = &resolve_stops(&self.stops, space, ctx, inputs)?;
-        let sample = |ux: f32, uy: f32| -> [f32; 4] {
+        let position = |ux: f32, uy: f32| -> f32 {
             let dx = ux - center[0];
             let dy = uy - center[1];
             let ang = libm::atan2f(dy, dx) - start_rad;
-            let t = ang.rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU;
-            sample_stops(stops, t, space)
+            ang.rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU
         };
-        Ok(render_gradient(ctx, self.out_kind, anchor, sample))
+        let color = |t: f32| sample_stops(stops, t, space);
+        Ok(render_gradient(ctx, self.out_kind, anchor, position, color))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"gradient-conic");
@@ -104,13 +101,13 @@ impl NodeFactory for GradientConicFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let center = read_xy(fields, "center", ctx, [0.5, 0.5])?;
+        let out_kind = parse_generator_kind(fields, ctx)?;
         let mut r = InReader::new(fields, ctx, 0);
         let space = read_space(&mut r, fields)?;
         let anchor = r.enum_or("anchor", Anchor::Tile, ANCHORS)?;
-        let stops = read_stops(fields, "stops", &mut r)?;
+        let stops = read_gradient_stops(fields, ctx, &mut r, out_kind)?;
         let start_angle = r.number_or("start-angle", 0.0)?;
         let parts = r.finish();
-        let out_kind = parse_generator_kind(fields, ctx)?;
         Ok(BuiltNode {
             node: Box::new(GradientConicNode {
                 center,
@@ -127,7 +124,7 @@ impl NodeFactory for GradientConicFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Conic (sweep) gradient around `center`. Gradient parameter is the clockwise angle from `start-angle` (degrees) normalized to [0, 1). 0° points along +x. `kind: sprite` switches to sprite-local [0, 1] coords.",
+            "description": "Conic (sweep) gradient around `center`. Gradient parameter is the clockwise angle from `start-angle` (degrees) normalized to [0, 1). 0° points along +x. `kind: sprite` switches to sprite-local [0, 1] coords; `kind: scalar` emits a canvas-sized ScalarField of that parameter instead of a colour, and takes no `stops`.",
             "properties": {
                 "center": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "default": [0.5, 0.5] },
                 "start-angle": schema_frag::number(),
@@ -141,7 +138,7 @@ impl NodeFactory for GradientConicFactory {
                 "width-px": { "type": "integer", "minimum": 1 },
                 "height-px": { "type": "integer", "minimum": 1 },
             },
-            "required": ["stops"],
+            "anyOf": stops_required(),
         })
     }
 }

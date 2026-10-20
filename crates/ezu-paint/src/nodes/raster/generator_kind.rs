@@ -1,9 +1,18 @@
-//! Shared `kind: raster | sprite` parsing for synthetic generator
-//! nodes (`solid`, `circle`, `gradient-*`). All four follow the same
-//! pattern: a single `kind` enum + an optional `width-px` / `height-px`
-//! pair that only matters in sprite mode.
+//! Shared `kind: raster | sprite | scalar` parsing for synthetic
+//! generator nodes (`solid`, `circle`, `gradient-*`, `noise`). They all
+//! follow the same pattern: a single `kind` enum plus an optional
+//! `width-px` / `height-px` pair that only matters in sprite mode.
+//!
+//! - `raster` (default) fills the padded canvas, positioned in tile or
+//!   world coordinates.
+//! - `sprite` draws a self-contained `width-px × height-px` image, for
+//!   `stamp`, `tiling` or `place` to put somewhere.
+//! - `scalar` emits a canvas-sized `ScalarField` of the number the
+//!   generator computes before it picks a colour — a gradient's position,
+//!   a circle's coverage, noise's raw value — for `color-ramp`,
+//!   `threshold`, `field-math` or a displacement to take up.
 
-use ezu_graph::{read_enum_baked, EnumTable, FactoryCtx, FactoryError};
+use ezu_graph::{read_enum_baked, EnumTable, FactoryCtx, FactoryError, PortKind};
 use serde_json::Value;
 
 use crate::nodes::common::read_number_or;
@@ -12,6 +21,7 @@ use crate::nodes::common::read_number_or;
 pub(super) enum GeneratorKind {
     Raster,
     Sprite { width: u32, height: u32 },
+    Scalar,
 }
 
 impl GeneratorKind {
@@ -19,6 +29,16 @@ impl GeneratorKind {
         match self {
             GeneratorKind::Raster => (*b"r", None),
             GeneratorKind::Sprite { width, height } => (*b"s", Some((width, height))),
+            GeneratorKind::Scalar => (*b"f", None),
+        }
+    }
+
+    /// The port kind a node of this kind produces.
+    pub(super) fn port_kind(self) -> PortKind {
+        match self {
+            GeneratorKind::Raster => PortKind::Raster,
+            GeneratorKind::Sprite { .. } => PortKind::Sprite,
+            GeneratorKind::Scalar => PortKind::ScalarField,
         }
     }
 }
@@ -28,16 +48,23 @@ impl GeneratorKind {
 enum KindName {
     Raster,
     Sprite,
+    Scalar,
 }
 
 /// `kind` decides the node's output port, so it is read at build time.
-const KINDS: EnumTable<KindName> = &[("raster", KindName::Raster), ("sprite", KindName::Sprite)];
+/// `scalar-field` is another name for `scalar`.
+const KINDS: EnumTable<KindName> = &[
+    ("raster", KindName::Raster),
+    ("sprite", KindName::Sprite),
+    ("scalar", KindName::Scalar),
+    ("scalar-field", KindName::Scalar),
+];
 
 /// The schema of the `kind` field [`parse_generator_kind`] reads.
 pub(super) fn generator_kind_schema() -> Value {
     ezu_graph::schema_frag::in_enum(serde_json::json!({
         "type": "string",
-        "enum": ezu_graph::enum_names(KINDS),
+        "enum": ["raster", "sprite", "scalar"],
         "default": "raster",
     }))
 }
@@ -50,6 +77,7 @@ pub(super) fn parse_generator_kind(
 ) -> Result<GeneratorKind, FactoryError> {
     match read_enum_baked(fields, ctx, "kind", KindName::Raster, KINDS)? {
         KindName::Raster => Ok(GeneratorKind::Raster),
+        KindName::Scalar => Ok(GeneratorKind::Scalar),
         KindName::Sprite => {
             let w = read_number_or(fields, "width-px", ctx, 0.0)?.round();
             if w < 1.0 {

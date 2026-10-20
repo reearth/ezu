@@ -900,7 +900,24 @@
             "type": "object"
           },
           {
-            "description": "Centred disk source. `kind: raster` (default) renders at canvas size with radius = `radius-frac × tile-size`. `kind: sprite` renders at `width-px × height-px` with radius = `radius-frac × min(width, height)`.",
+            "anyOf": [
+              {
+                "required": [
+                  "color"
+                ]
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "const": "scalar"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              }
+            ],
+            "description": "Centred disk source. `kind: raster` (default) renders at canvas size with radius = `radius-frac × tile-size`. `kind: sprite` renders at `width-px × height-px` with radius = `radius-frac × min(width, height)`. `kind: scalar` emits a canvas-sized ScalarField of the disk's coverage, as raster mode lays it out: 1 inside the `hardness` core, falling to 0 at the rim, 0 outside; it takes no `color`.",
             "properties": {
               "color": {
                 "description": "sRGB hex color, `$param` reference, or `@node` scalar port.",
@@ -931,7 +948,8 @@
                     "default": "raster",
                     "enum": [
                       "raster",
-                      "sprite"
+                      "sprite",
+                      "scalar"
                     ],
                     "type": "string"
                   },
@@ -967,7 +985,6 @@
             },
             "required": [
               "op",
-              "color",
               "radius-frac"
             ],
             "title": "op: circle",
@@ -2587,7 +2604,24 @@
             "type": "object"
           },
           {
-            "description": "Conic (sweep) gradient around `center`. Gradient parameter is the clockwise angle from `start-angle` (degrees) normalized to [0, 1). 0° points along +x. `kind: sprite` switches to sprite-local [0, 1] coords.",
+            "anyOf": [
+              {
+                "required": [
+                  "stops"
+                ]
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "const": "scalar"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              }
+            ],
+            "description": "Conic (sweep) gradient around `center`. Gradient parameter is the clockwise angle from `start-angle` (degrees) normalized to [0, 1). 0° points along +x. `kind: sprite` switches to sprite-local [0, 1] coords; `kind: scalar` emits a canvas-sized ScalarField of that parameter instead of a colour, and takes no `stops`.",
             "properties": {
               "anchor": {
                 "oneOf": [
@@ -2628,7 +2662,8 @@
                     "default": "raster",
                     "enum": [
                       "raster",
-                      "sprite"
+                      "sprite",
+                      "scalar"
                     ],
                     "type": "string"
                   },
@@ -2711,14 +2746,30 @@
               }
             },
             "required": [
-              "op",
-              "stops"
+              "op"
             ],
             "title": "op: gradient-conic",
             "type": "object"
           },
           {
-            "description": "Diamond gradient from `center`. Gradient parameter is Manhattan (|dx| + |dy|) distance / radius. `kind: sprite` switches to sprite-local [0, 1] coords.",
+            "anyOf": [
+              {
+                "required": [
+                  "stops"
+                ]
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "const": "scalar"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              }
+            ],
+            "description": "Diamond gradient from `center`. Gradient parameter is Manhattan (|dx| + |dy|) distance / radius. `kind: sprite` switches to sprite-local [0, 1] coords; `kind: scalar` emits a canvas-sized ScalarField of that parameter instead of a colour, clamped to [0, 1], and takes no `stops`.",
             "properties": {
               "anchor": {
                 "oneOf": [
@@ -2759,7 +2810,8 @@
                     "default": "raster",
                     "enum": [
                       "raster",
-                      "sprite"
+                      "sprite",
+                      "scalar"
                     ],
                     "type": "string"
                   },
@@ -2844,14 +2896,30 @@
               }
             },
             "required": [
-              "op",
-              "stops"
+              "op"
             ],
             "title": "op: gradient-diamond",
             "type": "object"
           },
           {
-            "description": "Linear gradient from `start` to `end` (fractional coords). `kind: raster` (default) samples in tile/world coords; `kind: sprite` samples in [0, 1] sprite coords at `width-px × height-px`.",
+            "anyOf": [
+              {
+                "required": [
+                  "stops"
+                ]
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "const": "scalar"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              }
+            ],
+            "description": "Linear gradient from `start` to `end` (fractional coords). `kind: raster` (default) samples in tile/world coords; `kind: sprite` samples in [0, 1] sprite coords at `width-px × height-px`; `kind: scalar` emits a canvas-sized ScalarField of the position along the gradient — the projection onto `start → end`, 0 at `start` and 1 at `end`, clamped to [0, 1] — and takes no `stops`.",
             "properties": {
               "anchor": {
                 "oneOf": [
@@ -2892,7 +2960,8 @@
                     "default": "raster",
                     "enum": [
                       "raster",
-                      "sprite"
+                      "sprite",
+                      "scalar"
                     ],
                     "type": "string"
                   },
@@ -2975,14 +3044,30 @@
               }
             },
             "required": [
-              "op",
-              "stops"
+              "op"
             ],
             "title": "op: gradient-linear",
             "type": "object"
           },
           {
-            "description": "Radial gradient from `center` outward. Gradient parameter is Euclidean distance / radius. `aspect > 1` stretches the ellipse along X, `< 1` along Y. `kind: sprite` switches to sprite-local [0, 1] coords.",
+            "anyOf": [
+              {
+                "required": [
+                  "stops"
+                ]
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "const": "scalar"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              }
+            ],
+            "description": "Radial gradient from `center` outward. Gradient parameter is Euclidean distance / radius. `aspect > 1` stretches the ellipse along X, `< 1` along Y. `kind: sprite` switches to sprite-local [0, 1] coords; `kind: scalar` emits a canvas-sized ScalarField of that parameter instead of a colour, clamped to [0, 1] (0 at `center`, 1 at `radius` and beyond), and takes no `stops`.",
             "properties": {
               "anchor": {
                 "oneOf": [
@@ -3037,7 +3122,8 @@
                     "default": "raster",
                     "enum": [
                       "raster",
-                      "sprite"
+                      "sprite",
+                      "scalar"
                     ],
                     "type": "string"
                   },
@@ -3122,8 +3208,7 @@
               }
             },
             "required": [
-              "op",
-              "stops"
+              "op"
             ],
             "title": "op: gradient-radial",
             "type": "object"
@@ -4470,7 +4555,7 @@
             "type": "object"
           },
           {
-            "description": "Procedural noise source. With `kind: raster` (default) the noise is mapped to RGBA via `low-color`/`high-color`/`opacity`. With `kind: scalar` it emits a `ScalarField` of raw fBm values — compose with `map-range` before feeding `hillshade`/`color-ramp`. Every `type` lands in [-1, 1]. `white`/`value`/`perlin`/`simplex` sit around 0. `worley` and `cell` both divide the plane into cells around scattered sites: `worley` is `1 − 2·distance` to the nearest site, +1 on the site and falling towards the cell's edge, and `cell` is the nearest site's own random value, flat across its cell and spread evenly over [-1, 1] — one tone per cell, for stones, panes or patches. `anchor=world` (default) keeps the field seamless across tile borders.",
+            "description": "Procedural noise source. With `kind: raster` (default) the noise is mapped to RGBA via `low-color`/`high-color`/`opacity`. With `kind: scalar` it emits a `ScalarField` of raw fBm values — compose with `map-range` before feeding `hillshade`/`color-ramp`. With `kind: sprite` it is coloured as in raster mode onto a `width-px × height-px` Sprite, sampled in the sprite's own pixels whatever the `anchor` and, without a `seed`, from a fixed one, so every copy `stamp` or `tiling` puts down is the same image. Every `type` lands in [-1, 1]. `white`/`value`/`perlin`/`simplex` sit around 0. `worley` and `cell` both divide the plane into cells around scattered sites: `worley` is `1 − 2·distance` to the nearest site, +1 on the site and falling towards the cell's edge, and `cell` is the nearest site's own random value, flat across its cell and spread evenly over [-1, 1] — one tone per cell, for stones, panes or patches. `anchor=world` (default) keeps the field seamless across tile borders.",
             "properties": {
               "anchor": {
                 "oneOf": [
@@ -4502,6 +4587,10 @@
                   }
                 ]
               },
+              "height-px": {
+                "minimum": 1,
+                "type": "integer"
+              },
               "high-color": {
                 "description": "sRGB hex color, `$param` reference, or `@node` scalar port.",
                 "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|[$@][A-Za-z_][A-Za-z0-9_-]*)$",
@@ -4513,6 +4602,7 @@
                     "default": "raster",
                     "enum": [
                       "raster",
+                      "sprite",
                       "scalar"
                     ],
                     "type": "string"
@@ -4649,6 +4739,10 @@
                     "type": "string"
                   }
                 ]
+              },
+              "width-px": {
+                "minimum": 1,
+                "type": "integer"
               }
             },
             "required": [
@@ -5415,7 +5509,24 @@
             "type": "object"
           },
           {
-            "description": "Solid-colour source. `kind: raster` (default) fills the full canvas; `kind: sprite` emits a Sprite at `width-px × height-px` for use as a synthetic placement/tiling source.",
+            "anyOf": [
+              {
+                "required": [
+                  "color"
+                ]
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "const": "scalar"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              }
+            ],
+            "description": "Solid-colour source. `kind: raster` (default) fills the full canvas; `kind: sprite` emits a Sprite at `width-px × height-px` for use as a synthetic placement/tiling source; `kind: scalar` emits a canvas-sized ScalarField holding `value` everywhere, a constant operand for `field-math` or a flat stand-in for a DEM.",
             "properties": {
               "color": {
                 "description": "sRGB hex color, `$param` reference, or `@node` scalar port.",
@@ -5432,7 +5543,8 @@
                     "default": "raster",
                     "enum": [
                       "raster",
-                      "sprite"
+                      "sprite",
+                      "scalar"
                     ],
                     "type": "string"
                   },
@@ -5447,14 +5559,27 @@
                 "const": "solid",
                 "description": "Selects the `solid` operation."
               },
+              "value": {
+                "oneOf": [
+                  {
+                    "default": 1,
+                    "description": "`kind: scalar` only: the number the field holds. Default 1.",
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
               "width-px": {
                 "minimum": 1,
                 "type": "integer"
               }
             },
             "required": [
-              "op",
-              "color"
+              "op"
             ],
             "title": "op: solid",
             "type": "object"

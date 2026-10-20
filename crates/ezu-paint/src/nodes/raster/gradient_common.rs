@@ -2,9 +2,10 @@
 
 use std::sync::Arc;
 
-use ezu_graph::{EvalCtx, PortValue, RasterBuf};
+use ezu_graph::{EvalCtx, FactoryCtx, FactoryError, InReader, PortValue, RasterBuf, ScalarField};
+use serde_json::Value;
 
-use crate::nodes::common::Anchor;
+use crate::nodes::common::{read_stops, Anchor, StopsIn};
 use crate::nodes::raster::generator_kind::GeneratorKind;
 
 /// Map a padded-canvas pixel to a "user-space" `(ux, uy)` coordinate
@@ -35,51 +36,97 @@ pub(super) fn pixel_to_user(x: u32, y: u32, ctx: &EvalCtx<'_>, anchor: Anchor) -
     }
 }
 
-/// Render a gradient into a buffer sized according to `out_kind`,
-/// invoking `sample` with each pixel's user-space `(ux, uy)`. Returns
-/// either a `Raster` or a `Sprite` `PortValue` matching the requested
-/// kind.
+/// Render a gradient into a buffer sized according to `out_kind`.
+/// `position` maps each pixel's user-space `(ux, uy)` to the gradient
+/// parameter `t`, and `color` maps `t` through the stops. Returns a
+/// `Raster`, a `Sprite` or a `ScalarField` matching the requested kind.
 ///
 /// In `Sprite` mode the `anchor` is ignored — sprite coordinates are
 /// just `(x + 0.5)/width, (y + 0.5)/height`, so the gradient is
-/// self-contained in the sprite. In `Raster` mode the existing
-/// `pixel_to_user` mapping is applied.
-pub(super) fn render_gradient<F>(
+/// self-contained in the sprite. In `Raster` and `Scalar` mode the
+/// existing `pixel_to_user` mapping is applied. `Scalar` mode never calls
+/// `color`: each sample is `t` clamped to `[0, 1]`, how far along the
+/// gradient the pixel lies, before any stop is looked at.
+pub(super) fn render_gradient<P, C>(
     ctx: &EvalCtx<'_>,
     out_kind: GeneratorKind,
     anchor: Anchor,
-    sample: F,
+    position: P,
+    color: C,
 ) -> PortValue
 where
-    F: Fn(f32, f32) -> [f32; 4],
+    P: Fn(f32, f32) -> f32,
+    C: Fn(f32) -> [f32; 4],
 {
-    let (w, h, raster_kind) = match out_kind {
-        GeneratorKind::Raster => {
-            let (pw, ph) = ctx.canvas.padded_dims();
-            (pw, ph, true)
-        }
-        GeneratorKind::Sprite { width, height } => (width, height, false),
+    let (w, h) = match out_kind {
+        GeneratorKind::Raster | GeneratorKind::Scalar => ctx.canvas.padded_dims(),
+        GeneratorKind::Sprite { width, height } => (width, height),
     };
+    let user = |x: u32, y: u32| match out_kind {
+        GeneratorKind::Sprite { .. } => ((x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / h as f32),
+        _ => pixel_to_user(x, y, ctx, anchor),
+    };
+    if out_kind == GeneratorKind::Scalar {
+        let mut values = Vec::with_capacity((w * h) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let (ux, uy) = user(x, y);
+                values.push(position(ux, uy).clamp(0.0, 1.0));
+            }
+        }
+        return PortValue::ScalarField(Arc::new(ScalarField {
+            width: w,
+            height: h,
+            values: values.into(),
+            nodata: None,
+            geo_scale: None,
+        }));
+    }
     let mut buf = RasterBuf::new(w, h);
     for y in 0..h {
         for x in 0..w {
-            let (ux, uy) = if raster_kind {
-                pixel_to_user(x, y, ctx, anchor)
-            } else {
-                ((x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / h as f32)
-            };
-            let c = sample(ux, uy);
+            let (ux, uy) = user(x, y);
+            let c = color(position(ux, uy));
             let rgba = premul_u8(c);
             let i = ((y * w + x) * 4) as usize;
             buf.pixels[i..i + 4].copy_from_slice(&rgba);
         }
     }
     let buf = Arc::new(buf);
-    if raster_kind {
-        PortValue::Raster(buf)
-    } else {
-        PortValue::Sprite(buf)
+    match out_kind {
+        GeneratorKind::Sprite { .. } => PortValue::Sprite(buf),
+        _ => PortValue::Raster(buf),
     }
+}
+
+/// Read a gradient's `stops`, which a `kind: scalar` gradient does
+/// without: it gives each pixel's position along the gradient, not a
+/// colour, so stops given anyway are ignored with a warning.
+pub(super) fn read_gradient_stops(
+    fields: &serde_json::Map<String, Value>,
+    ctx: &FactoryCtx<'_>,
+    r: &mut InReader<'_, '_>,
+    out_kind: GeneratorKind,
+) -> Result<StopsIn, FactoryError> {
+    if out_kind == GeneratorKind::Scalar {
+        if fields.contains_key("stops") {
+            ctx.warn(
+                "`stops` ignored: `kind: scalar` gives each pixel's position along the \
+                 gradient, not a colour",
+            );
+        }
+        return Ok(Vec::new());
+    }
+    read_stops(fields, "stops", r)
+}
+
+/// The schema's way of saying `stops` is required unless `kind` is
+/// `scalar`.
+pub(super) fn stops_required() -> Value {
+    serde_json::json!([
+        { "required": ["stops"] },
+        { "required": ["kind"], "properties": { "kind": { "const": "scalar" } } },
+    ])
 }
 
 #[inline]

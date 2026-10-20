@@ -1,5 +1,6 @@
 //! Output-kind extensions for synthetic generators: scalar-mode
-//! `noise`, and sprite-mode `solid` / `circle` / `gradient-*`.
+//! `noise` / `solid` / `circle` / `gradient-*`, and sprite-mode `solid` /
+//! `circle` / `gradient-*` / `noise`.
 //! The scalar variants are validated by piping through `color-ramp`;
 //! the sprite variants are validated by routing through `place` (a
 //! Sprite consumer).
@@ -120,4 +121,162 @@ fn gradient_linear_sprite_renders_at_native_size() {
         right[2] > 200 && right[0] < 40,
         "right edge should be blue: {right:?}"
     );
+}
+
+/// A generator in `kind: scalar` mode, as the field node `f` of a style
+/// whose output ramps it to colour, and that field.
+fn scalar_of(generator: &str, size: u32) -> std::sync::Arc<ezu_graph::ScalarField> {
+    let json = format!(
+        r##"{{
+          "name": "scalar-kind",
+          "tile-size": {size},
+          "params": {{ "v": {{ "type": "number", "default": 0.25 }} }},
+          "nodes": {{
+            "f":   {generator},
+            "out": {{ "op": "color-ramp", "field": "@f",
+                     "stops": [ {{ "value": 0, "color": "#000000" }},
+                                {{ "value": 1, "color": "#ffffff" }} ] }}
+          }},
+          "output": "@out"
+        }}"##
+    );
+    crate::common::field_of_node(
+        &json,
+        size,
+        0,
+        ezu_graph::TileId { z: 0, x: 0, y: 0 },
+        &[],
+        "f",
+    )
+}
+
+#[test]
+fn a_linear_gradient_gives_its_position_as_a_field() {
+    let f = scalar_of(
+        r#"{ "op": "gradient-linear", "kind": "scalar", "start": [0, 0], "end": [1, 0] }"#,
+        8,
+    );
+    assert_eq!((f.width, f.height), (8, 8));
+    // Pixel centres sit at (x + 0.5) / 8 along the gradient.
+    for x in 0..8 {
+        let want = (x as f32 + 0.5) / 8.0;
+        assert!(
+            (f.sample(x, 3) - want).abs() < 1e-6,
+            "x {x}: {}",
+            f.sample(x, 3)
+        );
+    }
+    assert_eq!(f.nodata, None);
+}
+
+#[test]
+fn radial_conic_and_diamond_gradients_clamp_their_position_to_0_1() {
+    let radial = scalar_of(
+        r#"{ "op": "gradient-radial", "kind": "scalar", "center": [0.5, 0.5], "radius": 0.25 }"#,
+        16,
+    );
+    // The pixel nearest the centre is half a pixel off it on each axis:
+    // √2 · 0.5 / 16 / 0.25 ≈ 0.18 of the way out.
+    assert!(
+        (radial.sample(8, 8) - 0.177).abs() < 0.01,
+        "{}",
+        radial.sample(8, 8)
+    );
+    // Past the radius the position stays at 1.
+    assert_eq!(radial.sample(0, 0), 1.0);
+    let diamond = scalar_of(
+        r#"{ "op": "gradient-diamond", "kind": "scalar", "center": [0.5, 0.5], "radius": 0.5 }"#,
+        16,
+    );
+    assert_eq!(diamond.sample(0, 0), 1.0);
+    let conic = scalar_of(r#"{ "op": "gradient-conic", "kind": "scalar" }"#, 16);
+    assert!(conic.values.iter().all(|v| (0.0..=1.0).contains(v)));
+    assert!(conic.values.iter().any(|v| *v > 0.9) && conic.values.iter().any(|v| *v < 0.1));
+}
+
+#[test]
+fn a_scalar_gradient_needs_no_stops_and_ignores_them() {
+    let json = |stops: &str| {
+        format!(
+            r##"{{
+              "name": "stops",
+              "tile-size": 8,
+              "nodes": {{
+                "f":   {{ "op": "gradient-linear", "kind": "scalar" {stops} }},
+                "out": {{ "op": "color-ramp", "field": "@f",
+                         "stops": [ {{ "value": 0, "color": "#000000" }},
+                                    {{ "value": 1, "color": "#ffffff" }} ] }}
+              }},
+              "output": "@out"
+            }}"##
+        )
+    };
+    let warnings = |j: &str| {
+        let doc = ezu_style::Document::from_json(j).unwrap();
+        ezu_graph::build_graph(&doc, &ezu_paint::nodes::default_registry())
+            .unwrap()
+            .warnings()
+            .to_vec()
+    };
+    assert!(warnings(&json("")).is_empty());
+    let w = warnings(&json(r##", "stops": [[0, "#ff0000"], [1, "#0000ff"]]"##));
+    assert!(w.iter().any(|w| w.contains("`stops` ignored")), "{w:?}");
+    assert_eq!(
+        render(&json(""), 8, 0).pixels,
+        render(
+            &json(r##", "stops": [[0, "#ff0000"], [1, "#0000ff"]]"##),
+            8,
+            0
+        )
+        .pixels
+    );
+}
+
+#[test]
+fn a_circle_gives_its_coverage_and_a_solid_its_value() {
+    let disk = scalar_of(
+        r#"{ "op": "circle", "kind": "scalar", "radius-frac": 0.25, "hardness": 0.5 }"#,
+        16,
+    );
+    assert_eq!(disk.sample(8, 8), 1.0);
+    assert_eq!(disk.sample(0, 0), 0.0);
+    // The soft rim lies between.
+    let rim = disk.sample(8, 5);
+    assert!(rim > 0.0 && rim < 1.0, "{rim}");
+
+    let flat = scalar_of(r#"{ "op": "solid", "kind": "scalar", "value": "$v" }"#, 8);
+    assert!(flat.values.iter().all(|v| *v == 0.25));
+    let one = scalar_of(r#"{ "op": "solid", "kind": "scalar" }"#, 8);
+    assert!(one.values.iter().all(|v| *v == 1.0));
+}
+
+/// A noise sprite is one image, the same on every tile and whatever the
+/// anchor, coloured as raster mode colours the noise.
+#[test]
+fn a_noise_sprite_is_the_same_image_on_every_tile() {
+    let json = |anchor: &str| {
+        format!(
+            r##"{{
+              "name": "noise-sprite",
+              "tile-size": 16,
+              "nodes": {{
+                "n":   {{ "op": "noise", "kind": "sprite", "width-px": 16, "height-px": 16,
+                         "scale-px": 4, "anchor": "{anchor}",
+                         "low-color": "#000000", "high-color": "#ffffff" }},
+                "out": {{ "op": "place", "input": "@n", "fit": "stretch" }}
+              }},
+              "output": "@out"
+            }}"##
+        )
+    };
+    let at = |anchor: &str, x: u32| {
+        crate::common::render_tile(&json(anchor), 16, 0, ezu_graph::TileId { z: 2, x, y: 1 })
+            .pixels
+            .clone()
+    };
+    let first = at("world", 0);
+    assert_eq!(at("world", 3), first);
+    assert_eq!(at("tile", 1), first);
+    // It is noise, not a flat fill.
+    assert!(first.chunks(4).any(|p| p[0] != first[0]));
 }

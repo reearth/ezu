@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, BuiltNode, EvalCtx, EvalError, FactoryCtx, FactoryError, In, InReader, Node,
-    NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    NodeFactory, PortKind, PortSpec, PortValue, RasterBuf, ScalarField,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -34,10 +34,7 @@ impl Node for CircleNode {
         &self.ports
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
-        match self.out_kind {
-            GeneratorKind::Raster => PortKind::Raster,
-            GeneratorKind::Sprite { .. } => PortKind::Sprite,
-        }
+        self.out_kind.port_kind()
     }
     fn eval(
         &self,
@@ -48,34 +45,54 @@ impl Node for CircleNode {
         // visually scales with the tile geometry). Sprite mode
         // anchors to the shorter sprite side so the disk fits.
         let (out_w, out_h, radius_unit) = match self.out_kind {
-            GeneratorKind::Raster => {
+            GeneratorKind::Raster | GeneratorKind::Scalar => {
                 let (pw, ph) = ctx.canvas.padded_dims();
                 (pw, ph, ctx.canvas.tile_w as f32)
             }
             GeneratorKind::Sprite { width, height } => (width, height, width.min(height) as f32),
         };
-        let color = self.color.get(ctx, inputs)?;
         let radius_frac = self.radius_frac.get(ctx, inputs)? as f32;
         let hardness = self.hardness.get(ctx, inputs)? as f32;
-        let mut out = RasterBuf::new(out_w, out_h);
         let cx = out_w as f32 * 0.5;
         let cy = out_h as f32 * 0.5;
         let r = radius_unit * radius_frac;
         let h = hardness.clamp(0.0, 0.999);
         let inner = r * h;
+        // How much of the disk covers a pixel: 1 inside the hard core,
+        // falling linearly to 0 at the rim.
+        let coverage = |x: u32, y: u32| -> f32 {
+            let dx = x as f32 + 0.5 - cx;
+            let dy = y as f32 + 0.5 - cy;
+            let d = (dx * dx + dy * dy).sqrt();
+            if d <= inner {
+                1.0
+            } else if d >= r {
+                0.0
+            } else {
+                1.0 - (d - inner) / (r - inner)
+            }
+        };
+        if self.out_kind == GeneratorKind::Scalar {
+            let mut values = Vec::with_capacity((out_w * out_h) as usize);
+            for y in 0..out_h {
+                for x in 0..out_w {
+                    values.push(coverage(x, y));
+                }
+            }
+            return Ok(PortValue::ScalarField(Arc::new(ScalarField {
+                width: out_w,
+                height: out_h,
+                values: values.into(),
+                nodata: None,
+                geo_scale: None,
+            })));
+        }
+        let color = self.color.get(ctx, inputs)?;
+        let mut out = RasterBuf::new(out_w, out_h);
         let [cr, cg, cb, ca] = color;
         for y in 0..out_h {
             for x in 0..out_w {
-                let dx = x as f32 + 0.5 - cx;
-                let dy = y as f32 + 0.5 - cy;
-                let d = (dx * dx + dy * dy).sqrt();
-                let m = if d <= inner {
-                    1.0
-                } else if d >= r {
-                    0.0
-                } else {
-                    1.0 - (d - inner) / (r - inner)
-                };
+                let m = coverage(x, y);
                 let alpha = ca * m;
                 let i = ((y * out_w + x) * 4) as usize;
                 out.pixels[i] = (cr * alpha * 255.0).round() as u8;
@@ -86,8 +103,8 @@ impl Node for CircleNode {
         }
         let buf = Arc::new(out);
         Ok(match self.out_kind {
-            GeneratorKind::Raster => PortValue::Raster(buf),
             GeneratorKind::Sprite { .. } => PortValue::Sprite(buf),
+            _ => PortValue::Raster(buf),
         })
     }
     fn param_hash(&self, h: &mut Xxh3) {
@@ -117,12 +134,17 @@ impl NodeFactory for CircleFactory {
         fields: &serde_json::Map<String, Value>,
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
+        let out_kind = parse_generator_kind(fields, ctx)?;
         let mut r = InReader::new(fields, ctx, 0);
-        let color = r.color("color")?;
+        // A scalar disk is its coverage alone, so it needs no colour.
+        let color = if out_kind == GeneratorKind::Scalar {
+            r.color_or("color", [1.0, 1.0, 1.0, 1.0])?
+        } else {
+            r.color("color")?
+        };
         let radius_frac = r.number("radius-frac")?;
         let hardness = r.number_or("hardness", 1.0)?;
         let parts = r.finish();
-        let out_kind = parse_generator_kind(fields, ctx)?;
         Ok(BuiltNode {
             node: Box::new(CircleNode {
                 color,
@@ -137,7 +159,7 @@ impl NodeFactory for CircleFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Centred disk source. `kind: raster` (default) renders at canvas size with radius = `radius-frac × tile-size`. `kind: sprite` renders at `width-px × height-px` with radius = `radius-frac × min(width, height)`.",
+            "description": "Centred disk source. `kind: raster` (default) renders at canvas size with radius = `radius-frac × tile-size`. `kind: sprite` renders at `width-px × height-px` with radius = `radius-frac × min(width, height)`. `kind: scalar` emits a canvas-sized ScalarField of the disk's coverage, as raster mode lays it out: 1 inside the `hardness` core, falling to 0 at the rim, 0 outside; it takes no `color`.",
             "properties": {
                 "color": schema_frag::color(),
                 "radius-frac": schema_frag::unit_number(),
@@ -146,7 +168,11 @@ impl NodeFactory for CircleFactory {
                 "width-px": { "type": "integer", "minimum": 1 },
                 "height-px": { "type": "integer", "minimum": 1 },
             },
-            "required": ["color", "radius-frac"],
+            "required": ["radius-frac"],
+            "anyOf": [
+                { "required": ["color"] },
+                { "required": ["kind"], "properties": { "kind": { "const": "scalar" } } },
+            ],
         })
     }
 }

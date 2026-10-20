@@ -1,5 +1,6 @@
 //! `noise` — procedural noise source. Emits a coloured `Raster`
-//! (default) or a raw `ScalarField` depending on the `kind` field.
+//! (default), a coloured `Sprite` or a raw `ScalarField` depending on the
+//! `kind` field.
 //!
 //! Shared parameters:
 //!
@@ -26,6 +27,12 @@
 //! `low-color` / `high-color` / `opacity` to map the normalised noise
 //! value to RGBA.
 //!
+//! Sprite mode (`kind: "sprite"`) colours the noise the same way onto a
+//! `width-px × height-px` image, sampled in the sprite's own pixels with
+//! no margin and whatever the `anchor`, and without a `seed` from the
+//! fixed one: a sprite is put down by `stamp` or `tiling` wherever they
+//! like, so it has to be one image rather than a window onto the map.
+//!
 //! Scalar mode (`kind: "scalar"`) emits the **raw** fBm value as a
 //! `ScalarField`, within `[-1, 1]` for every type. Compose with `map-range` to
 //! normalise before feeding `hillshade` / `slope` / `color-ramp`. The
@@ -36,34 +43,23 @@
 use std::sync::Arc;
 
 use ezu_graph::{
-    read_enum_baked, schema_frag, BuiltNode, CoordSpace, EnumTable, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InEnum, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
-    RasterBuf, ScalarField,
+    schema_frag, BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, In, InEnum,
+    InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf, ScalarField,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{anchor_schema, default_field_seed, read_number_or, Anchor, ANCHORS};
+use crate::nodes::raster::generator_kind::{
+    generator_kind_schema, parse_generator_kind, GeneratorKind,
+};
 use crate::nodes::raster::noise_field::{
     fbm, noise_type_schema, NoiseKind, Sampler, ScalePx, NOISE_TYPES,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OutputKind {
-    Raster,
-    Scalar,
-}
-
-/// `kind` decides the node's output port, so it is read at build time.
-const OUTPUT_KINDS: EnumTable<OutputKind> = &[
-    ("raster", OutputKind::Raster),
-    ("scalar", OutputKind::Scalar),
-    ("scalar-field", OutputKind::Scalar),
-];
-
 struct NoiseNode {
     kind: InEnum<NoiseKind>,
-    out_kind: OutputKind,
+    out_kind: GeneratorKind,
     scale: ScalePx,
     octaves: u32,
     lacunarity: In<f64>,
@@ -87,17 +83,15 @@ impl Node for NoiseNode {
         &self.ports
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
-        match self.out_kind {
-            OutputKind::Raster => PortKind::Raster,
-            OutputKind::Scalar => PortKind::ScalarField,
-        }
+        self.out_kind.port_kind()
     }
     fn coord_space(&self) -> CoordSpace {
         // Descriptive only, so the declared anchor stands for whatever a
         // `$param` sets it to at render time.
-        match self.anchor.fallback() {
-            Anchor::World => CoordSpace::World,
-            Anchor::Tile => CoordSpace::Tile,
+        match (self.out_kind, self.anchor.fallback()) {
+            (GeneratorKind::Sprite { .. }, _) => CoordSpace::Tile,
+            (_, Anchor::World) => CoordSpace::World,
+            (_, Anchor::Tile) => CoordSpace::Tile,
         }
     }
     fn eval(
@@ -105,8 +99,19 @@ impl Node for NoiseNode {
         ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
-        let (pw, ph) = ctx.canvas.padded_dims();
-        let pad = ctx.canvas.pad as f64;
+        // A sprite is its own little canvas: no margin, and sampled in its
+        // own pixels whatever the anchor, so it is the same image on every
+        // tile it is stamped on.
+        let sprite = match self.out_kind {
+            GeneratorKind::Sprite { width, height } => Some((width, height)),
+            _ => None,
+        };
+        let (pw, ph) = sprite.unwrap_or_else(|| ctx.canvas.padded_dims());
+        let pad = if sprite.is_some() {
+            0.0
+        } else {
+            ctx.canvas.pad as f64
+        };
         let tile_size = ctx.canvas.tile_w as f64;
 
         let lacunarity = self.lacunarity.get(ctx, inputs)?;
@@ -118,9 +123,15 @@ impl Node for NoiseNode {
 
         // Anchoring decides the default seed: a world-anchored field has to
         // be the same field in every tile, so it cannot use a per-tile one.
+        // Neither can a sprite, which is one image wherever it is put.
+        let seed_anchor = if sprite.is_some() {
+            Anchor::World
+        } else {
+            anchor
+        };
         let seed = self
             .seed
-            .unwrap_or_else(|| default_field_seed(anchor, ctx.rng_seed));
+            .unwrap_or_else(|| default_field_seed(seed_anchor, ctx.rng_seed));
         let main = Sampler::build(noise, seed);
         // Warp uses an offset seed so the warp field decorrelates from
         // the main field. Only built when warp is active.
@@ -134,8 +145,10 @@ impl Node for NoiseNode {
         };
 
         let (origin_x, origin_y) = match anchor {
-            Anchor::World => (ctx.tile.x as f64 * tile_size, ctx.tile.y as f64 * tile_size),
-            Anchor::Tile => (0.0, 0.0),
+            Anchor::World if sprite.is_none() => {
+                (ctx.tile.x as f64 * tile_size, ctx.tile.y as f64 * tile_size)
+            }
+            _ => (0.0, 0.0),
         };
 
         let (inv_scale_x, inv_scale_y) = self.scale.inv(ctx, inputs)?;
@@ -160,7 +173,7 @@ impl Node for NoiseNode {
         };
 
         match self.out_kind {
-            OutputKind::Scalar => {
+            GeneratorKind::Scalar => {
                 let mut values: Vec<f32> = Vec::with_capacity((pw * ph) as usize);
                 for y in 0..ph {
                     for x in 0..pw {
@@ -175,7 +188,7 @@ impl Node for NoiseNode {
                     geo_scale: None,
                 })))
             }
-            OutputKind::Raster => {
+            GeneratorKind::Raster | GeneratorKind::Sprite { .. } => {
                 let [lr, lg, lb, la] = self.low.get(ctx, inputs)?;
                 let [hr, hg, hb, ha] = self.high.get(ctx, inputs)?;
                 let opacity = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
@@ -195,17 +208,23 @@ impl Node for NoiseNode {
                         out.pixels[i + 3] = (a * 255.0).round() as u8;
                     }
                 }
-                Ok(PortValue::Raster(Arc::new(out)))
+                let out = Arc::new(out);
+                Ok(match sprite {
+                    Some(_) => PortValue::Sprite(out),
+                    None => PortValue::Raster(out),
+                })
             }
         }
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"noise");
         self.kind.param_hash(h);
-        h.update(match self.out_kind {
-            OutputKind::Raster => b"r",
-            OutputKind::Scalar => b"s",
-        });
+        let (tag, dims) = self.out_kind.hash_tag();
+        h.update(&tag);
+        if let Some((w, hh)) = dims {
+            h.update(&w.to_le_bytes());
+            h.update(&hh.to_le_bytes());
+        }
         // A literal axis hashes as the bare number it always did, so
         // existing styles keep their cache keys.
         for axis in [&self.scale.x, &self.scale.y] {
@@ -246,7 +265,7 @@ impl NodeFactory for NoiseFactory {
         fields: &serde_json::Map<String, Value>,
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
-        let out_kind = read_enum_baked(fields, ctx, "kind", OutputKind::Raster, OUTPUT_KINDS)?;
+        let out_kind = parse_generator_kind(fields, ctx)?;
 
         let mut r = InReader::new(fields, ctx, 0);
         let kind = r.enum_or("type", NoiseKind::Perlin, NOISE_TYPES)?;
@@ -299,14 +318,12 @@ impl NodeFactory for NoiseFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Procedural noise source. With `kind: raster` (default) the noise is mapped to RGBA via `low-color`/`high-color`/`opacity`. With `kind: scalar` it emits a `ScalarField` of raw fBm values — compose with `map-range` before feeding `hillshade`/`color-ramp`. Every `type` lands in [-1, 1]. `white`/`value`/`perlin`/`simplex` sit around 0. `worley` and `cell` both divide the plane into cells around scattered sites: `worley` is `1 − 2·distance` to the nearest site, +1 on the site and falling towards the cell's edge, and `cell` is the nearest site's own random value, flat across its cell and spread evenly over [-1, 1] — one tone per cell, for stones, panes or patches. `anchor=world` (default) keeps the field seamless across tile borders.",
+            "description": "Procedural noise source. With `kind: raster` (default) the noise is mapped to RGBA via `low-color`/`high-color`/`opacity`. With `kind: scalar` it emits a `ScalarField` of raw fBm values — compose with `map-range` before feeding `hillshade`/`color-ramp`. With `kind: sprite` it is coloured as in raster mode onto a `width-px × height-px` Sprite, sampled in the sprite's own pixels whatever the `anchor` and, without a `seed`, from a fixed one, so every copy `stamp` or `tiling` puts down is the same image. Every `type` lands in [-1, 1]. `white`/`value`/`perlin`/`simplex` sit around 0. `worley` and `cell` both divide the plane into cells around scattered sites: `worley` is `1 − 2·distance` to the nearest site, +1 on the site and falling towards the cell's edge, and `cell` is the nearest site's own random value, flat across its cell and spread evenly over [-1, 1] — one tone per cell, for stones, panes or patches. `anchor=world` (default) keeps the field seamless across tile borders.",
             "properties": {
                 "type": noise_type_schema(),
-                "kind": schema_frag::in_enum(serde_json::json!({
-                    "type": "string",
-                    "enum": ["raster", "scalar"],
-                    "default": "raster",
-                })),
+                "kind": generator_kind_schema(),
+                "width-px": { "type": "integer", "minimum": 1 },
+                "height-px": { "type": "integer", "minimum": 1 },
                 "scale-px": ScalePx::schema(),
                 "octaves": { "type": "integer", "minimum": 1, "maximum": 12, "default": 1 },
                 "lacunarity": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 2.0 })),

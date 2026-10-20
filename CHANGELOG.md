@@ -331,6 +331,16 @@ mean is spelled out in
   `default`, as MapLibre's `case`; a `when` is a bool literal, `$param`
   or `@node`. A two-way `select` may also be a `string` param naming `a`
   or `b`.
+- Every generator offers the same kinds. `gradient-linear`,
+  `gradient-radial`, `gradient-conic`, `gradient-diamond`, `circle` and
+  `solid` take `kind: scalar`, a canvas-sized scalar field of the number
+  they compute before picking a colour: a gradient's position along
+  itself, clamped to 0..1 (it then needs no `stops`); a circle's coverage,
+  1 inside its hard core falling to 0 at the rim (no `color`); and for
+  `solid`, a new `value` everywhere (default 1). `noise` takes
+  `kind: sprite` with `width-px` / `height-px`, coloured as in raster mode
+  and sampled in the sprite's own pixels, with a fixed default seed, so
+  each copy is the same image.
 
 ### Changed
 

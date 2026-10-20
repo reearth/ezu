@@ -10,13 +10,13 @@ use xxhash_rust::xxh3::Xxh3;
 
 use crate::color_interp::InterpSpace;
 use crate::nodes::common::{
-    anchor_schema, hash_stops, read_space, read_stops, read_xy, resolve_stops, sample_stops,
-    space_schema, Anchor, StopsIn, ANCHORS,
+    anchor_schema, hash_stops, read_space, read_xy, resolve_stops, sample_stops, space_schema,
+    Anchor, StopsIn, ANCHORS,
 };
 use crate::nodes::raster::generator_kind::{
     generator_kind_schema, parse_generator_kind, GeneratorKind,
 };
-use crate::nodes::raster::gradient_common::render_gradient;
+use crate::nodes::raster::gradient_common::{read_gradient_stops, render_gradient, stops_required};
 
 struct GradientDiamondNode {
     center: [f32; 2],
@@ -37,10 +37,7 @@ impl Node for GradientDiamondNode {
         &self.ports
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
-        match self.out_kind {
-            GeneratorKind::Raster => PortKind::Raster,
-            GeneratorKind::Sprite { .. } => PortKind::Sprite,
-        }
+        self.out_kind.port_kind()
     }
     fn coord_space(&self) -> CoordSpace {
         // Descriptive only, so the declared anchor stands for whatever a
@@ -63,11 +60,10 @@ impl Node for GradientDiamondNode {
         let space = self.space.get(ctx)?;
         let anchor = self.anchor.get(ctx)?;
         let stops = &resolve_stops(&self.stops, space, ctx, inputs)?;
-        let sample = |ux: f32, uy: f32| -> [f32; 4] {
-            let t = ((ux - center[0]).abs() + (uy - center[1]).abs()) / r;
-            sample_stops(stops, t, space)
-        };
-        Ok(render_gradient(ctx, self.out_kind, anchor, sample))
+        let position =
+            |ux: f32, uy: f32| -> f32 { ((ux - center[0]).abs() + (uy - center[1]).abs()) / r };
+        let color = |t: f32| sample_stops(stops, t, space);
+        Ok(render_gradient(ctx, self.out_kind, anchor, position, color))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"gradient-diamond");
@@ -100,13 +96,13 @@ impl NodeFactory for GradientDiamondFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let center = read_xy(fields, "center", ctx, [0.5, 0.5])?;
+        let out_kind = parse_generator_kind(fields, ctx)?;
         let mut r = InReader::new(fields, ctx, 0);
         let space = read_space(&mut r, fields)?;
         let anchor = r.enum_or("anchor", Anchor::Tile, ANCHORS)?;
-        let stops = read_stops(fields, "stops", &mut r)?;
+        let stops = read_gradient_stops(fields, ctx, &mut r, out_kind)?;
         let radius = r.number_or("radius", 0.5)?;
         let parts = r.finish();
-        let out_kind = parse_generator_kind(fields, ctx)?;
         Ok(BuiltNode {
             node: Box::new(GradientDiamondNode {
                 center,
@@ -123,7 +119,7 @@ impl NodeFactory for GradientDiamondFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Diamond gradient from `center`. Gradient parameter is Manhattan (|dx| + |dy|) distance / radius. `kind: sprite` switches to sprite-local [0, 1] coords.",
+            "description": "Diamond gradient from `center`. Gradient parameter is Manhattan (|dx| + |dy|) distance / radius. `kind: sprite` switches to sprite-local [0, 1] coords; `kind: scalar` emits a canvas-sized ScalarField of that parameter instead of a colour, clamped to [0, 1], and takes no `stops`.",
             "properties": {
                 "center": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "default": [0.5, 0.5] },
                 "radius": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0, "default": 0.5 })),
@@ -137,7 +133,7 @@ impl NodeFactory for GradientDiamondFactory {
                 "width-px": { "type": "integer", "minimum": 1 },
                 "height-px": { "type": "integer", "minimum": 1 },
             },
-            "required": ["stops"],
+            "anyOf": stops_required(),
         })
     }
 }

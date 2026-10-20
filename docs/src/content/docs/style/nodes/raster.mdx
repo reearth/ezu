@@ -92,7 +92,7 @@ Rearrange RGBA channels. Each output (`r`/`g`/`b`/`a`) names which input channel
 
 ### `circle`
 
-Centred disk source. `kind: raster` (default) renders at canvas size with radius = `radius-frac × tile-size`. `kind: sprite` renders at `width-px × height-px` with radius = `radius-frac × min(width, height)`.
+Centred disk source. `kind: raster` (default) renders at canvas size with radius = `radius-frac × tile-size`. `kind: sprite` renders at `width-px × height-px` with radius = `radius-frac × min(width, height)`. `kind: scalar` emits a canvas-sized ScalarField of the disk's coverage, as raster mode lays it out: 1 inside the `hardness` core, falling to 0 at the rim, 0 outside; it takes no `color`.
 
 <figure class="op-demo">
   <div class="op-demo__images">
@@ -103,10 +103,10 @@ Centred disk source. `kind: raster` (default) renders at canvas size with radius
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `color` | color \| `$param` \| `@node` | yes | sRGB hex color, `$param` reference, or `@node` scalar port. |
+| `color` | color \| `$param` \| `@node` | no | sRGB hex color, `$param` reference, or `@node` scalar port. |
 | `hardness` | number (0…1) \| `$param` \| `@node` | no | — |
 | `height-px` | integer (1…∞) | no | — |
-| `kind` | `raster` \| `sprite` \| `$param` | no | — |
+| `kind` | `raster` \| `sprite` \| `scalar` \| `$param` | no | — |
 | `radius-frac` | number (0…1) \| `$param` \| `@node` | yes | — |
 | `width-px` | integer (1…∞) | no | — |
 
@@ -286,7 +286,7 @@ Smears `input` along the streamlines of a direction `field` (line integral convo
 
 ### `gradient-conic`
 
-Conic (sweep) gradient around `center`. Gradient parameter is the clockwise angle from `start-angle` (degrees) normalized to [0, 1). 0° points along +x. `kind: sprite` switches to sprite-local [0, 1] coords.
+Conic (sweep) gradient around `center`. Gradient parameter is the clockwise angle from `start-angle` (degrees) normalized to [0, 1). 0° points along +x. `kind: sprite` switches to sprite-local [0, 1] coords; `kind: scalar` emits a canvas-sized ScalarField of that parameter instead of a colour, and takes no `stops`.
 
 <figure class="op-demo">
   <div class="op-demo__images">
@@ -300,15 +300,15 @@ Conic (sweep) gradient around `center`. Gradient parameter is the clockwise angl
 | `anchor` | `tile` \| `world` \| `$param` | no | — |
 | `center` | array of number | no | — |
 | `height-px` | integer (1…∞) | no | — |
-| `kind` | `raster` \| `sprite` \| `$param` | no | — |
+| `kind` | `raster` \| `sprite` \| `scalar` \| `$param` | no | — |
 | `space` | `rgb` \| `hsl` \| `hsv` \| `hcl` \| `lab` \| `$param` | no | Colour space the stops interpolate in; hue-based spaces take the shortest path. |
 | `start-angle` | number \| `$param` \| `@node` | no | — |
-| `stops` | array of array of — | yes | `[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order. |
+| `stops` | array of array of — | no | `[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order. |
 | `width-px` | integer (1…∞) | no | — |
 
 ### `gradient-diamond`
 
-Diamond gradient from `center`. Gradient parameter is Manhattan (|dx| + |dy|) distance / radius. `kind: sprite` switches to sprite-local [0, 1] coords.
+Diamond gradient from `center`. Gradient parameter is Manhattan (|dx| + |dy|) distance / radius. `kind: sprite` switches to sprite-local [0, 1] coords; `kind: scalar` emits a canvas-sized ScalarField of that parameter instead of a colour, clamped to [0, 1], and takes no `stops`.
 
 <figure class="op-demo">
   <div class="op-demo__images">
@@ -322,15 +322,15 @@ Diamond gradient from `center`. Gradient parameter is Manhattan (|dx| + |dy|) di
 | `anchor` | `tile` \| `world` \| `$param` | no | — |
 | `center` | array of number | no | — |
 | `height-px` | integer (1…∞) | no | — |
-| `kind` | `raster` \| `sprite` \| `$param` | no | — |
+| `kind` | `raster` \| `sprite` \| `scalar` \| `$param` | no | — |
 | `radius` | number (0…∞) \| `$param` \| `@node` | no | — |
 | `space` | `rgb` \| `hsl` \| `hsv` \| `hcl` \| `lab` \| `$param` | no | Colour space the stops interpolate in; hue-based spaces take the shortest path. |
-| `stops` | array of array of — | yes | `[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order. |
+| `stops` | array of array of — | no | `[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order. |
 | `width-px` | integer (1…∞) | no | — |
 
 ### `gradient-linear`
 
-Linear gradient from `start` to `end` (fractional coords). `kind: raster` (default) samples in tile/world coords; `kind: sprite` samples in [0, 1] sprite coords at `width-px × height-px`.
+Linear gradient from `start` to `end` (fractional coords). `kind: raster` (default) samples in tile/world coords; `kind: sprite` samples in [0, 1] sprite coords at `width-px × height-px`; `kind: scalar` emits a canvas-sized ScalarField of the position along the gradient — the projection onto `start → end`, 0 at `start` and 1 at `end`, clamped to [0, 1] — and takes no `stops`.
 
 <figure class="op-demo">
   <div class="op-demo__images">
@@ -344,15 +344,15 @@ Linear gradient from `start` to `end` (fractional coords). `kind: raster` (defau
 | `anchor` | `tile` \| `world` \| `$param` | no | — |
 | `end` | array of number | no | — |
 | `height-px` | integer (1…∞) | no | — |
-| `kind` | `raster` \| `sprite` \| `$param` | no | — |
+| `kind` | `raster` \| `sprite` \| `scalar` \| `$param` | no | — |
 | `space` | `rgb` \| `hsl` \| `hsv` \| `hcl` \| `lab` \| `$param` | no | Colour space the stops interpolate in; hue-based spaces take the shortest path. |
 | `start` | array of number | no | — |
-| `stops` | array of array of — | yes | `[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order. |
+| `stops` | array of array of — | no | `[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order. |
 | `width-px` | integer (1…∞) | no | — |
 
 ### `gradient-radial`
 
-Radial gradient from `center` outward. Gradient parameter is Euclidean distance / radius. `aspect > 1` stretches the ellipse along X, `< 1` along Y. `kind: sprite` switches to sprite-local [0, 1] coords.
+Radial gradient from `center` outward. Gradient parameter is Euclidean distance / radius. `aspect > 1` stretches the ellipse along X, `< 1` along Y. `kind: sprite` switches to sprite-local [0, 1] coords; `kind: scalar` emits a canvas-sized ScalarField of that parameter instead of a colour, clamped to [0, 1] (0 at `center`, 1 at `radius` and beyond), and takes no `stops`.
 
 <figure class="op-demo">
   <div class="op-demo__images">
@@ -367,10 +367,10 @@ Radial gradient from `center` outward. Gradient parameter is Euclidean distance 
 | `aspect` | number (0…∞) \| `$param` \| `@node` | no | — |
 | `center` | array of number | no | — |
 | `height-px` | integer (1…∞) | no | — |
-| `kind` | `raster` \| `sprite` \| `$param` | no | — |
+| `kind` | `raster` \| `sprite` \| `scalar` \| `$param` | no | — |
 | `radius` | number (0…∞) \| `$param` \| `@node` | no | — |
 | `space` | `rgb` \| `hsl` \| `hsv` \| `hcl` \| `lab` \| `$param` | no | Colour space the stops interpolate in; hue-based spaces take the shortest path. |
-| `stops` | array of array of — | yes | `[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order. |
+| `stops` | array of array of — | no | `[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order. |
 | `width-px` | integer (1…∞) | no | — |
 
 ### `hillshade`
@@ -499,7 +499,7 @@ Quantize a raster into uniform square blocks. `mode` selects how each block is s
 
 ### `noise`
 
-Procedural noise source. With `kind: raster` (default) the noise is mapped to RGBA via `low-color`/`high-color`/`opacity`. With `kind: scalar` it emits a `ScalarField` of raw fBm values — compose with `map-range` before feeding `hillshade`/`color-ramp`. Every `type` lands in [-1, 1]. `white`/`value`/`perlin`/`simplex` sit around 0. `worley` and `cell` both divide the plane into cells around scattered sites: `worley` is `1 − 2·distance` to the nearest site, +1 on the site and falling towards the cell's edge, and `cell` is the nearest site's own random value, flat across its cell and spread evenly over [-1, 1] — one tone per cell, for stones, panes or patches. `anchor=world` (default) keeps the field seamless across tile borders.
+Procedural noise source. With `kind: raster` (default) the noise is mapped to RGBA via `low-color`/`high-color`/`opacity`. With `kind: scalar` it emits a `ScalarField` of raw fBm values — compose with `map-range` before feeding `hillshade`/`color-ramp`. With `kind: sprite` it is coloured as in raster mode onto a `width-px × height-px` Sprite, sampled in the sprite's own pixels whatever the `anchor` and, without a `seed`, from a fixed one, so every copy `stamp` or `tiling` puts down is the same image. Every `type` lands in [-1, 1]. `white`/`value`/`perlin`/`simplex` sit around 0. `worley` and `cell` both divide the plane into cells around scattered sites: `worley` is `1 − 2·distance` to the nearest site, +1 on the site and falling towards the cell's edge, and `cell` is the nearest site's own random value, flat across its cell and spread evenly over [-1, 1] — one tone per cell, for stones, panes or patches. `anchor=world` (default) keeps the field seamless across tile borders.
 
 <figure class="op-demo">
   <div class="op-demo__images">
@@ -512,8 +512,9 @@ Procedural noise source. With `kind: raster` (default) the noise is mapped to RG
 | --- | --- | --- | --- |
 | `anchor` | `tile` \| `world` \| `$param` | no | — |
 | `gain` | number \| `$param` \| `@node` | no | — |
+| `height-px` | integer (1…∞) | no | — |
 | `high-color` | color \| `$param` \| `@node` | no | sRGB hex color, `$param` reference, or `@node` scalar port. |
-| `kind` | `raster` \| `scalar` \| `$param` | no | — |
+| `kind` | `raster` \| `sprite` \| `scalar` \| `$param` | no | — |
 | `lacunarity` | number \| `$param` \| `@node` | no | — |
 | `low-color` | color \| `$param` \| `@node` | no | sRGB hex color, `$param` reference, or `@node` scalar port. |
 | `octaves` | integer (1…12) | no | — |
@@ -523,6 +524,7 @@ Procedural noise source. With `kind: raster` (default) the noise is mapped to RG
 | `type` | `white` \| `value` \| `perlin` \| `simplex` \| `worley` \| `cell` \| `$param` | no | — |
 | `warp-amp` | number \| `$param` \| `@node` | no | — |
 | `warp-freq` | number \| `$param` \| `@node` | no | — |
+| `width-px` | integer (1…∞) | no | — |
 
 ### `place`
 
@@ -619,7 +621,7 @@ Slope angle as grayscale, normalised to 0..1 against `max-deg`. Missing samples 
 
 ### `solid`
 
-Solid-colour source. `kind: raster` (default) fills the full canvas; `kind: sprite` emits a Sprite at `width-px × height-px` for use as a synthetic placement/tiling source.
+Solid-colour source. `kind: raster` (default) fills the full canvas; `kind: sprite` emits a Sprite at `width-px × height-px` for use as a synthetic placement/tiling source; `kind: scalar` emits a canvas-sized ScalarField holding `value` everywhere, a constant operand for `field-math` or a flat stand-in for a DEM.
 
 <figure class="op-demo">
   <div class="op-demo__images">
@@ -630,9 +632,10 @@ Solid-colour source. `kind: raster` (default) fills the full canvas; `kind: spri
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `color` | color \| `$param` \| `@node` | yes | sRGB hex color, `$param` reference, or `@node` scalar port. |
+| `color` | color \| `$param` \| `@node` | no | sRGB hex color, `$param` reference, or `@node` scalar port. |
 | `height-px` | integer (1…∞) | no | — |
-| `kind` | `raster` \| `sprite` \| `$param` | no | — |
+| `kind` | `raster` \| `sprite` \| `scalar` \| `$param` | no | — |
+| `value` | number \| `$param` \| `@node` | no | `kind: scalar` only: the number the field holds. Default 1. |
 | `width-px` | integer (1…∞) | no | — |
 
 ### `stack`

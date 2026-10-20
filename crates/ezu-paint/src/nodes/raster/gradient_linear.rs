@@ -12,13 +12,13 @@ use xxhash_rust::xxh3::Xxh3;
 
 use crate::color_interp::InterpSpace;
 use crate::nodes::common::{
-    anchor_schema, hash_stops, read_space, read_stops, read_xy, resolve_stops, sample_stops,
-    space_schema, Anchor, StopsIn, ANCHORS,
+    anchor_schema, hash_stops, read_space, read_xy, resolve_stops, sample_stops, space_schema,
+    Anchor, StopsIn, ANCHORS,
 };
 use crate::nodes::raster::generator_kind::{
     generator_kind_schema, parse_generator_kind, GeneratorKind,
 };
-use crate::nodes::raster::gradient_common::render_gradient;
+use crate::nodes::raster::gradient_common::{read_gradient_stops, render_gradient, stops_required};
 
 struct GradientLinearNode {
     start: [f32; 2],
@@ -38,10 +38,7 @@ impl Node for GradientLinearNode {
         &[]
     }
     fn output(&self, _input_kinds: &[Option<PortKind>]) -> PortKind {
-        match self.out_kind {
-            GeneratorKind::Raster => PortKind::Raster,
-            GeneratorKind::Sprite { .. } => PortKind::Sprite,
-        }
+        self.out_kind.port_kind()
     }
     fn coord_space(&self) -> CoordSpace {
         // Descriptive only, so the declared anchor stands for whatever a
@@ -68,14 +65,15 @@ impl Node for GradientLinearNode {
         let space = self.space.get(ctx)?;
         let anchor = self.anchor.get(ctx)?;
         let stops = &resolve_stops(&self.stops, space, ctx, inputs)?;
-        let sample = |ux: f32, uy: f32| -> [f32; 4] {
+        // A zero-length gradient sits before its first stop everywhere.
+        let position = |ux: f32, uy: f32| -> f32 {
             if len2 < 1e-12 {
-                return stops.first().map(|s| s.rgba).unwrap_or([0.0; 4]);
+                return f32::NEG_INFINITY;
             }
-            let t = ((ux - start[0]) * dx + (uy - start[1]) * dy) / len2;
-            sample_stops(stops, t, space)
+            ((ux - start[0]) * dx + (uy - start[1]) * dy) / len2
         };
-        Ok(render_gradient(ctx, self.out_kind, anchor, sample))
+        let color = |t: f32| sample_stops(stops, t, space);
+        Ok(render_gradient(ctx, self.out_kind, anchor, position, color))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"gradient-linear");
@@ -110,11 +108,11 @@ impl NodeFactory for GradientLinearFactory {
     ) -> Result<BuiltNode, FactoryError> {
         let start = read_xy(fields, "start", ctx, [0.0, 0.0])?;
         let end = read_xy(fields, "end", ctx, [1.0, 0.0])?;
+        let out_kind = parse_generator_kind(fields, ctx)?;
         let mut r = InReader::new(fields, ctx, 0);
-        let stops = read_stops(fields, "stops", &mut r)?;
+        let stops = read_gradient_stops(fields, ctx, &mut r, out_kind)?;
         let space = read_space(&mut r, fields)?;
         let anchor = r.enum_or("anchor", Anchor::Tile, ANCHORS)?;
-        let out_kind = parse_generator_kind(fields, ctx)?;
         Ok(BuiltNode {
             node: Box::new(GradientLinearNode {
                 start,
@@ -130,7 +128,7 @@ impl NodeFactory for GradientLinearFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Linear gradient from `start` to `end` (fractional coords). `kind: raster` (default) samples in tile/world coords; `kind: sprite` samples in [0, 1] sprite coords at `width-px × height-px`.",
+            "description": "Linear gradient from `start` to `end` (fractional coords). `kind: raster` (default) samples in tile/world coords; `kind: sprite` samples in [0, 1] sprite coords at `width-px × height-px`; `kind: scalar` emits a canvas-sized ScalarField of the position along the gradient — the projection onto `start → end`, 0 at `start` and 1 at `end`, clamped to [0, 1] — and takes no `stops`.",
             "properties": {
                 "start": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "default": [0.0, 0.0] },
                 "end":   { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "default": [1.0, 0.0] },
@@ -144,7 +142,7 @@ impl NodeFactory for GradientLinearFactory {
                 "width-px": { "type": "integer", "minimum": 1 },
                 "height-px": { "type": "integer", "minimum": 1 },
             },
-            "required": ["stops"],
+            "anyOf": stops_required(),
         })
     }
 }
