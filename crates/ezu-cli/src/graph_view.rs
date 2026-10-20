@@ -46,6 +46,7 @@ struct Preview {
 pub struct Collector {
     canvas: CanvasInfo,
     image_size: u32,
+    compression: PngCompression,
     seen: Mutex<HashMap<NodeIx, Preview>>,
 }
 
@@ -57,10 +58,13 @@ pub struct Collected {
 
 impl Collector {
     /// `image_size` caps a thumbnail's long edge; `0` keeps full size.
-    pub fn new(canvas: CanvasInfo, image_size: u32) -> Self {
+    /// `compression` is what `ezu graph` defaults to `Fast`: these are
+    /// debug pictures, and there are as many of them as there are nodes.
+    pub fn new(canvas: CanvasInfo, image_size: u32, compression: PngCompression) -> Self {
         Self {
             canvas,
             image_size,
+            compression,
             seen: Mutex::new(HashMap::new()),
         }
     }
@@ -141,17 +145,7 @@ impl Collector {
     }
 
     fn encode(&self, buf: &RasterBuf, crop_w: u32, crop_h: u32, pad: u32) -> Option<Vec<u8>> {
-        // `Fast` here on purpose: these are throwaway debug pictures and
-        // there are as many of them as there are nodes.
-        crop_to_png_scaled(
-            buf,
-            crop_w,
-            crop_h,
-            pad,
-            self.image_size,
-            PngCompression::Fast,
-        )
-        .ok()
+        crop_to_png_scaled(buf, crop_w, crop_h, pad, self.image_size, self.compression).ok()
     }
 }
 

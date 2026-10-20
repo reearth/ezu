@@ -316,6 +316,7 @@ mod tests {
             zoom: page.zoom,
             out: page.out.clone(),
             format: None,
+            png: Default::default(),
             concurrency: Some(3),
             features: page.features.clone(),
             features_key: page.features_key.clone(),
@@ -380,6 +381,7 @@ mod tests {
             zoom: None,
             out: PathBuf::from("out.png"),
             format: None,
+            png: Default::default(),
             concurrency: Some(3),
             features: Vec::new(),
             features_key: Vec::new(),
@@ -425,7 +427,7 @@ mod tests {
             let style = style.clone();
             async move {
                 let cache = Arc::new(TileByteCache::new(64 << 20));
-                render_pages(&common(&style), &pages, 3, true, &cache)
+                render_pages(&common(&style), &pages, 3, Default::default(), true, &cache)
                     .await
                     .unwrap();
                 cache.counts()

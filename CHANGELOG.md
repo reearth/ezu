@@ -291,6 +291,14 @@ mean is spelled out in
   `--tile-size`: its tile size is what meets the scale.
 - `ezu bbox` takes `--concurrency`, as `frame` and `tiles` do, for how many
   of the mosaic's tiles render at once. It still defaults to the core count.
+- The CLI commands that write PNG take `--png-compression fast|default|best`,
+  the effort the embedding packages' `png.compression` names: `tile`,
+  `bbox`, `frame`, `tiles`, `serve` and `legend` default to `default`, and
+  `graph`, whose node pictures were always encoded fast, to `fast`. The
+  pixels are the same at every level. `tile`, `bbox`, `frame` and `tiles`
+  also take `--format rgba` (or an `.rgba` extension, and `"format": "rgba"`
+  on a frame page): straight 8-bit RGBA, row-major, with no header, as the
+  packages' `rgba` format returns it.
 
 ### Changed
 

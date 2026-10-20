@@ -1393,13 +1393,36 @@ pub fn crop_to_webp(
 /// pure-Rust WebP encoder. Use this for outputs that aren't tile-sized
 /// (e.g. the `ezu-cli bbox` mosaic).
 pub fn pixmap_to_webp(pixmap: &Pixmap) -> Result<Vec<u8>, PaintError> {
-    let (w, h) = (pixmap.width(), pixmap.height());
-    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    encode_rgba8_webp(pixmap.width(), pixmap.height(), &pixmap_to_rgba8(pixmap))
+}
+
+/// Encode a tiny-skia `Pixmap` as PNG at `compression`, the way
+/// [`crop_to_png`] encodes a tile: `Default` is `tiny-skia`'s own encoder,
+/// so it writes what `Pixmap::encode_png` does, and the other presets go
+/// through `image`'s over the demultiplied pixels. For outputs that aren't
+/// tile-sized (e.g. the `ezu-cli bbox` mosaic).
+pub fn pixmap_to_png(pixmap: &Pixmap, compression: PngCompression) -> Result<Vec<u8>, PaintError> {
+    if matches!(compression, PngCompression::Default) {
+        return pixmap.encode_png().map_err(|_| PaintError::PngEncode);
+    }
+    encode_rgba8_png(
+        pixmap.width(),
+        pixmap.height(),
+        &pixmap_to_rgba8(pixmap),
+        compression,
+    )
+}
+
+/// A tiny-skia `Pixmap`'s pixels as straight (un-premultiplied) 8-bit
+/// RGBA, row-major from the top-left: what [`crop_to_rgba8`] hands back for
+/// a tile.
+pub fn pixmap_to_rgba8(pixmap: &Pixmap) -> Vec<u8> {
+    let mut rgba = Vec::with_capacity(pixmap.data().len());
     for p in pixmap.pixels() {
         let p = p.demultiply();
         rgba.extend_from_slice(&[p.red(), p.green(), p.blue(), p.alpha()]);
     }
-    encode_rgba8_webp(w, h, &rgba)
+    rgba
 }
 
 fn encode_rgba8_webp(width: u32, height: u32, straight_rgba: &[u8]) -> Result<Vec<u8>, PaintError> {

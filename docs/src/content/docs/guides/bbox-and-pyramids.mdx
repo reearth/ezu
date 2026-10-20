@@ -196,6 +196,16 @@ or a malformed colour fails before rendering starts.
 
 - **WebP** — `--out tile.webp` (or `--format webp`) writes lossless WebP, usually
   20–40 % smaller than PNG on painterly content, through a pure-Rust encoder.
+- **PNG effort** — `--png-compression fast|default|best` trades encoding time for
+  file size, as the embedding packages' `png.compression` does: `best` writes
+  the smallest files at two to four times the encoding time, `fast` the
+  largest the soonest. The pixels are the same at every level.
+- **Raw pixels** — `--format rgba` (or an `.rgba` extension) writes the image as
+  the embedding renderer returns it with `format: "rgba"`: straight
+  (un-premultiplied) 8-bit RGBA, row-major from the top-left, and no header.
+  The file is width × height × 4 bytes and records neither, so the reader
+  brings them: a tile's tile size, a mosaic's tile count times that, a page's
+  `--size-px`.
 - **Tile size** — `tile`, `bbox` and `tiles` take `--tile-size` to render each
   tile at another size than the style's `tile-size`: `--tile-size 1024` on a
   512 px style is a hi-DPI pyramid of the same tiles. The style's own pixel

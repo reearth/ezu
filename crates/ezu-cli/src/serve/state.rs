@@ -49,6 +49,8 @@ pub struct Sources {
     pub tile_size: Option<u32>,
     /// `--pad`: the margin every style renders with in place of its own.
     pub pad: Option<u32>,
+    /// `--png-compression`: the effort every PNG tile is encoded with.
+    pub png_compression: ezu::paint::host::PngCompression,
 }
 
 /// Payload emitted when the watcher reloads the style from disk.

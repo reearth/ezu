@@ -186,6 +186,7 @@ mod tests {
             zoom: None,
             out: dir.join("page.png"),
             format: None,
+            png: Default::default(),
             concurrency: Some(3),
             features: features
                 .iter()

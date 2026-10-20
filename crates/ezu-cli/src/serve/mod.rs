@@ -73,6 +73,8 @@ pub struct ServeCmd {
     /// edge seams against its neighbour.
     #[arg(long)]
     pad: Option<u32>,
+    #[command(flatten)]
+    png: crate::PngArgs,
 }
 
 pub async fn run(args: ServeCmd) -> Result<(), Box<dyn std::error::Error>> {
@@ -127,6 +129,7 @@ pub async fn run(args: ServeCmd) -> Result<(), Box<dyn std::error::Error>> {
         byte_cache,
         tile_size: args.tile_size,
         pad: args.pad,
+        png_compression: args.png.compression(),
     };
 
     let snapshot = StyleSnapshot::build(style_text, 1, &sources).await?;

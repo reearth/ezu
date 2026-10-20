@@ -68,9 +68,11 @@ Options:
       --tile <TILE>
           Tile coordinate as `Z/X/Y`
       --out <OUT>
-          Output path. Format is sniffed from the extension (`.png` / `.webp`); use `--format` to override [default: out.png]
+          Output path. Format is sniffed from the extension (`.png` / `.webp` / `.rgba`); use `--format` to override [default: out.png]
       --format <FORMAT>
-          Output format. Defaults to whatever `--out`'s extension implies [possible values: png, webp]
+          Output format. Defaults to whatever `--out`'s extension implies. `rgba` is straight (un-premultiplied) 8-bit RGBA, row-major from the top-left, with no header, as the embedding renderer returns it: tile size × tile size × 4 bytes, the size being `--tile-size` or the style's, which the file does not record [possible values: png, webp, rgba]
+      --png-compression <PNG_COMPRESSION>
+          Effort the PNG encoder spends: `fast` writes larger files sooner, `best` the smallest at two to four times the encoding time. The pixels are the same at every level. Other formats ignore it [default: default] [possible values: fast, default, best]
   -h, --help
           Print help
 ```
@@ -108,9 +110,11 @@ Options:
       --zoom <ZOOM>
           Zoom level
       --out <OUT>
-          Output path. Format is sniffed from the extension (`.png` / `.webp`); use `--format` to override [default: out.png]
+          Output path. Format is sniffed from the extension (`.png` / `.webp` / `.rgba`); use `--format` to override [default: out.png]
       --format <FORMAT>
-          Output format. Defaults to whatever `--out`'s extension implies [possible values: png, webp]
+          Output format. Defaults to whatever `--out`'s extension implies. `rgba` is straight (un-premultiplied) 8-bit RGBA, row-major from the top-left, with no header: width × height × 4 bytes, each side the tiles across it times the tile size, which the file does not record (the log line naming the tiles covered does) [possible values: png, webp, rgba]
+      --png-compression <PNG_COMPRESSION>
+          Effort the PNG encoder spends: `fast` writes larger files sooner, `best` the smallest at two to four times the encoding time. The pixels are the same at every level. Other formats ignore it [default: default] [possible values: fast, default, best]
       --concurrency <CONCURRENCY>
           Number of tiles rendered in parallel. Defaults to the number of logical CPU cores
   -h, --help
@@ -158,9 +162,11 @@ Options:
       --zoom <ZOOM>
           Render at this zoom, deriving the tile size from it. By default the zoom is the one whose tile size comes nearest the style's `tile-size`. This is how a frame's tile size is chosen: the scale fixes it for each zoom, so `frame` takes no `--tile-size`
       --out <OUT>
-          Output path. Format is sniffed from the extension (`.png` / `.webp`); use `--format` to override [default: out.png]
+          Output path. Format is sniffed from the extension (`.png` / `.webp` / `.rgba`); use `--format` to override [default: out.png]
       --format <FORMAT>
-          Output format. Defaults to whatever `--out`'s extension implies [possible values: png, webp]
+          Output format. Defaults to whatever `--out`'s extension implies. `rgba` is straight (un-premultiplied) 8-bit RGBA, row-major from the top-left, with no header: width × height × 4 bytes of the page as `--size-px` or `--size-mm` sized it, which the file does not record [possible values: png, webp, rgba]
+      --png-compression <PNG_COMPRESSION>
+          Effort the PNG encoder spends: `fast` writes larger files sooner, `best` the smallest at two to four times the encoding time. The pixels are the same at every level. Other formats ignore it [default: default] [possible values: fast, default, best]
       --concurrency <CONCURRENCY>
           Number of tiles rendered in parallel. Defaults to the number of logical CPU cores
       --features <NODE=PATH>
@@ -210,7 +216,9 @@ Options:
       --out <OUT>
           Output directory; tiles are written as `<out>/<z>/<x>/<y>.<ext>` (extension picked by `--format`) [default: tiles]
       --format <FORMAT>
-          Output format. Defaults to PNG [default: png] [possible values: png, webp]
+          Output format. Defaults to PNG. `rgba` writes `<y>.rgba` files of straight (un-premultiplied) 8-bit RGBA, row-major from the top-left, with no header: tile size × tile size × 4 bytes each, the size being `--tile-size` or the style's, which the files do not record [default: png] [possible values: png, webp, rgba]
+      --png-compression <PNG_COMPRESSION>
+          Effort the PNG encoder spends: `fast` writes larger files sooner, `best` the smallest at two to four times the encoding time. The pixels are the same at every level. Other formats ignore it [default: default] [possible values: fast, default, best]
       --concurrency <CONCURRENCY>
           Number of tiles rendered in parallel. Defaults to the number of logical CPU cores
   -h, --help
@@ -267,6 +275,8 @@ Options:
           Long edge of each embedded node image, in pixels. `0` embeds them at the style's own tile size — sharper, and a much larger file on a graph of any size [default: 256]
       --sidecar
           Write the node images as PNG files beside the HTML (in `<out>.assets/`) instead of embedding them. Keeps the page small; pair with `--image-size 0` for full-size pictures
+      --png-compression <PNG_COMPRESSION>
+          Effort the PNG encoder spends on the node images. `fast` by default here, unlike the render commands: there is one image per node, and they are for looking at. The pixels are the same at every level [default: fast] [possible values: fast, default, best]
   -h, --help
           Print help
 ```
@@ -282,14 +292,24 @@ Arguments:
   <STYLE>  Ezu Style JSON document — local path or http(s):// URL
 
 Options:
-  -v, --verbose                    Emit per-node debug logs from the graph evaluator (op name, cache hit/miss, output shape, eval duration). Overrides `RUST_LOG` for this run
-      --zoom <ZOOM>                Keep only the entries that apply at this zoom. Also the zoom the swatches are drawn at, since a symbol may change with scale
-      --out <OUT>                  Output file. Writes to stdout when omitted
-      --pretty                     Pretty-print the emitted JSON
-      --swatch-dir <SWATCH_DIR>    Draw each entry's symbol into this directory as a PNG, and add its path to that entry in the emitted JSON
-      --swatch-size <SWATCH_SIZE>  Swatch size as `WIDTHxHEIGHT` (or one number for a square) [default: 48x32]
-      --assets-dir <ASSETS_DIR>    Base directory for resolving relative asset `src` paths, for swatches whose symbol needs a brush, font or sprite
-  -h, --help                       Print help
+  -v, --verbose
+          Emit per-node debug logs from the graph evaluator (op name, cache hit/miss, output shape, eval duration). Overrides `RUST_LOG` for this run
+      --zoom <ZOOM>
+          Keep only the entries that apply at this zoom. Also the zoom the swatches are drawn at, since a symbol may change with scale
+      --out <OUT>
+          Output file. Writes to stdout when omitted
+      --pretty
+          Pretty-print the emitted JSON
+      --swatch-dir <SWATCH_DIR>
+          Draw each entry's symbol into this directory as a PNG, and add its path to that entry in the emitted JSON
+      --swatch-size <SWATCH_SIZE>
+          Swatch size as `WIDTHxHEIGHT` (or one number for a square) [default: 48x32]
+      --assets-dir <ASSETS_DIR>
+          Base directory for resolving relative asset `src` paths, for swatches whose symbol needs a brush, font or sprite
+      --png-compression <PNG_COMPRESSION>
+          Effort the PNG encoder spends: `fast` writes larger files sooner, `best` the smallest at two to four times the encoding time. The pixels are the same at every level. Other formats ignore it [default: default] [possible values: fast, default, best]
+  -h, --help
+          Print help
 ```
 
 ## `ezu translate`
@@ -343,6 +363,8 @@ Options:
           Render each tile this many pixels square instead of at the style's `tile-size`. A request can still ask for a multiple of it per tile with `@2x` (up to `@4x`) before the extension. The style's own pixel sizes (line widths, text, `pad`) are not scaled with it
       --pad <PAD>
           Margin rendered around each tile before it is cropped, in pixels, in place of the style's `pad` raised to what its filters reach, for every style the server loads. Narrower than that reach, a tile's edge seams against its neighbour
+      --png-compression <PNG_COMPRESSION>
+          Effort the PNG encoder spends: `fast` writes larger files sooner, `best` the smallest at two to four times the encoding time. The pixels are the same at every level. Other formats ignore it [default: default] [possible values: fast, default, best]
   -h, --help
           Print help
 ```

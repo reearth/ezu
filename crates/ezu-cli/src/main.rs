@@ -143,12 +143,18 @@ struct TileSizeArgs {
 
 /// Output raster format. Pure-Rust pipelines on both sides — WebP is
 /// lossless via the `image-webp` codec, typically 20–40 % smaller than
-/// PNG for painterly content.
+/// PNG for painterly content. `rgba` is the embedding renderer's raw form:
+/// straight (un-premultiplied) 8-bit RGBA, row-major from the top-left,
+/// with no header.
+// The variants carry plain comments, not doc comments: clap would turn
+// those into per-value help and switch the whole command's `--help` to its
+// long layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum OutputFormat {
     Png,
     Webp,
+    Rgba,
 }
 
 impl OutputFormat {
@@ -156,17 +162,35 @@ impl OutputFormat {
         match self {
             OutputFormat::Png => "png",
             OutputFormat::Webp => "webp",
+            OutputFormat::Rgba => "rgba",
         }
     }
 
-    /// `opts`, asking the renderer to encode in this format.
-    fn with(self, opts: ezu::renderer::RenderOptions) -> ezu::renderer::RenderOptions {
+    /// `opts`, asking the renderer to encode in this format, a PNG at
+    /// `png`'s effort.
+    fn with(
+        self,
+        opts: ezu::renderer::RenderOptions,
+        png: PngLevel,
+    ) -> ezu::renderer::RenderOptions {
         ezu::renderer::RenderOptions {
             format: match self {
                 OutputFormat::Png => ezu::renderer::OutputFormat::Png,
                 OutputFormat::Webp => ezu::renderer::OutputFormat::Webp,
+                OutputFormat::Rgba => ezu::renderer::OutputFormat::Rgba,
             },
+            png_compression: png.into(),
             ..opts
+        }
+    }
+
+    /// `image` encoded in this format, a PNG at `png`'s effort.
+    fn encode(self, image: &Pixmap, png: PngLevel) -> Result<Vec<u8>, String> {
+        use ezu::paint::host::{pixmap_to_png, pixmap_to_rgba8};
+        match self {
+            OutputFormat::Png => pixmap_to_png(image, png.into()).map_err(|e| e.to_string()),
+            OutputFormat::Webp => pixmap_to_webp(image).map_err(|e| e.to_string()),
+            OutputFormat::Rgba => Ok(pixmap_to_rgba8(image)),
         }
     }
 
@@ -174,8 +198,49 @@ impl OutputFormat {
     fn from_path(path: &Path) -> Self {
         match path.extension().and_then(|s| s.to_str()) {
             Some(s) if s.eq_ignore_ascii_case("webp") => OutputFormat::Webp,
+            Some(s) if s.eq_ignore_ascii_case("rgba") => OutputFormat::Rgba,
             _ => OutputFormat::Png,
         }
+    }
+}
+
+/// Effort the PNG encoder spends. The pixels are the same at every level;
+/// only the file size and the time to write it differ.
+// Plain comments on the variants, as on `OutputFormat`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+enum PngLevel {
+    // Larger files, written sooner.
+    Fast,
+    // The balance every shell defaults to.
+    #[default]
+    Default,
+    // The smallest files, at two to four times the encoding time.
+    Best,
+}
+
+impl From<PngLevel> for ezu::paint::host::PngCompression {
+    fn from(level: PngLevel) -> Self {
+        match level {
+            PngLevel::Fast => Self::Fast,
+            PngLevel::Default => Self::Default,
+            PngLevel::Best => Self::Best,
+        }
+    }
+}
+
+/// `--png-compression`, for the commands that write PNG.
+#[derive(Args, Debug, Clone, Copy, Default)]
+pub(crate) struct PngArgs {
+    /// Effort the PNG encoder spends: `fast` writes larger files sooner,
+    /// `best` the smallest at two to four times the encoding time. The
+    /// pixels are the same at every level. Other formats ignore it.
+    #[arg(long, value_enum, default_value_t = PngLevel::Default)]
+    png_compression: PngLevel,
+}
+
+impl PngArgs {
+    pub(crate) fn compression(self) -> ezu::paint::host::PngCompression {
+        self.png_compression.into()
     }
 }
 
@@ -244,6 +309,11 @@ struct GraphCmd {
     /// small; pair with `--image-size 0` for full-size pictures.
     #[arg(long)]
     sidecar: bool,
+    /// Effort the PNG encoder spends on the node images. `fast` by default
+    /// here, unlike the render commands: there is one image per node, and
+    /// they are for looking at. The pixels are the same at every level.
+    #[arg(long, value_enum, default_value_t = PngLevel::Fast)]
+    png_compression: PngLevel,
 }
 
 #[derive(Args, Debug)]
@@ -271,6 +341,8 @@ struct LegendCmd {
     /// swatches whose symbol needs a brush, font or sprite.
     #[arg(long)]
     assets_dir: Option<PathBuf>,
+    #[command(flatten)]
+    png: PngArgs,
 }
 
 /// Parse `WIDTHxHEIGHT`, or a single number as a square.
@@ -345,12 +417,18 @@ struct TileCmd {
     #[arg(long, value_parser = parse_zxy)]
     tile: CoreTileId,
     /// Output path. Format is sniffed from the extension (`.png` /
-    /// `.webp`); use `--format` to override.
+    /// `.webp` / `.rgba`); use `--format` to override.
     #[arg(long, default_value = "out.png")]
     out: PathBuf,
     /// Output format. Defaults to whatever `--out`'s extension implies.
+    /// `rgba` is straight (un-premultiplied) 8-bit RGBA, row-major from the
+    /// top-left, with no header, as the embedding renderer returns it: tile
+    /// size × tile size × 4 bytes, the size being `--tile-size` or the
+    /// style's, which the file does not record.
     #[arg(long, value_enum)]
     format: Option<OutputFormat>,
+    #[command(flatten)]
+    png: PngArgs,
 }
 
 #[derive(Args, Debug)]
@@ -366,12 +444,18 @@ struct BboxCmd {
     #[arg(long)]
     zoom: u8,
     /// Output path. Format is sniffed from the extension (`.png` /
-    /// `.webp`); use `--format` to override.
+    /// `.webp` / `.rgba`); use `--format` to override.
     #[arg(long, default_value = "out.png")]
     out: PathBuf,
     /// Output format. Defaults to whatever `--out`'s extension implies.
+    /// `rgba` is straight (un-premultiplied) 8-bit RGBA, row-major from the
+    /// top-left, with no header: width × height × 4 bytes, each side the
+    /// tiles across it times the tile size, which the file does not record
+    /// (the log line naming the tiles covered does).
     #[arg(long, value_enum)]
     format: Option<OutputFormat>,
+    #[command(flatten)]
+    png: PngArgs,
     /// Number of tiles rendered in parallel. Defaults to the number of
     /// logical CPU cores.
     #[arg(long)]
@@ -419,12 +503,17 @@ struct FrameCmd {
     #[arg(long)]
     zoom: Option<u8>,
     /// Output path. Format is sniffed from the extension (`.png` /
-    /// `.webp`); use `--format` to override.
+    /// `.webp` / `.rgba`); use `--format` to override.
     #[arg(long, default_value = "out.png")]
     out: PathBuf,
     /// Output format. Defaults to whatever `--out`'s extension implies.
+    /// `rgba` is straight (un-premultiplied) 8-bit RGBA, row-major from the
+    /// top-left, with no header: width × height × 4 bytes of the page as
+    /// `--size-px` or `--size-mm` sized it, which the file does not record.
     #[arg(long, value_enum)]
     format: Option<OutputFormat>,
+    #[command(flatten)]
+    png: PngArgs,
     /// Number of tiles rendered in parallel. Defaults to the number of
     /// logical CPU cores.
     #[arg(long)]
@@ -472,9 +561,14 @@ struct TilesCmd {
     /// `<out>/<z>/<x>/<y>.<ext>` (extension picked by `--format`).
     #[arg(long, default_value = "tiles")]
     out: PathBuf,
-    /// Output format. Defaults to PNG.
+    /// Output format. Defaults to PNG. `rgba` writes `<y>.rgba` files of
+    /// straight (un-premultiplied) 8-bit RGBA, row-major from the top-left,
+    /// with no header: tile size × tile size × 4 bytes each, the size being
+    /// `--tile-size` or the style's, which the files do not record.
     #[arg(long, value_enum, default_value_t = OutputFormat::Png)]
     format: OutputFormat,
+    #[command(flatten)]
+    png: PngArgs,
     /// Number of tiles rendered in parallel. Defaults to the number
     /// of logical CPU cores.
     // Resolved at run time rather than through `default_value_t`, so
@@ -1005,7 +1099,11 @@ async fn run_graph_view(args: GraphCmd) -> Result<(), Box<dyn std::error::Error>
     let tiles = &opened.tiles;
 
     let canvas = CanvasInfo::square(tiles.tile_size(), tiles.pad());
-    let collector = Arc::new(graph_view::Collector::new(canvas, args.image_size));
+    let collector = Arc::new(graph_view::Collector::new(
+        canvas,
+        args.image_size,
+        args.png_compression.into(),
+    ));
     let watching = Arc::clone(&collector);
     tiles
         .render(tile, move |r, set, mut opts| {
@@ -1171,7 +1269,7 @@ async fn draw_swatches(
     dir: &Path,
     args: &LegendCmd,
 ) -> Result<Vec<Option<String>>, Box<dyn std::error::Error>> {
-    use ezu::paint::host::{crop_to_png, PngCompression};
+    use ezu::paint::host::crop_to_png;
     use ezu::paint::legend::{render_swatch, SwatchOptions};
 
     std::fs::create_dir_all(dir)?;
@@ -1209,7 +1307,7 @@ async fn draw_swatches(
             canvas.tile_w,
             canvas.tile_h,
             canvas.pad,
-            PngCompression::Default,
+            args.png.compression(),
         )?;
         let path = dir.join(format!("{i}.png"));
         std::fs::write(&path, &png)?;
@@ -1356,11 +1454,12 @@ async fn run_tile(args: TileCmd) -> Result<(), Box<dyn std::error::Error>> {
     let format = args
         .format
         .unwrap_or_else(|| OutputFormat::from_path(&args.out));
+    let png = args.png.png_compression;
     let bytes = opened
         .tiles
         .render(args.tile, move |r, set, opts| {
             let t = args.tile;
-            r.render_tile_with(t.z, t.x, t.y, set, format.with(opts))
+            r.render_tile_with(t.z, t.x, t.y, set, format.with(opts, png))
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -1419,10 +1518,7 @@ async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
         let dy = (tile.y - y_range.start) as i64 * t as i64;
         blit_rgba_into(&mut mosaic, &rgba, dx, dy, t);
     }
-    let bytes = match format {
-        OutputFormat::Png => mosaic.encode_png().map_err(|e| e.to_string())?,
-        OutputFormat::Webp => pixmap_to_webp(&mosaic).map_err(|e| e.to_string())?,
-    };
+    let bytes = format.encode(&mosaic, args.png.png_compression)?;
     std::fs::write(&args.out, &bytes)?;
     tracing::info!("wrote {} ({} bytes)", args.out.display(), bytes.len());
     Ok(())
@@ -1437,11 +1533,11 @@ async fn run_frame(args: FrameCmd) -> Result<(), Box<dyn std::error::Error>> {
     match &args.pages {
         Some(path) => {
             let pages = frame_pages::read(path)?;
-            render_pages(&args.common, &pages, concurrency, true, &cache).await
+            render_pages(&args.common, &pages, concurrency, args.png, true, &cache).await
         }
         None => {
             let page = page_from_flags(&args)?;
-            render_pages(&args.common, &[page], concurrency, false, &cache).await
+            render_pages(&args.common, &[page], concurrency, args.png, false, &cache).await
         }
     }
 }
@@ -1487,7 +1583,7 @@ fn page_from_flags(args: &FrameCmd) -> Result<frame_pages::Page, Box<dyn std::er
 /// job has, and a job ordered by scale keeps the most of it. Source tiles
 /// fetched for one page are kept for the next, as fetched bytes in
 /// `byte_cache` and as decoded data. Every page writes what a single-page
-/// run of it would.
+/// run of it would, PNG pages at `png`'s effort.
 ///
 /// `many` marks a pages-file run: errors then name the page, and each page
 /// and the whole job log a summary.
@@ -1495,6 +1591,7 @@ async fn render_pages(
     common: &CommonArgs,
     pages: &[frame_pages::Page],
     concurrency: usize,
+    png: PngArgs,
     many: bool,
     byte_cache: &Arc<TileByteCache>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -1576,10 +1673,7 @@ async fn render_pages(
         let image = render_frame(&opened.tiles, frame, concurrency, collector.as_mut())
             .await
             .map_err(|e| on_page(i, e))?;
-        let bytes = match page.format {
-            OutputFormat::Png => image.encode_png().map_err(|e| e.to_string())?,
-            OutputFormat::Webp => pixmap_to_webp(&image).map_err(|e| e.to_string())?,
-        };
+        let bytes = page.format.encode(&image, png.png_compression)?;
         std::fs::write(&page.out, &bytes).map_err(|e| on_page(i, e.into()))?;
         tracing::info!("wrote {} ({} bytes)", page.out.display(), bytes.len());
         let written = collector.map(FrameFeatureCollector::finish);
@@ -1749,13 +1843,14 @@ async fn run_tiles(args: TilesCmd) -> Result<(), Box<dyn std::error::Error>> {
             .flat_map(move |ty| xr.clone().map(move |tx| (tx, ty)));
         let out = &args.out;
         let format = args.format;
+        let png = args.png.png_compression;
         let t0 = std::time::Instant::now();
         futures::stream::iter(coords)
             .map(|(tx, ty)| async move {
                 let tile = CoreTileId::new(z, tx, ty);
                 let bytes = tiles
                     .render(tile, move |r, set, opts| {
-                        r.render_tile_with(tile.z, tile.x, tile.y, set, format.with(opts))
+                        r.render_tile_with(tile.z, tile.x, tile.y, set, format.with(opts, png))
                     })
                     .await?;
                 let dir = out.join(z.to_string()).join(tx.to_string());
@@ -2010,6 +2105,7 @@ mod tests {
             zoom: None,
             out: frame_out.clone(),
             format: None,
+            png: PngArgs::default(),
             concurrency: Some(2),
             features: Vec::new(),
             features_key: Vec::new(),
@@ -2038,6 +2134,7 @@ mod tests {
             zoom: frame.zoom,
             out: bbox_out.clone(),
             format: None,
+            png: PngArgs::default(),
             concurrency: None,
         })
         .await
@@ -2081,6 +2178,7 @@ mod tests {
             tile,
             out,
             format: None,
+            png: PngArgs::default(),
         }
     }
 
@@ -2126,6 +2224,7 @@ mod tests {
             zoom: 16,
             out,
             format: None,
+            png: PngArgs::default(),
             concurrency: None,
         };
         let (m1, m2) = (dir.join("m1.png"), dir.join("m2.png"));
@@ -2146,6 +2245,7 @@ mod tests {
             max_zoom: 16,
             out,
             format: OutputFormat::Png,
+            png: PngArgs::default(),
             concurrency: Some(2),
         };
         let (p1, p2) = (dir.join("p1"), dir.join("p2"));
@@ -2156,6 +2256,163 @@ mod tests {
         let at = |root: &Path| std::fs::read(root.join("16/58199/25811.png")).unwrap();
         assert_eq!(at(&p1), at(&p2));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Straight RGBA, row-major, as a decoded image's pixels demultiplied.
+    fn straight(png: &[u8]) -> (u32, u32, Vec<u8>) {
+        let p = Pixmap::decode_png(png).unwrap();
+        (p.width(), p.height(), ezu::paint::host::pixmap_to_rgba8(&p))
+    }
+
+    /// Every `--png-compression` writes other bytes for the same pixels,
+    /// on a tile the renderer encodes and on a mosaic the CLI does; and
+    /// `--format rgba` writes those pixels raw.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn png_compression_and_rgba_keep_the_pixels() {
+        let dir = scratch("png-levels");
+        let path = dir.join("style.json");
+        std::fs::write(&path, style(64)).unwrap();
+        let tile = CoreTileId::new(16, 58199, 25811);
+        let bbox = BBox {
+            min_lng: 139.697,
+            min_lat: 35.657,
+            max_lng: 139.704,
+            max_lat: 35.664,
+        };
+        let mut tiles = Vec::new();
+        let mut mosaics = Vec::new();
+        for level in [PngLevel::Fast, PngLevel::Default, PngLevel::Best] {
+            let png = PngArgs {
+                png_compression: level,
+            };
+            let out = dir.join(format!("tile-{level:?}.png"));
+            run_tile(TileCmd {
+                png,
+                ..tile_cmd(&path, tile, out.clone())
+            })
+            .await
+            .unwrap();
+            tiles.push(std::fs::read(&out).unwrap());
+            let out = dir.join(format!("bbox-{level:?}.png"));
+            run_bbox(BboxCmd {
+                common: common(&path),
+                size: TileSizeArgs::default(),
+                bbox,
+                zoom: 17,
+                out: out.clone(),
+                format: None,
+                png,
+                concurrency: None,
+            })
+            .await
+            .unwrap();
+            mosaics.push(std::fs::read(&out).unwrap());
+        }
+        for files in [&tiles, &mosaics] {
+            assert_ne!(files[0], files[1], "fast and default wrote the same bytes");
+            assert_ne!(files[1], files[2], "default and best wrote the same bytes");
+            assert_eq!(straight(&files[0]), straight(&files[1]));
+            assert_eq!(straight(&files[1]), straight(&files[2]));
+        }
+
+        // Raw pixels, sniffed from the extension or asked for by name.
+        let raw = dir.join("tile.rgba");
+        run_tile(tile_cmd(&path, tile, raw.clone())).await.unwrap();
+        let (w, h, want) = straight(&tiles[1]);
+        assert_eq!((w, h), (64, 64));
+        assert_eq!(std::fs::read(&raw).unwrap(), want);
+        let raw = dir.join("bbox.bin");
+        run_bbox(BboxCmd {
+            common: common(&path),
+            size: TileSizeArgs::default(),
+            bbox,
+            zoom: 17,
+            out: raw.clone(),
+            format: Some(OutputFormat::Rgba),
+            png: PngArgs::default(),
+            concurrency: None,
+        })
+        .await
+        .unwrap();
+        let (w, h, want) = straight(&mosaics[1]);
+        let got = std::fs::read(&raw).unwrap();
+        assert_eq!(got.len(), (w * h * 4) as usize);
+        assert_eq!(got, want);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A frame's `rgba` is the page's pixels, `width × height × 4` bytes.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_frame_writes_rgba_too() {
+        let dir = scratch("frame-rgba");
+        let path = dir.join("style.json");
+        std::fs::write(&path, style(256)).unwrap();
+        let frame = |out: PathBuf| FrameCmd {
+            common: common(&path),
+            pages: None,
+            center: Some((139.70, 35.66)),
+            scale: Some(5000.0),
+            dpi: Some(96.0),
+            size_mm: None,
+            size_px: Some((120, 80)),
+            zoom: None,
+            out,
+            format: None,
+            png: PngArgs::default(),
+            concurrency: Some(2),
+            features: Vec::new(),
+            features_key: Vec::new(),
+            features_coords: frame_features::FeatureCoords::Lonlat,
+        };
+        let (png, raw) = (dir.join("page.png"), dir.join("page.rgba"));
+        run_frame(frame(png.clone())).await.unwrap();
+        run_frame(frame(raw.clone())).await.unwrap();
+        let (w, h, want) = straight(&std::fs::read(&png).unwrap());
+        assert_eq!((w, h), (120, 80));
+        assert_eq!(std::fs::read(&raw).unwrap(), want);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn png_compression_and_rgba_parse_where_files_are_written() {
+        let parse = |args: &[&str]| Cli::try_parse_from(args).map(|c| c.cmd);
+        let tile = ["ezu", "tile", "--style", "s", "--tile", "1/0/0"];
+        let Ok(Cmd::Tile(t)) = parse(&[&tile[..], &["--png-compression", "best"]].concat()) else {
+            panic!("tile takes --png-compression");
+        };
+        assert_eq!(t.png.png_compression, PngLevel::Best);
+        assert!(parse(&[&tile[..], &["--png-compression", "max"]].concat()).is_err());
+        assert!(parse(&[&tile[..], &["--format", "rgba"]].concat()).is_ok());
+        for cmd in [
+            &[
+                "ezu", "bbox", "--style", "s", "--bbox", "0,0,1,1", "--zoom", "3",
+            ][..],
+            &[
+                "ezu",
+                "tiles",
+                "--style",
+                "s",
+                "--min-zoom",
+                "0",
+                "--max-zoom",
+                "1",
+            ][..],
+            &["ezu", "frame", "--style", "s", "--pages", "p.json"][..],
+            &["ezu", "serve", "s"][..],
+            &["ezu", "legend", "s"][..],
+            &["ezu", "graph", "s"][..],
+        ] {
+            let args = [cmd, &["--png-compression", "fast"]].concat();
+            assert!(parse(&args).is_ok(), "{cmd:?}");
+        }
+        assert_eq!(
+            OutputFormat::from_path(Path::new("a.RGBA")),
+            OutputFormat::Rgba
+        );
+        assert_eq!(
+            OutputFormat::from_path(Path::new("a.bin")),
+            OutputFormat::Png
+        );
     }
 
     /// A mosaic is the same image however many tiles render at once, and
@@ -2178,6 +2435,7 @@ mod tests {
             zoom: 17,
             out,
             format: None,
+            png: PngArgs::default(),
             concurrency,
         };
         let (one, many) = (dir.join("one.png"), dir.join("many.png"));

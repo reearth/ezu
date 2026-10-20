@@ -316,6 +316,7 @@ async fn get_tile(
     // Take only what we need from the snapshot to keep the lock window
     // short. Query-string parameter overrides are validated against
     // the document's `params` declarations while we hold the lock.
+    let png_compression = s.sources.png_compression;
     let (tiles, params) = {
         let snap = s.style.read().await;
         let mut params = Vec::new();
@@ -346,6 +347,7 @@ async fn get_tile(
                 format: format.encoding(),
                 params,
                 tile_size: tile_size.or(opts.tile_size),
+                png_compression,
                 ..opts
             };
             r.render_tile_with(tile.z, tile.x, tile.y, set, opts)
@@ -537,6 +539,7 @@ mod tests {
             byte_cache,
             tile_size,
             pad: None,
+            png_compression: Default::default(),
         };
         let snapshot = StyleSnapshot::build(style.to_string(), 1, &sources)
             .await
