@@ -1604,12 +1604,18 @@ mod tests {
     /// The warnings are the graph's, and follow the style.
     #[test]
     fn the_build_warnings_are_the_current_styles() {
-        let mut r = Renderer::new(include_str!("../../examples/styles/stained-glass.json"))
-            .expect("builds");
-        // `pane-px` is read when the graph is built, which the style does
-        // not say.
+        // A `raster` node that names no source falls back to the only one
+        // declared, and says so when the graph is built.
+        let mut r = Renderer::new(
+            r##"{ "name": "unnamed",
+                  "sources": { "sky": { "type": "raster",
+                                        "url": "https://example.invalid/{z}/{x}/{y}.png" } },
+                  "nodes": { "out": { "op": "raster" } },
+                  "output": "@out" }"##,
+        )
+        .expect("builds");
         assert!(
-            r.warnings().iter().any(|w| w.contains("pane-px")),
+            r.warnings().iter().any(|w| w.contains("`source` is not set")),
             "{:?}",
             r.warnings()
         );
