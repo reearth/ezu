@@ -36,7 +36,7 @@ const STAMP_POS_SALT: u32 = 0x5350_4f53; // 'SPOS'
 
 /// Parse an optional raw MapLibre expression field, type-checked against
 /// `expect`. Returns `(parsed, raw_json_text)` for a stable cache hash.
-fn parse_expr_field(
+pub(super) fn parse_expr_field(
     fields: &serde_json::Map<String, Value>,
     name: &str,
     expect: &maplibre_expr::Type,
@@ -61,7 +61,7 @@ fn parse_expr_field(
 
 /// Evaluate a `Number` expression for a group, falling back to `fallback`
 /// when the expression is absent or doesn't resolve to a number.
-fn eval_number(
+pub(super) fn eval_number(
     expr: &Option<maplibre_expr::Expr>,
     ectx: &maplibre_expr::EvaluationContext,
     fallback: f32,
@@ -77,7 +77,7 @@ fn eval_number(
 
 /// Evaluate an expression to the icon name (a string) for a group, or `None`
 /// when it doesn't resolve to a (non-empty) string.
-fn eval_icon_name(
+pub(super) fn eval_icon_name(
     expr: &maplibre_expr::Expr,
     ectx: &maplibre_expr::EvaluationContext,
 ) -> Option<String> {
@@ -377,6 +377,39 @@ pub(super) fn resolve_sprite_atlas(
     }
 }
 
+/// Read a data-driven icon: a `name-expr` (the MapLibre expression naming
+/// each feature's icon) plus the `sprite` atlas it crops from. The two replace
+/// an `image` input — the sheet is bound once and any icon in it is cropped
+/// per feature group, so no `image` node is wired. Returns the atlas key, the
+/// compiled expression and its raw JSON text, all `None` without `name-expr`.
+#[allow(clippy::type_complexity)]
+pub(super) fn read_icon_name_expr(
+    fields: &serde_json::Map<String, Value>,
+    ctx: &FactoryCtx<'_>,
+) -> Result<(Option<String>, Option<maplibre_expr::Expr>, Option<String>), FactoryError> {
+    let Some(v) = fields.get("name-expr") else {
+        return Ok((None, None, None));
+    };
+    let raw = fields
+        .get("sprite")
+        .and_then(Value::as_str)
+        .ok_or_else(|| FactoryError::MissingField("sprite".into()))?;
+    let atlas = resolve_sprite_atlas(raw, ctx)?;
+    let expr = maplibre_expr::parse(v).map_err(|e| FactoryError::BadField {
+        field: "name-expr".into(),
+        msg: e.to_string(),
+    })?;
+    // Prefer a String check (icon names stringify); fall back to untyped,
+    // since `match`/`step` over literals may not narrow.
+    let expr = maplibre_expr::typecheck(&expr, Some(&maplibre_expr::Type::String), false)
+        .or_else(|_| maplibre_expr::typecheck(&expr, None, false))
+        .map_err(|e| FactoryError::BadField {
+            field: "name-expr".into(),
+            msg: e.to_string(),
+        })?;
+    Ok((Some(atlas), Some(expr), Some(v.to_string())))
+}
+
 pub(super) struct StampFactory;
 impl NodeFactory for StampFactory {
     fn op_name(&self) -> &'static str {
@@ -389,34 +422,7 @@ impl NodeFactory for StampFactory {
     ) -> Result<BuiltNode, FactoryError> {
         let features = take_input_ref(fields, "features")?;
 
-        // Data-driven `icon-image`: a `name-expr` (the icon-image expression)
-        // plus a `sprite` atlas ref replace the `image` input. The sheet is
-        // bound once and any icon in it is cropped per feature, so no `image`
-        // node is wired.
-        let (icon_sprite, icon_name_expr, icon_name_expr_src) = match fields.get("name-expr") {
-            Some(v) => {
-                let raw = fields
-                    .get("sprite")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| FactoryError::MissingField("sprite".into()))?;
-                let atlas = resolve_sprite_atlas(raw, ctx)?;
-                let expr = maplibre_expr::parse(v).map_err(|e| FactoryError::BadField {
-                    field: "name-expr".into(),
-                    msg: e.to_string(),
-                })?;
-                // Prefer a String check (icon names stringify); fall back to
-                // untyped, since `match`/`step` over literals may not narrow.
-                let expr =
-                    maplibre_expr::typecheck(&expr, Some(&maplibre_expr::Type::String), false)
-                        .or_else(|_| maplibre_expr::typecheck(&expr, None, false))
-                        .map_err(|e| FactoryError::BadField {
-                            field: "name-expr".into(),
-                            msg: e.to_string(),
-                        })?;
-                (Some(atlas), Some(expr), Some(v.to_string()))
-            }
-            None => (None, None, None),
-        };
+        let (icon_sprite, icon_name_expr, icon_name_expr_src) = read_icon_name_expr(fields, ctx)?;
         // The single-image input, present only when not in icon mode.
         let image = match icon_name_expr {
             Some(_) => None,

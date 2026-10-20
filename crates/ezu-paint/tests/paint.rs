@@ -30,6 +30,8 @@ mod data_driven_circle;
 mod data_driven_fill;
 #[path = "paint/data_driven_icon.rs"]
 mod data_driven_icon;
+#[path = "paint/data_driven_line_stamp.rs"]
+mod data_driven_line_stamp;
 #[path = "paint/data_driven_stamp.rs"]
 mod data_driven_stamp;
 #[path = "paint/data_driven_stroke.rs"]

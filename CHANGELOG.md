@@ -199,6 +199,9 @@ mean is spelled out in
   fails the render — in the CLI, `ezu serve` answers 404, and the Rust, Go
   and JS renderers fail a tile with nothing bound for the source. Left out,
   nothing changes: the CLI still looks `--overzoom-levels` parents up.
+- `line-stamp` takes `width-expr` and `opacity-expr`, evaluated per feature
+  group as on `stroke`, and a pattern named per feature: `sprite` plus
+  `name-expr` in place of the `image` input, as on `stamp`.
 
 ### Changed
 

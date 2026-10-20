@@ -136,15 +136,19 @@ Brush stroke along MVT polylines.
 
 ### `line-stamp`
 
-Repeat a sprite along each polyline, rotated to the line's tangent (MapLibre `line-pattern`). Points/polygons ignored. `width-px` scales the image height to the stroke width; `spacing-px` sets the advance (0 = the scaled image width, seamless).
+Repeat a sprite along each polyline, rotated to the line's tangent (MapLibre `line-pattern`). Points/polygons ignored. `width-px` scales the image height to the stroke width; `spacing-px` sets the advance (0 = the scaled image width, seamless). Provide either an `image` input (one pattern for every line) or, for a data-driven `line-pattern`, a `sprite` atlas ref plus a `name-expr` that names each feature's pattern.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
-| `image` | `@node` | yes | Reference to another node (`@name`). |
+| `image` | `@node` | no | Reference to another node (`@name`). |
+| `name-expr` | — | no | A MapLibre expression giving each feature's pattern icon name (MapLibre data-driven `line-pattern`), cropped per group from the `sprite` atlas. Used instead of an `image` input; a group whose name doesn't resolve to an icon in the sheet is not drawn. |
 | `opacity` | number (0…1) \| `$param` \| `@node` | no | — |
+| `opacity-expr` | — | no | A MapLibre number expression giving opacity, evaluated per feature group; overrides the constant `opacity`. A group whose expression doesn't resolve to a number falls back to `opacity`. |
 | `scale` | number (0…∞) \| `$param` \| `@node` | no | Extra uniform scale on top of the width fit. Default 1.0. |
 | `spacing-px` | number (0…∞) \| `$param` \| `@node` | no | Advance between stamps. 0 = the scaled image width (seamless tiling). |
+| `sprite` | string | no | Asset reference (`@name`) or literal path. |
+| `width-expr` | — | no | A MapLibre number expression (px, e.g. ["interpolate", ["linear"], ["zoom"], 10, 2, 16, 8]) giving the stroke width, evaluated per feature group with the tile's zoom; overrides the constant `width-px`. A group whose expression doesn't resolve to a number falls back to `width-px`. |
 | `width-px` | number (0…∞) \| `$param` \| `@node` | no | Stroke width; the image height is fit to it. 0 = native height. |
 
 ### `stamp`

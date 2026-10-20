@@ -3478,7 +3478,7 @@
             "type": "object"
           },
           {
-            "description": "Repeat a sprite along each polyline, rotated to the line's tangent (MapLibre `line-pattern`). Points/polygons ignored. `width-px` scales the image height to the stroke width; `spacing-px` sets the advance (0 = the scaled image width, seamless).",
+            "description": "Repeat a sprite along each polyline, rotated to the line's tangent (MapLibre `line-pattern`). Points/polygons ignored. `width-px` scales the image height to the stroke width; `spacing-px` sets the advance (0 = the scaled image width, seamless). Provide either an `image` input (one pattern for every line) or, for a data-driven `line-pattern`, a `sprite` atlas ref plus a `name-expr` that names each feature's pattern.",
             "properties": {
               "features": {
                 "description": "Reference to another node (`@name`).",
@@ -3489,6 +3489,9 @@
                 "description": "Reference to another node (`@name`).",
                 "pattern": "^@?[A-Za-z_][A-Za-z0-9_-]*$",
                 "type": "string"
+              },
+              "name-expr": {
+                "description": "A MapLibre expression giving each feature's pattern icon name (MapLibre data-driven `line-pattern`), cropped per group from the `sprite` atlas. Used instead of an `image` input; a group whose name doesn't resolve to an icon in the sheet is not drawn."
               },
               "op": {
                 "const": "line-stamp",
@@ -3507,6 +3510,9 @@
                     "type": "string"
                   }
                 ]
+              },
+              "opacity-expr": {
+                "description": "A MapLibre number expression giving opacity, evaluated per feature group; overrides the constant `opacity`. A group whose expression doesn't resolve to a number falls back to `opacity`."
               },
               "scale": {
                 "oneOf": [
@@ -3536,6 +3542,13 @@
                   }
                 ]
               },
+              "sprite": {
+                "description": "Asset reference (`@name`) or literal path.",
+                "type": "string"
+              },
+              "width-expr": {
+                "description": "A MapLibre number expression (px, e.g. [\"interpolate\", [\"linear\"], [\"zoom\"], 10, 2, 16, 8]) giving the stroke width, evaluated per feature group with the tile's zoom; overrides the constant `width-px`. A group whose expression doesn't resolve to a number falls back to `width-px`."
+              },
               "width-px": {
                 "oneOf": [
                   {
@@ -3553,8 +3566,7 @@
             },
             "required": [
               "op",
-              "features",
-              "image"
+              "features"
             ],
             "title": "op: line-stamp",
             "type": "object"
