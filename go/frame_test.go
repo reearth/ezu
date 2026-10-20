@@ -456,6 +456,76 @@ func TestRenderFrameHoldsTheRenderer(t *testing.T) {
 	}
 }
 
+// A sources callback that panics unwinds through the frame. A caller that
+// recovers gets the renderer back: not held by a frame that is no longer
+// running, with the panicking tile's binder stale, and drawing the same page
+// as before.
+func TestRenderFrameGivesTheRendererBackAfterAPanic(t *testing.T) {
+	ctx, renderer := open(t, stainedGlassStyle)
+	f, err := renderer.ComputeFrame(ctx, FrameRequest{
+		CenterLon: 139.812, CenterLat: 35.6216,
+		Scale: 40000, DPI: 200,
+		Width: 500, Height: 400,
+	}, AtZoom(14))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentBytes := readFile(t, "testdata/basemap-13-7277-3227.mvt")
+	parent, err := renderer.LoadSource(ctx, "basemap", parentBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Release(ctx)
+	sources := func(ctx context.Context, tile Tile, b *FrameBinder) (SourceSet, error) {
+		var set SourceSet
+		return set, set.Bind(parent, FromZoom(13))
+	}
+
+	var kept *FrameBinder
+	panicking := func(ctx context.Context, tile Tile, b *FrameBinder) (SourceSet, error) {
+		kept = b
+		panic("fetch blew up")
+	}
+	recovered := func(render func()) (got any) {
+		defer func() { got = recover() }()
+		render()
+		return nil
+	}
+	nodes := []FrameFeatureNode{{Node: "roads_f"}, {Node: "water_f", Key: []string{"kind"}}}
+	for name, render := range map[string]func(){
+		"RenderFrame": func() { renderer.RenderFrame(ctx, f, panicking, Render{}) },
+		"RenderFrameWithFeatures": func() {
+			renderer.RenderFrameWithFeatures(ctx, f, panicking, FrameFeatures{Nodes: nodes}, Render{})
+		},
+	} {
+		kept = nil
+		if got := recovered(render); got != "fetch blew up" {
+			t.Fatalf("%s: recovered %v, want the callback's panic", name, got)
+		}
+		if err := kept.BindSource(ctx, "basemap", parentBytes); !errors.Is(err, ErrStaleBinder) {
+			t.Errorf("%s: the panicking tile's binder gave %v, want ErrStaleBinder", name, err)
+		}
+		if err := renderer.SetGlyphBudget(ctx, 1<<20); err != nil {
+			t.Errorf("%s: after the panic SetGlyphBudget gave %v", name, err)
+		}
+		if err := renderer.ClearGlyphBudget(ctx); err != nil {
+			t.Errorf("%s: after the panic ClearGlyphBudget gave %v", name, err)
+		}
+		img, pages, err := renderer.RenderFrameWithFeatures(ctx, f, sources, FrameFeatures{Nodes: nodes}, Render{})
+		if err != nil {
+			t.Fatalf("%s: after the panic the next frame gave %v", name, err)
+		}
+		if sum := sha256.Sum256(img.Pix); hex.EncodeToString(sum[:]) != cornerFramePixels {
+			t.Errorf("%s: after the panic the page is not the CLI's", name)
+		}
+		for _, p := range pages {
+			if sum := sha256.Sum256(p.GeoJSON); hex.EncodeToString(sum[:]) != cornerFeatures[CoordsLonLat][p.Node] {
+				t.Errorf("%s: after the panic %s is not the CLI's file", name, p.Node)
+			}
+		}
+	}
+}
+
 func TestBlitTileCropsAtEveryEdge(t *testing.T) {
 	// A 4 × 4 tile whose bytes count up, placed so that only its centre
 	// 2 × 2 falls in a 2 × 2 image.

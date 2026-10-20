@@ -305,13 +305,21 @@ func (r *Renderer) RenderFrame(ctx context.Context, f Frame, sources func(ctx co
 	if !r.framing.CompareAndSwap(false, true) {
 		return nil, ErrFrameInProgress
 	}
+	defer r.endFrame()
 	img, err := r.renderFrameTiles(ctx, f, sources, opts, 0)
-	r.openTile.Store(0)
-	r.framing.Store(false)
 	if err != nil {
 		return nil, err
 	}
 	return img, nil
+}
+
+// endFrame gives the renderer back after a frame, however the frame ended.
+// It runs deferred so that a sources callback that panics, and a caller
+// that recovers, still find the renderer free rather than refusing
+// everything with [ErrFrameInProgress] for the rest of its life.
+func (r *Renderer) endFrame() {
+	r.openTile.Store(0)
+	r.framing.Store(false)
 }
 
 // frameRenderOptions checks opts against the frame and fixes what the frame
@@ -408,7 +416,7 @@ func (r *Renderer) RenderFrameWithFeatures(ctx context.Context, f Frame, sources
 	if !r.framing.CompareAndSwap(false, true) {
 		return nil, nil, ErrFrameInProgress
 	}
-	defer r.framing.Store(false)
+	defer r.endFrame()
 	id, err := r.call(ctx, func(ctx context.Context) (int64, error) {
 		ptr, err := r.writeBytes(ctx, reqJSON)
 		if err != nil {
@@ -420,16 +428,22 @@ func (r *Renderer) RenderFrameWithFeatures(ctx context.Context, f Frame, sources
 	if err != nil {
 		return nil, nil, err
 	}
+	// Until finish takes it, the gathering is dropped with the frame,
+	// however the frame ends — a sources callback that panics included; a
+	// renderer that died took it along.
+	finished := false
+	defer func() {
+		if !finished {
+			_, _ = r.call(ctx, func(ctx context.Context) (int64, error) {
+				return r.call1(ctx, "ezu_frame_features_free", uint64(r.handle), uint64(id))
+			})
+		}
+	}()
 	img, err := r.renderFrameTiles(ctx, f, sources, opts, uint32(id))
-	r.openTile.Store(0)
 	if err != nil {
-		// The gathering is dropped with the frame; a renderer that died
-		// took it along.
-		_, _ = r.call(ctx, func(ctx context.Context) (int64, error) {
-			return r.call1(ctx, "ezu_frame_features_free", uint64(r.handle), uint64(id))
-		})
 		return nil, nil, err
 	}
+	finished = true
 	_, reply, err := r.withSlots(ctx, func(slots uint32) (int64, error) {
 		return r.call1(ctx, "ezu_frame_features_finish", uint64(r.handle), uint64(id),
 			uint64(slots), uint64(slots+4))
@@ -517,10 +531,8 @@ func (r *Renderer) renderFrameTiles(ctx context.Context, f Frame, sources func(c
 		var set SourceSet
 		if sources != nil {
 			b := &FrameBinder{r: r, tile: r.issued.Add(1), tileScoped: tileScoped}
-			r.openTile.Store(b.tile)
 			var err error
-			set, err = sources(ctx, tile, b)
-			r.openTile.Store(0)
+			set, err = r.tileSources(ctx, sources, tile, b)
 			if err != nil {
 				return nil, fmt.Errorf("ezu: sources for tile %d/%d/%d: %w", tile.Z, tile.X, tile.Y, err)
 			}
@@ -548,6 +560,15 @@ func (r *Renderer) renderFrameTiles(ctx context.Context, f Frame, sources func(c
 		blitTile(img, px, t, int(dx), int(dy))
 	}
 	return img, nil
+}
+
+// tileSources runs one tile's sources with b open, and closes b however
+// sources returns, so a binder kept from a callback that panicked is as
+// stale as any other.
+func (r *Renderer) tileSources(ctx context.Context, sources func(ctx context.Context, tile Tile, b *FrameBinder) (SourceSet, error), tile Tile, b *FrameBinder) (SourceSet, error) {
+	r.openTile.Store(b.tile)
+	defer r.openTile.Store(0)
+	return sources(ctx, tile, b)
 }
 
 // renderGatheredTile is [Renderer.RenderTileWith] for one tile of a frame
