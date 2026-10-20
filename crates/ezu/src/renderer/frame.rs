@@ -13,8 +13,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use super::{
-    BindOptions, Error, ErrorKind, Frame, OutputFormat, RenderOptions, Renderer, SourceData,
-    SourceInfo, SourceSet, TileId,
+    BindOptions, Error, ErrorKind, Frame, FrameFeatureCollector, FrameFeatures, OutputFormat,
+    PageFeatures, RenderOptions, Renderer, SourceData, SourceInfo, SourceSet, TileId,
 };
 
 /// What [`Renderer::render_frame`] hands each tile's callback: loading
@@ -166,7 +166,44 @@ impl Renderer {
     pub fn render_frame<E>(
         &mut self,
         frame: &Frame,
+        opts: RenderOptions,
+        sources: impl FnMut(&mut FrameBinder<'_>, TileId) -> Result<SourceSet, E>,
+    ) -> Result<Vec<u8>, RenderFrameError<E>> {
+        self.render_frame_tiles(frame, opts, None, sources)
+    }
+
+    /// [`render_frame`](Self::render_frame), also handing back what the
+    /// features nodes `features` names held over the whole page: one
+    /// [`PageFeatures`] per entry, in the order given, whose
+    /// [`to_geojson`](PageFeatures::to_geojson) is the file
+    /// `ezu frame --features` writes for the same style and data.
+    ///
+    /// The values are the ones each tile's render computed on its way to
+    /// the pixels, so this costs no second evaluation, and the page is the
+    /// one `render_frame` returns. How a node's features over many tiles
+    /// become one page — which are kept, how a key collapses copies, the
+    /// order — is [`FrameFeatureCollector::finish`]'s.
+    ///
+    /// A name that is not a node of the style, or names one that produces
+    /// something other than features, and a key that names no property,
+    /// fail with [`ErrorKind::InvalidStyle`] before anything renders.
+    pub fn render_frame_with_features<E>(
+        &mut self,
+        frame: &Frame,
+        opts: RenderOptions,
+        features: &FrameFeatures,
+        sources: impl FnMut(&mut FrameBinder<'_>, TileId) -> Result<SourceSet, E>,
+    ) -> Result<(Vec<u8>, Vec<PageFeatures>), RenderFrameError<E>> {
+        let mut collector = self.frame_features(frame, features)?;
+        let page = self.render_frame_tiles(frame, opts, Some(&mut collector), sources)?;
+        Ok((page, collector.finish()))
+    }
+
+    fn render_frame_tiles<E>(
+        &mut self,
+        frame: &Frame,
         mut opts: RenderOptions,
+        mut collector: Option<&mut FrameFeatureCollector>,
         mut sources: impl FnMut(&mut FrameBinder<'_>, TileId) -> Result<SourceSet, E>,
     ) -> Result<Vec<u8>, RenderFrameError<E>> {
         let invalid = |msg: String| Error::new(ErrorKind::InvalidStyle, msg);
@@ -192,7 +229,15 @@ impl Renderer {
                 let tile = TileId::new(frame.zoom, x, y);
                 let set = sources(&mut FrameBinder { renderer: self }, tile)
                     .map_err(|error| RenderFrameError::Bind { tile, error })?;
-                let px = self.render_tile_with(frame.zoom, x, y, &set, opts.clone());
+                let px = match collector.as_deref_mut() {
+                    None => self.render_tile_with(frame.zoom, x, y, &set, opts.clone()),
+                    Some(c) => self
+                        .render_tile_with_features(frame.zoom, x, y, &set, opts.clone(), &c.nodes())
+                        .map(|(px, values)| {
+                            c.add(tile, &values);
+                            px
+                        }),
+                };
                 self.trim_glyphs();
                 let px = px?;
                 if px.len() != t * t * 4 {
@@ -316,6 +361,83 @@ mod tests {
 
         // The renderer's own tile size is untouched.
         assert_eq!(r.render_tile_size(), 512);
+    }
+
+    /// The page features of a frame are the page and the features its
+    /// tiles' renders computed, assembled as a collector fed by hand
+    /// assembles them.
+    #[test]
+    fn a_frame_hands_back_its_page_features() {
+        use crate::renderer::{FeatureCoords, FrameFeatureNode};
+        let mut r = Renderer::new(STAINED_GLASS).expect("builds");
+        let f = corner(&r);
+        let parent = r.load_source("basemap", BASEMAP_Z13).expect("loads");
+        let set = |_: &mut FrameBinder<'_>, _: TileId| {
+            let mut set = SourceSet::new();
+            set.bind(&parent, &overzoomed())?;
+            Ok::<_, Error>(set)
+        };
+        let req = FrameFeatures {
+            nodes: vec![
+                FrameFeatureNode::new("roads_f"),
+                FrameFeatureNode::keyed("water_f", ["kind"]),
+            ],
+            coords: FeatureCoords::Px,
+        };
+        let plain = r
+            .render_frame(&f, RenderOptions::default(), set)
+            .expect("renders");
+        let (page, features) = r
+            .render_frame_with_features(&f, RenderOptions::default(), &req, set)
+            .expect("renders");
+        assert!(page == plain, "the page is render_frame's");
+        assert_eq!(
+            features.iter().map(PageFeatures::node).collect::<Vec<_>>(),
+            ["roads_f", "water_f"]
+        );
+        assert!(!features[0].is_empty());
+
+        let mut by_hand = r.frame_features(&f, &req).expect("a collector");
+        let opts = RenderOptions {
+            format: OutputFormat::Rgba,
+            tile_size: Some(f.tile_size),
+            ..RenderOptions::default()
+        };
+        // Bottom row first: the order tiles are added in does not matter.
+        for y in f.tiles_y.clone().rev() {
+            for x in f.tiles_x.clone() {
+                let mut set = SourceSet::new();
+                set.bind(&parent, &overzoomed()).expect("binds");
+                let (_, values) = r
+                    .render_tile_with_features(f.zoom, x, y, &set, opts.clone(), &by_hand.nodes())
+                    .expect("renders");
+                by_hand.add(TileId::new(f.zoom, x, y), &values);
+            }
+        }
+        let want: Vec<String> = by_hand.finish().iter().map(|p| p.to_geojson()).collect();
+        let got: Vec<String> = features.iter().map(|p| p.to_geojson()).collect();
+        assert_eq!(got, want);
+
+        for bad in [
+            FrameFeatureNode::new("nope"),
+            FrameFeatureNode::new("out"),
+            FrameFeatureNode::keyed("roads_f", Vec::<String>::new()),
+        ] {
+            let req = FrameFeatures {
+                nodes: vec![bad],
+                coords: FeatureCoords::LonLat,
+            };
+            let e = r
+                .render_frame_with_features(&f, RenderOptions::default(), &req, |_, _| {
+                    panic!("nothing renders")
+                })
+                .map(|_| ())
+                .unwrap_err();
+            assert!(
+                matches!(&e, RenderFrameError::<Error>::Render(e) if e.kind() == ErrorKind::InvalidStyle),
+                "{e}"
+            );
+        }
     }
 
     #[test]

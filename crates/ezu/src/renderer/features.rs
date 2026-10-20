@@ -66,7 +66,7 @@ impl NodeFeatures {
                 out.push(',');
             }
             out.push_str(r#"{"type":"Feature","geometry":"#);
-            out.push_str(&geometry(group));
+            out.push_str(&geometry(group, &tile_position));
             out.push_str(r#","properties":"#);
             let props: serde_json::Map<String, serde_json::Value> = group
                 .properties
@@ -134,7 +134,7 @@ fn downcast(any: &OpaqueValue) -> Option<Arc<FilteredFeatures>> {
 /// A property value as JSON. A whole number is written without a fraction,
 /// so a feature id reads `12`, not `12.0`; kinds JSON has no form for
 /// (colours, formatted text) are written as their text.
-fn property_json(v: &maplibre_expr::Value) -> serde_json::Value {
+pub(super) fn property_json(v: &maplibre_expr::Value) -> serde_json::Value {
     use maplibre_expr::Value;
     use serde_json::Value as J;
     match v {
@@ -165,16 +165,21 @@ fn number(n: f64) -> serde_json::Value {
     }
 }
 
-/// `g`'s geometry as GeoJSON text; a group mixing kinds becomes a
-/// GeometryCollection, one with none `null`.
-fn geometry(g: &FeatureGroup) -> String {
+/// `g`'s geometry as GeoJSON text, each position written by `position`; a
+/// group mixing kinds becomes a GeometryCollection, one with none `null`.
+///
+/// Tile units and page coordinates differ only in how a position is
+/// written, so both go through here: the structure, the closing and the
+/// winding of rings are the same.
+pub(super) fn geometry(g: &FeatureGroup, position: &impl Fn(&mut String, (i32, i32))) -> String {
+    let w = Writer { position };
     let mut parts = Vec::new();
     let mut s = String::new();
     match g.polygons.as_slice() {
         [] => {}
         [p] => {
             s.push_str(r#"{"type":"Polygon","coordinates":"#);
-            polygon(&mut s, p);
+            w.polygon(&mut s, p);
             s.push('}');
             parts.push(std::mem::take(&mut s));
         }
@@ -184,7 +189,7 @@ fn geometry(g: &FeatureGroup) -> String {
                 if i > 0 {
                     s.push(',');
                 }
-                polygon(&mut s, p);
+                w.polygon(&mut s, p);
             }
             s.push_str("]}");
             parts.push(std::mem::take(&mut s));
@@ -194,7 +199,7 @@ fn geometry(g: &FeatureGroup) -> String {
         [] => {}
         [l] => {
             s.push_str(r#"{"type":"LineString","coordinates":"#);
-            positions(&mut s, l.iter().copied());
+            w.positions(&mut s, l.iter().copied());
             s.push('}');
             parts.push(std::mem::take(&mut s));
         }
@@ -204,7 +209,7 @@ fn geometry(g: &FeatureGroup) -> String {
                 if i > 0 {
                     s.push(',');
                 }
-                positions(&mut s, l.iter().copied());
+                w.positions(&mut s, l.iter().copied());
             }
             s.push_str("]}");
             parts.push(std::mem::take(&mut s));
@@ -214,13 +219,13 @@ fn geometry(g: &FeatureGroup) -> String {
         [] => {}
         [p] => {
             s.push_str(r#"{"type":"Point","coordinates":"#);
-            position(&mut s, *p);
+            (w.position)(&mut s, *p);
             s.push('}');
             parts.push(std::mem::take(&mut s));
         }
         ps => {
             s.push_str(r#"{"type":"MultiPoint","coordinates":"#);
-            positions(&mut s, ps.iter().copied());
+            w.positions(&mut s, ps.iter().copied());
             s.push('}');
             parts.push(std::mem::take(&mut s));
         }
@@ -235,48 +240,56 @@ fn geometry(g: &FeatureGroup) -> String {
     }
 }
 
-fn position(out: &mut String, (x, y): (i32, i32)) {
+/// A position in tile units, as written.
+pub(super) fn tile_position(out: &mut String, (x, y): (i32, i32)) {
     let _ = write!(out, "[{x},{y}]");
 }
 
-fn positions(out: &mut String, cs: impl IntoIterator<Item = (i32, i32)>) {
-    out.push('[');
-    for (i, c) in cs.into_iter().enumerate() {
-        if i > 0 {
-            out.push(',');
+struct Writer<'a, P> {
+    position: &'a P,
+}
+
+impl<P: Fn(&mut String, (i32, i32))> Writer<'_, P> {
+    fn positions(&self, out: &mut String, cs: impl IntoIterator<Item = (i32, i32)>) {
+        out.push('[');
+        for (i, c) in cs.into_iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            (self.position)(out, c);
         }
-        position(out, c);
+        out.push(']');
     }
-    out.push(']');
-}
 
-/// A ring closed and wound as RFC 7946 asks — exterior anticlockwise, holes
-/// clockwise, as seen on a north-up map — whatever order the node emitted
-/// it in.
-fn ring(out: &mut String, ring: &[(i32, i32)], exterior: bool) {
-    let mut pts = ring.to_vec();
-    if pts.len() > 1 && pts.first() != pts.last() {
-        pts.push(pts[0]);
+    /// A ring closed and wound as RFC 7946 asks — exterior anticlockwise,
+    /// holes clockwise, as seen on a north-up map — whatever order the
+    /// node emitted it in. The winding is taken in tile units, which every
+    /// written form is an orientation-keeping map of.
+    fn ring(&self, out: &mut String, ring: &[(i32, i32)], exterior: bool) {
+        let mut pts = ring.to_vec();
+        if pts.len() > 1 && pts.first() != pts.last() {
+            pts.push(pts[0]);
+        }
+        // Shoelace in y-down units: positive is clockwise on screen.
+        let area: i128 = pts
+            .windows(2)
+            .map(|w| w[0].0 as i128 * w[1].1 as i128 - w[1].0 as i128 * w[0].1 as i128)
+            .sum();
+        if (area > 0) == exterior {
+            pts.reverse();
+        }
+        self.positions(out, pts);
     }
-    // Shoelace in y-down units: positive is clockwise on screen.
-    let area: i128 = pts
-        .windows(2)
-        .map(|w| w[0].0 as i128 * w[1].1 as i128 - w[1].0 as i128 * w[0].1 as i128)
-        .sum();
-    if (area > 0) == exterior {
-        pts.reverse();
-    }
-    positions(out, pts);
-}
 
-fn polygon(out: &mut String, p: &ezu_features::Polygon) {
-    out.push('[');
-    ring(out, &p.exterior, true);
-    for hole in &p.holes {
-        out.push(',');
-        ring(out, hole, false);
+    fn polygon(&self, out: &mut String, p: &ezu_features::Polygon) {
+        out.push('[');
+        self.ring(out, &p.exterior, true);
+        for hole in &p.holes {
+            out.push(',');
+            self.ring(out, hole, false);
+        }
+        out.push(']');
     }
-    out.push(']');
 }
 
 #[cfg(test)]

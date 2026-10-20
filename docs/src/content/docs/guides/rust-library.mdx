@@ -160,6 +160,29 @@ let (png, features) = r.render_tile_with_features(z, x, y, &set, RenderOptions::
 let geojson = features[0].to_geojson(); // x right, y down, 0..extent across the tile
 ```
 
+`render_frame_with_features` does the same over a page: it gathers each node's
+features from every tile, drops the ones wholly off the page, and, given a key —
+properties that identify a feature, `label-id` and `part` for `label-boxes` —
+keeps one copy of a feature that several tiles saw. Each `PageFeatures` writes
+the file `ezu frame --features` writes, in longitude and latitude or page
+pixels, byte for byte:
+
+```rust
+use ezu::renderer::{FeatureCoords, FrameFeatureNode, FrameFeatures};
+
+let req = FrameFeatures {
+    nodes: vec![FrameFeatureNode::keyed("boxes", ["label-id", "part"])],
+    coords: FeatureCoords::LonLat,
+};
+let (page, features) = r.render_frame_with_features(&f, RenderOptions::default(), &req, sources)?;
+std::fs::write("labels.geojson", features[0].to_geojson())?;
+```
+
+A host that renders a frame's tiles its own way — several at once over one
+`&Renderer` — gets the same assembly from `frame_features`: a collector it
+feeds each tile's `render_tile_with_features` result into, in any order, and
+finishes into the same pages.
+
 ## Serial or parallel
 
 `Evaluator::render` walks the topological order sequentially.

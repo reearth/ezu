@@ -87,6 +87,7 @@ mod assets;
 mod error;
 mod features;
 mod frame;
+mod frame_features;
 mod options;
 mod source_set;
 mod sources;
@@ -94,6 +95,9 @@ mod sources;
 pub use error::{Error, ErrorKind};
 pub use features::{FeatureGroup, FilteredFeatures, NodeFeatures};
 pub use frame::{FrameBinder, RenderFrameError};
+pub use frame_features::{
+    FeatureCoords, FrameFeatureCollector, FrameFeatureNode, FrameFeatures, PageFeatures,
+};
 pub use options::{BindOptions, OutputFormat, RenderOptions};
 pub use source_set::{SourceData, SourceSet};
 pub use sources::{SourceInfo, SourceKind};
@@ -814,21 +818,10 @@ impl Renderer {
         opts: RenderOptions,
         nodes: &[&str],
     ) -> Result<(Vec<u8>, Vec<NodeFeatures>), Error> {
-        let mut ixs = Vec::with_capacity(nodes.len());
-        for &node in nodes {
-            let ix = self
-                .graph
-                .index_of(node)
-                .ok_or_else(|| err(InvalidStyle, format!("the style has no node `{node}`")))?;
-            let kind = self.graph.output_kind(ix);
-            if kind != ezu_graph::PortKind::Features {
-                return Err(err(
-                    InvalidStyle,
-                    format!("node `{node}` produces {kind}, not features"),
-                ));
-            }
-            ixs.push(ix);
-        }
+        let ixs = nodes
+            .iter()
+            .map(|node| self.features_node(node))
+            .collect::<Result<Vec<_>, _>>()?;
         let capture = features::Capture::new(ixs);
         let image = self.render_from(z, x, y, set, opts, Some(&capture))?;
         let features = nodes
@@ -840,6 +833,44 @@ impl Renderer {
             })
             .collect();
         Ok((image, features))
+    }
+
+    /// The graph index of `node`, checked to be a node that produces
+    /// features.
+    fn features_node(&self, node: &str) -> Result<ezu_graph::NodeIx, Error> {
+        let ix = self
+            .graph
+            .index_of(node)
+            .ok_or_else(|| err(InvalidStyle, format!("the style has no node `{node}`")))?;
+        let kind = self.graph.output_kind(ix);
+        if kind != ezu_graph::PortKind::Features {
+            return Err(err(
+                InvalidStyle,
+                format!("node `{node}` produces {kind}, not features"),
+            ));
+        }
+        Ok(ix)
+    }
+
+    /// A collector for the page features `req` asks of `frame`, for a host
+    /// that renders the frame's tiles itself; see
+    /// [`FrameFeatureCollector`].
+    /// [`render_frame_with_features`](Self::render_frame_with_features)
+    /// makes and drives one of its own.
+    ///
+    /// Fails with [`ErrorKind::InvalidStyle`] when a name is not a node of
+    /// the style, names one that produces something other than features,
+    /// or a key names no property — checked here, before anything renders.
+    pub fn frame_features(
+        &self,
+        frame: &Frame,
+        req: &FrameFeatures,
+    ) -> Result<FrameFeatureCollector, Error> {
+        for entry in &req.nodes {
+            self.features_node(&entry.node)?;
+        }
+        frame_features::check_request(req)?;
+        Ok(FrameFeatureCollector::new(frame, req))
     }
 
     /// [`render_tile_with`](Self::render_tile_with), showing every node's
