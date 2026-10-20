@@ -393,9 +393,17 @@ pub struct FeatureSource {
     tiles: TileSource,
     min_zoom: Option<u8>,
     max_zoom: Option<u8>,
+    /// The declared `on-missing`; `None` keeps the caller's
+    /// `--overzoom-levels` walk.
+    on_missing: Option<ezu::style::OnMissing>,
 }
 
 impl FeatureSource {
+    /// The declared `on-missing`, when the style gives one.
+    pub fn on_missing(&self) -> Option<ezu::style::OnMissing> {
+        self.on_missing
+    }
+
     /// The deepest zoom the source serves: its declared `max-zoom`, else
     /// what the source itself claims (TileJSON `maxzoom`, PMTiles header).
     pub fn max_zoom(&self) -> Option<u8> {
@@ -422,21 +430,26 @@ impl FeatureSource {
     }
 
     /// Fetch what draws `tile`: its [`native_tile`](Self::native_tile),
-    /// walking up `max_parent_levels` more on a miss. Returns the bytes
-    /// with the tile they came from, for the caller to clip into `tile`.
+    /// walking further up on a miss as the source's `on-missing` says —
+    /// not at all for `empty` and `error`, up to its `min-zoom` for
+    /// `upsample`, and `max_parent_levels` when it says nothing. Returns
+    /// the bytes with the tile they came from, for the caller to clip
+    /// into `tile`.
     pub async fn fetch(
         &self,
         tile: TileId,
         max_parent_levels: u8,
     ) -> Result<Option<(Bytes, TileId)>, SourceError> {
-        match self.native_tile(tile) {
-            Some(native) => {
-                self.tiles
-                    .fetch_with_fallback(native, max_parent_levels)
-                    .await
-            }
-            None => Ok(None),
-        }
+        use ezu::style::OnMissing;
+        let Some(native) = self.native_tile(tile) else {
+            return Ok(None);
+        };
+        let levels = match self.on_missing {
+            None => max_parent_levels,
+            Some(OnMissing::Empty | OnMissing::Error) => 0,
+            Some(OnMissing::Upsample) => native.z.saturating_sub(self.min_zoom.unwrap_or(0)),
+        };
+        self.tiles.fetch_with_fallback(native, levels).await
     }
 
     /// Fetch the neighbours of `tile` at `offsets` for cross-tile
@@ -507,6 +520,7 @@ impl FeatureSources {
                     .map_err(|e| format!("source `{name}`: {e}"))?,
                 min_zoom: decl.min_zoom(),
                 max_zoom: decl.max_zoom(),
+                on_missing: decl.on_missing(),
             });
         }
         if let Some((spec, origin)) = cli_override {
@@ -883,6 +897,48 @@ mod tests {
                 .await
                 .is_err()
         );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[tokio::test]
+    async fn a_vector_source_walks_up_on_a_miss_as_its_on_missing_says() {
+        let root = std::env::temp_dir().join(format!("ezu-vector-missing-{}", std::process::id()));
+        let d = root.join("bg/10/2");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("4.pbf"), "bg 10").unwrap();
+        let url = format!("{}/bg/{{z}}/{{x}}/{{y}}.pbf", root.display()).replace('\\', "/");
+        let fetch = |extra: &'static str, levels: u8| {
+            let url = url.clone();
+            let root = root.clone();
+            async move {
+                let doc = ezu::style::Document::from_json(&format!(
+                    r##"{{
+                      "name": "one",
+                      "sources": {{ "bg": {{ "type": "mvt", "url": "{url}" {extra} }} }},
+                      "nodes": {{ "out": {{ "op": "solid", "color": "#000000" }} }},
+                      "output": "@out"
+                    }}"##
+                ))
+                .unwrap();
+                let sources = FeatureSources::open(&doc, None, &root).await.unwrap();
+                let bg = sources.get(Some("bg")).unwrap();
+                bg.fetch(TileId::new(16, 128, 256), levels)
+                    .await
+                    .unwrap()
+                    .map(|(_, from)| from)
+            }
+        };
+        let z10 = Some(TileId::new(10, 2, 4));
+        // Unset, the caller's walk decides, as it always has.
+        assert_eq!(fetch("", 6).await, z10);
+        assert_eq!(fetch("", 4).await, None);
+        // `upsample` walks as far as it takes, `empty` and `error` not at all.
+        assert_eq!(fetch(r#", "on-missing": "upsample""#, 0).await, z10);
+        assert_eq!(fetch(r#", "on-missing": "empty""#, 6).await, None);
+        assert_eq!(fetch(r#", "on-missing": "error""#, 6).await, None);
+        // ... and `upsample` stops at the source's floor.
+        let floored = r#", "on-missing": "upsample", "min-zoom": 11"#;
+        assert_eq!(fetch(floored, 0).await, None);
         std::fs::remove_dir_all(&root).ok();
     }
 

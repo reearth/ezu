@@ -183,6 +183,12 @@ mean is spelled out in
   Below it the CLI fetches nothing for the source, the renderer leaves
   whatever is bound for it unread, and `on-missing: error` does not fire;
   `on-missing: upsample` walks up no further than it.
+- `mvt` and `pmtiles` sources take `on-missing`, as `dem` and `raster` do:
+  `empty` draws no features for a missing tile, `upsample` reprojects the
+  nearest ancestor that exists (no higher than `min-zoom`), and `error`
+  fails the render — in the CLI, `ezu serve` answers 404, and the Rust, Go
+  and JS renderers fail a tile with nothing bound for the source. Left out,
+  nothing changes: the CLI still looks `--overzoom-levels` parents up.
 
 ### Changed
 

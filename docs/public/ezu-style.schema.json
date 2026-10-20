@@ -6963,6 +6963,14 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "on-missing": {
+                "description": "404 within zoom range: no features, reproject the nearest ancestor that exists (up to `min-zoom`), or fail the tile. Omitted, the host decides; the CLI looks up `--overzoom-levels` parents (4 by default).",
+                "enum": [
+                  "empty",
+                  "upsample",
+                  "error"
+                ]
+              },
               "type": {
                 "enum": [
                   "mvt",

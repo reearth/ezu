@@ -206,13 +206,30 @@ impl TileRenderer {
         let vector = futures::future::try_join_all(self.vector.iter().map(|s| async move {
             let offsets = self.renderer.requested_neighbor_offsets(&s.name)?;
             let mut got = Vec::new();
-            if let Some((bytes, from)) = s.fetch(tile, self.overzoom_levels).await? {
-                got.push(Fetched {
+            match s.fetch(tile, self.overzoom_levels).await? {
+                Some((bytes, from)) => got.push(Fetched {
                     source: Arc::clone(&s.name),
                     from,
                     bytes,
                     coord: (0, 0),
-                });
+                }),
+                // A tile the source should have and does not, where the
+                // style asked for that to fail; below its `min-zoom` there
+                // is nothing to miss. Layers bind as `<source>.<layer>`.
+                None if s.on_missing() == Some(OnMissing::Error)
+                    && s.native_tile(tile).is_some()
+                    && self.requested.iter().any(|r| {
+                        r.strip_prefix(&*s.name)
+                            .is_some_and(|rest| rest.starts_with('.'))
+                    }) =>
+                {
+                    return Err(MissingTile {
+                        source_name: Arc::clone(&s.name),
+                        tile,
+                    }
+                    .into());
+                }
+                None => {}
             }
             if !offsets.is_empty() {
                 for (coord, (bytes, from)) in s

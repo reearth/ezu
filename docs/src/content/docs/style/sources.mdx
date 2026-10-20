@@ -70,6 +70,12 @@ MapLibre source's `minzoom` / `maxzoom` do: below `min-zoom` the source binds
 nothing and its layers draw nothing; past `max-zoom` each tile is cut from the
 covering ancestor at `max-zoom`, its geometry reprojected into the requested tile.
 
+`on-missing` says what a tile missing within that range means, as for `raster`
+and `dem`: `empty` draws no features, `upsample` reprojects the nearest ancestor
+that exists (no higher than `min-zoom`), and `error` fails the render. Left out,
+the host decides, which is how vector sources have always behaved: the CLI looks
+up to `--overzoom-levels` parents up (4 by default).
+
 **`pmtiles`** — a PMTiles archive (local path or `http(s)://`). Layers bind exactly
 as `mvt`, and it takes the same `min-zoom` / `max-zoom`.
 

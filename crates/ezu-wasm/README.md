@@ -554,8 +554,9 @@ nodes short-circuit.
 `dem` and `raster` behave the same by default: nothing bound means a
 zero-elevation field or no imagery, and the tile renders flat. When that
 is worth failing over instead, the style says so per source with
-`on-missing: error`, and `renderTile` throws `UnknownSource` for a tile
-with nothing bound rather than handing back a blank. `on-missing:
+`on-missing: error` (on `mvt` and `pmtiles` sources too), and
+`renderTile` throws `UnknownSource` for a tile with nothing bound rather
+than handing back a blank. `on-missing:
 upsample` describes the parent walk, which in a wasm host *is* the
 `sourceZoom` binding above — ezu never fetches, so it cannot walk on its
 own.

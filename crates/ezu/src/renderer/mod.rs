@@ -1056,14 +1056,22 @@ impl Renderer {
         // *neighbour* still degrades — the stitch edge-clamps, same as
         // the native host.
         for (name, decl) in &self.doc.sources {
-            let on_missing = match decl {
-                SourceDecl::Dem(s) => s.on_missing,
-                SourceDecl::Raster(s) => s.on_missing,
-                _ => continue,
-            };
+            if decl.on_missing() != Some(OnMissing::Error) {
+                continue;
+            }
             // Below the source's `min-zoom` there is no tile to miss.
-            let below_floor = decl.min_zoom().is_some_and(|mz| z < mz);
-            if on_missing != OnMissing::Error || below_floor || !requested.contains(name.as_str()) {
+            if decl.min_zoom().is_some_and(|mz| z < mz) {
+                continue;
+            }
+            // A vector source's layers are read as `<source>.<layer>`.
+            let read = match decl {
+                SourceDecl::Mvt(_) | SourceDecl::Pmtiles(_) => requested.iter().any(|r| {
+                    r.strip_prefix(name.as_str())
+                        .is_some_and(|rest| rest.starts_with('.'))
+                }),
+                _ => requested.contains(name.as_str()),
+            };
+            if !read {
                 continue;
             }
             let has_centre = set.get(name).is_some_and(|m| m.contains_key(&(0, 0)));
@@ -1821,6 +1829,27 @@ mod tests {
             "the floor itself is in range"
         );
         assert_eq!(ink(r#", "min-zoom": 15"#), 0);
+    }
+
+    #[test]
+    fn a_vector_source_with_on_missing_error_fails_a_tile_left_unbound() {
+        let render = |extra: &str, bind: bool| {
+            let mut r = Renderer::new(&vector_style(extra)).expect("builds");
+            if bind {
+                r.bind_source("basemap", BASEMAP_Z14.to_vec(), &BindOptions::default())
+                    .expect("binds");
+            }
+            r.render_tile(14, 14554, 6454, RenderOptions::default())
+        };
+        let error = r#", "on-missing": "error""#;
+        assert!(render(error, true).is_ok());
+        let e = render(error, false).expect_err("nothing bound");
+        assert!(e.to_string().contains("on-missing: error"), "{e}");
+        // Without it a missing tile is simply empty, as it always was.
+        assert!(render("", false).is_ok());
+        assert!(render(r#", "on-missing": "empty""#, false).is_ok());
+        // Below the floor there is no tile to miss.
+        assert!(render(r#", "on-missing": "error", "min-zoom": 15"#, false).is_ok());
     }
 
     #[test]

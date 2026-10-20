@@ -579,13 +579,15 @@ pub enum ParamKind {
 #[serde(rename_all = "kebab-case")]
 pub enum OnMissing {
     /// Treat the tile as empty: transparent pixels for `raster`,
-    /// zero elevation for `dem`. Missing *neighbour* tiles always
-    /// degrade this way (the stitch edge-clamps).
+    /// zero elevation for `dem`, no features for `mvt` / `pmtiles`.
+    /// Missing *neighbour* tiles always degrade this way (the stitch
+    /// edge-clamps).
     #[default]
     Empty,
     /// Walk up parent zooms until a tile exists and upsample the
-    /// covered sub-region; falls back to `empty` when nothing is
-    /// found all the way to z0.
+    /// covered sub-region (for vector tiles, reproject its geometry);
+    /// falls back to `empty` when nothing is found all the way up to
+    /// the source's `min-zoom`, or z0.
     Upsample,
     /// Fail the whole tile render. Hosts surface it (the tile server
     /// returns HTTP 404 for the rendered tile).
@@ -665,6 +667,19 @@ impl SourceDecl {
             SourceDecl::Pmtiles(s) => s.max_zoom,
             SourceDecl::Dem(s) => s.max_zoom,
             SourceDecl::Raster(s) => s.max_zoom,
+            _ => None,
+        }
+    }
+
+    /// What a tile pyramid does about a tile missing within its zoom
+    /// range. `None` for a vector source that leaves it to the host, and
+    /// for every source that is not a tile pyramid.
+    pub fn on_missing(&self) -> Option<OnMissing> {
+        match self {
+            SourceDecl::Mvt(s) => s.on_missing,
+            SourceDecl::Pmtiles(s) => s.on_missing,
+            SourceDecl::Dem(s) => Some(s.on_missing),
+            SourceDecl::Raster(s) => Some(s.on_missing),
             _ => None,
         }
     }
@@ -863,6 +878,12 @@ pub struct MvtSource {
     /// the covering ancestor (MapLibre's source `maxzoom`).
     #[serde(default)]
     pub max_zoom: Option<u8>,
+    /// What a missing tile within the zoom range means — no features,
+    /// the covering ancestor's reprojected, or a failed render. `None`
+    /// leaves it to the host, which is what vector sources have always
+    /// done: the CLI looks `--overzoom-levels` parents up (4 by default).
+    #[serde(default)]
+    pub on_missing: Option<OnMissing>,
 }
 
 /// PMTiles archive source — local path or `http(s)://` URL.
@@ -880,6 +901,9 @@ pub struct PmtilesSource {
     /// Deepest zoom the source serves, as [`MvtSource::max_zoom`].
     #[serde(default)]
     pub max_zoom: Option<u8>,
+    /// What a missing tile means, as [`MvtSource::on_missing`].
+    #[serde(default)]
+    pub on_missing: Option<OnMissing>,
 }
 
 /// Raster-DEM source. Tiles encode elevation in the RGB channels using

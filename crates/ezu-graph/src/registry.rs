@@ -490,7 +490,8 @@ impl NodeRegistry {
                                     "url": { "type": "string" },
                                     "attribution": { "type": "string", "description": "Explicit attribution; inherits upstream TileJSON / PMTiles metadata when absent." },
                                     "min-zoom": { "type": "integer", "minimum": 0, "description": "Shallowest zoom the source serves. Below it nothing is bound, so its layers draw nothing (MapLibre's source `minzoom`)." },
-                                    "max-zoom": { "type": "integer", "minimum": 0, "description": "Deepest zoom the source serves. Past it, tiles are overzoomed from the covering ancestor (MapLibre's source `maxzoom`)." }
+                                    "max-zoom": { "type": "integer", "minimum": 0, "description": "Deepest zoom the source serves. Past it, tiles are overzoomed from the covering ancestor (MapLibre's source `maxzoom`)." },
+                                    "on-missing": { "enum": ["empty", "upsample", "error"], "description": "404 within zoom range: no features, reproject the nearest ancestor that exists (up to `min-zoom`), or fail the tile. Omitted, the host decides; the CLI looks up `--overzoom-levels` parents (4 by default)." }
                                 }
                             },
                             dem_source,
