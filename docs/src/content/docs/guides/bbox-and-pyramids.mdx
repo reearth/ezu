@@ -21,7 +21,8 @@ ezu bbox --style watercolor.json \
 
 The box is `min-lng,min-lat,max-lng,max-lat`. The result is tile-aligned: it
 covers *at least* the box, snapped outward to tile edges. This is the command for
-a figure in a slide deck.
+a figure in a slide deck. `--concurrency` sets how many of its tiles render at
+once (default: your core count); the image is the same either way.
 
 ## A page at a print scale
 

@@ -289,6 +289,8 @@ mean is spelled out in
   (`@1x` to `@4x`, PNG or WebP) with the tile at that multiple of its tile
   size, the URL a MapLibre client asks a hi-DPI tile by. `frame` takes no
   `--tile-size`: its tile size is what meets the scale.
+- `ezu bbox` takes `--concurrency`, as `frame` and `tiles` do, for how many
+  of the mosaic's tiles render at once. It still defaults to the core count.
 
 ### Changed
 

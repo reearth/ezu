@@ -372,6 +372,10 @@ struct BboxCmd {
     /// Output format. Defaults to whatever `--out`'s extension implies.
     #[arg(long, value_enum)]
     format: Option<OutputFormat>,
+    /// Number of tiles rendered in parallel. Defaults to the number of
+    /// logical CPU cores.
+    #[arg(long)]
+    concurrency: Option<usize>,
 }
 
 #[derive(Args, Debug)]
@@ -1376,6 +1380,10 @@ async fn render_rgba(tiles: &TileRenderer, tile: CoreTileId) -> Result<Vec<u8>, 
 }
 
 async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
+    let concurrency = args.concurrency.unwrap_or_else(default_concurrency);
+    if concurrency == 0 {
+        return Err("--concurrency must be ≥ 1".into());
+    }
     let opened = open(&args.common, args.size).await?;
     let tiles = &opened.tiles;
     let format = args
@@ -1404,7 +1412,7 @@ async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
             .map(|tile| async move {
                 Ok::<_, render::BoxError>((tile, render_rgba(tiles, tile).await?))
             })
-            .buffer_unordered(default_concurrency());
+            .buffer_unordered(concurrency);
     while let Some(done) = rendered.next().await {
         let (tile, rgba) = done.map_err(|e| e.to_string())?;
         let dx = (tile.x - x_range.start) as i64 * t as i64;
@@ -2030,6 +2038,7 @@ mod tests {
             zoom: frame.zoom,
             out: bbox_out.clone(),
             format: None,
+            concurrency: None,
         })
         .await
         .unwrap();
@@ -2117,6 +2126,7 @@ mod tests {
             zoom: 16,
             out,
             format: None,
+            concurrency: None,
         };
         let (m1, m2) = (dir.join("m1.png"), dir.join("m2.png"));
         run_bbox(bbox(&big, m1.clone(), None)).await.unwrap();
@@ -2145,6 +2155,39 @@ mod tests {
             .unwrap();
         let at = |root: &Path| std::fs::read(root.join("16/58199/25811.png")).unwrap();
         assert_eq!(at(&p1), at(&p2));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A mosaic is the same image however many tiles render at once, and
+    /// `--concurrency 0` is refused before anything renders.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn bbox_concurrency_changes_nothing_but_the_speed() {
+        let dir = scratch("bbox-concurrency");
+        let path = dir.join("style.json");
+        std::fs::write(&path, style(64)).unwrap();
+        let bbox = |out: PathBuf, concurrency| BboxCmd {
+            common: common(&path),
+            size: TileSizeArgs::default(),
+            // Three by three tiles at z17, around the polygon.
+            bbox: BBox {
+                min_lng: 139.697,
+                min_lat: 35.657,
+                max_lng: 139.704,
+                max_lat: 35.664,
+            },
+            zoom: 17,
+            out,
+            format: None,
+            concurrency,
+        };
+        let (one, many) = (dir.join("one.png"), dir.join("many.png"));
+        run_bbox(bbox(one.clone(), Some(1))).await.unwrap();
+        run_bbox(bbox(many.clone(), Some(8))).await.unwrap();
+        let image = Pixmap::load_png(&one).unwrap();
+        assert!(image.width() >= 3 * 64 && image.height() >= 3 * 64);
+        assert_eq!(std::fs::read(&one).unwrap(), std::fs::read(&many).unwrap());
+        let refused = run_bbox(bbox(dir.join("none.png"), Some(0))).await;
+        assert!(refused.unwrap_err().to_string().contains("--concurrency"));
         std::fs::remove_dir_all(&dir).ok();
     }
 
