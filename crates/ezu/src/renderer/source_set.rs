@@ -19,8 +19,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use ezu_features::FeatureLayer;
 use ezu_paint::host::{DemTile, RasterTile};
+use ezu_paint::render::SharedLayer;
 use ezu_style::DemEncoding;
 
 use super::{already_bound_otherwise, BindOptions, Error};
@@ -63,7 +63,9 @@ impl SourceData {
 
 #[derive(Clone)]
 pub(super) enum Payload {
-    Mvt(Arc<[Arc<FeatureLayer>]>),
+    /// Kept as `SharedLayer`s, not bare layers, so every render the tile is
+    /// bound to shares one conversion of each layer's features per zoom.
+    Mvt(Arc<[Arc<SharedLayer>]>),
     /// Elevations, with the encoding they were decoded with: the same
     /// bytes read as another encoding are different heights.
     Dem(Arc<DemTile>, DemEncoding),

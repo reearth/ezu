@@ -148,6 +148,11 @@ mean is spelled out in
   node's `anchor-expr`, so each label takes the anchor MapLibre gives it. It
   used to warn and fall back to `center`. `text-variable-anchor` still takes
   precedence, and a line-placed layer still warns and uses the default.
+- A vector tile loaded with `load_source` and bound into several source sets
+  prepares its features for filtering once per zoom, not once per render that
+  reads it, so a style that stitches layers across tile borders no longer
+  repeats that work for each of a tile's neighbours. A block of 4×4 stitched
+  tiles renders about 30% faster on four threads.
 
 ### Deprecated
 

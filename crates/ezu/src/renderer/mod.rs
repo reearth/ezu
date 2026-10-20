@@ -504,7 +504,12 @@ impl Renderer {
         let payload = match decl {
             SourceDecl::Mvt(_) | SourceDecl::Pmtiles(_) => {
                 let tile = ezu_features::mvt::decode(bytes).map_err(|e| err(MvtDecode, e))?;
-                Payload::Mvt(tile.layers.into_iter().map(Arc::new).collect())
+                Payload::Mvt(
+                    tile.layers
+                        .into_iter()
+                        .map(|l| Arc::new(ezu_paint::render::SharedLayer::new(l)))
+                        .collect(),
+                )
             }
             SourceDecl::Dem(spec) => {
                 // The tile id only names the tile in an error message, and
@@ -800,7 +805,7 @@ impl Renderer {
         let mut needed: BTreeMap<&str, BTreeSet<u32>> = BTreeMap::new();
 
         // Every bound vector tile, centre and neighbours alike.
-        let decoded: Vec<(&str, &[Arc<ezu_features::FeatureLayer>])> = set
+        let decoded: Vec<(&str, &[Arc<ezu_paint::render::SharedLayer>])> = set
             .entries
             .iter()
             .flat_map(|(name, slots)| {
@@ -832,7 +837,7 @@ impl Renderer {
                     if source.is_some_and(|s| s != bound_source) {
                         continue;
                     }
-                    for l in layers {
+                    for l in layers.iter().map(|l| &l.layer) {
                         if layer.is_some_and(|want| want != l.name) {
                             continue;
                         }
@@ -993,7 +998,7 @@ impl Renderer {
                                     .iter()
                                     .map(|l| {
                                         ezu_features::mvt::clip_layer_to_descendant(
-                                            l, ancestor, oz.target,
+                                            &l.layer, ancestor, oz.target,
                                         )
                                         .map(Arc::new)
                                     })
@@ -1002,21 +1007,21 @@ impl Renderer {
                                 tile_loader.bind_mvt_layers(name, dx, dy, clipped, shift);
                             }
                             // The same layers every render that binds this
-                            // data shares, uncopied.
+                            // data shares, uncopied, along with their
+                            // converted features.
                             None => {
-                                tile_loader.bind_mvt_layers(
+                                tile_loader.bind_shared_layers(
                                     name,
                                     dx,
                                     dy,
                                     layers.iter().cloned(),
-                                    0,
                                 );
                             }
                         }
                         // Overzoom yields the same layer names, so the
                         // source's own layers name every binding made.
                         for layer in layers.iter() {
-                            let base = format!("{name}.{}", layer.name);
+                            let base = format!("{name}.{}", layer.layer.name);
                             tile_loader.mix_content_hash(
                                 &ezu_graph::neighbor_binding(&base, dx, dy),
                                 placed.data.content,

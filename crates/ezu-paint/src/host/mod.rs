@@ -44,6 +44,7 @@ use hokusai::Brush;
 use tiny_skia::{Pixmap, PixmapPaint, Transform};
 use xxhash_rust::xxh3::Xxh3;
 
+use crate::render::SharedLayer;
 use crate::PaintError;
 
 /// In-memory asset bank for `brush-file` and `image` references.
@@ -836,22 +837,21 @@ impl<'a> TileLoader<'a> {
     /// `"<source>.<layer>"`; the style's `features` node references
     /// the same `(source, layer)` pair.
     pub fn bind_features(&mut self, name: impl Into<String>, layer: FeatureLayer) -> &mut Self {
-        self.bind_layer(name.into(), Arc::new(layer), 0)
+        self.bind_layer(name.into(), Arc::new(SharedLayer::new(layer)))
     }
 
-    /// [`bind_features`](Self::bind_features) for a layer scaled up
-    /// `overzoom` levels from the tile it was encoded for (see
-    /// [`DecodedTile::overzoom`]).
-    fn bind_layer(&mut self, name: String, layer: Arc<FeatureLayer>, overzoom: u8) -> &mut Self {
+    /// [`bind_features`](Self::bind_features) for a layer that may be bound
+    /// elsewhere too, scaled up [`SharedLayer::overzoom`] levels from the
+    /// tile it was encoded for (see [`DecodedTile::overzoom`]).
+    fn bind_layer(&mut self, name: String, layer: Arc<SharedLayer>) -> &mut Self {
         let mut hash = self.binding_hash(&name);
-        if overzoom > 0 {
+        if layer.overzoom > 0 {
             let mut h = Xxh3::new();
             h.update(&hash.to_le_bytes());
-            h.update(&[overzoom]);
+            h.update(&[layer.overzoom]);
             hash = h.digest128();
         }
-        let opaque: OpaqueValue = Arc::new(crate::render::SharedLayer::from_shared(layer, overzoom))
-            as Arc<dyn Any + Send + Sync>;
+        let opaque: OpaqueValue = layer as Arc<dyn Any + Send + Sync>;
         self.bindings.insert(
             name,
             Binding {
@@ -925,9 +925,31 @@ impl<'a> TileLoader<'a> {
         layers: impl IntoIterator<Item = Arc<FeatureLayer>>,
         overzoom: u8,
     ) -> &mut Self {
+        self.bind_shared_layers(
+            source,
+            dx,
+            dy,
+            layers
+                .into_iter()
+                .map(|layer| Arc::new(SharedLayer::from_shared(layer, overzoom))),
+        )
+    }
+
+    /// [`bind_mvt_layers`](Self::bind_mvt_layers) for layers the host keeps
+    /// as [`SharedLayer`]s. Every render a `SharedLayer` is bound to then
+    /// shares its conversion of the features for filtering and paint, not
+    /// just the decoded features: a layer bound as the centre of one tile
+    /// and a neighbour of eight more is converted once, not nine times.
+    pub fn bind_shared_layers(
+        &mut self,
+        source: &str,
+        dx: i32,
+        dy: i32,
+        layers: impl IntoIterator<Item = Arc<SharedLayer>>,
+    ) -> &mut Self {
         for layer in layers {
-            let base = format!("{source}.{}", layer.name);
-            self.bind_layer(ezu_graph::neighbor_binding(&base, dx, dy), layer, overzoom);
+            let base = format!("{source}.{}", layer.layer.name);
+            self.bind_layer(ezu_graph::neighbor_binding(&base, dx, dy), layer);
         }
         self
     }

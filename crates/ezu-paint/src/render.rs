@@ -2,7 +2,7 @@
 //! nodes (`features`).
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use ezu_features::{Feature, FeatureLayer, Value};
 use maplibre_expr::{EvaluationContext, Expr, Feature as ExprFeature, Value as ExprValue};
@@ -19,16 +19,34 @@ use crate::nodes::common::FeatureGroup;
 /// [`OnceLock`] — instead of once per referencing node. A Protomaps basemap
 /// aims dozens of `features` nodes at the single `roads` layer (each with its
 /// own filter), so sharing collapses that many redundant conversions to one.
+///
+/// A host that binds one decoded layer to several renders — as the centre
+/// of one tile and a neighbour of the next — can bind the same
+/// `Arc<SharedLayer>` to each (see [`TileLoader::bind_shared_layers`]), and
+/// the conversion is then shared across those renders too. It depends on
+/// the zoom of the tile being drawn, so it is kept per zoom.
+///
+/// [`TileLoader::bind_shared_layers`]: crate::host::TileLoader::bind_shared_layers
 pub struct SharedLayer {
     /// Behind an `Arc` so a host can bind one decoded layer to several
-    /// tiles' renders without copying it. The conversion below is not
-    /// shared that way: it depends on the zoom of the tile being drawn.
+    /// tiles' renders without copying it.
     pub layer: Arc<FeatureLayer>,
     /// How many zoom levels the layer's geometry was scaled up from the
     /// tile it was encoded for (see [`ezu_features::mvt::DecodedTile::overzoom`]).
     pub overzoom: u8,
-    prepared: OnceLock<PreparedLayer>,
+    /// One conversion per zoom the layer has been drawn at. The lock is
+    /// held only to find or add a zoom's slot; the conversion itself runs
+    /// in that slot's `OnceLock`, so renders at other zooms are not held
+    /// up by it, and two renders at one zoom build it once.
+    prepared: Mutex<Vec<(u8, Arc<OnceLock<PreparedLayer>>)>>,
 }
+
+/// How many zooms a [`SharedLayer`] keeps a conversion for. A layer is
+/// drawn at the zoom it was loaded for, and an overzoomed copy is a layer
+/// of its own, so one slot is the norm; a host that binds one layer to
+/// tiles of several zooms gets a few, and past that each render converts
+/// for itself rather than the layer growing without bound.
+const PREPARED_ZOOMS: usize = 4;
 
 impl SharedLayer {
     pub fn new(layer: FeatureLayer) -> SharedLayer {
@@ -46,16 +64,34 @@ impl SharedLayer {
         SharedLayer {
             layer,
             overzoom,
-            prepared: OnceLock::new(),
+            prepared: Mutex::new(Vec::new()),
         }
     }
 
-    /// The per-feature converted view, built on first use at tile zoom `z`.
-    /// A `SharedLayer` is bound per tile, so `z` is constant across the calls
-    /// that reach one instance.
-    fn prepared(&self, z: u8) -> &PreparedLayer {
-        self.prepared
-            .get_or_init(|| PreparedLayer::build(&self.layer, z))
+    /// Run `f` over the per-feature converted view at tile zoom `z`,
+    /// building it on the first use at that zoom.
+    fn with_prepared<R>(&self, z: u8, f: impl FnOnce(&PreparedLayer) -> R) -> R {
+        let slot = {
+            // A panic while the lock was held cannot leave the list
+            // half-written, so a poisoned lock is still safe to use.
+            let mut slots = self
+                .prepared
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match slots.iter().find(|(sz, _)| *sz == z) {
+                Some((_, slot)) => Some(slot.clone()),
+                None if slots.len() < PREPARED_ZOOMS => {
+                    let slot = Arc::new(OnceLock::new());
+                    slots.push((z, slot.clone()));
+                    Some(slot)
+                }
+                None => None,
+            }
+        };
+        match slot {
+            Some(slot) => f(slot.get_or_init(|| PreparedLayer::build(&self.layer, z))),
+            None => f(&PreparedLayer::build(&self.layer, z)),
+        }
     }
 }
 
@@ -99,17 +135,29 @@ impl PreparedLayer {
 /// feature, preserving its properties alongside its own geometry. This is the
 /// only representation of a `Features` payload; consumers that want the flat
 /// geometry view walk the groups. Each feature's properties are converted into
-/// the `maplibre-expr` value form once per tile (see [`SharedLayer`]) and
-/// shared via `Arc`, so both the per-feature filter here and downstream
-/// data-driven paint pay no re-conversion cost. Features that contribute no
-/// geometry at all are skipped (they'd paint nothing).
+/// the `maplibre-expr` value form once per layer and zoom (see
+/// [`SharedLayer`]) and shared via `Arc`, so both the per-feature filter here
+/// and downstream data-driven paint pay no re-conversion cost. Features that
+/// contribute no geometry at all are skipped (they'd paint nothing).
 pub fn collect_groups(
     shared: &SharedLayer,
     filter_expr: Option<&Expr>,
     min_zoom_field: &Option<String>,
     z: u8,
 ) -> Vec<FeatureGroup> {
-    let prepared = shared.prepared(z);
+    shared.with_prepared(z, |prepared| {
+        collect_prepared(shared, prepared, filter_expr, min_zoom_field, z)
+    })
+}
+
+/// [`collect_groups`] over the layer's conversion at zoom `z`.
+fn collect_prepared(
+    shared: &SharedLayer,
+    prepared: &PreparedLayer,
+    filter_expr: Option<&Expr>,
+    min_zoom_field: &Option<String>,
+    z: u8,
+) -> Vec<FeatureGroup> {
     let mut out = Vec::new();
     for (f, pf) in shared.layer.features.iter().zip(&prepared.features) {
         // A MapLibre filter expression (full expression language: `any`,
@@ -268,6 +316,24 @@ mod tests {
         };
         let shared = SharedLayer::new(layer);
         !collect_groups(&shared, Some(e), &None, 14).is_empty()
+    }
+
+    #[test]
+    fn one_layer_filters_at_each_zoom_it_is_drawn_at() {
+        // One layer bound to renders at more zooms than it keeps a
+        // conversion for: every zoom still filters with its own value.
+        let shared = SharedLayer::new(ezu_features::FeatureLayer {
+            name: "t".into(),
+            extent: 4096,
+            features: vec![feat(&[])],
+        });
+        let e = expr(serde_json::json!([">=", ["zoom"], 10]));
+        for _ in 0..2 {
+            for z in 6..14u8 {
+                let drawn = !collect_groups(&shared, Some(&e), &None, z).is_empty();
+                assert_eq!(drawn, z >= 10, "zoom {z}");
+            }
+        }
     }
 
     #[test]

@@ -32,6 +32,27 @@ const VECTOR: &str = r##"{
     "output": "@out"
 }"##;
 
+/// [`VECTOR`] with every layer stitched across tile borders, so each render
+/// reads its eight neighbours' layers as well as its own.
+const VECTOR_STITCHED: &str = r##"{
+    "name": "bench",
+    "tile-size": 256,
+    "sources": {
+        "basemap": { "type": "mvt", "url": "https://x/{z}/{x}/{y}.mvt" }
+    },
+    "nodes": {
+        "bg": { "op": "solid", "color": "#ffffff" },
+        "earth": { "op": "features", "source": "basemap", "layer": "earth", "stitch": "pieces" },
+        "water": { "op": "features", "source": "basemap", "layer": "water", "stitch": "pieces" },
+        "buildings": { "op": "features", "source": "basemap", "layer": "buildings", "stitch": "pieces" },
+        "land": { "op": "fill-solid", "features": "@earth", "fill": "#e8e4d8" },
+        "sea": { "op": "fill-solid", "features": "@water", "fill": "#9bc8e5" },
+        "house": { "op": "fill-solid", "features": "@buildings", "fill": "#b0a898" },
+        "out": { "op": "stack", "layers": ["@bg", "@land", "@sea", "@house"] }
+    },
+    "output": "@out"
+}"##;
+
 const N: u32 = 4;
 const ROUNDS: usize = 3;
 
@@ -143,6 +164,15 @@ fn one_load(style: &str, source: &str, bytes: &[u8]) -> f64 {
 fn a_block_of_tiles_with_their_neighbourhoods() {
     for (label, style, source, bytes, z, x0, y0) in [
         ("mvt", VECTOR, "basemap", BASEMAP_Z14, 14, 14553, 6453),
+        (
+            "mvt stitched",
+            VECTOR_STITCHED,
+            "basemap",
+            BASEMAP_Z14,
+            14,
+            14553,
+            6453,
+        ),
         ("dem", HILLSHADE, "terrain", TERRAIN_Z10, 10, 908, 401),
     ] {
         let decode = one_load(style, source, bytes);
