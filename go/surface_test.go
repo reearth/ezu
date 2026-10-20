@@ -377,3 +377,27 @@ func TestRenderParams(t *testing.T) {
 		t.Errorf("an undeclared param gave %v, want InvalidStyle", err)
 	}
 }
+
+// Warnings are the current style's: stained-glass reads pane-px when its
+// graph is built, which it does not say, and a style that raises none
+// answers an empty slice.
+func TestWarningsAreTheCurrentStyles(t *testing.T) {
+	ctx, renderer := open(t, stainedGlassStyle)
+	warnings, err := renderer.Warnings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, w := range warnings {
+		found = found || strings.Contains(w, "pane-px")
+	}
+	if !found {
+		t.Errorf("stained-glass warned %q, nothing about pane-px", warnings)
+	}
+	if _, err := renderer.SetStyle(ctx, []byte(`{"name":"plain","nodes":{"out":{"op":"solid","color":"#000000"}},"output":"@out"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if warnings, err := renderer.Warnings(ctx); err != nil || warnings == nil || len(warnings) != 0 {
+		t.Errorf("a plain style warned %#v (%v)", warnings, err)
+	}
+}

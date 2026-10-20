@@ -683,6 +683,15 @@ impl Renderer {
         Ok(out)
     }
 
+    /// What building the current style's graph warned about: each names a
+    /// node that works but relies on something the style does not say out
+    /// loud. They are also logged when the style is built; this is for
+    /// reporting or checking them on your own terms. Follows `setStyle`.
+    #[wasm_bindgen(getter)]
+    pub fn warnings(&self) -> Vec<String> {
+        self.inner.borrow().warnings().to_vec()
+    }
+
     /// Names of every source with at least one pending binding.
     /// Order matches the style's `sources` declaration order.
     #[wasm_bindgen(js_name = boundSources)]

@@ -299,6 +299,30 @@ impl Renderer {
         Frame::compute(req).map_err(|e| err(InvalidStyle, e))
     }
 
+    /// What building the current style's graph warned about: each names a
+    /// node that works but relies on something the style does not say out
+    /// loud. They are also logged when the style is built, as `tracing`
+    /// warnings; this is for a host that reports or checks them itself —
+    /// failing a build on any, say.
+    pub fn warnings(&self) -> &[String] {
+        self.graph.warnings()
+    }
+
+    /// The current style's built graph: the one every render evaluates.
+    ///
+    /// Only in Rust. The graph is the evaluator's in-memory structure, with
+    /// a node object per op, and has no form across the wasm boundary the
+    /// JS and Go packages sit behind; what a host there needs from it is
+    /// answered by calls of its own — [`warnings`](Self::warnings),
+    /// [`requested_neighbor_offsets`](Self::requested_neighbor_offsets),
+    /// [`render_tile_with_features`](Self::render_tile_with_features). A
+    /// Rust host can read it instead of building the style a second time:
+    /// the canvas margin it needs, the node indices
+    /// [`render_tile_observed`](Self::render_tile_observed) reports.
+    pub fn graph(&self) -> &Graph {
+        &self.graph
+    }
+
     /// JSON Schema for the current style's `params` — types, defaults,
     /// ranges, descriptions.
     pub fn params_schema(&self) -> serde_json::Value {
@@ -884,8 +908,7 @@ impl Renderer {
     /// packages sit behind. What a host outside a debugger wants from a
     /// node, its features, crosses that boundary through
     /// [`render_tile_with_features`](Self::render_tile_with_features).
-    /// Node indices are the graph's, which building the same style with
-    /// [`ezu_graph::build_graph`] and the default registry reproduces.
+    /// Node indices are those of [`graph`](Self::graph).
     pub fn render_tile_observed(
         &self,
         z: u8,
@@ -1560,6 +1583,28 @@ fn collect_codepoints(s: &str, out: &mut BTreeSet<u32>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The warnings are the graph's, and follow the style.
+    #[test]
+    fn the_build_warnings_are_the_current_styles() {
+        let mut r = Renderer::new(include_str!("../../examples/styles/stained-glass.json"))
+            .expect("builds");
+        // `pane-px` is read when the graph is built, which the style does
+        // not say.
+        assert!(
+            r.warnings().iter().any(|w| w.contains("pane-px")),
+            "{:?}",
+            r.warnings()
+        );
+        assert_eq!(r.warnings(), r.graph().warnings());
+        r.set_style(
+            r##"{ "name": "plain", "nodes": { "out": { "op": "solid", "color": "#000000" } },
+                  "output": "@out" }"##,
+        )
+        .expect("builds");
+        assert!(r.warnings().is_empty());
+        assert_eq!(r.graph().len(), 1);
+    }
 
     #[test]
     fn text_expressions_yield_the_properties_they_read() {

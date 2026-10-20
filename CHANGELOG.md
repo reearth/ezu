@@ -59,8 +59,12 @@ mean is spelled out in
   `renderFrameWithFeatures`) does the same for a print page: each node's
   features gathered over the page's tiles, copies that neighbouring tiles
   both saw collapsed by an optional key, in lon/lat or page pixels, written
-  as the same bytes `ezu frame --features` writes. The wasm module's ABI
-  version is now 6.
+  as the same bytes `ezu frame --features` writes.
+- The renderer answers what building the style's graph warned about, in
+  Rust, Go and JS: `warnings()` (`Warnings`, `warnings`), for a host that
+  reports them or refuses a style with any, as `ezu check --strict` does. A
+  Rust host can also read the built graph itself with `graph()` rather than
+  building the style a second time. The wasm module's ABI version is now 7.
 - The renderer's cache size can be set, in Rust, Go and JS:
   `set_cache_budget` (`SetCacheBudget` and `ClearCacheBudget`,
   `setCacheBudget` and `clearCacheBudget`) lets the render cache hold more

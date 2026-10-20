@@ -109,6 +109,7 @@ class Renderer {
 
   setStyle(styleJson: string): number;            // → new node count
   readonly tileSize: number;
+  readonly warnings: string[];  // what building the style's graph warned about
 
   // Bind tile bytes under a `sources.<name>` entry from the style.
   // The renderer dispatches on the source's declared `type`:

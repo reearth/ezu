@@ -57,7 +57,7 @@ use ezu::renderer::{Error, ErrorKind, FrameFeatureCollector, Renderer, SourceDat
 /// code's meaning, or an export appearing or leaving. The Go package
 /// checks it at instantiation, which is what catches a committed module
 /// that was not rebuilt.
-pub const ABI_VERSION: u32 = 6;
+pub const ABI_VERSION: u32 = 7;
 
 /// Every function this shell exports, in one list, so a test can compare
 /// it with what the committed module actually carries. The linker's own
@@ -84,6 +84,7 @@ pub const EXPORTS: &[&str] = &[
     "ezu_params_schema",
     "ezu_attribution",
     "ezu_legend",
+    "ezu_warnings",
     "ezu_bind_source",
     "ezu_clear_sources",
     "ezu_sources",
@@ -624,6 +625,19 @@ pub extern "C" fn ezu_sources(handle: u32, out_ptr: u32, out_len: u32) -> i64 {
             })
             .collect();
         let json = serde_json::to_string(&declared).unwrap_or_else(|_| "[]".into());
+        unsafe { reply_json(out_ptr, out_len, json) }
+    })
+}
+
+/// What building the current style's graph warned about, as a JSON array
+/// of strings: each names a node that works but relies on something the
+/// style does not say out loud. They are also logged when the style is
+/// built ([`ezu_drain_logs`]); this is for a host that reports or checks
+/// them on its own terms.
+#[unsafe(no_mangle)]
+pub extern "C" fn ezu_warnings(handle: u32, out_ptr: u32, out_len: u32) -> i64 {
+    with_renderer(handle, |r| {
+        let json = serde_json::to_string(r.warnings()).unwrap_or_else(|_| "[]".into());
         unsafe { reply_json(out_ptr, out_len, json) }
     })
 }

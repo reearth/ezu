@@ -366,6 +366,11 @@ wants the lines itself — to attach them to a response, or to assert on them in
 test. Use one or the other: a runtime with a logger has already emptied the
 buffer by the time you ask.
 
+What the style itself warned about when its graph was built — a node that works
+but relies on something the style does not say — is logged once, as it builds,
+and stays answerable afterwards: `Warnings` returns it, for a deploy that
+refuses a style with any, as `ezu check --strict` does.
+
 ## One renderer, one goroutine
 
 **A `Renderer` is one wasm instance, and a wasm instance is single-threaded.** It

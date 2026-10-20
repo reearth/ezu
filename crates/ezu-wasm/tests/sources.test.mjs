@@ -156,3 +156,12 @@ test("the cache budget is the host's and outlives a new style", () => {
   r.clearCacheBudget();
   assert.equal(r.memoryUsage().cacheBudget, fallback);
 });
+
+test("warnings are the current style's graph's", () => {
+  const r = new Renderer(read("crates/ezu/examples/styles/stained-glass.json").toString());
+  // stained-glass reads `pane-px` when its graph is built, which it does not say.
+  assert.ok(r.warnings.some((w) => w.includes("pane-px")), JSON.stringify(r.warnings));
+  r.setStyle(stitched);
+  assert.deepEqual(r.warnings, []);
+  r.free();
+});

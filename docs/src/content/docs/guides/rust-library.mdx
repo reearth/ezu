@@ -93,6 +93,12 @@ let png = r.render_tile(13, 7276, 3225, RenderOptions::default())?;
 r.clear_sources();
 ```
 
+The renderer builds the style's graph once and keeps it: `warnings()` lists what
+the build warned about, and `graph()` hands over the graph itself — what it
+reads, the canvas margin it needs — so a host that reports on the style does not
+build it a second time. The graph is Rust-only; the JS and Go packages have
+`warnings` and their own calls for the rest.
+
 Built with the `http` feature, a native host can also leave the style's own
 assets to the renderer. `resolve_assets(base_dir)` reads or fetches every brush,
 image, sprite and font the style declares, `file:` paths against `base_dir`, and

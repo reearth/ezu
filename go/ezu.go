@@ -93,7 +93,7 @@ var wasmModule []byte
 // The ABI this package was written against. ezu_abi_version must agree or
 // the embedded module is stale — which is the cost of committing a built
 // artefact, and the check that keeps the cost cheap.
-const abiVersion = 6
+const abiVersion = 7
 
 // The host module the wasm side imports its out-of-memory report from. See
 // oomHandler and crates/ezu-cabi/src/oom.rs.
@@ -1074,6 +1074,25 @@ func (r *Renderer) Sources(ctx context.Context) ([]Source, error) {
 	}
 	if err := json.Unmarshal(payload, &out); err != nil {
 		return nil, fmt.Errorf("ezu: reading the declared sources: %w", err)
+	}
+	return out, nil
+}
+
+// Warnings is what building the current style's graph warned about: each
+// names a node that works but relies on something the style does not say out
+// loud. They also reach the logger when the style is built; this is for
+// reporting or checking them on your own terms — failing a deploy on any,
+// say. A style that raised none answers an empty slice.
+func (r *Renderer) Warnings(ctx context.Context) ([]string, error) {
+	out := []string{}
+	_, payload, err := r.withSlots(ctx, func(slots uint32) (int64, error) {
+		return r.call1(ctx, "ezu_warnings", uint64(r.handle), uint64(slots), uint64(slots+4))
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(payload, &out); err != nil {
+		return nil, fmt.Errorf("ezu: reading the warnings: %w", err)
 	}
 	return out, nil
 }

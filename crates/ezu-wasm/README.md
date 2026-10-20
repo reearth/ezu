@@ -34,6 +34,10 @@ class Renderer {
   // from this rather than parsing the style.
   readonly paramsSchema: object;
 
+  // What building the style's graph warned about (also logged as it
+  // builds). Follows `setStyle`.
+  readonly warnings: string[];
+
   // The style's declared `legend`, or undefined. Pass a zoom to keep
   // only the entries that apply there. Entries name the node that draws
   // each symbol, so render that node for the swatch.
