@@ -162,9 +162,15 @@ test("the cache budget is the host's and outlives a new style", () => {
 });
 
 test("warnings are the current style's graph's", () => {
-  const r = new Renderer(read("crates/ezu/examples/styles/stained-glass.json").toString());
-  // stained-glass reads `pane-px` when its graph is built, which it does not say.
-  assert.ok(r.warnings.some((w) => w.includes("pane-px")), JSON.stringify(r.warnings));
+  // A raster node that names no source falls back to the only one declared,
+  // and says so when the graph is built.
+  const r = new Renderer(JSON.stringify({
+    name: "unnamed",
+    sources: { sky: { type: "raster", url: "https://example.invalid/{z}/{x}/{y}.png" } },
+    nodes: { out: { op: "raster" } },
+    output: "@out",
+  }));
+  assert.ok(r.warnings.some((w) => w.includes("`source` is not set")), JSON.stringify(r.warnings));
   r.setStyle(stitched);
   assert.deepEqual(r.warnings, []);
   r.free();

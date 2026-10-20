@@ -378,21 +378,27 @@ func TestRenderParams(t *testing.T) {
 	}
 }
 
-// Warnings are the current style's: stained-glass reads pane-px when its
-// graph is built, which it does not say, and a style that raises none
-// answers an empty slice.
+// Warnings are the current style's: a raster node that names no source
+// falls back to the only one declared and says so when the graph is built,
+// and a style that raises none answers an empty slice.
 func TestWarningsAreTheCurrentStyles(t *testing.T) {
 	ctx, renderer := open(t, stainedGlassStyle)
+	unnamed := `{"name":"unnamed",
+		"sources":{"sky":{"type":"raster","url":"https://example.invalid/{z}/{x}/{y}.png"}},
+		"nodes":{"out":{"op":"raster"}},"output":"@out"}`
+	if _, err := renderer.SetStyle(ctx, []byte(unnamed)); err != nil {
+		t.Fatal(err)
+	}
 	warnings, err := renderer.Warnings(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	found := false
 	for _, w := range warnings {
-		found = found || strings.Contains(w, "pane-px")
+		found = found || strings.Contains(w, "`source` is not set")
 	}
 	if !found {
-		t.Errorf("stained-glass warned %q, nothing about pane-px", warnings)
+		t.Errorf("a raster node with no source warned %q, nothing about the fallback", warnings)
 	}
 	if _, err := renderer.SetStyle(ctx, []byte(`{"name":"plain","nodes":{"out":{"op":"solid","color":"#000000"}},"output":"@out"}`)); err != nil {
 		t.Fatal(err)
