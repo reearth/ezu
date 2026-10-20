@@ -24,14 +24,14 @@ Evaluate a MapLibre expression once per tile (the tile's zoom is in the context)
 
 ### `math`
 
-Arithmetic over scalar numbers. Operands accept literals, `$param` references, and `@node` scalar ports. Unary fns use `a`; binary `a b`; `clamp(a, b=lo, c=hi)`, `lerp(a, b, c=t)`.
+Arithmetic over scalar numbers. Operands accept literals, `$param` references, and `@node` scalar ports. Unary fns use `a`; binary `a b`; `clamp(a, b=lo, c=hi)`, `lerp(a, b, c=t)`, `smoothstep(a=edge0, b=edge1, c=x)`. `log` is the natural logarithm; angles are in radians; `atan2(a=y, b=x)`; `step(a=edge, b=x)` is 0 below the edge and 1 from it on; `fract` is `a - floor(a)`; `sign` is -1, 0 or 1.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `a` | number \| `$param` \| `@node` | yes | — |
 | `b` | number \| `$param` \| `@node` | no | — |
 | `c` | number \| `$param` \| `@node` | no | — |
-| `fn` | `abs` \| `neg` \| `floor` \| `ceil` \| `round` \| `sqrt` \| `add` \| `sub` \| `mul` \| `div` \| `mod` \| `min` \| `max` \| `pow` \| `clamp` \| `lerp` | yes | — |
+| `fn` | `abs` \| `neg` \| `floor` \| `ceil` \| `round` \| `fract` \| `sign` \| `sqrt` \| `exp` \| `log` \| `log2` \| `log10` \| `sin` \| `cos` \| `tan` \| `asin` \| `acos` \| `atan` \| `add` \| `sub` \| `mul` \| `div` \| `mod` \| `min` \| `max` \| `pow` \| `atan2` \| `step` \| `clamp` \| `lerp` \| `smoothstep` | yes | — |
 
 ### `zoom`
 

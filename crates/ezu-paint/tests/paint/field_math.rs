@@ -395,3 +395,82 @@ fn roughened_terrain_feeds_hillshade() {
     let flat = render_with_scalar_fields(&plain, 16, 1, TILE, &[("terrain", ramp)]);
     assert_ne!(shaded.pixels, flat.pixels);
 }
+
+#[test]
+fn transcendental_and_shaping_functions_apply_per_pixel() {
+    // x/2 - 1 runs from -1 to 3 across the field.
+    let p = || field(None, |x, _| x as f32 / 2.0 - 1.0);
+    type Unary = fn(f64) -> f64;
+    let unary: [(&str, Unary); 6] = [
+        ("exp", libm::exp),
+        ("sin", libm::sin),
+        ("cos", libm::cos),
+        ("atan", libm::atan),
+        ("fract", |a| a - a.floor()),
+        ("sign", |a| {
+            if a > 0.0 {
+                1.0
+            } else if a < 0.0 {
+                -1.0
+            } else {
+                0.0
+            }
+        }),
+    ];
+    for (name, f) in unary {
+        let out = run(
+            &format!(r#"{{ "op": "field-math", "fn": "{name}", "a": "@p" }}"#),
+            p(),
+            constant(0.0),
+        );
+        for ((x, _), v) in each(&out) {
+            let a = (x as f32 / 2.0 - 1.0) as f64;
+            assert_eq!(v, f(a) as f32, "{name}({a})");
+        }
+    }
+
+    // `atan2(a=y, b=x)` against a second field.
+    let out = run(
+        r#"{ "op": "field-math", "fn": "atan2", "a": "@p", "b": "@q" }"#,
+        p(),
+        constant(-1.0),
+    );
+    for ((x, _), v) in each(&out) {
+        let a = (x as f32 / 2.0 - 1.0) as f64;
+        assert_eq!(v, libm::atan2(a, -1.0) as f32);
+    }
+
+    // `smoothstep(a=edge0, b=edge1, c=x)` with the field as `c`.
+    let out = run(
+        r#"{ "op": "field-math", "fn": "smoothstep", "a": 0, "b": 2, "c": "@p" }"#,
+        p(),
+        constant(0.0),
+    );
+    for ((x, _), v) in each(&out) {
+        let t = ((x as f32 / 2.0 - 1.0) as f64 / 2.0).clamp(0.0, 1.0);
+        assert_eq!(v, (t * t * (3.0 - 2.0 * t)) as f32);
+    }
+}
+
+#[test]
+fn log_of_a_non_positive_is_missing() {
+    let out = run(
+        r#"{ "op": "field-math", "fn": "log", "a": "@p" }"#,
+        field(Some(-1.0), |x, _| x as f32 - 2.0),
+        constant(0.0),
+    );
+    for ((x, _), v) in each(&out) {
+        if x <= 2 {
+            // log(0) is -inf and log of a negative NaN: both missing.
+            assert_eq!(v, -1.0, "x = {x}");
+        } else {
+            assert_eq!(v, libm::log(x as f64 - 2.0) as f32);
+        }
+    }
+    let out = run(
+        r#"{ "op": "field-math", "fn": "log10", "a": "@p" }"#,
+        constant(100.0),
+        constant(0.0),
+    );
+    assert!(out.values.iter().all(|&v| v == 2.0));
+}

@@ -248,6 +248,10 @@ mean is spelled out in
   mode mixes the colours where both inputs are present, and the operator
   decides how much of each survives, as the spec combines them. `over`,
   `dest-out` and `erase` still work, and `source` names `copy`.
+- `math` and `field-math` take `exp`, `log` (natural), `log2`, `log10`,
+  `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sign`, `fract`,
+  `step` and `smoothstep`. Angles are in radians, and the results are the
+  same bytes on every host.
 
 ### Changed
 

@@ -249,14 +249,14 @@ Per-channel morphological min over a square kernel, on a raster, sprite or scala
 
 ### `field-math`
 
-Per-pixel arithmetic over scalar fields, with the same functions as `math`: unary fns use `a`; binary `a b`; `clamp(a, b=lo, c=hi)`, `lerp(a, b, c=t)`. Each operand is a field (`@node` outputting a ScalarField) or a number (literal, `$param`, or `@node` scalar port) applied to every pixel; at least one must be a field, and all fields must be the same size. Add a little noise to a DEM to roughen it, mix two fields by a third with `lerp`, or scale a field by a `$param`. A pixel is missing in the output where any field operand is missing (NaN or its nodata value), or where the result is not a finite number (`sqrt` of a negative, `div` by zero). The output keeps the nodata value and geographic scale of the first field operand, and writes missing pixels as that nodata, or NaN.
+Per-pixel arithmetic over scalar fields, with the same functions as `math`. Unary fns use `a`; binary `a b`; `clamp(a, b=lo, c=hi)`, `lerp(a, b, c=t)`, `smoothstep(a=edge0, b=edge1, c=x)`. `log` is the natural logarithm; angles are in radians; `atan2(a=y, b=x)`; `step(a=edge, b=x)` is 0 below the edge and 1 from it on; `fract` is `a - floor(a)`; `sign` is -1, 0 or 1. Each operand is a field (`@node` outputting a ScalarField) or a number (literal, `$param`, or `@node` scalar port) applied to every pixel; at least one must be a field, and all fields must be the same size. Add a little noise to a DEM to roughen it, mix two fields by a third with `lerp`, or scale a field by a `$param`. A pixel is missing in the output where any field operand is missing (NaN or its nodata value), or where the result is not a finite number (`sqrt` or `log` of a negative, `div` by zero). The output keeps the nodata value and geographic scale of the first field operand, and writes missing pixels as that nodata, or NaN.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `a` | number \| `$param` \| `@node` | yes | `$param` reference, or `@node` that outputs a ScalarField or a Scalar. |
 | `b` | number \| `$param` \| `@node` | no | `$param` reference, or `@node` that outputs a ScalarField or a Scalar. |
 | `c` | number \| `$param` \| `@node` | no | `$param` reference, or `@node` that outputs a ScalarField or a Scalar. |
-| `fn` | `abs` \| `neg` \| `floor` \| `ceil` \| `round` \| `sqrt` \| `add` \| `sub` \| `mul` \| `div` \| `mod` \| `min` \| `max` \| `pow` \| `clamp` \| `lerp` | yes | — |
+| `fn` | `abs` \| `neg` \| `floor` \| `ceil` \| `round` \| `fract` \| `sign` \| `sqrt` \| `exp` \| `log` \| `log2` \| `log10` \| `sin` \| `cos` \| `tan` \| `asin` \| `acos` \| `atan` \| `add` \| `sub` \| `mul` \| `div` \| `mod` \| `min` \| `max` \| `pow` \| `atan2` \| `step` \| `clamp` \| `lerp` \| `smoothstep` | yes | — |
 
 ### `flow-field`
 

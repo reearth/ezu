@@ -16,8 +16,8 @@
 //!
 //! Every field operand must be the same size. A pixel where any field
 //! operand is missing (NaN, or equal to that field's `nodata`) comes out
-//! missing, as does one whose result is not a finite number — `sqrt` of
-//! a negative, `div` or `mod` by zero, a `pow` that overflows. Where
+//! missing, as does one whose result is not a finite number — `sqrt` or
+//! `log` of a negative, `div` or `mod` by zero, a `pow` that overflows. Where
 //! `math` stops the render on such a result, a field just loses that
 //! pixel. The output takes its `nodata` and `geo_scale` from the first
 //! field operand in `a`, `b`, `c` order, and writes missing pixels as
@@ -250,7 +250,7 @@ impl NodeFactory for FieldMathFactory {
             ]
         });
         serde_json::json!({
-            "description": "Per-pixel arithmetic over scalar fields, with the same functions as `math`: unary fns use `a`; binary `a b`; `clamp(a, b=lo, c=hi)`, `lerp(a, b, c=t)`. Each operand is a field (`@node` outputting a ScalarField) or a number (literal, `$param`, or `@node` scalar port) applied to every pixel; at least one must be a field, and all fields must be the same size. Add a little noise to a DEM to roughen it, mix two fields by a third with `lerp`, or scale a field by a `$param`. A pixel is missing in the output where any field operand is missing (NaN or its nodata value), or where the result is not a finite number (`sqrt` of a negative, `div` by zero). The output keeps the nodata value and geographic scale of the first field operand, and writes missing pixels as that nodata, or NaN.",
+            "description": format!("Per-pixel arithmetic over scalar fields, with the same functions as `math`. {} Each operand is a field (`@node` outputting a ScalarField) or a number (literal, `$param`, or `@node` scalar port) applied to every pixel; at least one must be a field, and all fields must be the same size. Add a little noise to a DEM to roughen it, mix two fields by a third with `lerp`, or scale a field by a `$param`. A pixel is missing in the output where any field operand is missing (NaN or its nodata value), or where the result is not a finite number (`sqrt` or `log` of a negative, `div` by zero). The output keeps the nodata value and geographic scale of the first field operand, and writes missing pixels as that nodata, or NaN.", MathFn::OPERANDS_DOC),
             "properties": {
                 "fn": { "type": "string", "enum": MathFn::NAMES },
                 "a": operand,
