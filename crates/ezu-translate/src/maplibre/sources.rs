@@ -139,15 +139,16 @@ pub(crate) fn convert_sources(
             }
             "raster-dem" => {
                 if let Some(url) = url {
-                    let enc = dem_encoding(name, decl, report);
                     // `neighbor-fetch` stitches the 3×3 tile neighbourhood so
                     // hillshade slopes stay correct up to the tile edge. No
                     // `tileSize` carries over: ezu reads each tile's edge from
                     // the decoded image.
-                    let mut dem = serde_json::json!({
-                        "type": "dem", "url": url, "encoding": enc,
-                        "neighbor-fetch": true
-                    });
+                    let mut dem = Map::new();
+                    dem.insert("type".into(), "dem".into());
+                    dem.insert("url".into(), url.into());
+                    dem.extend(dem_encoding(name, decl, report));
+                    dem.insert("neighbor-fetch".into(), true.into());
+                    let mut dem = Value::Object(dem);
                     if let Some(mz) = decl.get("maxzoom").and_then(Value::as_u64) {
                         dem["max-zoom"] = Value::from(mz);
                     }
@@ -275,40 +276,43 @@ pub(crate) fn features_node(
     Value::Object(m)
 }
 
-/// Map a MapLibre `raster-dem` `encoding` onto the two ezu `dem` accepts.
+/// The `encoding` (and, for `custom`, the factor fields) of the ezu `dem`
+/// source a MapLibre `raster-dem` becomes.
 ///
 /// - absent or `mapbox` (MapLibre's default) -> `mapbox-rgb`
 /// - `terrarium` -> `terrarium`
-/// - `custom` -> the matching ezu encoding when its
-///   `redFactor`/`greenFactor`/`blueFactor`/`baseShift` equal that encoding's
-///   exactly (Mapbox: 6553.6, 25.6, 0.1, -10000; Terrarium: 256, 1, 1/256,
-///   -32768). Any other factors have no ezu equivalent, and a `dem` source
-///   cannot be dropped because the `hillshade` layer's `dem` node refers to
-///   it, so the source is kept with `mapbox-rgb` and a warning says the
-///   decoded heights are wrong.
-fn dem_encoding(name: &str, decl: &Map<String, Value>, report: &mut Report) -> &'static str {
-    match decl.get("encoding").and_then(Value::as_str) {
+/// - `custom` -> `custom`, its `redFactor`/`greenFactor`/`blueFactor`/
+///   `baseShift` carried as `red-factor`/… . Both sides decode
+///   `R*red + G*green + B*blue - baseShift`, with the same defaults. Factors
+///   equal to MapLibre's own for one of the fixed encodings (Mapbox:
+///   6553.6, 25.6, 0.1, 10000; Terrarium: 256, 1, 1/256, 32768) become that
+///   encoding's name instead, which decodes the same heights.
+fn dem_encoding(name: &str, decl: &Map<String, Value>, report: &mut Report) -> Map<String, Value> {
+    let mut factors = Map::new();
+    let encoding = match decl.get("encoding").and_then(Value::as_str) {
         None | Some("mapbox") => "mapbox-rgb",
         Some("terrarium") => "terrarium",
         Some("custom") => {
-            let f = |key: &str| decl.get(key).and_then(Value::as_f64);
-            let got = [
-                f("redFactor").unwrap_or(1.0),
-                f("greenFactor").unwrap_or(1.0),
-                f("blueFactor").unwrap_or(1.0),
-                f("baseShift").unwrap_or(0.0),
+            const KEYS: [(&str, &str, f64); 4] = [
+                ("redFactor", "red-factor", 1.0),
+                ("greenFactor", "green-factor", 1.0),
+                ("blueFactor", "blue-factor", 1.0),
+                ("baseShift", "base-shift", 0.0),
             ];
+            let got = KEYS
+                .map(|(key, _, default)| decl.get(key).and_then(Value::as_f64).unwrap_or(default));
             let same = |want: [f64; 4]| got.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-9);
-            if same([6553.6, 25.6, 0.1, -10000.0]) {
+            if same([6553.6, 25.6, 0.1, 10000.0]) {
                 "mapbox-rgb"
-            } else if same([256.0, 1.0, 1.0 / 256.0, -32768.0]) {
+            } else if same([256.0, 1.0, 1.0 / 256.0, 32768.0]) {
                 "terrarium"
             } else {
-                report.warn(format!(
-                    "source `{name}`: custom raster-dem encoding {got:?} has no ezu \
-                     equivalent — decoded as mapbox-rgb, elevations will be wrong"
-                ));
-                "mapbox-rgb"
+                for ((key, ezu_key, _), v) in KEYS.iter().zip(got) {
+                    if decl.contains_key(*key) {
+                        factors.insert((*ezu_key).into(), Value::from(v));
+                    }
+                }
+                "custom"
             }
         }
         Some(other) => {
@@ -318,5 +322,9 @@ fn dem_encoding(name: &str, decl: &Map<String, Value>, report: &mut Report) -> &
             ));
             "mapbox-rgb"
         }
-    }
+    };
+    let mut out = Map::new();
+    out.insert("encoding".into(), Value::from(encoding));
+    out.extend(factors);
+    out
 }

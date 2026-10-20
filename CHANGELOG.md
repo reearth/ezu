@@ -225,6 +225,10 @@ mean is spelled out in
   this way is rounded and held to [2, 256]. A `dither` `amount` that is not
   a number, a `$param` or an `@node` now fails the build instead of quietly
   becoming 0.5.
+- `ezu translate` turns a `raster-dem` source with `"encoding": "custom"`
+  into a `dem` source with `"encoding": "custom"` and the same factors. It
+  used to decode any factors other than Terrain-RGB's or Terrarium's as
+  Terrain-RGB, with a warning that the heights would be wrong.
 
 ### Deprecated
 
@@ -266,6 +270,10 @@ mean is spelled out in
   a `$param` set at render time, as its schema said; it used to reject the
   one and keep the other at its default. It may now be left out when both
   `spacing-x` and `spacing-y` are given.
+- `ezu translate` recognised a `custom` `raster-dem` encoding as Terrain-RGB
+  or Terrarium only when its `baseShift` was negated (`-10000`, `-32768`).
+  MapLibre subtracts `baseShift`, so its own factors for those encodings
+  have `10000` and `32768`, and those are now what match.
 - The schema lists `$param` and `@node` for `gap-width-px` on `stroke`, which
   has always accepted them; editors that validate against the schema
   flagged them as errors.
