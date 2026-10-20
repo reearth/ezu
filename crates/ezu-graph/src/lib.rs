@@ -33,7 +33,10 @@ pub use eval::{
 };
 pub use evaluator::{describe_value, Evaluator, NodeObserver, RenderError};
 pub use graph::{BuildError, Edge, Graph, GraphBuilder, NodeId, NodeIx, MAX_PAD};
-pub use input::{parse_param_value, In, InParts, InReader, PaddingIn, ScalarType, ACCEPTS_SCALAR};
+pub use input::{
+    enum_names, parse_param_value, read_enum_baked, EnumTable, In, InEnum, InParts, InReader,
+    PaddingIn, ScalarType, ACCEPTS_SCALAR,
+};
 pub use neighbor::{neighbor_binding, neighbor_bindings, parse_neighbor_binding};
 pub use node::{InfluenceCtx, InkReach, Node};
 pub use port::{CoordSpace, PortKind, PortSpec};

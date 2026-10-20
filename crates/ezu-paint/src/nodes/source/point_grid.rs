@@ -13,21 +13,15 @@
 //! just outside the tile exist and whatever draws them spills in.
 
 use ezu_graph::{
-    schema_frag, BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, In, InReader,
-    Node, NodeFactory, PortKind, PortSpec, PortValue,
+    schema_frag, BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, In, InEnum,
+    InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{features_value, read_optional_string, FeatureGroup};
+use crate::nodes::common::{anchor_schema, features_value, Anchor, FeatureGroup, ANCHORS};
 
 const DEFAULT_EXTENT: u32 = 4096;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Anchor {
-    Tile,
-    World,
-}
 
 struct PointGridNode {
     extent: u32,
@@ -36,7 +30,7 @@ struct PointGridNode {
     offset_x: In<f64>,
     offset_y: In<f64>,
     stagger: In<f64>,
-    anchor: Anchor,
+    anchor: InEnum<Anchor>,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
 }
@@ -72,7 +66,7 @@ impl Node for PointGridNode {
         }
         // World origin in tile-local coords: subtract the tile's world
         // offset so a single global grid lines up across neighbours.
-        let (ox, oy) = match self.anchor {
+        let (ox, oy) = match self.anchor.get(ctx)? {
             Anchor::Tile => (offset_x, offset_y),
             Anchor::World => (
                 offset_x - (ctx.tile.x as f64) * e,
@@ -127,10 +121,7 @@ impl Node for PointGridNode {
         self.offset_x.param_hash(h);
         self.offset_y.param_hash(h);
         self.stagger.param_hash(h);
-        h.update(match self.anchor {
-            Anchor::Tile => &[0u8],
-            Anchor::World => &[1u8],
-        });
+        self.anchor.param_hash(h);
     }
     fn param_refs(&self) -> Vec<String> {
         self.param_refs.clone()
@@ -152,18 +143,8 @@ impl NodeFactory for PointGridFactory {
             .and_then(Value::as_u64)
             .map(|v| v as u32)
             .unwrap_or(DEFAULT_EXTENT);
-        let anchor = match read_optional_string(fields, "anchor")?.as_deref() {
-            None | Some("tile") => Anchor::Tile,
-            Some("world") => Anchor::World,
-            Some(other) => {
-                return Err(FactoryError::BadField {
-                    field: "anchor".into(),
-                    msg: format!("unknown anchor '{other}', expected tile/world"),
-                });
-            }
-        };
-
         let mut r = InReader::new(fields, ctx, 0);
+        let anchor = r.enum_or("anchor", Anchor::Tile, ANCHORS)?;
         let (spacing_x, spacing_y) = super::read_spacing(&mut r, fields)?;
         let offset_x = r.number_or("offset-x", 0.0)?;
         let offset_y = r.number_or("offset-y", 0.0)?;
@@ -216,7 +197,7 @@ impl NodeFactory for PointGridFactory {
                     "type": "number", "default": 0.0,
                     "description": "Shift every other row sideways by this fraction of `spacing-x`. `0.5` puts each row's points halfway between the row above's — the centres of a running brick bond, or a triangular lattice."
                 })),
-                "anchor": { "type": "string", "enum": ["tile", "world"], "default": "tile" },
+                "anchor": anchor_schema("tile", None),
             },
             "anyOf": super::spacing_any_of(),
         })

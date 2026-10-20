@@ -88,8 +88,9 @@ impl PortValue {
     }
 }
 
-/// A constant value carried on a `Scalar` port.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// A constant value carried on a `Scalar` port, or the value of a
+/// render-time param.
+#[derive(Debug, Clone, PartialEq)]
 pub enum ScalarValue {
     /// Straight (non-premultiplied) sRGB-encoded RGBA, components in
     /// `[0, 1]` — the same convention as a parsed `#rrggbb[aa]`
@@ -97,6 +98,10 @@ pub enum ScalarValue {
     Color([f32; 4]),
     Number(f64),
     Bool(bool),
+    /// The value of a `string` param. No node produces one, so it only
+    /// ever reaches a field through a `$param` — fields that take one of
+    /// a fixed set of names read it.
+    String(std::sync::Arc<str>),
 }
 
 impl ScalarValue {
@@ -124,12 +129,22 @@ impl ScalarValue {
         }
     }
 
-    /// Short kind name for error messages (`number` / `color` / `bool`).
+    pub fn as_str(&self) -> Option<&str> {
+        if let ScalarValue::String(s) = self {
+            Some(s)
+        } else {
+            None
+        }
+    }
+
+    /// Short kind name for error messages (`number` / `color` / `bool` /
+    /// `string`).
     pub fn kind_name(&self) -> &'static str {
         match self {
             ScalarValue::Color(_) => "color",
             ScalarValue::Number(_) => "number",
             ScalarValue::Bool(_) => "bool",
+            ScalarValue::String(_) => "string",
         }
     }
 
@@ -149,6 +164,11 @@ impl ScalarValue {
             ScalarValue::Bool(b) => {
                 h.update(b"B");
                 h.update(&[*b as u8]);
+            }
+            ScalarValue::String(s) => {
+                h.update(b"S");
+                h.update(&(s.len() as u64).to_le_bytes());
+                h.update(s.as_bytes());
             }
         }
     }

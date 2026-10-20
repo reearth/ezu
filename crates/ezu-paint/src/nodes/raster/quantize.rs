@@ -91,7 +91,7 @@ impl NodeFactory for QuantizeFactory {
     ) -> Result<BuiltNode, FactoryError> {
         let input = take_input_ref(fields, "input")?;
         let mut r = InReader::new(fields, ctx, 1);
-        let palette = Palette::from_fields(fields, ctx, &mut r)?;
+        let palette = Palette::from_fields(fields, &mut r)?;
         Ok(BuiltNode {
             node: Box::new(QuantizeNode {
                 palette,
@@ -114,7 +114,7 @@ impl NodeFactory for QuantizeFactory {
                     "items": schema_frag::nested_color(),
                     "description": "Each entry is `#rrggbb` / `#rrggbbaa` (alpha ignored for matching) or a `$param`, so a palette can be recoloured at render time.",
                 },
-                "space": { "type": "string", "enum": ["lab", "rgb"], "default": "lab", "description": "Colour space the nearest-colour distance is measured in." },
+                "space": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": ["lab", "rgb"], "default": "lab", "description": "Colour space the nearest-colour distance is measured in." })),
             },
             "required": ["input", "palette"],
         })

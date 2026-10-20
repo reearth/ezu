@@ -20,16 +20,15 @@
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, take_input_ref, take_optional_input_ref, BuiltNode, Connection, EvalCtx,
-    EvalError, FactoryCtx, FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec,
-    PortValue, RasterBuf,
+    enum_names, schema_frag, take_input_ref, take_optional_input_ref, BuiltNode, Connection,
+    EnumTable, EvalCtx, EvalError, FactoryCtx, FactoryError, In, InEnum, InReader, Node,
+    NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    raster_or_sprite_output, read_string_or, unwrap_raster_or_sprite, wrap_raster_like,
-    ACCEPTS_RASTER_OR_SPRITE,
+    raster_or_sprite_output, unwrap_raster_or_sprite, wrap_raster_like, ACCEPTS_RASTER_OR_SPRITE,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,50 +51,24 @@ enum BlendMode {
     Luminosity,
 }
 
-impl BlendMode {
-    fn parse(s: &str) -> Option<Self> {
-        Some(match s {
-            "normal" => Self::Normal,
-            "multiply" => Self::Multiply,
-            "screen" => Self::Screen,
-            "overlay" => Self::Overlay,
-            "darken" => Self::Darken,
-            "lighten" => Self::Lighten,
-            "color-dodge" => Self::ColorDodge,
-            "color-burn" => Self::ColorBurn,
-            "hard-light" => Self::HardLight,
-            "soft-light" => Self::SoftLight,
-            "difference" => Self::Difference,
-            "exclusion" => Self::Exclusion,
-            "hue" => Self::Hue,
-            "saturation" => Self::Saturation,
-            "color" => Self::Color,
-            "luminosity" => Self::Luminosity,
-            _ => return None,
-        })
-    }
-
-    fn as_tag(self) -> &'static [u8] {
-        match self {
-            Self::Normal => b"normal",
-            Self::Multiply => b"multiply",
-            Self::Screen => b"screen",
-            Self::Overlay => b"overlay",
-            Self::Darken => b"darken",
-            Self::Lighten => b"lighten",
-            Self::ColorDodge => b"color-dodge",
-            Self::ColorBurn => b"color-burn",
-            Self::HardLight => b"hard-light",
-            Self::SoftLight => b"soft-light",
-            Self::Difference => b"difference",
-            Self::Exclusion => b"exclusion",
-            Self::Hue => b"hue",
-            Self::Saturation => b"saturation",
-            Self::Color => b"color",
-            Self::Luminosity => b"luminosity",
-        }
-    }
-}
+const MODES: EnumTable<BlendMode> = &[
+    ("normal", BlendMode::Normal),
+    ("multiply", BlendMode::Multiply),
+    ("screen", BlendMode::Screen),
+    ("overlay", BlendMode::Overlay),
+    ("darken", BlendMode::Darken),
+    ("lighten", BlendMode::Lighten),
+    ("color-dodge", BlendMode::ColorDodge),
+    ("color-burn", BlendMode::ColorBurn),
+    ("hard-light", BlendMode::HardLight),
+    ("soft-light", BlendMode::SoftLight),
+    ("difference", BlendMode::Difference),
+    ("exclusion", BlendMode::Exclusion),
+    ("hue", BlendMode::Hue),
+    ("saturation", BlendMode::Saturation),
+    ("color", BlendMode::Color),
+    ("luminosity", BlendMode::Luminosity),
+];
 
 /// Porter-Duff compositing operator, by its W3C Compositing name.
 /// Defaults to `SourceOver` (the usual "draw on top"). `DestinationOut`
@@ -118,40 +91,28 @@ enum Composite {
     Xor,
 }
 
+/// The W3C names first, then the shorter spellings accepted for three of
+/// them.
+const COMPOSITES: EnumTable<Composite> = &[
+    ("clear", Composite::Clear),
+    ("copy", Composite::Copy),
+    ("destination", Composite::Destination),
+    ("source-over", Composite::SourceOver),
+    ("destination-over", Composite::DestinationOver),
+    ("source-in", Composite::SourceIn),
+    ("destination-in", Composite::DestinationIn),
+    ("source-out", Composite::SourceOut),
+    ("destination-out", Composite::DestinationOut),
+    ("source-atop", Composite::SourceAtop),
+    ("destination-atop", Composite::DestinationAtop),
+    ("xor", Composite::Xor),
+    ("over", Composite::SourceOver),
+    ("source", Composite::Copy),
+    ("dest-out", Composite::DestinationOut),
+    ("erase", Composite::DestinationOut),
+];
+
 impl Composite {
-    fn parse(s: &str) -> Option<Self> {
-        Some(match s {
-            "clear" => Self::Clear,
-            "copy" | "source" => Self::Copy,
-            "destination" => Self::Destination,
-            "source-over" | "over" => Self::SourceOver,
-            "destination-over" => Self::DestinationOver,
-            "source-in" => Self::SourceIn,
-            "destination-in" => Self::DestinationIn,
-            "source-out" => Self::SourceOut,
-            "destination-out" | "dest-out" | "erase" => Self::DestinationOut,
-            "source-atop" => Self::SourceAtop,
-            "destination-atop" => Self::DestinationAtop,
-            "xor" => Self::Xor,
-            _ => return None,
-        })
-    }
-    fn as_tag(self) -> &'static [u8] {
-        match self {
-            Self::Clear => b"clear",
-            Self::Copy => b"copy",
-            Self::Destination => b"destination",
-            Self::SourceOver => b"over",
-            Self::DestinationOver => b"destination-over",
-            Self::SourceIn => b"source-in",
-            Self::DestinationIn => b"destination-in",
-            Self::SourceOut => b"source-out",
-            Self::DestinationOut => b"destination-out",
-            Self::SourceAtop => b"source-atop",
-            Self::DestinationAtop => b"destination-atop",
-            Self::Xor => b"xor",
-        }
-    }
     /// The Porter-Duff coverage factors `(Fa, Fb)` for source alpha `sa`
     /// and backdrop alpha `ba`: the result is `Fa` of the (blended)
     /// source plus `Fb` of the backdrop.
@@ -189,10 +150,10 @@ impl Composite {
 }
 
 struct BlendNode {
-    mode: BlendMode,
+    mode: InEnum<BlendMode>,
     /// The operator the style names. `None` leaves it to the deprecated
     /// `clip` flag: source-atop when it is true, source-over otherwise.
-    composite: Option<Composite>,
+    composite: Option<InEnum<Composite>>,
     opacity: In<f64>,
     clip: In<bool>,
     has_mask: bool,
@@ -246,8 +207,9 @@ impl Node for BlendNode {
             }
         }
         let op = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
-        let composite = match self.composite {
-            Some(c) => c,
+        let mode = self.mode.get(ctx)?;
+        let composite = match &self.composite {
+            Some(c) => c.get(ctx)?,
             None if self.clip.get(ctx, inputs)? => Composite::SourceAtop,
             None => Composite::SourceOver,
         };
@@ -273,10 +235,7 @@ impl Node for BlendNode {
         // Fast path: plain source-over of premultiplied bytes — the common
         // Normal / source-over / no-mask case. Skip the demultiply →
         // W3C blend → recomposite round-trip and work in integer space.
-        if self.mode == BlendMode::Normal
-            && composite == Composite::SourceOver
-            && mask_ref.is_none()
-        {
+        if mode == BlendMode::Normal && composite == Composite::SourceOver && mask_ref.is_none() {
             // Base is transparent everywhere: source-over onto nothing is
             // just the (opacity-1) source. Reuse its buffer directly.
             if op >= 1.0 && base.is_blank() {
@@ -286,14 +245,14 @@ impl Node for BlendNode {
             return Ok(wrap_raster_like(Arc::new(out), kind));
         }
 
-        let out = blend_general(&base, &over, mask_ref, self.mode, composite, op);
+        let out = blend_general(&base, &over, mask_ref, mode, composite, op);
         Ok(wrap_raster_like(Arc::new(out), kind))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"blend");
-        h.update(self.mode.as_tag());
-        match self.composite {
-            Some(c) => h.update(c.as_tag()),
+        self.mode.param_hash(h);
+        match &self.composite {
+            Some(c) => c.param_hash(h),
             None => h.update(b"clip-flag"),
         }
         self.opacity.param_hash(h);
@@ -442,18 +401,13 @@ impl NodeFactory for BlendFactory {
         let base = take_input_ref(fields, "base")?;
         let over = take_input_ref(fields, "over")?;
         let mask = take_optional_input_ref(fields, "mask")?;
-        let mode_str = read_string_or(fields, "mode", ctx, "normal")?;
-        let mode = BlendMode::parse(&mode_str).ok_or_else(|| FactoryError::BadField {
-            field: "mode".into(),
-            msg: format!("unknown blend mode `{mode_str}`"),
-        })?;
+        // Scalar port indices start after the three fixed ports
+        // (base, over, mask) — `mask` always occupies index 2 even
+        // when unconnected, so eval's `inputs[2]` lookup stays valid.
+        let mut r = InReader::new(fields, ctx, 3);
+        let mode = r.enum_or("mode", BlendMode::Normal, MODES)?;
         let composite = if fields.contains_key("composite") {
-            let s = read_string_or(fields, "composite", ctx, "source-over")?;
-            let c = Composite::parse(&s).ok_or_else(|| FactoryError::BadField {
-                field: "composite".into(),
-                msg: format!("unknown composite op `{s}`"),
-            })?;
-            Some(c)
+            Some(r.enum_or("composite", Composite::SourceOver, COMPOSITES)?)
         } else {
             None
         };
@@ -477,10 +431,6 @@ impl NodeFactory for BlendFactory {
             }
         }
         let has_mask = mask.is_some();
-        // Scalar port indices start after the three fixed ports
-        // (base, over, mask) — `mask` always occupies index 2 even
-        // when unconnected, so eval's `inputs[2]` lookup stays valid.
-        let mut r = InReader::new(fields, ctx, 3);
         let opacity = r.number_or("opacity", 1.0)?;
         let clip = r.bool_or("clip", false)?;
         let parts = r.finish();
@@ -542,30 +492,17 @@ impl NodeFactory for BlendFactory {
                 "base": schema_frag::node_ref(),
                 "over": schema_frag::node_ref(),
                 "mask": schema_frag::node_ref(),
-                "mode": {
+                "mode": schema_frag::in_enum(serde_json::json!({
                     "type": "string",
-                    "enum": [
-                        "normal","multiply","screen","overlay","darken","lighten",
-                        "color-dodge","color-burn","hard-light","soft-light",
-                        "difference","exclusion",
-                        "hue","saturation","color","luminosity"
-                    ],
+                    "enum": enum_names(MODES),
                     "default": "normal"
-                },
-                "composite": {
+                })),
+                "composite": schema_frag::in_enum(serde_json::json!({
                     "type": "string",
-                    "enum": [
-                        "clear", "copy", "destination",
-                        "source-over", "destination-over",
-                        "source-in", "destination-in",
-                        "source-out", "destination-out",
-                        "source-atop", "destination-atop",
-                        "xor",
-                        "over", "source", "dest-out", "erase"
-                    ],
+                    "enum": enum_names(COMPOSITES),
                     "default": "source-over",
                     "description": "Porter-Duff operator, by its W3C Compositing name. `over`, `source`, and `dest-out` / `erase` are accepted for `source-over`, `copy` and `destination-out`."
-                },
+                })),
                 "clip": {
                     "oneOf": [{"type": "boolean"}, {"type": "string", "pattern": "^[$@].+"}],
                     "default": false,
@@ -879,14 +816,12 @@ mod tests {
 
     #[test]
     fn aliases_name_the_same_operators() {
-        assert_eq!(Composite::parse("over"), Some(Composite::SourceOver));
-        assert_eq!(Composite::parse("source"), Some(Composite::Copy));
-        assert_eq!(
-            Composite::parse("dest-out"),
-            Some(Composite::DestinationOut)
-        );
-        assert_eq!(Composite::parse("erase"), Some(Composite::DestinationOut));
-        assert_eq!(Composite::parse("plus"), None);
+        let parse = |s: &str| COMPOSITES.iter().find(|(n, _)| *n == s).map(|(_, c)| *c);
+        assert_eq!(parse("over"), Some(Composite::SourceOver));
+        assert_eq!(parse("source"), Some(Composite::Copy));
+        assert_eq!(parse("dest-out"), Some(Composite::DestinationOut));
+        assert_eq!(parse("erase"), Some(Composite::DestinationOut));
+        assert_eq!(parse("plus"), None);
     }
 
     #[test]

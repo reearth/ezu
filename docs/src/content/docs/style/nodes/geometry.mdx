@@ -41,7 +41,7 @@ Convert each polygon to its boundary rings (exterior + holes) as polylines. Exis
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `clip-edges` | `keep` \| `drop` | no | What to do with the straight edges a vector tile adds where it clips a polygon at the tile buffer, just outside the tile. `keep` outlines them like any other edge; `drop` leaves them out, splitting a ring into open polylines where they were. Use `drop` when a wide stroke on the outline (a coastal band, say) shows a band along every tile seam: the stroke on those edges reaches into the tile. `drop` removes every segment that lies entirely past one side of the tile and runs within 15° of that side; the tolerance is what lets it work after a `buffer`, which can bend the clip line slightly. A real shoreline outside the tile running nearly parallel to its edge is dropped too, but nothing inside the tile goes missing, and a rectangle exactly on the tile border is kept. |
+| `clip-edges` | `keep` \| `drop` \| `$param` | no | What to do with the straight edges a vector tile adds where it clips a polygon at the tile buffer, just outside the tile. `keep` outlines them like any other edge; `drop` leaves them out, splitting a ring into open polylines where they were. Use `drop` when a wide stroke on the outline (a coastal band, say) shows a band along every tile seam: the stroke on those edges reaches into the tile. `drop` removes every segment that lies entirely past one side of the tile and runs within 15° of that side; the tolerance is what lets it work after a `buffer`, which can bend the clip line slightly. A real shoreline outside the tile running nearly parallel to its edge is dropped too, but nothing inside the tile goes missing, and a rectangle exactly on the tile border is kept. |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
 
 ### `buffer`
@@ -59,7 +59,7 @@ Minkowski sum / offset with a disk. Polygons accept negative distance for erosio
 | --- | --- | --- | --- |
 | `distance` | number \| `$param` \| `@node` | yes | Offset distance in tile pixels. Positive inflates, negative erodes (polygons only). |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
-| `join` | `miter` \| `round` \| `bevel` | no | — |
+| `join` | `miter` \| `round` \| `bevel` \| `$param` | no | — |
 
 ### `centroid`
 
@@ -87,7 +87,7 @@ Isolines from a ScalarField (marching squares with linear sub-cell interpolation
 | `base` | number \| `$param` \| `@node` | no | Offset the `interval` grid: levels sit at `base + k·interval`. |
 | `field` | `@node` | yes | Reference to another node (`@name`). |
 | `interval` | number \| `$param` \| `@node` | no | Spacing between levels, in field units. Required unless `levels` is given. |
-| `levels` | array of number \| string | no | Explicit levels to extract; overrides `interval`/`base`. A level may be a `$param`; the list is sorted and de-duplicated per render. |
+| `levels` | array of number \| `$param` | no | Explicit levels to extract; overrides `interval`/`base`. A level may be a `$param`; the list is sorted and de-duplicated per render. |
 | `max` | number \| `$param` \| `@node` | no | Emit no level above this value. |
 | `min` | number \| `$param` \| `@node` | no | Emit no level below this value. |
 
@@ -162,7 +162,7 @@ Polygon boolean operation between two Features inputs. Subject = `a`, clip = `b`
 | --- | --- | --- | --- |
 | `a` | `@node` | yes | Reference to another node (`@name`). |
 | `b` | `@node` | yes | Reference to another node (`@name`). |
-| `mode` | `union` \| `intersection` \| `difference` \| `symmetric-difference` \| `xor` | no | — |
+| `mode` | `union` \| `intersection` \| `difference` \| `symmetric-difference` \| `xor` \| `$param` | no | — |
 
 ### `hatch`
 

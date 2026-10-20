@@ -63,7 +63,7 @@ pub fn render_with_params(
 ) -> std::sync::Arc<ezu_graph::RasterBuf> {
     let mut pv = ParamValues::new();
     for (name, value) in params {
-        pv.set(name.to_string(), *value);
+        pv.set(name.to_string(), value.clone());
     }
     let doc = Document::from_json(json).expect("parse");
     let registry = default_registry();
@@ -411,7 +411,7 @@ pub fn render_with_features_sprite_and_params(
     use ezu_paint::host::TileLoader;
     let mut pv = ParamValues::new();
     for (name, value) in params {
-        pv.set(name.to_string(), *value);
+        pv.set(name.to_string(), value.clone());
     }
     let doc = Document::from_json(json).expect("parse");
     let registry = default_registry();

@@ -21,19 +21,22 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, InReader, Node, NodeFactory, PaddingIn, PortKind, PortSpec, PortValue, RasterBuf,
+    read_enum_baked, schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EnumTable,
+    EvalCtx, EvalError, FactoryCtx, FactoryError, InReader, Node, NodeFactory, PaddingIn, PortKind,
+    PortSpec, PortValue, RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{read_optional_string, Anchor};
+use crate::nodes::common::{anchor_schema, Anchor, ANCHORS};
 
 #[derive(Clone, Copy)]
 enum Mode {
     Average,
     Nearest,
 }
+
+const MODES: EnumTable<Mode> = &[("average", Mode::Average), ("nearest", Mode::Nearest)];
 
 struct MosaicNode {
     block: PaddingIn,
@@ -214,26 +217,10 @@ impl NodeFactory for MosaicFactory {
             });
         }
         let block_bound = block_bound_raw.round() as u32;
-        let anchor = match read_optional_string(fields, "anchor")?.as_deref() {
-            None | Some("world") => Anchor::World,
-            Some("tile") => Anchor::Tile,
-            Some(other) => {
-                return Err(FactoryError::BadField {
-                    field: "anchor".into(),
-                    msg: format!("expected `world` or `tile`, got `{other}`"),
-                });
-            }
-        };
-        let mode = match read_optional_string(fields, "mode")?.as_deref() {
-            None | Some("average") => Mode::Average,
-            Some("nearest") => Mode::Nearest,
-            Some(other) => {
-                return Err(FactoryError::BadField {
-                    field: "mode".into(),
-                    msg: format!("expected `average` or `nearest`, got `{other}`"),
-                });
-            }
-        };
+        // Both decide how much padding the node asks for, which is fixed
+        // before rendering, so they are read at build time.
+        let anchor = read_enum_baked(fields, ctx, "anchor", Anchor::World, ANCHORS)?;
+        let mode = read_enum_baked(fields, ctx, "mode", Mode::Average, MODES)?;
         let mut ports = vec![PortSpec {
             name: "input",
             accepts: &[PortKind::Raster],
@@ -268,10 +255,9 @@ impl NodeFactory for MosaicFactory {
                     "description": "Block edge length in canvas pixels. With `anchor: world` the block size sets the canvas padding, which is fixed before anything renders — so this needs an upper bound the build can see: a literal, a `$param` with `max`, or `block-max` beside an `@node` port."
                 })),
                 "block-max": { "type": "number", "minimum": 0.0, "description": "Upper bound on `block` for padding, required when `block` is an `@node` port. Values above it are clamped." },
-                "anchor": { "type": "string", "enum": ["world", "tile"], "default": "world",
-                            "description": "`world` (default) makes the block grid seamless across map tiles by growing the upstream pad. `tile` restarts the grid at every map tile's top-left and requires no extra padding." },
-                "mode": { "type": "string", "enum": ["average", "nearest"], "default": "average",
-                          "description": "`average` (default) blends covered pixels into a mean colour. `nearest` samples the block's centre pixel verbatim — produces hard block edges without inter-colour averaging." },
+                "anchor": anchor_schema("world", Some("`world` (default) makes the block grid seamless across map tiles by growing the upstream pad. `tile` restarts the grid at every map tile's top-left and requires no extra padding. Read when the graph is built: a `$param` gives its default.")),
+                "mode": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": ["average", "nearest"], "default": "average",
+                          "description": "`average` (default) blends covered pixels into a mean colour. `nearest` samples the block's centre pixel verbatim — produces hard block edges without inter-colour averaging. Read when the graph is built: a `$param` gives its default." })),
             },
             "required": ["input", "block"],
         })

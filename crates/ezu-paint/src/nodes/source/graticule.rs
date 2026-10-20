@@ -26,8 +26,8 @@
 
 use ezu_core::coord::{lat_to_world_y, lon_to_world_x, world_y_to_lat, MERCATOR_MAX_LAT};
 use ezu_graph::{
-    schema_frag, BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, In, InReader,
-    Node, NodeFactory, PortKind, PortSpec, PortValue,
+    schema_frag, BuiltNode, CoordSpace, EnumTable, EvalCtx, EvalError, FactoryCtx, FactoryError,
+    In, InEnum, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use maplibre_expr::Value as ExprValue;
 use serde_json::Value;
@@ -54,6 +54,12 @@ enum Axes {
     Parallels,
     Meridians,
 }
+
+const AXES: EnumTable<Axes> = &[
+    ("both", Axes::Both),
+    ("parallels", Axes::Parallels),
+    ("meridians", Axes::Meridians),
+];
 
 /// The coarsest ladder interval that still puts about four lines across
 /// a tile at zoom `z`, where a tile spans `360 / 2^z` degrees of
@@ -119,7 +125,7 @@ struct GraticuleNode {
     interval_x_deg: Option<In<f64>>,
     /// Degrees between parallels; `None` picks it from the zoom.
     interval_y_deg: Option<In<f64>>,
-    axes: Axes,
+    axes: InEnum<Axes>,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
 }
@@ -164,8 +170,9 @@ impl Node for GraticuleNode {
         let to_local = |world: f64, origin: f64| (world - origin) / span * e;
 
         let mut groups = Vec::new();
+        let axes = self.axes.get(ctx)?;
 
-        if self.axes != Axes::Meridians && usable(interval_y) {
+        if axes != Axes::Meridians && usable(interval_y) {
             let interval = interval_y;
             // North edge is the smaller world y, so it is the *higher*
             // latitude: walk south from there.
@@ -184,7 +191,7 @@ impl Node for GraticuleNode {
             }
         }
 
-        if self.axes != Axes::Parallels && usable(interval_x) {
+        if axes != Axes::Parallels && usable(interval_x) {
             let interval = interval_x;
             let lon_west = (world_x0 * 360.0 - 180.0).max(-180.0);
             let lon_east = ((world_x0 + span) * 360.0 - 180.0).min(180.0);
@@ -212,11 +219,7 @@ impl Node for GraticuleNode {
                 field.param_hash(h);
             }
         }
-        h.update(match self.axes {
-            Axes::Both => &[0u8],
-            Axes::Parallels => &[1u8],
-            Axes::Meridians => &[2u8],
-        });
+        self.axes.param_hash(h);
     }
     fn param_refs(&self) -> Vec<String> {
         self.param_refs.clone()
@@ -238,19 +241,8 @@ impl NodeFactory for GraticuleFactory {
             .and_then(Value::as_u64)
             .map(|v| v as u32)
             .unwrap_or(DEFAULT_EXTENT);
-        let axes = match fields.get("axes").and_then(Value::as_str) {
-            None | Some("both") => Axes::Both,
-            Some("parallels") => Axes::Parallels,
-            Some("meridians") => Axes::Meridians,
-            Some(other) => {
-                return Err(FactoryError::BadField {
-                    field: "axes".into(),
-                    msg: format!("unknown axes '{other}', expected both/parallels/meridians"),
-                });
-            }
-        };
-
         let mut r = InReader::new(fields, ctx, 0);
+        let axes = r.enum_or("axes", Axes::Both, AXES)?;
         // Absent rather than defaulted: without an interval the node
         // picks one from the zoom, which no constant can express. The
         // shared `interval-deg` is read whenever present, even when both
@@ -299,8 +291,8 @@ impl NodeFactory for GraticuleFactory {
                                    "description": "Degrees of longitude between meridians, overriding `interval-deg` on that axis." })),
                 "interval-y-deg": schema_frag::in_number(serde_json::json!({ "type": "number", "exclusiveMinimum": 0.0,
                                    "description": "Degrees of latitude between parallels, overriding `interval-deg` on that axis." })),
-                "axes": { "type": "string", "enum": ["both", "parallels", "meridians"], "default": "both",
-                          "description": "Which families to emit: parallels of latitude, meridians of longitude, or both." },
+                "axes": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": ["both", "parallels", "meridians"], "default": "both",
+                          "description": "Which families to emit: parallels of latitude, meridians of longitude, or both." })),
             },
         })
     }

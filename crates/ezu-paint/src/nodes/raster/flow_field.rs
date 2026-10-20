@@ -27,14 +27,14 @@
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    schema_frag, take_input_ref, BuiltNode, Connection, EnumTable, EvalCtx, EvalError, FactoryCtx,
+    FactoryError, In, InEnum, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use super::terrain_common::horn_gradient;
-use crate::nodes::common::read_string_or;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Direction {
@@ -43,8 +43,14 @@ enum Direction {
     Along,
 }
 
+const DIRECTIONS: EnumTable<Direction> = &[
+    ("downhill", Direction::Downhill),
+    ("uphill", Direction::Uphill),
+    ("along", Direction::Along),
+];
+
 struct FlowFieldNode {
-    direction: Direction,
+    direction: InEnum<Direction>,
     max_deg: In<f64>,
     normalize: In<bool>,
     exaggeration: In<f64>,
@@ -74,6 +80,7 @@ impl Node for FlowFieldNode {
         let max_deg = self.max_deg.get(ctx, inputs)? as f32;
         let normalize = self.normalize.get(ctx, inputs)?;
         let exaggeration = self.exaggeration.get(ctx, inputs)? as f32;
+        let direction = self.direction.get(ctx)?;
         let w = field.width;
         let h = field.height;
         let mut out = RasterBuf::new(w, h);
@@ -97,7 +104,7 @@ impl Node for FlowFieldNode {
                     // Unit downhill vector, scaled.
                     let dx = -dz_dx / g * len;
                     let dy = -dz_dy / g * len;
-                    match self.direction {
+                    match direction {
                         Direction::Downhill => (dx, dy),
                         Direction::Uphill => (-dx, -dy),
                         // With y down, the right-hand side of heading
@@ -119,11 +126,7 @@ impl Node for FlowFieldNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"flow-field");
-        h.update(match self.direction {
-            Direction::Downhill => b"dn",
-            Direction::Uphill => b"up",
-            Direction::Along => b"al",
-        });
+        self.direction.param_hash(h);
         self.max_deg.param_hash(h);
         self.normalize.param_hash(h);
         self.exaggeration.param_hash(h);
@@ -150,18 +153,8 @@ impl NodeFactory for FlowFieldFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let input = take_input_ref(fields, "field")?;
-        let direction = match read_string_or(fields, "direction", ctx, "downhill")?.as_str() {
-            "downhill" => Direction::Downhill,
-            "uphill" => Direction::Uphill,
-            "along" => Direction::Along,
-            other => {
-                return Err(FactoryError::BadField {
-                    field: "direction".into(),
-                    msg: format!("expected `downhill`, `uphill` or `along`, got `{other}`"),
-                });
-            }
-        };
         let mut r = InReader::new(fields, ctx, 1);
+        let direction = r.enum_or("direction", Direction::Downhill, DIRECTIONS)?;
         let max_deg = r.number_or("max-deg", 45.0)?;
         let normalize = r.bool_or("normalize", false)?;
         let exaggeration = r.number_or("exaggeration", 1.0)?;
@@ -196,8 +189,8 @@ impl NodeFactory for FlowFieldFactory {
             "description": "Direction raster from an elevation field: which way the ground falls, rises, or runs level at each pixel. R = 0.5 + 0.5·vx and G = 0.5 + 0.5·vy in pixel axes (+x east, +y south), B = 0, opaque; flat 50% grey means no direction. This is `displace`'s encoding, so the output feeds `displace` directly, and it is what `flow-smear` reads to streak a texture along the terrain. The vector's length is the slope angle over `max-deg` (capped at 1), or 1 everywhere the ground slopes with `normalize`. Missing samples (NaN or the field's nodata value) get the opaque no-flow grey, so `displace` and `flow-smear` leave them in place; a missing neighbour counts as the centre value, so the ground around a hole does not flow into or out of it.",
             "properties": {
                 "field": schema_frag::node_ref(),
-                "direction": { "type": "string", "enum": ["downhill", "uphill", "along"], "default": "downhill",
-                               "description": "`downhill` follows the fall line, `uphill` points the other way, and `along` follows the contour lines with downhill on its right-hand side (counter-clockwise around a summit on a north-up map)." },
+                "direction": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": ["downhill", "uphill", "along"], "default": "downhill",
+                               "description": "`downhill` follows the fall line, `uphill` points the other way, and `along` follows the contour lines with downhill on its right-hand side (counter-clockwise around a summit on a north-up map)." })),
                 "max-deg": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 45,
                               "description": "Slope angle (degrees) at which the vector reaches full length. Ignored with `normalize`." })),
                 "normalize": { "oneOf": [{"type": "boolean"}, {"type": "string", "pattern": "^[$@].+"}], "default": false,

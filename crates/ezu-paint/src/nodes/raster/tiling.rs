@@ -19,17 +19,18 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    FactoryError, In, InEnum, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    read_optional_string, read_xy, unwrap_raster_or_sprite, Anchor, ACCEPTS_RASTER_OR_SPRITE,
+    anchor_schema, read_xy, unwrap_raster_or_sprite, Anchor, ACCEPTS_RASTER_OR_SPRITE, ANCHORS,
 };
 
 struct TilingNode {
-    anchor: Anchor,
+    anchor: InEnum<Anchor>,
     /// `None` → use the source raster's width as the natural period.
     scale_px: Option<In<f64>>,
     offset_px: [f64; 2],
@@ -50,7 +51,9 @@ impl Node for TilingNode {
         PortKind::Raster
     }
     fn coord_space(&self) -> CoordSpace {
-        match self.anchor {
+        // Descriptive only, so the declared anchor stands for whatever a
+        // `$param` sets it to at render time.
+        match self.anchor.fallback() {
             Anchor::World => CoordSpace::World,
             Anchor::Tile => CoordSpace::Tile,
         }
@@ -71,7 +74,7 @@ impl Node for TilingNode {
             return Ok(PortValue::Raster(Arc::new(RasterBuf::new(pw, ph))));
         }
 
-        let (origin_x, origin_y) = match self.anchor {
+        let (origin_x, origin_y) = match self.anchor.get(ctx)? {
             Anchor::World => (ctx.tile.x as f64 * tile_size, ctx.tile.y as f64 * tile_size),
             Anchor::Tile => (0.0, 0.0),
         };
@@ -135,10 +138,7 @@ impl Node for TilingNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"tiling");
-        match self.anchor {
-            Anchor::World => h.update(b"w"),
-            Anchor::Tile => h.update(b"t"),
-        }
+        self.anchor.param_hash(h);
         // A literal scale hashes as the bare number it always did, so
         // existing styles keep their cache keys.
         match &self.scale_px {
@@ -209,19 +209,10 @@ impl NodeFactory for TilingFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let input = take_input_ref(fields, "input")?;
-        let anchor = match read_optional_string(fields, "anchor")?.as_deref() {
-            None | Some("world") => Anchor::World,
-            Some("tile") => Anchor::Tile,
-            Some(other) => {
-                return Err(FactoryError::BadField {
-                    field: "anchor".into(),
-                    msg: format!("expected `world` or `tile`, got `{other}`"),
-                });
-            }
-        };
         let offset = read_xy(fields, "offset-px", ctx, [0.0, 0.0])?;
         let offset_px = [offset[0] as f64, offset[1] as f64];
         let mut r = InReader::new(fields, ctx, 1);
+        let anchor = r.enum_or("anchor", Anchor::World, ANCHORS)?;
         let scale_px = match fields.contains_key("scale-px") {
             true => Some(r.number("scale-px")?),
             false => None,
@@ -260,8 +251,7 @@ impl NodeFactory for TilingFactory {
             "description": "Repeat a raster across the canvas with bilinear wrap-around sampling. Primary use case is paper / canvas texture composition. Does not stretch-to-fit — use a dedicated `cover`/`contain` node if that's what you want.",
             "properties": {
                 "input": schema_frag::node_ref(),
-                "anchor": { "type": "string", "enum": ["world", "tile"], "default": "world",
-                            "description": "`world` (default) makes the pattern seamless across map tiles; `tile` restarts the pattern at every map tile's top-left." },
+                "anchor": anchor_schema("world", Some("`world` (default) makes the pattern seamless across map tiles; `tile` restarts the pattern at every map tile's top-left.")),
                 "scale-px": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.5,
                               "description": "Canvas pixels per one source repetition. Defaults to the source image's native width." })),
                 "offset-px": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2,

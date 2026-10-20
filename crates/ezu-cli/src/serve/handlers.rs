@@ -659,6 +659,50 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// A string param reaches a tile through the query string, and its
+    /// `enum` is checked there and published with the params schema.
+    #[tokio::test]
+    async fn a_string_param_rides_the_query_string() {
+        let root = scratch("string-param");
+        let style = r##"{
+          "name": "modes",
+          "tile-size": 16,
+          "params": {
+            "mode": { "type": "string", "enum": ["multiply", "screen"], "default": "multiply" }
+          },
+          "nodes": {
+            "base": { "op": "solid", "color": "#808080" },
+            "over": { "op": "solid", "color": "#ff4020" },
+            "out":  { "op": "blend", "base": "@base", "over": "@over", "mode": "$mode" }
+          },
+          "output": "@out"
+        }"##;
+        let state = serve(style, &root).await.unwrap();
+        let (status, schema) = request(&state, "GET", "/style/params", "").await;
+        assert_eq!(status, StatusCode::OK);
+        let schema: serde_json::Value = serde_json::from_slice(&schema).unwrap();
+        assert_eq!(
+            schema["properties"]["mode"]["enum"],
+            serde_json::json!(["multiply", "screen"])
+        );
+
+        let (status, plain) = request(&state, "GET", "/tiles/3/1/2.png", "").await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, same) = request(&state, "GET", "/tiles/3/1/2.png?mode=multiply", "").await;
+        assert_eq!((status, &same), (StatusCode::OK, &plain));
+        let (status, screen) = request(&state, "GET", "/tiles/3/1/2.png?mode=screen", "").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_ne!(screen, plain);
+        let (status, body) = request(&state, "GET", "/tiles/3/1/2.png?mode=overlay", "").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            String::from_utf8_lossy(&body).contains("not one of"),
+            "{}",
+            String::from_utf8_lossy(&body)
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     fn dem_style(url: &str, read: bool) -> String {
         let out = if read {
             r#""dem": { "op": "dem", "source": "terrain" },

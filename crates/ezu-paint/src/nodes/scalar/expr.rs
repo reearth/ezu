@@ -12,8 +12,8 @@
 //! the consuming node's `*-expr` fields, which evaluate per feature group.
 
 use ezu_graph::{
-    BuiltNode, EvalCtx, EvalError, FactoryCtx, FactoryError, Node, NodeFactory, PortKind, PortSpec,
-    PortValue, ScalarValue,
+    read_enum_baked, BuiltNode, EnumTable, EvalCtx, EvalError, FactoryCtx, FactoryError, Node,
+    NodeFactory, PortKind, PortSpec, PortValue, ScalarValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -25,6 +25,12 @@ enum ExprType {
     Color,
     Bool,
 }
+
+const EXPR_TYPES: EnumTable<ExprType> = &[
+    ("number", ExprType::Number),
+    ("color", ExprType::Color),
+    ("bool", ExprType::Bool),
+];
 
 struct ExprNode {
     expr: maplibre_expr::Expr,
@@ -85,22 +91,14 @@ impl NodeFactory for ExprFactory {
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
-        _ctx: &FactoryCtx<'_>,
+        ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let raw = fields
             .get("expr")
             .ok_or_else(|| FactoryError::MissingField("expr".into()))?;
-        let ty = match fields.get("type").and_then(Value::as_str) {
-            None | Some("number") => ExprType::Number,
-            Some("color") => ExprType::Color,
-            Some("bool") => ExprType::Bool,
-            Some(other) => {
-                return Err(FactoryError::BadField {
-                    field: "type".into(),
-                    msg: format!("expected number/color/bool, got `{other}`"),
-                })
-            }
-        };
+        // The expression is typechecked against `type` here, so it is read
+        // at build time.
+        let ty = read_enum_baked(fields, ctx, "type", ExprType::Number, EXPR_TYPES)?;
         let expected = match ty {
             ExprType::Number => maplibre_expr::Type::Number,
             ExprType::Color => maplibre_expr::Type::Color,
@@ -130,8 +128,8 @@ impl NodeFactory for ExprFactory {
             "description": "Evaluate a MapLibre expression once per tile (the tile's zoom is in the context) and emit the result as a Scalar — feed it to any node's scalar field via `@node`. Use for zoom curves (`interpolate`/`step`/legacy `{stops}`); per-feature expressions belong on the consuming node's `*-expr` fields instead.",
             "properties": {
                 "expr": { "description": "A raw MapLibre expression producing `type` (e.g. [\"interpolate\", [\"linear\"], [\"zoom\"], 13, 1, 15, 0])." },
-                "type": { "type": "string", "enum": ["number", "color", "bool"], "default": "number",
-                          "description": "The scalar type the expression must produce (build-time typechecked)." },
+                "type": ezu_graph::schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": ["number", "color", "bool"], "default": "number",
+                          "description": "The scalar type the expression must produce (build-time typechecked)." })),
             },
             "required": ["expr"],
         })

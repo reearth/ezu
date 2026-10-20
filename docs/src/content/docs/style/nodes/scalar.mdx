@@ -20,7 +20,7 @@ Evaluate a MapLibre expression once per tile (the tile's zoom is in the context)
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `expr` | — | yes | A raw MapLibre expression producing `type` (e.g. ["interpolate", ["linear"], ["zoom"], 13, 1, 15, 0]). |
-| `type` | `number` \| `color` \| `bool` | no | The scalar type the expression must produce (build-time typechecked). |
+| `type` | `number` \| `color` \| `bool` \| `$param` | no | The scalar type the expression must produce (build-time typechecked). |
 
 ### `math`
 
@@ -31,7 +31,7 @@ Arithmetic over scalar numbers. Operands accept literals, `$param` references, a
 | `a` | number \| `$param` \| `@node` | yes | — |
 | `b` | number \| `$param` \| `@node` | no | — |
 | `c` | number \| `$param` \| `@node` | no | — |
-| `fn` | `abs` \| `neg` \| `floor` \| `ceil` \| `round` \| `fract` \| `sign` \| `sqrt` \| `exp` \| `log` \| `log2` \| `log10` \| `sin` \| `cos` \| `tan` \| `asin` \| `acos` \| `atan` \| `add` \| `sub` \| `mul` \| `div` \| `mod` \| `min` \| `max` \| `pow` \| `atan2` \| `step` \| `clamp` \| `lerp` \| `smoothstep` | yes | — |
+| `fn` | `abs` \| `neg` \| `floor` \| `ceil` \| `round` \| `fract` \| `sign` \| `sqrt` \| `exp` \| `log` \| `log2` \| `log10` \| `sin` \| `cos` \| `tan` \| `asin` \| `acos` \| `atan` \| `add` \| `sub` \| `mul` \| `div` \| `mod` \| `min` \| `max` \| `pow` \| `atan2` \| `step` \| `clamp` \| `lerp` \| `smoothstep` \| `$param` | yes | — |
 
 ### `zoom`
 

@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use ezu_core::TileId as CoreTileId;
 use ezu_graph::{
-    Asset, EvalCtx, EvalError, FactoryCtx, FactoryError, PortKind, PortValue, RasterBuf,
-    ScalarField,
+    Asset, EnumTable, EvalCtx, EvalError, FactoryCtx, FactoryError, InEnum, InReader, PortKind,
+    PortValue, RasterBuf, ScalarField,
 };
 use ezu_style as spec;
 use hokusai::Brush;
@@ -196,23 +196,6 @@ pub(super) fn read_bool_or(
     })
 }
 
-pub(super) fn read_string_or(
-    fields: &serde_json::Map<String, Value>,
-    name: &str,
-    ctx: &FactoryCtx<'_>,
-    default: &str,
-) -> Result<String, FactoryError> {
-    if !fields.contains_key(name) {
-        return Ok(default.to_string());
-    }
-    let v = resolve_field(fields, name, ctx)?;
-    let s = v.as_str().ok_or_else(|| FactoryError::BadField {
-        field: name.into(),
-        msg: "expected string".into(),
-    })?;
-    Ok(s.to_string())
-}
-
 /// Read a zoom-level field (`min-zoom` / `max-zoom`), absent → `None`.
 pub(super) fn read_optional_zoom(
     fields: &serde_json::Map<String, Value>,
@@ -252,50 +235,23 @@ pub(super) enum BoundaryMode {
     Wrap,
 }
 
-impl BoundaryMode {
-    /// One byte per mode for a node's `param_hash`.
-    pub(super) fn tag(self) -> u8 {
-        match self {
-            BoundaryMode::Clamp => 0,
-            BoundaryMode::Transparent => 1,
-            BoundaryMode::Mirror => 2,
-            BoundaryMode::Wrap => 3,
-        }
-    }
-}
+/// What a `boundary` field accepts; `repeat` is another name for `wrap`.
+pub(super) const BOUNDARIES: EnumTable<BoundaryMode> = &[
+    ("clamp", BoundaryMode::Clamp),
+    ("transparent", BoundaryMode::Transparent),
+    ("mirror", BoundaryMode::Mirror),
+    ("wrap", BoundaryMode::Wrap),
+    ("repeat", BoundaryMode::Wrap),
+];
 
-/// The schema of a `boundary` field read by [`read_boundary`].
+/// The schema of a `boundary` field read through [`BOUNDARIES`].
 pub(super) fn boundary_schema() -> Value {
-    serde_json::json!({
+    ezu_graph::schema_frag::in_enum(serde_json::json!({
         "type": "string",
-        "enum": ["clamp", "transparent", "mirror", "wrap", "repeat"],
+        "enum": ezu_graph::enum_names(BOUNDARIES),
         "default": "clamp",
         "description": "How to read past the input's edge: `clamp` repeats the edge pixel, `transparent` reads nothing, `mirror` reflects the image, and `wrap` (or `repeat`) tiles it, so what leaves one edge comes back in at the opposite one.",
-    })
-}
-
-pub(super) fn read_boundary(
-    fields: &serde_json::Map<String, Value>,
-    name: &str,
-    default: BoundaryMode,
-) -> Result<BoundaryMode, FactoryError> {
-    let Some(v) = fields.get(name) else {
-        return Ok(default);
-    };
-    let s = v.as_str().ok_or_else(|| FactoryError::BadField {
-        field: name.into(),
-        msg: "expected string".into(),
-    })?;
-    match s {
-        "clamp" => Ok(BoundaryMode::Clamp),
-        "transparent" => Ok(BoundaryMode::Transparent),
-        "mirror" => Ok(BoundaryMode::Mirror),
-        "wrap" | "repeat" => Ok(BoundaryMode::Wrap),
-        _ => Err(FactoryError::BadField {
-            field: name.into(),
-            msg: format!("unknown boundary `{s}`, expected clamp/transparent/mirror/wrap"),
-        }),
-    }
+    }))
 }
 
 /// Resolve a possibly out-of-range integer pixel coordinate into a
@@ -397,20 +353,19 @@ pub(super) fn default_field_seed(anchor: Anchor, rng_seed: u64) -> u32 {
     }
 }
 
-pub(super) fn read_anchor(
-    fields: &serde_json::Map<String, Value>,
-    name: &str,
-    ctx: &FactoryCtx<'_>,
-) -> Result<Anchor, FactoryError> {
-    let s = read_string_or(fields, name, ctx, "tile")?;
-    match s.as_str() {
-        "tile" => Ok(Anchor::Tile),
-        "world" => Ok(Anchor::World),
-        _ => Err(FactoryError::BadField {
-            field: name.into(),
-            msg: format!("expected `tile` or `world`, got `{s}`"),
-        }),
+pub(super) const ANCHORS: EnumTable<Anchor> = &[("tile", Anchor::Tile), ("world", Anchor::World)];
+
+/// The schema of an `anchor` field taking `tile` / `world`.
+pub(super) fn anchor_schema(default: &str, description: Option<&str>) -> Value {
+    let mut literal = serde_json::json!({
+        "type": "string",
+        "enum": ["tile", "world"],
+        "default": default,
+    });
+    if let Some(d) = description {
+        literal["description"] = d.into();
     }
+    ezu_graph::schema_frag::in_enum(literal)
 }
 
 pub(super) fn read_xy(
@@ -528,24 +483,52 @@ pub(super) fn hash_stops(stops: &StopsIn, h: &mut xxhash_rust::xxh3::Xxh3) {
     }
 }
 
+/// The colour spaces a stop table can interpolate in, with the two other
+/// names `hsv` and `hcl` go by.
+pub(super) const SPACES: EnumTable<crate::color_interp::InterpSpace> = {
+    use crate::color_interp::InterpSpace as S;
+    &[
+        ("rgb", S::Rgb),
+        ("hsl", S::Hsl),
+        ("hsv", S::Hsv),
+        ("hcl", S::Hcl),
+        ("lab", S::Lab),
+        ("hsb", S::Hsv),
+        ("lch", S::Hcl),
+    ]
+};
+
+/// The schema of a `space` field read by [`read_space`].
+pub(super) fn space_schema(description: &str) -> Value {
+    ezu_graph::schema_frag::in_enum(serde_json::json!({
+        "type": "string",
+        "enum": ["rgb", "hsl", "hsv", "hcl", "lab"],
+        "default": "rgb",
+        "description": description,
+    }))
+}
+
 /// Read an optional colour-interpolation `space` field (`"rgb"` default,
 /// plus `"hsl"` / `"hsv"` / `"hcl"` / `"lab"`). Used by `color-ramp` and the
 /// gradient ops so a stop table can interpolate hue on the shortest path.
+///
+/// A literal is matched without regard to case, as it always has been; a
+/// `string` `$param` must use the lower-case names.
 pub(super) fn read_space(
+    r: &mut InReader<'_, '_>,
     fields: &serde_json::Map<String, Value>,
-) -> Result<crate::color_interp::InterpSpace, FactoryError> {
+) -> Result<InEnum<crate::color_interp::InterpSpace>, FactoryError> {
+    use crate::color_interp::InterpSpace;
     match fields.get("space") {
-        None | Some(Value::Null) => Ok(crate::color_interp::InterpSpace::default()),
-        Some(v) => {
-            let s = v.as_str().ok_or_else(|| FactoryError::BadField {
-                field: "space".into(),
-                msg: "expected a string".into(),
-            })?;
-            crate::color_interp::InterpSpace::parse(s).ok_or_else(|| FactoryError::BadField {
+        None | Some(Value::Null) => Ok(InEnum::constant("space", SPACES, InterpSpace::default())),
+        Some(Value::String(s)) if !s.starts_with(['$', '@']) => {
+            let space = InterpSpace::parse(s).ok_or_else(|| FactoryError::BadField {
                 field: "space".into(),
                 msg: format!("unknown colour space `{s}` (rgb|hsl|hsv|hcl|lab)"),
-            })
+            })?;
+            Ok(InEnum::constant("space", SPACES, space))
         }
+        Some(_) => r.enum_or("space", InterpSpace::default(), SPACES),
     }
 }
 

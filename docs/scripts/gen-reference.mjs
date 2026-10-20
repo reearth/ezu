@@ -122,6 +122,8 @@ function typeOf(frag) {
   if (typeof frag.pattern === 'string') {
     if (frag.pattern.startsWith('^@?')) return '`@node`';
     if (frag.pattern.includes('[$@]')) return frag.pattern.includes('#') ? 'color \\| `$param` \\| `@node`' : '`$param` \\| `@node`';
+    // `schema_frag::in_enum` / `nested_number`: a `$param` and nothing else.
+    if (frag.pattern.startsWith('^\\$')) return '`$param`';
   }
   if (Array.isArray(frag.enum)) return frag.enum.map((v) => `\`${v}\``).join(' \\| ');
   if (Array.isArray(frag.oneOf)) {
@@ -211,7 +213,7 @@ function describe(frag) {
     const nested = mdx(branch?.description);
     // The `$param` / `@node` branch carries boilerplate every numeric
     // field shares; it is the literal's description that is specific.
-    if (nested && !nested.includes('`$param` reference or `@node`')) return nested;
+    if (nested && !nested.startsWith('`$param` reference')) return nested;
   }
   return '—';
 }

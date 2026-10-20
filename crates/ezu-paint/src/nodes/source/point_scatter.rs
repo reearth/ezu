@@ -23,13 +23,13 @@
 
 use ezu_core::seed::{cell_seed, next_unit};
 use ezu_graph::{
-    schema_frag, BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, In, InReader,
-    Node, NodeFactory, PortKind, PortSpec, PortValue,
+    schema_frag, BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, In, InEnum,
+    InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{features_value, read_optional_string, FeatureGroup};
+use crate::nodes::common::{anchor_schema, features_value, Anchor, FeatureGroup, ANCHORS};
 
 const DEFAULT_EXTENT: u32 = 4096;
 
@@ -59,17 +59,11 @@ fn count_for(u: f32) -> u32 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Anchor {
-    Tile,
-    World,
-}
-
 struct PointScatterNode {
     extent: u32,
     spacing_x: In<f64>,
     spacing_y: In<f64>,
-    anchor: Anchor,
+    anchor: InEnum<Anchor>,
     seed: u32,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
@@ -106,7 +100,7 @@ impl Node for PointScatterNode {
         // two tiles covering one cell agree on its contents. The offset is a
         // whole number of extents, which is also why the rounding below
         // cannot disagree between neighbours.
-        let (tox, toy) = match self.anchor {
+        let (tox, toy) = match self.anchor.get(ctx)? {
             Anchor::Tile => (0.0, 0.0),
             Anchor::World => ((ctx.tile.x as f64) * e, (ctx.tile.y as f64) * e),
         };
@@ -161,10 +155,7 @@ impl Node for PointScatterNode {
         h.update(&self.extent.to_le_bytes());
         self.spacing_x.param_hash(h);
         self.spacing_y.param_hash(h);
-        h.update(match self.anchor {
-            Anchor::Tile => &[0u8],
-            Anchor::World => &[1u8],
-        });
+        self.anchor.param_hash(h);
         h.update(&self.seed.to_le_bytes());
     }
     fn param_refs(&self) -> Vec<String> {
@@ -187,22 +178,13 @@ impl NodeFactory for PointScatterFactory {
             .and_then(Value::as_u64)
             .map(|v| v as u32)
             .unwrap_or(DEFAULT_EXTENT);
-        let anchor = match read_optional_string(fields, "anchor")?.as_deref() {
-            None | Some("world") => Anchor::World,
-            Some("tile") => Anchor::Tile,
-            Some(other) => {
-                return Err(FactoryError::BadField {
-                    field: "anchor".into(),
-                    msg: format!("unknown anchor '{other}', expected tile/world"),
-                });
-            }
-        };
         let seed = match fields.get("seed") {
             Some(Value::Number(n)) => n.as_u64().map(|v| v as u32).unwrap_or(DEFAULT_SEED),
             _ => DEFAULT_SEED,
         };
 
         let mut r = InReader::new(fields, ctx, 0);
+        let anchor = r.enum_or("anchor", Anchor::World, ANCHORS)?;
         let (spacing_x, spacing_y) = super::read_spacing(&mut r, fields)?;
         let parts = r.finish();
 
@@ -244,8 +226,7 @@ impl NodeFactory for PointScatterFactory {
                 })),
                 "spacing-x": super::spacing_axis_schema("x"),
                 "spacing-y": super::spacing_axis_schema("y"),
-                "anchor": { "type": "string", "enum": ["tile", "world"], "default": "world",
-                            "description": "`world` indexes the cells off global (0, 0), so adjacent tiles agree on the points they share and the scatter is seamless — the usual choice. `tile` indexes off the tile's own corner, giving every tile the same point set and a visible seam." },
+                "anchor": anchor_schema("world", Some("`world` indexes the cells off global (0, 0), so adjacent tiles agree on the points they share and the scatter is seamless — the usual choice. `tile` indexes off the tile's own corner, giving every tile the same point set and a visible seam.")),
                 "seed": { "type": "integer", "minimum": 0,
                           "description": "Optional explicit u32 seed. Change it to get a different scatter at the same spacing, or to keep two `point-scatter` nodes from landing on each other. Default: a fixed constant, so the pattern is stable across tiles and runs." },
             },

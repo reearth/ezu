@@ -19,21 +19,23 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, Node, NodeFactory, PaddingIn, PortKind, PortSpec, PortValue,
-    RasterBuf,
+    FactoryError, In, InEnum, InReader, Node, NodeFactory, PaddingIn, PortKind, PortSpec,
+    PortValue, RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    boundary_schema, default_field_seed, image_or_field_output, read_boundary, read_number_or,
-    read_optional_string, resample_field, sample_bilinear, unwrap_raster_or_sprite,
-    wrap_raster_like, Anchor, BoundaryMode, ACCEPTS_IMAGE_OR_FIELD,
+    anchor_schema, boundary_schema, default_field_seed, image_or_field_output, read_number_or,
+    resample_field, sample_bilinear, unwrap_raster_or_sprite, wrap_raster_like, Anchor,
+    BoundaryMode, ACCEPTS_IMAGE_OR_FIELD, ANCHORS, BOUNDARIES,
 };
-use crate::nodes::raster::noise_field::{fbm, NoiseKind, Sampler, ScalePx, NOISE_TYPES};
+use crate::nodes::raster::noise_field::{
+    fbm, noise_type_schema, NoiseKind, Sampler, ScalePx, NOISE_TYPES,
+};
 
 struct WarpNode {
-    kind: NoiseKind,
+    kind: InEnum<NoiseKind>,
     scale: ScalePx,
     octaves: u32,
     lacunarity: In<f64>,
@@ -41,8 +43,8 @@ struct WarpNode {
     amp_x: PaddingIn,
     amp_y: PaddingIn,
     seed: Option<u32>,
-    anchor: Anchor,
-    boundary: BoundaryMode,
+    anchor: InEnum<Anchor>,
+    boundary: InEnum<BoundaryMode>,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
 }
@@ -58,7 +60,9 @@ impl Node for WarpNode {
         image_or_field_output(input_kinds)
     }
     fn coord_space(&self) -> CoordSpace {
-        match self.anchor {
+        // Descriptive only, so the declared anchor stands for whatever a
+        // `$param` sets it to at render time.
+        match self.anchor.fallback() {
             Anchor::World => CoordSpace::World,
             Anchor::Tile => CoordSpace::Inherit,
         }
@@ -88,18 +92,21 @@ impl Node for WarpNode {
         let gain = self.gain.get(ctx, inputs)?;
         let amp_x = self.amp_x.get(ctx, inputs)?;
         let amp_y = self.amp_y.get(ctx, inputs)?;
+        let noise = self.kind.get(ctx)?;
+        let anchor = self.anchor.get(ctx)?;
+        let boundary = self.boundary.get(ctx)?;
 
         // Anchoring decides the default seed: a world-anchored field has to
         // be the same field in every tile, so it cannot use a per-tile one.
         let seed = self
             .seed
-            .unwrap_or_else(|| default_field_seed(self.anchor, ctx.rng_seed));
-        let nx = Sampler::build(self.kind, seed);
-        let ny = Sampler::build(self.kind, seed.wrapping_add(0x9E37_79B9));
+            .unwrap_or_else(|| default_field_seed(anchor, ctx.rng_seed));
+        let nx = Sampler::build(noise, seed);
+        let ny = Sampler::build(noise, seed.wrapping_add(0x9E37_79B9));
 
         let pad = ctx.canvas.pad as f64;
         let tile_size = ctx.canvas.tile_w as f64;
-        let (origin_x, origin_y) = match self.anchor {
+        let (origin_x, origin_y) = match anchor {
             Anchor::World => (ctx.tile.x as f64 * tile_size, ctx.tile.y as f64 * tile_size),
             Anchor::Tile => (0.0, 0.0),
         };
@@ -141,7 +148,7 @@ impl Node for WarpNode {
                 let (dx, dy) = offset(x, y);
                 let sx = x as f64 + dx;
                 let sy = y as f64 + dy;
-                let pxv = sample_bilinear(&src, sx, sy, self.boundary);
+                let pxv = sample_bilinear(&src, sx, sy, boundary);
                 let i = ((y * w + x) * 4) as usize;
                 out.pixels[i..i + 4].copy_from_slice(&pxv);
             }
@@ -150,7 +157,7 @@ impl Node for WarpNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"warp");
-        h.update(&[self.kind.tag()]);
+        self.kind.param_hash(h);
         // A single wavelength hashes as the one field it used to be, so
         // existing styles keep their cache keys; `[x, y]` adds the second.
         self.scale.x.param_hash(h);
@@ -170,11 +177,8 @@ impl Node for WarpNode {
             }
             None => h.update(&[0]),
         }
-        h.update(match self.anchor {
-            Anchor::Tile => &[0u8],
-            Anchor::World => &[1u8],
-        });
-        h.update(&[self.boundary.tag()]);
+        self.anchor.param_hash(h);
+        self.boundary.param_hash(h);
     }
     fn param_refs(&self) -> Vec<String> {
         self.param_refs.clone()
@@ -192,21 +196,14 @@ impl NodeFactory for WarpFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let input = take_input_ref(fields, "input")?;
-        let kind = match read_optional_string(fields, "type")?.as_deref() {
-            None => NoiseKind::Perlin,
-            Some(s) => NoiseKind::parse(s).ok_or_else(|| FactoryError::BadField {
-                field: "type".into(),
-                msg: format!(
-                    "unknown noise type `{s}`, expected {}",
-                    NOISE_TYPES.join("/")
-                ),
-            })?,
-        };
         // `octaves` stays static: it's clamped to a derived integer range
         // (1..=12) at build time and used as a loop count in eval.
         let octaves = (read_number_or(fields, "octaves", ctx, 1.0)? as u32).clamp(1, 12);
 
         let mut r = InReader::new(fields, ctx, 1);
+        let kind = r.enum_or("type", NoiseKind::Perlin, NOISE_TYPES)?;
+        let anchor = r.enum_or("anchor", Anchor::World, ANCHORS)?;
+        let boundary = r.enum_or("boundary", BoundaryMode::Clamp, BOUNDARIES)?;
         let scale = ScalePx::read(&mut r, fields)?;
         let lacunarity = r.number_or("lacunarity", 2.0)?;
         let gain = r.number_or("gain", 0.5)?;
@@ -238,17 +235,6 @@ impl NodeFactory for WarpFactory {
                 msg: "expected non-negative integer".into(),
             })? as u32),
         };
-        let anchor = match read_optional_string(fields, "anchor")?.as_deref() {
-            None | Some("world") => Anchor::World,
-            Some("tile") => Anchor::Tile,
-            Some(other) => {
-                return Err(FactoryError::BadField {
-                    field: "anchor".into(),
-                    msg: format!("unknown anchor `{other}`, expected tile/world"),
-                });
-            }
-        };
-        let boundary = read_boundary(fields, "boundary", BoundaryMode::Clamp)?;
 
         let mut ports = vec![PortSpec {
             name: "input",
@@ -285,11 +271,7 @@ impl NodeFactory for WarpFactory {
             "description": "Domain warp via an internal noise field, on a raster, sprite or scalar field; the output is the same kind as the input. With `anchor: world` (default) the warp is seamless across tile borders; the upstream pad grows by `amp-px` to keep samples inside the available raster. Warping an elevation field (`dem`) before `contour` makes the contour lines wobble together without ever crossing, since they stay level lines of one surface; warping a `noise` field with `kind: scalar` gives a swirled field to threshold or ramp. A field keeps its nodata value and geographic scale; nodata samples are left out of the interpolation, and a read with only nodata around it stays nodata. A field always clamps at its edge; `boundary` applies to images.",
             "properties": {
                 "input": schema_frag::node_ref(),
-                "type": {
-                    "type": "string",
-                    "enum": NOISE_TYPES,
-                    "default": "perlin",
-                },
+                "type": noise_type_schema(),
                 "scale-px": ScalePx::schema(),
                 "octaves": { "type": "integer", "minimum": 1, "maximum": 12, "default": 1 },
                 "lacunarity": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 2.0 })),
@@ -300,7 +282,7 @@ impl NodeFactory for WarpFactory {
                 "amp-x-px": schema_frag::px_number(),
                 "amp-y-px": schema_frag::px_number(),
                 "seed": { "type": "integer", "minimum": 0, "description": "Field seed. Omitted, `anchor: world` uses a fixed seed so every tile samples the same field, and `anchor: tile` uses the host's per-tile seed so each tile gets its own. Set it to pin either." },
-                "anchor": { "type": "string", "enum": ["tile", "world"], "default": "world" },
+                "anchor": anchor_schema("world", None),
                 "boundary": boundary_schema(),
             },
             "required": ["input", "scale-px", "amp-px"],

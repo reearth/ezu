@@ -58,16 +58,16 @@ use ezu_features::ops::centroid::polygon_area_centroid;
 use ezu_features::ops::contains::point_in_polygon;
 use ezu_features::ops::polylabel::pole_of_inaccessibility;
 use ezu_graph::{
-    schema_frag, take_input_ref, Asset, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError,
-    FactoryCtx, FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    enum_names, read_enum_baked, schema_frag, take_input_ref, Asset, BuiltNode, Connection,
+    CoordSpace, EnumTable, EvalCtx, EvalError, FactoryCtx, FactoryError, In, InReader, Node,
+    NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
     downcast_features, neighbor_feature_groups, read_bool_or, read_number, read_number_or,
-    read_optional_string, read_optional_zoom, read_string_or, read_xy, FeatureGroup,
-    NeighborGroups,
+    read_optional_string, read_optional_zoom, read_xy, FeatureGroup, NeighborGroups,
 };
 use ezu_core::text::{
     clip_line,
@@ -82,6 +82,55 @@ use super::labels::{
     draw_labels, label_rect, rotated_bounds, set_id, BackgroundDraw, FaceCache, IconDraw,
     LabelDraw, LabelSet, PointVariant,
 };
+
+/// MapLibre's nine anchor names, shared with `stamp`.
+pub(super) const TEXT_ANCHORS: EnumTable<Anchor> = &[
+    ("center", Anchor::Center),
+    ("left", Anchor::Left),
+    ("right", Anchor::Right),
+    ("top", Anchor::Top),
+    ("bottom", Anchor::Bottom),
+    ("top-left", Anchor::TopLeft),
+    ("top-right", Anchor::TopRight),
+    ("bottom-left", Anchor::BottomLeft),
+    ("bottom-right", Anchor::BottomRight),
+];
+
+// The label's layout is fixed when the graph is built — its sizes, offsets
+// and spacing are read then too, and the label pad and the anchor list
+// derive from them — so these fields are read at build time as well: a
+// `$param` in one bakes its default in, with a warning.
+const PLACEMENTS: EnumTable<Placement> = &[
+    ("point", Placement::Point),
+    ("line", Placement::Line),
+    ("line-center", Placement::LineCenter),
+];
+const POLYGON_ANCHORS: EnumTable<PolygonAnchor> = &[
+    ("pole", PolygonAnchor::Pole),
+    ("centroid", PolygonAnchor::Centroid),
+];
+const JUSTIFIES: EnumTable<Justify> = &[
+    ("auto", Justify::Auto),
+    ("left", Justify::Left),
+    ("center", Justify::Center),
+    ("right", Justify::Right),
+];
+const TRANSFORMS: EnumTable<TextTransform> = &[
+    ("none", TextTransform::None),
+    ("uppercase", TextTransform::Uppercase),
+    ("lowercase", TextTransform::Lowercase),
+];
+const OVERLAPS: EnumTable<Overlap> = &[
+    ("never", Overlap::Never),
+    ("always", Overlap::Always),
+    ("fallback", Overlap::Fallback),
+];
+const ICON_TEXT_FITS: EnumTable<IconTextFit> = &[
+    ("none", IconTextFit::None),
+    ("width", IconTextFit::Width),
+    ("height", IconTextFit::Height),
+    ("both", IconTextFit::Both),
+];
 
 /// Parse an optional raw MapLibre expression field, type-checked against
 /// `expect`. Returns `(parsed, raw_json_text)` for a stable cache hash.
@@ -809,16 +858,6 @@ enum PolygonAnchor {
     Centroid,
 }
 
-impl PolygonAnchor {
-    fn parse(s: &str) -> Option<PolygonAnchor> {
-        Some(match s {
-            "pole" => PolygonAnchor::Pole,
-            "centroid" => PolygonAnchor::Centroid,
-            _ => return None,
-        })
-    }
-}
-
 /// One polygon's label anchor under `mode`, with the pole searched to
 /// `precision`.
 fn polygon_anchor(
@@ -903,14 +942,6 @@ enum Placement {
 }
 
 impl Placement {
-    fn parse(s: &str) -> Option<Placement> {
-        Some(match s {
-            "point" => Placement::Point,
-            "line" => Placement::Line,
-            "line-center" => Placement::LineCenter,
-            _ => return None,
-        })
-    }
     /// The `ezu_core` line mode, or `None` for point placement.
     fn line(self) -> Option<LinePlacement> {
         match self {
@@ -3182,11 +3213,7 @@ fn build_icon_config(
         .ok_or_else(|| FactoryError::MissingField("icon-sprite".into()))?;
     let sprite = super::stamp::resolve_sprite_atlas(sprite, ctx)?;
 
-    let anchor_s = read_string_or(fields, "icon-anchor", ctx, "center")?;
-    let anchor = Anchor::parse(&anchor_s).ok_or_else(|| FactoryError::BadField {
-        field: "icon-anchor".into(),
-        msg: format!("unknown anchor `{anchor_s}`"),
-    })?;
+    let anchor = read_enum_baked(fields, ctx, "icon-anchor", Anchor::Center, TEXT_ANCHORS)?;
     let (size_expr, size_expr_src) =
         parse_expr_field(fields, "icon-size-expr", &maplibre_expr::Type::Number)?;
     let (rotate_expr, rotate_expr_src) =
@@ -3195,11 +3222,13 @@ fn build_icon_config(
         parse_expr_field(fields, "icon-opacity-expr", &maplibre_expr::Type::Number)?;
     let (padding_expr, padding_expr_src) =
         parse_expr_field(fields, "icon-padding-expr", &maplibre_expr::Type::Number)?;
-    let fit_s = read_string_or(fields, "icon-text-fit", ctx, "none")?;
-    let text_fit = IconTextFit::parse(&fit_s).ok_or_else(|| FactoryError::BadField {
-        field: "icon-text-fit".into(),
-        msg: format!("unknown fit `{fit_s}`"),
-    })?;
+    let text_fit = read_enum_baked(
+        fields,
+        ctx,
+        "icon-text-fit",
+        IconTextFit::None,
+        ICON_TEXT_FITS,
+    )?;
     let text_fit_padding = read_box_padding(fields, "icon-text-fit-padding", ctx)?;
     Ok(Some(IconConfig {
         sprite,
@@ -3402,28 +3431,21 @@ fn build_text_node(
     };
 
     // Placement (point / line / line-center) and its line-only knobs.
-    let placement_s = read_string_or(fields, "placement", ctx, "point")?;
-    let placement = Placement::parse(&placement_s).ok_or_else(|| FactoryError::BadField {
-        field: "placement".into(),
-        msg: format!("unknown placement `{placement_s}` (point|line|line-center)"),
-    })?;
-    let polygon_anchor_s = read_string_or(fields, "polygon-anchor", ctx, "pole")?;
-    let polygon_anchor =
-        PolygonAnchor::parse(&polygon_anchor_s).ok_or_else(|| FactoryError::BadField {
-            field: "polygon-anchor".into(),
-            msg: format!("unknown polygon-anchor `{polygon_anchor_s}` (pole|centroid)"),
-        })?;
+    let placement = read_enum_baked(fields, ctx, "placement", Placement::Point, PLACEMENTS)?;
+    let polygon_anchor = read_enum_baked(
+        fields,
+        ctx,
+        "polygon-anchor",
+        PolygonAnchor::Pole,
+        POLYGON_ANCHORS,
+    )?;
     let spacing_px = read_number_or(fields, "spacing-px", ctx, 250.0)? as f32;
     let max_angle_deg = read_number_or(fields, "max-angle-deg", ctx, 45.0)? as f32;
     let keep_upright = read_bool_or(fields, "keep-upright", ctx, true)?;
 
     // Layout constants. Enumerated strings are validated here so a
     // typo fails the build instead of silently defaulting.
-    let anchor_s = read_string_or(fields, "anchor", ctx, "center")?;
-    let anchor = Anchor::parse(&anchor_s).ok_or_else(|| FactoryError::BadField {
-        field: "anchor".into(),
-        msg: format!("unknown anchor `{anchor_s}`"),
-    })?;
+    let anchor = read_enum_baked(fields, ctx, "anchor", Anchor::Center, TEXT_ANCHORS)?;
     // `anchor-variants` (MapLibre `text-variable-anchor`): an ordered list
     // of anchors tried on collision. Absent → the fixed `anchor`. Deprecated
     // for `anchor-offsets`, resolved below.
@@ -3449,16 +3471,8 @@ fn build_text_node(
         None => Vec::new(),
     };
     let radial_offset_em = read_number_or(fields, "radial-offset", ctx, 0.0)? as f32;
-    let justify_s = read_string_or(fields, "justify", ctx, "auto")?;
-    let justify = Justify::parse(&justify_s).ok_or_else(|| FactoryError::BadField {
-        field: "justify".into(),
-        msg: format!("unknown justify `{justify_s}` (auto|left|center|right)"),
-    })?;
-    let transform_s = read_string_or(fields, "transform", ctx, "none")?;
-    let transform = TextTransform::parse(&transform_s).ok_or_else(|| FactoryError::BadField {
-        field: "transform".into(),
-        msg: format!("unknown transform `{transform_s}` (none|uppercase|lowercase)"),
-    })?;
+    let justify = read_enum_baked(fields, ctx, "justify", Justify::Auto, JUSTIFIES)?;
+    let transform = read_enum_baked(fields, ctx, "transform", TextTransform::None, TRANSFORMS)?;
     let offset_em = read_xy(fields, "offset-em", ctx, [0.0, 0.0])?;
     // The positions a point label tries. `anchor-offsets` lists them
     // outright and takes over from every older anchor field; without it they
@@ -3599,18 +3613,7 @@ fn build_text_node(
     // `allow-overlap` maps onto two of them.
     let overlap = match fields.get("overlap") {
         Some(_) => {
-            let s = read_string_or(fields, "overlap", ctx, "never")?;
-            let mode = match s.as_str() {
-                "never" => Overlap::Never,
-                "always" => Overlap::Always,
-                "fallback" => Overlap::Fallback,
-                _ => {
-                    return Err(FactoryError::BadField {
-                        field: "overlap".into(),
-                        msg: format!("unknown overlap `{s}` (never|always|fallback)"),
-                    })
-                }
-            };
+            let mode = read_enum_baked(fields, ctx, "overlap", Overlap::Never, OVERLAPS)?;
             if fields.contains_key("allow-overlap") {
                 ctx.warn("`allow-overlap` ignored: `overlap` sets how the label overlaps");
             }
@@ -3873,18 +3876,18 @@ fn text_schema(stage: Stage) -> Value {
                                         "description": "`[top, right, bottom, left]` px between the label's text and the edge of its background box, in the order `icon-text-fit-padding` uses. Setting it gives each point label the box even without `background-color`: the box then paints nothing, but `anchor` and `offset-em` still position it, it is still the label's collision box, and `label-boxes` still reports it as `background` — a way to reserve space around a label or measure a badge drawn by other ops. Default [0, 0, 0, 0]." },
                 "background-radius-px": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0,
                                           "description": "Corner radius of the background box's `background-color` fill in px, clamped to half its shorter side. Default 0 (square corners)." })),
-                "placement": { "type": "string", "enum": ["point", "line", "line-center"],
-                               "description": "MapLibre `symbol-placement`. `point` (default) labels each feature point, and each polygon once at its `polygon-anchor`. `line` repeats labels along each polyline every `spacing-px`; `line-center` places one at each line's arc-length midpoint. Line placement ignores wrapping (`max-width-em`) and lays out a single line along the path." },
-                "polygon-anchor": { "type": "string", "enum": ["pole", "centroid"],
-                                    "description": "Where point placement labels a polygon. `pole` (default) is its pole of inaccessibility, the interior spot farthest from its outline, where MapLibre places it. `centroid` is its area-weighted centroid with any holes cut out, the polygon's balance point, for a label that belongs in the middle of an area such as a block number; where the centroid falls outside the polygon (a C or U shape) the pole is used instead. Past a source's `max-zoom` the anchor is found on the polygon as the source tile holds it, so every deeper zoom labels it in the same place. At the zooms the source serves, each tile finds the anchor on the polygon as that tile was cut, so a polygon reaching further past a tile edge than the tile's buffer gets a separate anchor in each tile it crosses, as in MapLibre; stitching the `features` node does not change that, and tiles generated with a buffer wider than the polygon do. Point placement only." },
+                "placement": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": enum_names(PLACEMENTS),
+                               "description": "MapLibre `symbol-placement`. `point` (default) labels each feature point, and each polygon once at its `polygon-anchor`. `line` repeats labels along each polyline every `spacing-px`; `line-center` places one at each line's arc-length midpoint. Line placement ignores wrapping (`max-width-em`) and lays out a single line along the path." })),
+                "polygon-anchor": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": enum_names(POLYGON_ANCHORS),
+                                    "description": "Where point placement labels a polygon. `pole` (default) is its pole of inaccessibility, the interior spot farthest from its outline, where MapLibre places it. `centroid` is its area-weighted centroid with any holes cut out, the polygon's balance point, for a label that belongs in the middle of an area such as a block number; where the centroid falls outside the polygon (a C or U shape) the pole is used instead. Past a source's `max-zoom` the anchor is found on the polygon as the source tile holds it, so every deeper zoom labels it in the same place. At the zooms the source serves, each tile finds the anchor on the polygon as that tile was cut, so a polygon reaching further past a tile edge than the tile's buffer gets a separate anchor in each tile it crosses, as in MapLibre; stitching the `features` node does not change that, and tiles generated with a buffer wider than the polygon do. Point placement only." })),
                 "spacing-px": { "type": "number", "minimum": 1.0,
                                 "description": "Gap in px between successive line anchors (MapLibre `symbol-spacing`). Line placement only. Default 250." },
                 "max-angle-deg": { "type": "number", "minimum": 0.0,
                                    "description": "Max cumulative bend in degrees the line may turn over a label-length window before the anchor is rejected (MapLibre `text-max-angle`). Line placement only. Default 45." },
                 "keep-upright": { "type": "boolean",
                                   "description": "Flip a right-to-left label so it reads upright (MapLibre `text-keep-upright`). Line placement only. Default true." },
-                "anchor": { "type": "string", "enum": ["center", "left", "right", "top", "bottom", "top-left", "top-right", "bottom-left", "bottom-right"],
-                            "description": "Which part of the label block sits on the point (point placement). Default `center`. Ignored when `anchor-offsets` is set." },
+                "anchor": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": enum_names(TEXT_ANCHORS),
+                            "description": "Which part of the label block sits on the point (point placement). Default `center`. Ignored when `anchor-offsets` is set." })),
                 "anchor-expr": {
                     "description": "A MapLibre string expression (data-driven MapLibre `text-anchor`), evaluated per feature group with the tile's zoom, naming which part of the label block sits on the point: one of `center`, `left`, `right`, `top`, `bottom`, `top-left`, `top-right`, `bottom-left`, `bottom-right`. It takes the place of `anchor` for that group, with `offset-em` (or `radial-offset`) shifting the block as it would for that constant anchor, and `justify: auto` following it. A group whose result is not an anchor name, or whose evaluation fails, uses `anchor`; a result that is not an anchor name is reported once per node. Ignored, with a warning, when `anchor-offsets` or `anchor-variants` is set, since those name the anchors themselves. Point placement only.",
                 },
@@ -3907,8 +3910,8 @@ fn text_schema(stage: Stage) -> Value {
                 "offset-em-expr": {
                     "description": "A MapLibre expression yielding an [x, y] number array in em (data-driven MapLibre `text-offset`), evaluated per feature group with the tile's zoom; takes the place of `offset-em` for that group, wherever `offset-em` applies: the single fixed position (with `anchor` or `anchor-expr`), the per-anchor shift of `anchor-variants`, and the along / across shift of a line label. A result that is not two numbers, or an evaluation error, uses `offset-em`. Ignored, with a warning, on point placement when `anchor-offsets` is set.",
                 },
-                "justify": { "type": "string", "enum": ["auto", "left", "center", "right"],
-                             "description": "Line alignment within the wrapped block. Default `auto` (follows the anchor's horizontal side)." },
+                "justify": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": enum_names(JUSTIFIES),
+                             "description": "Line alignment within the wrapped block. Default `auto` (follows the anchor's horizontal side)." })),
                 "justify-expr": {
                     "description": "A MapLibre string expression (data-driven MapLibre `text-justify`), evaluated per feature group with the tile's zoom, naming `auto`, `left`, `center` or `right`; takes the place of `justify` for that group. A result that names no value (reported once per node) or an evaluation error uses `justify`.",
                 },
@@ -3927,8 +3930,8 @@ fn text_schema(stage: Stage) -> Value {
                 "letter-spacing-em-expr": {
                     "description": "A MapLibre number expression in em (data-driven MapLibre `text-letter-spacing`), evaluated per feature group; takes the place of `letter-spacing-em` for that group.",
                 },
-                "transform": { "type": "string", "enum": ["none", "uppercase", "lowercase"],
-                               "description": "Case transform applied before shaping. Default `none`." },
+                "transform": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": enum_names(TRANSFORMS),
+                               "description": "Case transform applied before shaping. Default `none`." })),
                 "transform-expr": {
                     "description": "A MapLibre string expression (data-driven MapLibre `text-transform`), evaluated per feature group with the tile's zoom, naming `none`, `uppercase` or `lowercase`; takes the place of `transform` for that group. A result that names no value (reported once per node) or an evaluation error uses `transform`.",
                 },
@@ -3943,8 +3946,8 @@ fn text_schema(stage: Stage) -> Value {
                                  "description": "Render outline-font glyphs through the SDF field-sampling path (maplibre-gl-js style, which draws every glyph from an SDF) instead of a per-glyph vector fill / stroke. The halo then comes from a distance threshold rather than a stroke, matching MapLibre's halo shape and cost. SDF glyph (`glyphs`) stacks are unaffected. Default true." },
                 "collide": { "type": "boolean",
                              "description": "Whether to run deterministic label collision. Default true (MapLibre's default). Set false to draw every label (the pre-collision behaviour)." },
-                "overlap": { "type": "string", "enum": ["never", "always", "fallback"],
-                             "description": "What a label does when it collides with labels placed before it. `never` (default): it tries each of its positions (`anchor-offsets`) and drops if none is free. `always` (MapLibre `text-allow-overlap`): it shows at its first position without trying the others, whatever it overlaps. `fallback`: it tries every position as `never` does, and the symbol's text-only or icon-only fallbacks when `icon-optional` / `text-optional` allow them, and only when all are blocked shows at its first position, overlapping; `label-boxes` marks it `overlapped`. A shown label still reserves its box (blocking later labels) unless `ignore-placement`. On a symbol with an icon, `always` takes effect only with `icon-allow-overlap` set too, while `fallback` applies to the whole symbol." },
+                "overlap": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": enum_names(OVERLAPS),
+                             "description": "What a label does when it collides with labels placed before it. `never` (default): it tries each of its positions (`anchor-offsets`) and drops if none is free. `always` (MapLibre `text-allow-overlap`): it shows at its first position without trying the others, whatever it overlaps. `fallback`: it tries every position as `never` does, and the symbol's text-only or icon-only fallbacks when `icon-optional` / `text-optional` allow them, and only when all are blocked shows at its first position, overlapping; `label-boxes` marks it `overlapped`. A shown label still reserves its box (blocking later labels) unless `ignore-placement`. On a symbol with an icon, `always` takes effect only with `icon-allow-overlap` set too, while `fallback` applies to the whole symbol." })),
                 "allow-overlap": { "type": "boolean",
                                    "description": "Deprecated: use `overlap` (`true` is `\"always\"`, `false` is `\"never\"`). MapLibre `text-allow-overlap`: place the label even if it collides. It still reserves its box (blocking later labels) unless `ignore-placement`. Ignored when `overlap` is set. Default false." },
                 "ignore-placement": { "type": "boolean",
@@ -3984,8 +3987,8 @@ fn text_schema(stage: Stage) -> Value {
                 "icon-size": { "type": "number", "minimum": 0.0,
                                "description": "MapLibre `icon-size`: multiplier on the sprite's authored display size (atlas pixels over its pixel ratio). Default 1." },
                 "icon-size-expr": { "description": "A MapLibre number expression, evaluated per feature group; overrides `icon-size`." },
-                "icon-anchor": { "type": "string", "enum": ["center", "left", "right", "top", "bottom", "top-left", "top-right", "bottom-left", "bottom-right"],
-                                 "description": "Which part of the icon sits on the point (MapLibre `icon-anchor`). Default `center`." },
+                "icon-anchor": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": enum_names(TEXT_ANCHORS),
+                                 "description": "Which part of the icon sits on the point (MapLibre `icon-anchor`). Default `center`." })),
                 "icon-offset": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2,
                                  "description": "MapLibre `icon-offset`: shift [x, y] in px, itself scaled by `icon-size`. Default [0, 0]." },
                 "icon-rotate-deg": { "type": "number",
@@ -4004,8 +4007,8 @@ fn text_schema(stage: Stage) -> Value {
                                    "description": "MapLibre `icon-optional`: let the text place when the icon's box is blocked. Default false — icon and text place as one unit." },
                 "text-optional": { "type": "boolean",
                                    "description": "MapLibre `text-optional`: let the icon place when the text's box is blocked. Default false." },
-                "icon-text-fit": { "enum": ["none", "width", "height", "both"],
-                                   "description": "MapLibre `icon-text-fit`: stretch the icon to the box its label occupies, on the named axes. The sprite's `stretchX`/`stretchY`/`content` metadata decides which bands absorb the growth, so a shield keeps its corners; a sprite without it scales whole. The fitted box is also the icon's collision box. Default `none`." },
+                "icon-text-fit": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": enum_names(ICON_TEXT_FITS),
+                                   "description": "MapLibre `icon-text-fit`: stretch the icon to the box its label occupies, on the named axes. The sprite's `stretchX`/`stretchY`/`content` metadata decides which bands absorb the growth, so a shield keeps its corners; a sprite without it scales whole. The fitted box is also the icon's collision box. Default `none`." })),
                 "icon-text-fit-padding": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4,
                                            "description": "MapLibre `icon-text-fit-padding`: `[top, right, bottom, left]` px added around the label's box before the icon is fitted to it. Default [0, 0, 0, 0]." },
             },

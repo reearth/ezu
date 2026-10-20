@@ -106,6 +106,8 @@ mod sharpen_field;
 mod sprite_icon_edges;
 #[path = "paint/stamp_position_jitter.rs"]
 mod stamp_position_jitter;
+#[path = "paint/string_params.rs"]
+mod string_params;
 #[path = "paint/stroke_gap_width.rs"]
 mod stroke_gap_width;
 #[path = "paint/terrain_holes.rs"]

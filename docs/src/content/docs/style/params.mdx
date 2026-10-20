@@ -10,7 +10,9 @@ sidebar:
   "paper":    { "type": "color",  "default": "#fbf6e6" },
   "softness": { "type": "number", "default": 0, "min": 0, "max": 4,
                 "description": "Blur over the finished tile, in px." },
-  "labels":   { "type": "bool",   "default": true }
+  "labels":   { "type": "bool",   "default": true },
+  "ink-mode": { "type": "string", "default": "multiply",
+                "enum": ["multiply", "darken", "normal"] }
 }
 ```
 
@@ -25,12 +27,14 @@ Reference a param with `$name` anywhere a scalar field lives:
 
 | Field | Applies to | Meaning |
 | --- | --- | --- |
-| `type` | all | `color`, `number`, or `bool` — required |
+| `type` | all | `color`, `number`, `bool`, or `string` — required |
 | `default` | all | used when the caller supplies nothing — required |
 | `min` / `max` | `number` | validated on every override; `max` also serves as the static bound for padding-determining fields |
+| `enum` | `string` | the values the param may take; the `default` must be one of them, and every override is checked against the list |
 | `description` | all | surfaced in the generated schema and the editor's params panel |
 
-Colours are `#rrggbb` or `#rrggbbaa`. Bools are `true` / `false`.
+Colours are `#rrggbb` or `#rrggbbaa`. Bools are `true` / `false`. A string is
+any text unless it declares an `enum`.
 
 ## Overriding at render time
 
@@ -48,8 +52,9 @@ let mut params = ezu::graph::ParamValues::new();
 params.set("softness".into(), parse_param_value(&doc.params, "softness", "2")?);
 ```
 
-Every path validates: a number outside `min`/`max`, a malformed colour, or a
-non-boolean fails before rendering. An unset param falls back to its `default`.
+Every path validates: a number outside `min`/`max`, a malformed colour, a
+non-boolean, or a string outside its `enum` fails before rendering. An unset
+param falls back to its `default`.
 
 :::caution[`v` is reserved]
 The tile server uses `v` as a query key, so a param named `v` cannot be overridden
@@ -66,7 +71,7 @@ responsive on a style that takes hundreds of milliseconds cold.
 ## The generated schema
 
 `Document::params_schema()` derives a JSON Schema of the declarations — types,
-defaults, ranges, descriptions:
+defaults, ranges, a string's `enum`, descriptions:
 
 ```sh
 curl http://127.0.0.1:8080/style/params
@@ -77,7 +82,8 @@ serves it at `/style/params`, and in the browser it is the `paramsSchema` getter
 on the wasm [`Renderer`](/ezu/guides/browser-wasm/#building-the-panel-from-the-schema).
 
 Drive your own sliders and colour pickers off that rather than parsing the style.
-The live editor's panel is generated from exactly this.
+The live editor's panel is generated from exactly this: a string with an `enum`
+becomes a menu of its values, and one without a text field.
 
 ## Padding-determining fields need `max`
 
@@ -96,6 +102,40 @@ A `@node` port carries no bound, so the style states one beside it with a
 
 The bound is what the graph budgets padding for, so keep it as tight as the style
 actually needs — an unnecessarily large `max` costs render time on every tile.
+
+## Fields with a fixed set of names
+
+A field that takes one of a few names — a blend `mode`, a stroke `cap`, a noise
+`type` — takes a `string` param:
+
+```json
+"params": {
+  "ink-mode": { "type": "string", "default": "multiply",
+                "enum": ["multiply", "darken", "normal"] }
+},
+"nodes": {
+  "inked": { "op": "blend", "base": "@paper", "over": "@ink", "mode": "$ink-mode" }
+}
+```
+
+The build checks the param against the field: its `default`, and every value its
+`enum` allows, must be names the field accepts, so a param that could be set to
+something the field has no meaning for fails there rather than at the render that
+sets it. Without an `enum` any string can arrive, and a name the field does not
+know fails that render. A `@node` cannot feed such a field, since no node produces
+a string.
+
+Most of these fields follow the param per render. A few decide what the graph is —
+a node's output kind, its ports, the padding it asks for, the neighbour tiles it
+requests — and the graph is fixed before anything renders. Those are read when the
+graph is built: a `$param` there gives its `default`, the build warns that an
+override will not reach the field, and `--strict` refuses it.
+
+| Read per render | Read when the graph is built |
+| --- | --- |
+| `blend` `mode`, `composite`; `stroke` `cap`, `join`; `buffer` `join`; `noise` and `warp` `type`, `anchor`; `warp` and `displace` `boundary`; `color-ramp` `interpolation`, `space`; `gradient-*` `anchor`, `space`; `mix` `space`; `quantize` and `dither` `space`, `dither` `method`; `tiling` `anchor`; `hillshade` `mode`; `flow-field` `direction`; `flow-smear` `sides`, `taper`; `channel-shuffle` `r`/`g`/`b`/`a`; `pick-channel` `channel`; `place` `fit`, `anchor`; `stamp` `anchor`; `point-grid` and `point-scatter` `anchor`; `tile-bounds` `cover`; `graticule` `axes`; `boundary` `clip-edges`; `feature-boolean` `mode`; `label-boxes` `include` | `kind` of `solid`, `circle`, `gradient-*` and `noise`; `math` and `field-math` `fn`; `expr` `type`; `mosaic` `anchor`, `mode`; `features` `stitch`; every enumerated field of `text` and `text-labels` (`placement`, `anchor`, `justify`, …), whose layout is fixed at build time along with its sizes and offsets |
+
+A name inside an array — one entry of `anchor-offsets`, of `parts` — is a literal.
 
 ## Inside a table
 

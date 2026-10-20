@@ -152,7 +152,8 @@ impl Document {
     /// may pass when rendering this style (CLI `--param`, server query
     /// string, library `ParamValues`). Derived from the document's
     /// `params` declarations: numbers carry `minimum` / `maximum`,
-    /// colors a hex-string pattern, and every entry its declared
+    /// colors a hex-string pattern, strings their `enum` when they
+    /// declare one, and every entry its declared
     /// `default` / `description`. Editor UIs can drive sliders and
     /// color pickers straight off this.
     pub fn params_schema(&self) -> serde_json::Value {
@@ -184,6 +185,14 @@ impl Document {
                 ParamKind::Bool => {
                     let mut p = Map::new();
                     p.insert("type".into(), json!("boolean"));
+                    p
+                }
+                ParamKind::String => {
+                    let mut p = Map::new();
+                    p.insert("type".into(), json!("string"));
+                    if let Some(c) = &decl.choices {
+                        p.insert("enum".into(), json!(c));
+                    }
                     p
                 }
             };
@@ -559,8 +568,49 @@ pub struct ParamDecl {
     pub min: Option<f64>,
     #[serde(default)]
     pub max: Option<f64>,
+    /// The strings a `string` param may take. Absent means any string.
+    /// A field with a fixed set of names (a blend mode, a line cap) checks
+    /// this list against its own when the graph is built, so a param that
+    /// could be set to something the field does not accept fails there
+    /// rather than at the render that sets it.
+    #[serde(default, rename = "enum")]
+    pub choices: Option<Vec<String>>,
     #[serde(default)]
     pub description: Option<String>,
+}
+
+impl ParamDecl {
+    /// Check what can be checked without knowing which fields read the
+    /// param: `enum` belongs to `string` params alone, must name at least
+    /// one value, and must contain the `default`. Other kinds' defaults
+    /// are checked against the field that reads them.
+    pub fn check(&self) -> Result<(), String> {
+        let Some(choices) = &self.choices else {
+            if self.kind == ParamKind::String && !self.default.is_string() {
+                return Err(format!("default {} is not a string", self.default));
+            }
+            return Ok(());
+        };
+        if self.kind != ParamKind::String {
+            return Err(format!(
+                "`enum` is only for `string` params, but this one is `{}`",
+                self.kind.name()
+            ));
+        }
+        if choices.is_empty() {
+            return Err("`enum` lists no values".into());
+        }
+        let Some(default) = self.default.as_str() else {
+            return Err(format!("default {} is not a string", self.default));
+        };
+        if !choices.iter().any(|c| c == default) {
+            return Err(format!(
+                "default `{default}` is not one of its `enum`: {}",
+                choices.join(", ")
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq, Clone, Copy)]
@@ -569,6 +619,21 @@ pub enum ParamKind {
     Color,
     Number,
     Bool,
+    /// Free text, or one of the names listed in the declaration's `enum`.
+    /// Fields that take a fixed set of names read it.
+    String,
+}
+
+impl ParamKind {
+    /// The kind as a style writes it in `type`.
+    pub fn name(self) -> &'static str {
+        match self {
+            ParamKind::Color => "color",
+            ParamKind::Number => "number",
+            ParamKind::Bool => "bool",
+            ParamKind::String => "string",
+        }
+    }
 }
 
 /// What a tile-pyramid source does when a tile request 404s within
@@ -1222,6 +1287,10 @@ impl<'a> FieldRef<'a> {
 mod tests {
     use super::*;
 
+    fn props_of<'a>(schema: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
+        &schema["properties"][name]
+    }
+
     #[test]
     fn parses_minimal_document() {
         let json = r##"{
@@ -1385,13 +1454,23 @@ mod tests {
           "params": {
             "ink": { "type": "color", "default": "#000000", "description": "Line color" },
             "k":   { "type": "number", "default": 0.5, "min": 0, "max": 1 },
-            "on":  { "type": "bool", "default": true }
+            "on":  { "type": "bool", "default": true },
+            "mode": { "type": "string", "enum": ["multiply", "screen"], "default": "screen" },
+            "note": { "type": "string", "default": "" }
           },
           "nodes": { "out": { "op": "solid", "color": "$ink" } },
           "output": "@out"
         }"##;
         let doc = Document::from_json(json).unwrap();
         let schema = doc.params_schema();
+        assert_eq!(props_of(&schema, "mode")["type"], "string");
+        assert_eq!(
+            props_of(&schema, "mode")["enum"],
+            serde_json::json!(["multiply", "screen"])
+        );
+        assert_eq!(props_of(&schema, "mode")["default"], "screen");
+        assert_eq!(props_of(&schema, "note")["type"], "string");
+        assert!(props_of(&schema, "note").get("enum").is_none());
         let props = &schema["properties"];
         assert_eq!(props["ink"]["type"], "string");
         assert_eq!(props["ink"]["default"], "#000000");

@@ -8,13 +8,11 @@
 //! ```
 
 use ezu_graph::{
-    BuiltNode, EvalCtx, EvalError, FactoryCtx, FactoryError, In, InReader, Node, NodeFactory,
-    PortKind, PortSpec, PortValue, ScalarValue,
+    read_enum_baked, BuiltNode, EnumTable, EvalCtx, EvalError, FactoryCtx, FactoryError, In,
+    InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, ScalarValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
-
-use crate::nodes::common::read_string_or;
 
 /// One of `math`'s functions. `field-math` applies the same set per
 /// pixel, so its arity and semantics live here once.
@@ -57,95 +55,64 @@ pub(in crate::nodes) enum MathFn {
 }
 
 impl MathFn {
-    /// Every function name, in the order the schema lists them.
-    pub(in crate::nodes) const NAMES: [&'static str; 31] = [
-        "abs",
-        "neg",
-        "floor",
-        "ceil",
-        "round",
-        "fract",
-        "sign",
-        "sqrt",
-        "exp",
-        "log",
-        "log2",
-        "log10",
-        "sin",
-        "cos",
-        "tan",
-        "asin",
-        "acos",
-        "atan",
-        "add",
-        "sub",
-        "mul",
-        "div",
-        "mod",
-        "min",
-        "max",
-        "pow",
-        "atan2",
-        "step",
-        "clamp",
-        "lerp",
-        "smoothstep",
+    /// Every function by name, in the order the schema lists them.
+    pub(in crate::nodes) const TABLE: EnumTable<MathFn> = &[
+        ("abs", Self::Abs),
+        ("neg", Self::Neg),
+        ("floor", Self::Floor),
+        ("ceil", Self::Ceil),
+        ("round", Self::Round),
+        ("fract", Self::Fract),
+        ("sign", Self::Sign),
+        ("sqrt", Self::Sqrt),
+        ("exp", Self::Exp),
+        ("log", Self::Log),
+        ("log2", Self::Log2),
+        ("log10", Self::Log10),
+        ("sin", Self::Sin),
+        ("cos", Self::Cos),
+        ("tan", Self::Tan),
+        ("asin", Self::Asin),
+        ("acos", Self::Acos),
+        ("atan", Self::Atan),
+        ("add", Self::Add),
+        ("sub", Self::Sub),
+        ("mul", Self::Mul),
+        ("div", Self::Div),
+        ("mod", Self::Mod),
+        ("min", Self::Min),
+        ("max", Self::Max),
+        ("pow", Self::Pow),
+        ("atan2", Self::Atan2),
+        ("step", Self::Step),
+        ("clamp", Self::Clamp),
+        ("lerp", Self::Lerp),
+        ("smoothstep", Self::Smoothstep),
     ];
 
     /// How the schema describes the operands, shared by `math` and
     /// `field-math`.
     pub(in crate::nodes) const OPERANDS_DOC: &'static str = "Unary fns use `a`; binary `a b`; `clamp(a, b=lo, c=hi)`, `lerp(a, b, c=t)`, `smoothstep(a=edge0, b=edge1, c=x)`. `log` is the natural logarithm; angles are in radians; `atan2(a=y, b=x)`; `step(a=edge, b=x)` is 0 below the edge and 1 from it on; `fract` is `a - floor(a)`; `sign` is -1, 0 or 1.";
 
-    /// Read the node's `fn` field.
+    /// Read the node's required `fn` field. The function decides how many
+    /// operands the node has, and so its ports, so it is read when the
+    /// graph is built: a `$param` gives its default.
     pub(in crate::nodes) fn read(
         fields: &serde_json::Map<String, Value>,
         ctx: &FactoryCtx<'_>,
     ) -> Result<Self, FactoryError> {
-        let fn_name = read_string_or(fields, "fn", ctx, "")?;
-        Self::parse(&fn_name).ok_or_else(|| FactoryError::BadField {
-            field: "fn".into(),
-            msg: format!(
-                "unknown fn `{fn_name}` (expected {})",
-                Self::NAMES.join("/")
-            ),
-        })
+        if !fields.contains_key("fn") {
+            return Err(FactoryError::MissingField("fn".into()));
+        }
+        read_enum_baked(fields, ctx, "fn", Self::Abs, Self::TABLE)
     }
 
-    fn parse(s: &str) -> Option<Self> {
-        Some(match s {
-            "abs" => Self::Abs,
-            "neg" => Self::Neg,
-            "floor" => Self::Floor,
-            "ceil" => Self::Ceil,
-            "round" => Self::Round,
-            "fract" => Self::Fract,
-            "sign" => Self::Sign,
-            "sqrt" => Self::Sqrt,
-            "exp" => Self::Exp,
-            "log" => Self::Log,
-            "log2" => Self::Log2,
-            "log10" => Self::Log10,
-            "sin" => Self::Sin,
-            "cos" => Self::Cos,
-            "tan" => Self::Tan,
-            "asin" => Self::Asin,
-            "acos" => Self::Acos,
-            "atan" => Self::Atan,
-            "add" => Self::Add,
-            "sub" => Self::Sub,
-            "mul" => Self::Mul,
-            "div" => Self::Div,
-            "mod" => Self::Mod,
-            "min" => Self::Min,
-            "max" => Self::Max,
-            "pow" => Self::Pow,
-            "atan2" => Self::Atan2,
-            "step" => Self::Step,
-            "clamp" => Self::Clamp,
-            "lerp" => Self::Lerp,
-            "smoothstep" => Self::Smoothstep,
-            _ => return None,
-        })
+    /// The schema of the `fn` field.
+    pub(in crate::nodes) fn schema() -> Value {
+        ezu_graph::schema_frag::in_enum(serde_json::json!({
+            "type": "string",
+            "enum": ezu_graph::enum_names(Self::TABLE),
+        }))
     }
 
     /// Number of operands (1 = `a`, 2 = `a b`, 3 = `a b c`).
@@ -387,7 +354,7 @@ impl NodeFactory for MathFactory {
                 MathFn::OPERANDS_DOC
             ),
             "properties": {
-                "fn": { "type": "string", "enum": MathFn::NAMES },
+                "fn": MathFn::schema(),
                 "a": ezu_graph::schema_frag::number(),
                 "b": ezu_graph::schema_frag::number(),
                 "c": ezu_graph::schema_frag::number(),
@@ -405,9 +372,8 @@ mod tests {
 
     #[test]
     fn every_name_parses_to_a_function_with_that_tag() {
-        for name in MathFn::NAMES {
-            let f = MathFn::parse(name).unwrap_or_else(|| panic!("`{name}` does not parse"));
-            assert_eq!(f.tag(), name);
+        for (name, f) in MathFn::TABLE {
+            assert_eq!(f.tag(), *name);
         }
     }
 

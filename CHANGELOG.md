@@ -305,6 +305,23 @@ mean is spelled out in
   `--features-coords` (`tile`, the default, `lonlat` or `px`) and writes one
   tile's collection as the embedding packages' `renderTileWithFeatures`
   returns it.
+- Params can be strings: `{ "type": "string", "default": "multiply",
+  "enum": ["multiply", "screen"] }`. `enum` is optional; when it is given the
+  default must be one of its values, and an override from `--param`, the
+  tile server's query string, or the Rust, Go and JS `params` is refused
+  outside it, as a number outside `min`/`max` is. `params_schema()`
+  (`ParamsSchema`, `paramsSchema`) and `/style/params` carry the `enum`,
+  and the live editor's params panel shows such a param as a menu, or a
+  text field without one.
+- Every field that takes one of a fixed set of names — `blend`'s `mode`,
+  `stroke`'s `cap`, `noise`'s `type`, a `boundary`, an `anchor` — takes a
+  `$param` of type `string`, which most of them follow per render. The build
+  fails when the param's default, or any value its `enum` allows, is not a
+  name the field accepts. The few fields the graph needs before rendering
+  (a generator's `kind`, `math`'s `fn`, `mosaic`'s `mode`, `features`'
+  `stitch`, `text`'s layout) take the param's default, with the build-time
+  warning other such fields give. The schema marks each of these fields as
+  taking a `$param`.
 
 ### Changed
 

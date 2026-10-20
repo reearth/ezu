@@ -129,6 +129,7 @@ impl Collector {
                     ),
                     ScalarValue::Number(n) => format!("{n}"),
                     ScalarValue::Bool(b) => format!("{b}"),
+                    ScalarValue::String(s) => format!("{s:?}"),
                 });
                 None
             }

@@ -6,8 +6,9 @@
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, InfluenceCtx, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    enum_names, schema_frag, take_input_ref, BuiltNode, Connection, EnumTable, EvalCtx, EvalError,
+    FactoryCtx, FactoryError, In, InEnum, InReader, InfluenceCtx, Node, NodeFactory, PortKind,
+    PortSpec, PortValue,
 };
 use serde_json::Value;
 use tiny_skia::{LineCap, LineJoin};
@@ -15,17 +16,29 @@ use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
     canvas_into_raster, color_f32_to_u8, downcast_features, empty_raster, make_canvas,
-    read_string_or, tint_alpha_color,
+    tint_alpha_color,
 };
 use crate::{paint_strokes, StrokeStyle};
+
+pub(super) const CAPS: EnumTable<LineCap> = &[
+    ("butt", LineCap::Butt),
+    ("round", LineCap::Round),
+    ("square", LineCap::Square),
+];
+
+pub(super) const JOINS: EnumTable<LineJoin> = &[
+    ("miter", LineJoin::Miter),
+    ("round", LineJoin::Round),
+    ("bevel", LineJoin::Bevel),
+];
 
 struct StrokeNode {
     color: In<[f32; 4]>,
     width_px: In<f64>,
     gap_width_px: In<f64>,
     opacity: In<f64>,
-    cap: LineCap,
-    join: LineJoin,
+    cap: InEnum<LineCap>,
+    join: InEnum<LineJoin>,
     /// On/off dash pattern in pixels (`None` = solid). Each length may
     /// be a `$param`, so the pattern resolves once per eval.
     dash: Option<Vec<In<f64>>>,
@@ -99,6 +112,8 @@ impl Node for StrokeNode {
         let const_color = tint_alpha_color(rgba8, opacity);
         let const_width = (self.width_px.get(ctx, inputs)? as f32).max(0.0);
         let const_gap = (self.gap_width_px.get(ctx, inputs)? as f32).max(0.0);
+        let cap = self.cap.get(ctx)?;
+        let join = self.join.get(ctx)?;
         // Resolved once here; every group's `StrokeStyle` clones it.
         let dash = match &self.dash {
             None => None,
@@ -160,8 +175,8 @@ impl Node for StrokeNode {
                 let style = StrokeStyle {
                     color,
                     width,
-                    cap: self.cap,
-                    join: self.join,
+                    cap,
+                    join,
                     dash: dash.clone(),
                     gap,
                 };
@@ -173,8 +188,8 @@ impl Node for StrokeNode {
         let style = StrokeStyle {
             color: const_color,
             width: const_width,
-            cap: self.cap,
-            join: self.join,
+            cap,
+            join,
             dash: dash.clone(),
             gap: const_gap,
         };
@@ -188,7 +203,8 @@ impl Node for StrokeNode {
         self.width_px.param_hash(h);
         self.gap_width_px.param_hash(h);
         self.opacity.param_hash(h);
-        h.update(&[cap_tag(self.cap), join_tag(self.join)]);
+        self.cap.param_hash(h);
+        self.join.param_hash(h);
         if let Some(d) = &self.dash {
             h.update(&[1]);
             for v in d {
@@ -219,23 +235,6 @@ impl Node for StrokeNode {
     }
 }
 
-fn cap_tag(c: LineCap) -> u8 {
-    match c {
-        LineCap::Butt => 0,
-        LineCap::Round => 1,
-        LineCap::Square => 2,
-    }
-}
-
-fn join_tag(j: LineJoin) -> u8 {
-    match j {
-        LineJoin::Miter => 0,
-        LineJoin::Round => 1,
-        LineJoin::Bevel => 2,
-        LineJoin::MiterClip => 3,
-    }
-}
-
 pub(super) struct StrokeFactory;
 impl NodeFactory for StrokeFactory {
     fn op_name(&self) -> &'static str {
@@ -247,29 +246,9 @@ impl NodeFactory for StrokeFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let features = take_input_ref(fields, "features")?;
-        let cap = match read_string_or(fields, "cap", ctx, "butt")?.as_str() {
-            "butt" => LineCap::Butt,
-            "round" => LineCap::Round,
-            "square" => LineCap::Square,
-            other => {
-                return Err(FactoryError::BadField {
-                    field: "cap".into(),
-                    msg: format!("expected butt/round/square, got `{other}`"),
-                })
-            }
-        };
-        let join = match read_string_or(fields, "join", ctx, "miter")?.as_str() {
-            "miter" => LineJoin::Miter,
-            "round" => LineJoin::Round,
-            "bevel" => LineJoin::Bevel,
-            other => {
-                return Err(FactoryError::BadField {
-                    field: "join".into(),
-                    msg: format!("expected miter/round/bevel, got `{other}`"),
-                })
-            }
-        };
         let mut r = InReader::new(fields, ctx, 1);
+        let cap = r.enum_or("cap", LineCap::Butt, CAPS)?;
+        let join = r.enum_or("join", LineJoin::Miter, JOINS)?;
         let dash = match fields.get("dasharray") {
             None | Some(Value::Null) => None,
             Some(v) => {
@@ -430,8 +409,8 @@ impl NodeFactory for StrokeFactory {
                 "opacity-expr": {
                     "description": "A MapLibre number expression (JSON array) giving stroke opacity, evaluated per feature group at paint time. When present it overrides the constant `opacity`; a group whose expression doesn't resolve to a number falls back to `opacity`.",
                 },
-                "cap": { "type": "string", "enum": ["butt", "round", "square"], "default": "butt" },
-                "join": { "type": "string", "enum": ["miter", "round", "bevel"], "default": "miter" },
+                "cap": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": enum_names(CAPS), "default": "butt" })),
+                "join": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": enum_names(JOINS), "default": "miter" })),
                 "dasharray": { "type": "array",
                                "items": schema_frag::nested_number(serde_json::json!({ "type": "number", "minimum": 0.0 })),
                                "description": "On/off lengths in pixels; omit for solid. Each length may be a `$param`." },

@@ -24,7 +24,8 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, take_optional_input_ref, BuiltNode, Connection, CoordSpace,
-    EvalCtx, EvalError, FactoryCtx, FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    EnumTable, EvalCtx, EvalError, FactoryCtx, FactoryError, InEnum, InReader, Node, NodeFactory,
+    PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -86,13 +87,17 @@ struct LabelBoxesNode {
     parts: u8,
     /// Also emit the candidates that lost their collision test or were
     /// dropped by the same-value dedupe.
-    include_rejected: bool,
+    include_rejected: InEnum<bool>,
     /// `filter-expr`, compiled once, and its source for the cache key.
     filter_expr: Option<maplibre_expr::Expr>,
     filter_expr_src: Option<String>,
     extent: u32,
     ports: Vec<PortSpec>,
+    param_refs: Vec<String>,
 }
+
+/// `include`: whether to add the labels that did not place.
+const INCLUDES: EnumTable<bool> = &[("placed", false), ("all", true)];
 
 /// Converts the label frame (px, this tile's origin at 0) to the emitted
 /// geometry's extent units, and collects the boxes that pass `filter`.
@@ -398,6 +403,7 @@ impl Node for LabelBoxesNode {
                 ));
             }
         }
+        let include_rejected = self.include_rejected.get(ctx)?;
         let mut out = Emitter {
             sx: self.extent as f32 / ctx.canvas.tile_w.max(1) as f32,
             sy: self.extent as f32 / ctx.canvas.tile_h.max(1) as f32,
@@ -416,7 +422,7 @@ impl Node for LabelBoxesNode {
                 };
                 self.emit_label(&mut out, layer, set, p.cand, p.variant, outcome);
             }
-            if self.include_rejected {
+            if include_rejected {
                 // A losing candidate is shown as it first tried to place.
                 for &cand in &placed.outcome.rejected {
                     self.emit_label(&mut out, layer, set, cand, 0, Outcome::Collided);
@@ -430,13 +436,17 @@ impl Node for LabelBoxesNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"label-boxes");
-        h.update(&[self.parts, self.include_rejected as u8]);
+        h.update(&[self.parts]);
+        self.include_rejected.param_hash(h);
         h.update(&self.extent.to_le_bytes());
         h.update(&(self.ports.len() as u64).to_le_bytes());
         if let Some(s) = &self.filter_expr_src {
             h.update(b"fexpr");
             h.update(s.as_bytes());
         }
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -448,7 +458,7 @@ impl NodeFactory for LabelBoxesFactory {
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
-        _ctx: &FactoryCtx<'_>,
+        ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let mut ports = vec![PortSpec::new("placement", ACCEPTS_LABELS)];
         let mut connections = vec![Connection {
@@ -484,16 +494,9 @@ impl NodeFactory for LabelBoxesFactory {
                 mask
             }
         };
-        let include_rejected = match fields.get("include").map(|v| v.as_str()) {
-            None | Some(Some("placed")) => false,
-            Some(Some("all")) => true,
-            Some(_) => {
-                return Err(FactoryError::BadField {
-                    field: "include".into(),
-                    msg: "expected `placed` or `all`".into(),
-                })
-            }
-        };
+        let mut r = InReader::new(fields, ctx, ports.len());
+        let include_rejected = r.enum_or("include", false, INCLUDES)?;
+        let param_refs = r.finish().param_refs;
         let extent = match fields.get("extent") {
             None => DEFAULT_EXTENT,
             Some(v) => v
@@ -522,6 +525,7 @@ impl NodeFactory for LabelBoxesFactory {
                 filter_expr_src,
                 extent,
                 ports,
+                param_refs,
             }),
             connections,
         })
@@ -543,11 +547,12 @@ impl NodeFactory for LabelBoxesFactory {
                     "items": { "enum": ["text", "icon", "background", "glyph", "collision"] },
                     "description": "Which boxes to emit. Default: every kind a label has."
                 },
-                "include": {
+                "include": schema_frag::in_enum(serde_json::json!({
+                    "type": "string",
                     "enum": ["placed", "all"],
                     "default": "placed",
                     "description": "`placed` emits the labels that placed; `all` adds the candidates that lost their collision test or were dropped by `dedupe-key-expr`, with `placed: false`, at their first anchor. Duplicate copies of one label are never emitted."
-                },
+                })),
                 "filter-expr": {
                     "description": "A MapLibre filter expression (JSON array, e.g. [\">\", [\"coalesce\", [\"get\", \"variant-index\"], 0], 0]), evaluated per box against every property the box carries, `part` included, with `geometry-type` `Polygon`. A box is emitted only when the expression is truthy; one whose expression errors is dropped. Picks out, say, the labels that moved off their first position, to draw a leader line to their feature."
                 },

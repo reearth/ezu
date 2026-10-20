@@ -72,8 +72,8 @@ the tile server serves at `/style/params`:
 
 ```js
 for (const [name, p] of Object.entries(r.paramsSchema.properties)) {
-  // p.type: 'number' | 'string' (format 'color') | 'boolean'
-  // p.default, p.minimum, p.maximum, p.description
+  // p.type: 'number' | 'string' (format 'color' for a colour) | 'boolean'
+  // p.default, p.minimum, p.maximum, p.enum (a string's values), p.description
   panel.append(control(name, p));
 }
 ```

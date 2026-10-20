@@ -42,8 +42,8 @@ use std::sync::Arc;
 use ezu_features::ops::boolean::polygon_union_all;
 use ezu_features::ops::clip::{clip_line_to_rect, clip_polygon_to_rect, ClipRect, Span};
 use ezu_graph::{
-    Asset, AssetError, BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, Node,
-    NodeFactory, PortKind, PortSpec, PortValue,
+    read_enum_baked, schema_frag, Asset, AssetError, BuiltNode, CoordSpace, EnumTable, EvalCtx,
+    EvalError, FactoryCtx, FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -62,6 +62,8 @@ enum Stitch {
     /// Keep each tile's pieces as they are.
     Pieces,
 }
+
+const STITCHES: EnumTable<Stitch> = &[("merge", Stitch::Merge), ("pieces", Stitch::Pieces)];
 
 struct FeaturesNode {
     name: String,
@@ -367,16 +369,18 @@ impl NodeFactory for FeaturesFactory {
         let min_zoom_field = read_optional_string(fields, "min-zoom-field")?;
         let min_zoom = read_optional_zoom(fields, "min-zoom")?;
         let max_zoom = read_optional_zoom(fields, "max-zoom")?;
-        let stitch = match read_optional_string(fields, "stitch")?.as_deref() {
+        // Stitching decides which neighbour bindings the node asks the
+        // host for, which happens before rendering, so it is read at
+        // build time.
+        let stitch = match fields.get("stitch") {
             None => None,
-            Some("merge") => Some(Stitch::Merge),
-            Some("pieces") => Some(Stitch::Pieces),
-            Some(other) => {
-                return Err(FactoryError::BadField {
-                    field: "stitch".into(),
-                    msg: format!("unknown stitch '{other}', expected merge/pieces"),
-                })
-            }
+            Some(_) => Some(read_enum_baked(
+                fields,
+                ctx,
+                "stitch",
+                Stitch::Merge,
+                STITCHES,
+            )?),
         };
         Ok(BuiltNode {
             node: Box::new(FeaturesNode {
@@ -408,8 +412,8 @@ impl NodeFactory for FeaturesFactory {
                               "description": "Style-level minimum zoom. Below this zoom the node emits an empty layer (the asset is not even loaded)." },
                 "max-zoom": { "type": "integer", "minimum": 0, "maximum": 24,
                               "description": "Style-level maximum zoom. Above this zoom the node emits an empty layer." },
-                "stitch": { "type": "string", "enum": ["merge", "pieces"],
-                            "description": "Join the layer to its 8 neighbouring tiles, for effects that reach further than the tile's thin buffer: wide strokes along outlines, large buffers, closings. Each tile contributes only the area it owns, so nothing is drawn twice. `merge` unions polygons with identical properties so no edge remains where tiles meet; `pieces` keeps every piece as its tile cut it (cheaper, and identical when the layer is only filled). Costs fetching and decoding up to 8 more tiles for this layer only; a neighbour the host cannot provide falls back to this tile's own buffer data. Omit to read this tile alone." },
+                "stitch": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": ["merge", "pieces"],
+                            "description": "Join the layer to its 8 neighbouring tiles, for effects that reach further than the tile's thin buffer: wide strokes along outlines, large buffers, closings. Each tile contributes only the area it owns, so nothing is drawn twice. `merge` unions polygons with identical properties so no edge remains where tiles meet; `pieces` keeps every piece as its tile cut it (cheaper, and identical when the layer is only filled). Costs fetching and decoding up to 8 more tiles for this layer only; a neighbour the host cannot provide falls back to this tile's own buffer data. Omit to read this tile alone. Read when the graph is built: a `$param` gives its default." })),
             },
             "required": ["layer"],
         })

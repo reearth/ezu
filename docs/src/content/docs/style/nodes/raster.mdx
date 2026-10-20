@@ -28,9 +28,9 @@ Composite `over` onto `base` with a W3C blend mode and a Porter-Duff operator (`
 | --- | --- | --- | --- |
 | `base` | `@node` | yes | Reference to another node (`@name`). |
 | `clip` | boolean \| `$param` \| `@node` | no | Deprecated: use `"composite": "source-atop"`, which is what `true` means. Ignored when `composite` is set. |
-| `composite` | `clear` \| `copy` \| `destination` \| `source-over` \| `destination-over` \| `source-in` \| `destination-in` \| `source-out` \| `destination-out` \| `source-atop` \| `destination-atop` \| `xor` \| `over` \| `source` \| `dest-out` \| `erase` | no | Porter-Duff operator, by its W3C Compositing name. `over`, `source`, and `dest-out` / `erase` are accepted for `source-over`, `copy` and `destination-out`. |
+| `composite` | `clear` \| `copy` \| `destination` \| `source-over` \| `destination-over` \| `source-in` \| `destination-in` \| `source-out` \| `destination-out` \| `source-atop` \| `destination-atop` \| `xor` \| `over` \| `source` \| `dest-out` \| `erase` \| `$param` | no | Porter-Duff operator, by its W3C Compositing name. `over`, `source`, and `dest-out` / `erase` are accepted for `source-over`, `copy` and `destination-out`. |
 | `mask` | `@node` | no | Reference to another node (`@name`). |
-| `mode` | `normal` \| `multiply` \| `screen` \| `overlay` \| `darken` \| `lighten` \| `color-dodge` \| `color-burn` \| `hard-light` \| `soft-light` \| `difference` \| `exclusion` \| `hue` \| `saturation` \| `color` \| `luminosity` | no | — |
+| `mode` | `normal` \| `multiply` \| `screen` \| `overlay` \| `darken` \| `lighten` \| `color-dodge` \| `color-burn` \| `hard-light` \| `soft-light` \| `difference` \| `exclusion` \| `hue` \| `saturation` \| `color` \| `luminosity` \| `$param` | no | — |
 | `opacity` | number (0…1) \| `$param` \| `@node` | no | — |
 | `over` | `@node` | yes | Reference to another node (`@name`). |
 
@@ -84,11 +84,11 @@ Rearrange RGBA channels. Each output (`r`/`g`/`b`/`a`) names which input channel
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `a` | `r` \| `g` \| `b` \| `a` \| `luminance` \| `0` \| `1` | no | — |
-| `b` | `r` \| `g` \| `b` \| `a` \| `luminance` \| `0` \| `1` | no | — |
-| `g` | `r` \| `g` \| `b` \| `a` \| `luminance` \| `0` \| `1` | no | — |
+| `a` | `r` \| `g` \| `b` \| `a` \| `luminance` \| `0` \| `1` \| `$param` | no | — |
+| `b` | `r` \| `g` \| `b` \| `a` \| `luminance` \| `0` \| `1` \| `$param` | no | — |
+| `g` | `r` \| `g` \| `b` \| `a` \| `luminance` \| `0` \| `1` \| `$param` | no | — |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
-| `r` | `r` \| `g` \| `b` \| `a` \| `luminance` \| `0` \| `1` | no | — |
+| `r` | `r` \| `g` \| `b` \| `a` \| `luminance` \| `0` \| `1` \| `$param` | no | — |
 
 ### `circle`
 
@@ -106,7 +106,7 @@ Centred disk source. `kind: raster` (default) renders at canvas size with radius
 | `color` | color \| `$param` \| `@node` | yes | sRGB hex color, `$param` reference, or `@node` scalar port. |
 | `hardness` | number (0…1) \| `$param` \| `@node` | no | — |
 | `height-px` | integer (1…∞) | no | — |
-| `kind` | `raster` \| `sprite` | no | — |
+| `kind` | `raster` \| `sprite` \| `$param` | no | — |
 | `radius-frac` | number (0…1) \| `$param` \| `@node` | yes | — |
 | `width-px` | integer (1…∞) | no | — |
 
@@ -117,10 +117,10 @@ Map a `ScalarField` (or a `Raster`, by its luminance — a gradient map) to colo
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `field` | `@node` | yes | Reference to another node (`@name`). |
-| `interpolation` | `linear` \| `step` | no | `linear` (default) blends the colours of the two stops around a value. `step` gives a value the colour of the stop at or below it (the first stop's below them all), as MapLibre's `step` does, so the ramp paints flat bands. Ignored with `ramp-expr`. |
+| `interpolation` | `linear` \| `step` \| `$param` | no | `linear` (default) blends the colours of the two stops around a value. `step` gives a value the colour of the stop at or below it (the first stop's below them all), as MapLibre's `step` does, so the ramp paints flat bands. Ignored with `ramp-expr`. |
 | `opacity` | number (0…1) \| `$param` \| `@node` | no | Uniform output-alpha multiplier (layer opacity). Default 1.0. Feed an `expr` node via `@node` for a zoom curve. |
 | `ramp-expr` | — | no | A MapLibre color expression over `heatmap-density` (e.g. a `heatmap-color` value). When present it overrides `stops`: the expression is baked into a 256-entry LUT per eval (zoom in context), inputs clamp to [0, 1], and lookups interpolate linearly between entries — mirroring MapLibre's 256-px ramp texture. `stops` is only required when this is absent. |
-| `space` | `rgb` \| `hsl` \| `hsv` \| `hcl` \| `lab` | no | Colour space the stops interpolate in. `rgb` (default) is a straight sRGB lerp; `hsl`/`hsv`/`hcl` interpolate hue on the shortest path; `hcl`/`lab` are perceptual (ported from the MapLibre style spec). |
+| `space` | `rgb` \| `hsl` \| `hsv` \| `hcl` \| `lab` \| `$param` | no | Colour space the stops interpolate in. `rgb` (default) is a straight sRGB lerp; `hsl`/`hsv`/`hcl` interpolate hue on the shortest path; `hcl`/`lab` are perceptual (ported from the MapLibre style spec). |
 | `stops` | array of object | no | Either half of a stop may be a `$param`, so a ramp can be recoloured or rescaled at render time. The table is sorted by `value` on every eval, so a param may reorder it. |
 
 ### `color-to-alpha`
@@ -191,7 +191,7 @@ Photoshop-style displacement map. Output pixel reads `input` at a position offse
 | `amp-x-px-max` | number (0…∞) | no | Upper bound on `amp-x-px` for padding, required when `amp-x-px` is an `@node` port. Values above it are clamped. |
 | `amp-y-px` | number (0…∞) \| `$param` \| `@node` | no | — |
 | `amp-y-px-max` | number (0…∞) | no | Upper bound on `amp-y-px` for padding, required when `amp-y-px` is an `@node` port. Values above it are clamped. |
-| `boundary` | `clamp` \| `transparent` \| `mirror` \| `wrap` \| `repeat` | no | How to read past the input's edge: `clamp` repeats the edge pixel, `transparent` reads nothing, `mirror` reflects the image, and `wrap` (or `repeat`) tiles it, so what leaves one edge comes back in at the opposite one. |
+| `boundary` | `clamp` \| `transparent` \| `mirror` \| `wrap` \| `repeat` \| `$param` | no | How to read past the input's edge: `clamp` repeats the edge pixel, `transparent` reads nothing, `mirror` reflects the image, and `wrap` (or `repeat`) tiles it, so what leaves one edge comes back in at the opposite one. |
 | `displacement` | `@node` | yes | Reference to another node (`@name`). |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
 
@@ -211,9 +211,9 @@ Reduce to a fixed `palette` with dithering so gradients survive a small palette.
 | --- | --- | --- | --- |
 | `amount` | number (0…1) \| `$param` \| `@node` | no | Ordered-dither strength (ignored for floyd-steinberg). |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
-| `method` | `floyd-steinberg` \| `ordered` | no | — |
+| `method` | `floyd-steinberg` \| `ordered` \| `$param` | no | — |
 | `palette` | array of string | yes | Each entry is `#rrggbb` / `#rrggbbaa` (alpha ignored for matching) or a `$param`, so a palette can be recoloured at render time. |
-| `space` | `lab` \| `rgb` | no | — |
+| `space` | `lab` \| `rgb` \| `$param` | no | — |
 
 ### `edge-detect`
 
@@ -254,10 +254,10 @@ Per-pixel arithmetic over scalar fields, with the same functions as `math`. Unar
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `a` | number \| `$param` \| `@node` | yes | `$param` reference, or `@node` that outputs a ScalarField or a Scalar. |
-| `b` | number \| `$param` \| `@node` | no | `$param` reference, or `@node` that outputs a ScalarField or a Scalar. |
-| `c` | number \| `$param` \| `@node` | no | `$param` reference, or `@node` that outputs a ScalarField or a Scalar. |
-| `fn` | `abs` \| `neg` \| `floor` \| `ceil` \| `round` \| `fract` \| `sign` \| `sqrt` \| `exp` \| `log` \| `log2` \| `log10` \| `sin` \| `cos` \| `tan` \| `asin` \| `acos` \| `atan` \| `add` \| `sub` \| `mul` \| `div` \| `mod` \| `min` \| `max` \| `pow` \| `atan2` \| `step` \| `clamp` \| `lerp` \| `smoothstep` | yes | — |
+| `a` | number \| `$param` \| `@node` | yes | — |
+| `b` | number \| `$param` \| `@node` | no | — |
+| `c` | number \| `$param` \| `@node` | no | — |
+| `fn` | `abs` \| `neg` \| `floor` \| `ceil` \| `round` \| `fract` \| `sign` \| `sqrt` \| `exp` \| `log` \| `log2` \| `log10` \| `sin` \| `cos` \| `tan` \| `asin` \| `acos` \| `atan` \| `add` \| `sub` \| `mul` \| `div` \| `mod` \| `min` \| `max` \| `pow` \| `atan2` \| `step` \| `clamp` \| `lerp` \| `smoothstep` \| `$param` | yes | — |
 
 ### `flow-field`
 
@@ -265,7 +265,7 @@ Direction raster from an elevation field: which way the ground falls, rises, or 
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `direction` | `downhill` \| `uphill` \| `along` | no | `downhill` follows the fall line, `uphill` points the other way, and `along` follows the contour lines with downhill on its right-hand side (counter-clockwise around a summit on a north-up map). |
+| `direction` | `downhill` \| `uphill` \| `along` \| `$param` | no | `downhill` follows the fall line, `uphill` points the other way, and `along` follows the contour lines with downhill on its right-hand side (counter-clockwise around a summit on a north-up map). |
 | `exaggeration` | number \| `$param` \| `@node` | no | Multiplier on the gradient before the slope angle is taken, as in `hillshade`. |
 | `field` | `@node` | yes | Reference to another node (`@name`). |
 | `max-deg` | number \| `$param` \| `@node` | no | Slope angle (degrees) at which the vector reaches full length. Ignored with `normalize`. |
@@ -281,8 +281,8 @@ Smears `input` along the streamlines of a direction `field` (line integral convo
 | `input` | `@node` | yes | Reference to another node (`@name`). |
 | `length-px` | number (0…∞) \| `$param` \| `@node` | no | Walk length in px each way, at full field length. |
 | `length-px-max` | number (0…∞) | no | Upper bound on `length-px` for padding, required when `length-px` is an `@node` port. Values above it are clamped. |
-| `sides` | `both` \| `forward` \| `backward` | no | `both` smears each way along the field, so a speck becomes a stroke centred on it; `forward` smears only the way the field points, so a speck trails a comet tail downstream; `backward` smears only against it, so the tail runs upstream. |
-| `taper` | `flat` \| `smooth` | no | `flat` weights every sample alike; `smooth` fades them towards the ends of the walk (a Hann window), softening the stroke ends. |
+| `sides` | `both` \| `forward` \| `backward` \| `$param` | no | `both` smears each way along the field, so a speck becomes a stroke centred on it; `forward` smears only the way the field points, so a speck trails a comet tail downstream; `backward` smears only against it, so the tail runs upstream. |
+| `taper` | `flat` \| `smooth` \| `$param` | no | `flat` weights every sample alike; `smooth` fades them towards the ends of the walk (a Hann window), softening the stroke ends. |
 
 ### `gradient-conic`
 
@@ -297,11 +297,11 @@ Conic (sweep) gradient around `center`. Gradient parameter is the clockwise angl
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `anchor` | `tile` \| `world` | no | — |
+| `anchor` | `tile` \| `world` \| `$param` | no | — |
 | `center` | array of number | no | — |
 | `height-px` | integer (1…∞) | no | — |
-| `kind` | `raster` \| `sprite` | no | — |
-| `space` | `rgb` \| `hsl` \| `hsv` \| `hcl` \| `lab` | no | Colour space the stops interpolate in; hue-based spaces take the shortest path. |
+| `kind` | `raster` \| `sprite` \| `$param` | no | — |
+| `space` | `rgb` \| `hsl` \| `hsv` \| `hcl` \| `lab` \| `$param` | no | Colour space the stops interpolate in; hue-based spaces take the shortest path. |
 | `start-angle` | number \| `$param` \| `@node` | no | — |
 | `stops` | array of array of — | yes | `[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order. |
 | `width-px` | integer (1…∞) | no | — |
@@ -319,12 +319,12 @@ Diamond gradient from `center`. Gradient parameter is Manhattan (|dx| + |dy|) di
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `anchor` | `tile` \| `world` | no | — |
+| `anchor` | `tile` \| `world` \| `$param` | no | — |
 | `center` | array of number | no | — |
 | `height-px` | integer (1…∞) | no | — |
-| `kind` | `raster` \| `sprite` | no | — |
+| `kind` | `raster` \| `sprite` \| `$param` | no | — |
 | `radius` | number (0…∞) \| `$param` \| `@node` | no | — |
-| `space` | `rgb` \| `hsl` \| `hsv` \| `hcl` \| `lab` | no | Colour space the stops interpolate in; hue-based spaces take the shortest path. |
+| `space` | `rgb` \| `hsl` \| `hsv` \| `hcl` \| `lab` \| `$param` | no | Colour space the stops interpolate in; hue-based spaces take the shortest path. |
 | `stops` | array of array of — | yes | `[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order. |
 | `width-px` | integer (1…∞) | no | — |
 
@@ -341,11 +341,11 @@ Linear gradient from `start` to `end` (fractional coords). `kind: raster` (defau
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `anchor` | `tile` \| `world` | no | — |
+| `anchor` | `tile` \| `world` \| `$param` | no | — |
 | `end` | array of number | no | — |
 | `height-px` | integer (1…∞) | no | — |
-| `kind` | `raster` \| `sprite` | no | — |
-| `space` | `rgb` \| `hsl` \| `hsv` \| `hcl` \| `lab` | no | Colour space the stops interpolate in; hue-based spaces take the shortest path. |
+| `kind` | `raster` \| `sprite` \| `$param` | no | — |
+| `space` | `rgb` \| `hsl` \| `hsv` \| `hcl` \| `lab` \| `$param` | no | Colour space the stops interpolate in; hue-based spaces take the shortest path. |
 | `start` | array of number | no | — |
 | `stops` | array of array of — | yes | `[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order. |
 | `width-px` | integer (1…∞) | no | — |
@@ -363,13 +363,13 @@ Radial gradient from `center` outward. Gradient parameter is Euclidean distance 
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `anchor` | `tile` \| `world` | no | — |
+| `anchor` | `tile` \| `world` \| `$param` | no | — |
 | `aspect` | number (0…∞) \| `$param` \| `@node` | no | — |
 | `center` | array of number | no | — |
 | `height-px` | integer (1…∞) | no | — |
-| `kind` | `raster` \| `sprite` | no | — |
+| `kind` | `raster` \| `sprite` \| `$param` | no | — |
 | `radius` | number (0…∞) \| `$param` \| `@node` | no | — |
-| `space` | `rgb` \| `hsl` \| `hsv` \| `hcl` \| `lab` | no | Colour space the stops interpolate in; hue-based spaces take the shortest path. |
+| `space` | `rgb` \| `hsl` \| `hsv` \| `hcl` \| `lab` \| `$param` | no | Colour space the stops interpolate in; hue-based spaces take the shortest path. |
 | `stops` | array of array of — | yes | `[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order. |
 | `width-px` | integer (1…∞) | no | — |
 
@@ -384,7 +384,7 @@ Analytical hillshade (Horn 1981) from a ScalarField. `mode: shade` outputs grays
 | `exaggeration` | number \| `$param` \| `@node` | no | Extra vertical exaggeration on top of z-factor. |
 | `field` | `@node` | yes | Reference to another node (`@name`). |
 | `highlight-color` | color \| `$param` \| `@node` | no | sRGB hex color, `$param` reference, or `@node` scalar port. |
-| `mode` | `shade` \| `relief` | no | — |
+| `mode` | `shade` \| `relief` \| `$param` | no | — |
 | `multidirectional` | boolean \| `$param` \| `@node` | no | ESRI-style 4-direction weighted hillshade — softer, more legible at small zooms. |
 | `shadow-color` | color \| `$param` \| `@node` | no | sRGB hex color, `$param` reference, or `@node` scalar port. |
 | `z-factor` | number \| `$param` \| `@node` | no | Multiplier on elevation before gradient — use ~1/cos(lat) for high latitudes. |
@@ -474,7 +474,7 @@ Interpolate two rasters per-pixel by scalar `t` (0..1) in colour `space`. A stra
 | --- | --- | --- | --- |
 | `a` | `@node` | yes | Reference to another node (`@name`). |
 | `b` | `@node` | yes | Reference to another node (`@name`). |
-| `space` | `rgb` \| `hsl` \| `hsv` \| `hcl` \| `lab` | no | Colour space the interpolation runs in; hue-based spaces take the shortest path. |
+| `space` | `rgb` \| `hsl` \| `hsv` \| `hcl` \| `lab` \| `$param` | no | Colour space the interpolation runs in; hue-based spaces take the shortest path. |
 | `t` | number (0…1) \| `$param` \| `@node` | no | — |
 
 ### `mosaic`
@@ -491,11 +491,11 @@ Quantize a raster into uniform square blocks. `mode` selects how each block is s
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `anchor` | `world` \| `tile` | no | `world` (default) makes the block grid seamless across map tiles by growing the upstream pad. `tile` restarts the grid at every map tile's top-left and requires no extra padding. |
+| `anchor` | `tile` \| `world` \| `$param` | no | `world` (default) makes the block grid seamless across map tiles by growing the upstream pad. `tile` restarts the grid at every map tile's top-left and requires no extra padding. Read when the graph is built: a `$param` gives its default. |
 | `block` | integer (1…∞) \| `$param` \| `@node` | yes | Block edge length in canvas pixels. With `anchor: world` the block size sets the canvas padding, which is fixed before anything renders — so this needs an upper bound the build can see: a literal, a `$param` with `max`, or `block-max` beside an `@node` port. |
 | `block-max` | number (0…∞) | no | Upper bound on `block` for padding, required when `block` is an `@node` port. Values above it are clamped. |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
-| `mode` | `average` \| `nearest` | no | `average` (default) blends covered pixels into a mean colour. `nearest` samples the block's centre pixel verbatim — produces hard block edges without inter-colour averaging. |
+| `mode` | `average` \| `nearest` \| `$param` | no | `average` (default) blends covered pixels into a mean colour. `nearest` samples the block's centre pixel verbatim — produces hard block edges without inter-colour averaging. Read when the graph is built: a `$param` gives its default. |
 
 ### `noise`
 
@@ -510,17 +510,17 @@ Procedural noise source. With `kind: raster` (default) the noise is mapped to RG
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `anchor` | `tile` \| `world` | no | — |
+| `anchor` | `tile` \| `world` \| `$param` | no | — |
 | `gain` | number \| `$param` \| `@node` | no | — |
 | `high-color` | color \| `$param` \| `@node` | no | sRGB hex color, `$param` reference, or `@node` scalar port. |
-| `kind` | `raster` \| `scalar` | no | — |
+| `kind` | `raster` \| `scalar` \| `$param` | no | — |
 | `lacunarity` | number \| `$param` \| `@node` | no | — |
 | `low-color` | color \| `$param` \| `@node` | no | sRGB hex color, `$param` reference, or `@node` scalar port. |
 | `octaves` | integer (1…12) | no | — |
 | `opacity` | number (0…1) \| `$param` \| `@node` | no | — |
-| `scale-px` | number \| `$param` \| `@node` \| array of number \| string | yes | Noise wavelength in pixels. A single number for isotropic noise; an `[x, y]` array for anisotropic noise (larger value = longer wavelength along that axis, i.e. stretched pattern). A single value may be a `$param` or an `@node`; each entry of the array may be a number or a `$param`. |
+| `scale-px` | number \| `$param` \| `@node` \| array of number \| `$param` | yes | Noise wavelength in pixels. A single number for isotropic noise; an `[x, y]` array for anisotropic noise (larger value = longer wavelength along that axis, i.e. stretched pattern). A single value may be a `$param` or an `@node`; each entry of the array may be a number or a `$param`. |
 | `seed` | integer (0…∞) | no | Field seed. Omitted, `anchor: world` uses a fixed seed so every tile samples the same field, and `anchor: tile` uses the host's per-tile seed so each tile gets its own. Set it to pin either. |
-| `type` | `white` \| `value` \| `perlin` \| `simplex` \| `worley` \| `cell` | no | — |
+| `type` | `white` \| `value` \| `perlin` \| `simplex` \| `worley` \| `cell` \| `$param` | no | — |
 | `warp-amp` | number \| `$param` \| `@node` | no | — |
 | `warp-freq` | number \| `$param` \| `@node` | no | — |
 
@@ -530,8 +530,8 @@ Draw the source raster onto the canvas exactly once. `fit:none` (default) uses p
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `anchor` | `top-left` \| `top-center` \| `top-right` \| `center-left` \| `center` \| `center-right` \| `bottom-left` \| `bottom-center` \| `bottom-right` | no | Only used when fit=none. |
-| `fit` | `none` \| `cover` \| `contain` \| `stretch` | no | — |
+| `anchor` | `top-left` \| `top-center` \| `top-right` \| `center-left` \| `center` \| `center-right` \| `bottom-left` \| `bottom-center` \| `bottom-right` \| `$param` | no | Only used when fit=none. |
+| `fit` | `none` \| `cover` \| `contain` \| `stretch` \| `$param` | no | — |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
 | `opacity` | number (0…1) \| `$param` \| `@node` | no | — |
 | `position-px` | array of number | no | fit=none: canvas pixel where the image's `anchor` point lands. Other fits: offset from canvas center. |
@@ -571,7 +571,7 @@ Snap each pixel to the nearest colour in `palette`, measuring distance in `space
 | --- | --- | --- | --- |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
 | `palette` | array of string | yes | Each entry is `#rrggbb` / `#rrggbbaa` (alpha ignored for matching) or a `$param`, so a palette can be recoloured at render time. |
-| `space` | `lab` \| `rgb` | no | Colour space the nearest-colour distance is measured in. |
+| `space` | `lab` \| `rgb` \| `$param` | no | Colour space the nearest-colour distance is measured in. |
 
 ### `saturate`
 
@@ -632,7 +632,7 @@ Solid-colour source. `kind: raster` (default) fills the full canvas; `kind: spri
 | --- | --- | --- | --- |
 | `color` | color \| `$param` \| `@node` | yes | sRGB hex color, `$param` reference, or `@node` scalar port. |
 | `height-px` | integer (1…∞) | no | — |
-| `kind` | `raster` \| `sprite` | no | — |
+| `kind` | `raster` \| `sprite` \| `$param` | no | — |
 | `width-px` | integer (1…∞) | no | — |
 
 ### `stack`
@@ -669,7 +669,7 @@ Repeat a raster across the canvas with bilinear wrap-around sampling. Primary us
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `anchor` | `world` \| `tile` | no | `world` (default) makes the pattern seamless across map tiles; `tile` restarts the pattern at every map tile's top-left. |
+| `anchor` | `tile` \| `world` \| `$param` | no | `world` (default) makes the pattern seamless across map tiles; `tile` restarts the pattern at every map tile's top-left. |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
 | `offset-px` | array of number | no | Pattern offset in canvas pixels [x, y]. |
 | `opacity` | number (0…1) \| `$param` \| `@node` | no | — |
@@ -712,13 +712,13 @@ Domain warp via an internal noise field, on a raster, sprite or scalar field; th
 | `amp-x-px-max` | number (0…∞) | no | Upper bound on `amp-x-px` for padding, required when `amp-x-px` is an `@node` port. Values above it are clamped. |
 | `amp-y-px` | number (0…∞) \| `$param` \| `@node` | no | — |
 | `amp-y-px-max` | number (0…∞) | no | Upper bound on `amp-y-px` for padding, required when `amp-y-px` is an `@node` port. Values above it are clamped. |
-| `anchor` | `tile` \| `world` | no | — |
-| `boundary` | `clamp` \| `transparent` \| `mirror` \| `wrap` \| `repeat` | no | How to read past the input's edge: `clamp` repeats the edge pixel, `transparent` reads nothing, `mirror` reflects the image, and `wrap` (or `repeat`) tiles it, so what leaves one edge comes back in at the opposite one. |
+| `anchor` | `tile` \| `world` \| `$param` | no | — |
+| `boundary` | `clamp` \| `transparent` \| `mirror` \| `wrap` \| `repeat` \| `$param` | no | How to read past the input's edge: `clamp` repeats the edge pixel, `transparent` reads nothing, `mirror` reflects the image, and `wrap` (or `repeat`) tiles it, so what leaves one edge comes back in at the opposite one. |
 | `gain` | number \| `$param` \| `@node` | no | — |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
 | `lacunarity` | number \| `$param` \| `@node` | no | — |
 | `octaves` | integer (1…12) | no | — |
-| `scale-px` | number \| `$param` \| `@node` \| array of number \| string | yes | Noise wavelength in pixels. A single number for isotropic noise; an `[x, y]` array for anisotropic noise (larger value = longer wavelength along that axis, i.e. stretched pattern). A single value may be a `$param` or an `@node`; each entry of the array may be a number or a `$param`. |
+| `scale-px` | number \| `$param` \| `@node` \| array of number \| `$param` | yes | Noise wavelength in pixels. A single number for isotropic noise; an `[x, y]` array for anisotropic noise (larger value = longer wavelength along that axis, i.e. stretched pattern). A single value may be a `$param` or an `@node`; each entry of the array may be a number or a `$param`. |
 | `seed` | integer (0…∞) | no | Field seed. Omitted, `anchor: world` uses a fixed seed so every tile samples the same field, and `anchor: tile` uses the host's per-tile seed so each tile gets its own. Set it to pin either. |
-| `type` | `white` \| `value` \| `perlin` \| `simplex` \| `worley` \| `cell` | no | — |
+| `type` | `white` \| `value` \| `perlin` \| `simplex` \| `worley` \| `cell` \| `$param` | no | — |
 

@@ -32,17 +32,6 @@ pub(super) enum IconTextFit {
 }
 
 impl IconTextFit {
-    /// Parse the MapLibre value; unknown names fall back to `none`.
-    pub(super) fn parse(s: &str) -> Option<IconTextFit> {
-        Some(match s {
-            "none" => IconTextFit::None,
-            "width" => IconTextFit::Width,
-            "height" => IconTextFit::Height,
-            "both" => IconTextFit::Both,
-            _ => return None,
-        })
-    }
-
     fn fits_width(self) -> bool {
         matches!(self, IconTextFit::Width | IconTextFit::Both)
     }

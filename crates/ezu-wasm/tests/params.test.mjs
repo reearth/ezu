@@ -1,0 +1,43 @@
+// Render-time params from JS: a string param is overridden through
+// `params` the way a number is, checked against its `enum` there, and
+// published in `paramsSchema` for a host to build its controls from.
+//
+// Run with scripts/test-wasm-js.sh, which builds the module and points
+// EZU_WASM_NODE at it.
+
+import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+import { test } from "node:test";
+
+const require = createRequire(import.meta.url);
+const { Renderer } = require(
+  process.env.EZU_WASM_NODE ?? "../../../target/ezu-wasm-node/ezu.js",
+);
+
+const style = JSON.stringify({
+  name: "modes",
+  "tile-size": 16,
+  params: {
+    mode: { type: "string", enum: ["multiply", "screen"], default: "multiply" },
+  },
+  nodes: {
+    base: { op: "solid", color: "#808080" },
+    over: { op: "solid", color: "#ff4020" },
+    out: { op: "blend", base: "@base", over: "@over", mode: "$mode" },
+  },
+  output: "@out",
+});
+
+test("a string param is overridden per render and checked against its enum", () => {
+  const r = new Renderer(style);
+  const mode = r.paramsSchema.properties.mode;
+  assert.equal(mode.type, "string");
+  assert.deepEqual(mode.enum, ["multiply", "screen"]);
+  assert.equal(mode.default, "multiply");
+
+  const render = (params) => r.renderTile(0, 0, 0, { format: "rgba", params });
+  const plain = render(undefined);
+  assert.deepEqual(render({ mode: "multiply" }), plain);
+  assert.notDeepEqual(render({ mode: "screen" }), plain);
+  assert.throws(() => render({ mode: "overlay" }), { name: "InvalidStyle" });
+});

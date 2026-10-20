@@ -12,13 +12,13 @@
 
 use ezu_features::Polygon;
 use ezu_graph::{
-    BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, Node, NodeFactory,
-    PortKind, PortSpec, PortValue,
+    schema_frag, BuiltNode, CoordSpace, EnumTable, EvalCtx, EvalError, FactoryCtx, FactoryError,
+    InEnum, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{features_value, read_optional_string, FeatureGroup};
+use crate::nodes::common::{features_value, FeatureGroup};
 
 const DEFAULT_EXTENT: u32 = 4096;
 
@@ -28,9 +28,12 @@ enum Cover {
     Canvas,
 }
 
+const COVERS: EnumTable<Cover> = &[("tile", Cover::Tile), ("canvas", Cover::Canvas)];
+
 struct TileBoundsNode {
     extent: u32,
-    cover: Cover,
+    cover: InEnum<Cover>,
+    param_refs: Vec<String>,
 }
 
 impl Node for TileBoundsNode {
@@ -54,7 +57,7 @@ impl Node for TileBoundsNode {
         let e = self.extent as i32;
         // The pad is in canvas pixels and the rectangle in extent units;
         // round the margin outwards so the whole padded canvas is covered.
-        let (mx, my) = match self.cover {
+        let (mx, my) = match self.cover.get(ctx)? {
             Cover::Tile => (0, 0),
             Cover::Canvas => {
                 let pad = ctx.canvas.pad as f64 * self.extent as f64;
@@ -77,10 +80,10 @@ impl Node for TileBoundsNode {
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"tile-bounds");
         h.update(&self.extent.to_le_bytes());
-        h.update(match self.cover {
-            Cover::Tile => &[0u8],
-            Cover::Canvas => &[1u8],
-        });
+        self.cover.param_hash(h);
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -92,25 +95,21 @@ impl NodeFactory for TileBoundsFactory {
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
-        _ctx: &FactoryCtx<'_>,
+        ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let extent = fields
             .get("extent")
             .and_then(Value::as_u64)
             .map(|v| v as u32)
             .unwrap_or(DEFAULT_EXTENT);
-        let cover = match read_optional_string(fields, "cover")?.as_deref() {
-            None | Some("tile") => Cover::Tile,
-            Some("canvas") => Cover::Canvas,
-            Some(other) => {
-                return Err(FactoryError::BadField {
-                    field: "cover".into(),
-                    msg: format!("unknown cover '{other}', expected tile/canvas"),
-                });
-            }
-        };
+        let mut r = InReader::new(fields, ctx, 0);
+        let cover = r.enum_or("cover", Cover::Tile, COVERS)?;
         Ok(BuiltNode {
-            node: Box::new(TileBoundsNode { extent, cover }),
+            node: Box::new(TileBoundsNode {
+                extent,
+                cover,
+                param_refs: r.finish().param_refs,
+            }),
             connections: vec![],
         })
     }
@@ -119,12 +118,12 @@ impl NodeFactory for TileBoundsFactory {
             "description": "Tile-filling rectangle polygon source. `cover: canvas` grows it over the padded canvas, so geometry built from it — Voronoi cells, hatch lines — reaches past the tile's edge and neighbouring tiles build the same shapes along their shared border.",
             "properties": {
                 "extent": { "type": "integer", "minimum": 1, "default": DEFAULT_EXTENT },
-                "cover": {
+                "cover": schema_frag::in_enum(serde_json::json!({
                     "type": "string",
                     "enum": ["tile", "canvas"],
                     "default": "tile",
                     "description": "`tile` is the visible tile exactly; `canvas` adds the canvas padding on every side."
-                },
+                })),
             },
         })
     }

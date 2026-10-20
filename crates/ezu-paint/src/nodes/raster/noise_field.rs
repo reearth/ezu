@@ -3,7 +3,7 @@
 //! Centralises the `NoiseKind` enum + `Sampler` dispatch + fBm
 //! accumulator so both ops describe the same noise space.
 
-use ezu_graph::{EvalCtx, EvalError, FactoryError, In, InReader, PortValue};
+use ezu_graph::{EnumTable, EvalCtx, EvalError, FactoryError, In, InReader, PortValue};
 use noise::{core::worley::ReturnType, NoiseFn, Perlin, Simplex, Value as ValueNoise, Worley};
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -19,31 +19,22 @@ pub(super) enum NoiseKind {
 }
 
 /// The names `type` accepts, in the order the schema lists them.
-pub(super) const NOISE_TYPES: [&str; 6] = ["white", "value", "perlin", "simplex", "worley", "cell"];
+pub(super) const NOISE_TYPES: EnumTable<NoiseKind> = &[
+    ("white", NoiseKind::White),
+    ("value", NoiseKind::Value),
+    ("perlin", NoiseKind::Perlin),
+    ("simplex", NoiseKind::Simplex),
+    ("worley", NoiseKind::Worley),
+    ("cell", NoiseKind::Cell),
+];
 
-impl NoiseKind {
-    pub(super) fn tag(self) -> u8 {
-        match self {
-            NoiseKind::White => 0,
-            NoiseKind::Value => 1,
-            NoiseKind::Perlin => 2,
-            NoiseKind::Simplex => 3,
-            NoiseKind::Worley => 4,
-            NoiseKind::Cell => 5,
-        }
-    }
-
-    pub(super) fn parse(s: &str) -> Option<NoiseKind> {
-        Some(match s {
-            "white" => NoiseKind::White,
-            "value" => NoiseKind::Value,
-            "perlin" => NoiseKind::Perlin,
-            "simplex" => NoiseKind::Simplex,
-            "worley" => NoiseKind::Worley,
-            "cell" => NoiseKind::Cell,
-            _ => return None,
-        })
-    }
+/// The schema of a noise `type` field.
+pub(super) fn noise_type_schema() -> Value {
+    ezu_graph::schema_frag::in_enum(serde_json::json!({
+        "type": "string",
+        "enum": ezu_graph::enum_names(NOISE_TYPES),
+        "default": "perlin",
+    }))
 }
 
 pub(super) enum Sampler {

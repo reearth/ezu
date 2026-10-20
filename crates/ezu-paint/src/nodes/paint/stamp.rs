@@ -13,9 +13,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, take_input_ref, Asset, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError,
-    FactoryCtx, FactoryError, In, InReader, InfluenceCtx, Node, NodeFactory, PortKind, PortSpec,
-    PortValue,
+    enum_names, schema_frag, take_input_ref, Asset, BuiltNode, Connection, CoordSpace, EvalCtx,
+    EvalError, FactoryCtx, FactoryError, In, InEnum, InReader, InfluenceCtx, Node, NodeFactory,
+    PortKind, PortSpec, PortValue,
 };
 use ezu_style as spec;
 use serde_json::Value;
@@ -28,9 +28,10 @@ use ezu_core::{
     text::Anchor,
 };
 
+use super::text::TEXT_ANCHORS;
 use crate::nodes::common::{
-    canvas_into_raster, core_tile, downcast_features, empty_raster, make_canvas, read_string_or,
-    read_xy, unwrap_raster_or_sprite, FramedImage, ACCEPTS_RASTER_OR_SPRITE,
+    canvas_into_raster, core_tile, downcast_features, empty_raster, make_canvas, read_xy,
+    unwrap_raster_or_sprite, FramedImage, ACCEPTS_RASTER_OR_SPRITE,
 };
 
 const STAMP_SALT: u32 = 0x5354_4d50; // 'STMP'
@@ -141,7 +142,7 @@ struct StampNode {
     icon_name_expr: Option<maplibre_expr::Expr>,
     icon_name_expr_src: Option<String>,
     /// Which part of the image sits on the point (MapLibre `icon-anchor`).
-    anchor: Anchor,
+    anchor: InEnum<Anchor>,
     /// Data-driven `anchor`: a MapLibre string expression naming the anchor
     /// per feature group, with its raw JSON text for the hash.
     anchor_expr: Option<maplibre_expr::Expr>,
@@ -162,12 +163,12 @@ impl StampNode {
     /// names one, else `anchor`. An evaluation error falls back quietly like
     /// the other per-group expressions; a string that names no anchor is a
     /// style mistake, so it is reported, once per node.
-    fn group_anchor(&self, ectx: &maplibre_expr::EvaluationContext) -> (f32, f32) {
+    fn group_anchor(&self, ectx: &maplibre_expr::EvaluationContext, anchor: Anchor) -> (f32, f32) {
         let Some(expr) = &self.anchor_expr else {
-            return self.anchor.fraction();
+            return anchor.fraction();
         };
         let Ok(maplibre_expr::Value::String(name)) = maplibre_expr::evaluate(expr, ectx) else {
-            return self.anchor.fraction();
+            return anchor.fraction();
         };
         match Anchor::parse(&name) {
             Some(a) => a.fraction(),
@@ -178,7 +179,7 @@ impl StampNode {
                          `anchor` was used for such points"
                     );
                 }
-                self.anchor.fraction()
+                anchor.fraction()
             }
         }
     }
@@ -227,6 +228,7 @@ impl Node for StampNode {
         let scale_jitter = self.scale_jitter.get(ctx, inputs)? as f32;
         let position_jitter_px = self.position_jitter_px.get(ctx, inputs)? as f32;
         let const_opacity = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
+        let const_anchor = self.anchor.get(ctx)?;
 
         let mut canvas = make_canvas(ctx)?;
         let pad = canvas.pad() as f32;
@@ -341,7 +343,7 @@ impl Node for StampNode {
                     opacity,
                     ..PixmapPaint::default()
                 };
-                let anchor = self.group_anchor(&ectx);
+                let anchor = self.group_anchor(&ectx, const_anchor);
                 stamp_points(
                     pm,
                     &group.points,
@@ -373,7 +375,7 @@ impl Node for StampNode {
                         opacity,
                         ..PixmapPaint::default()
                     };
-                    let anchor = self.group_anchor(&ectx);
+                    let anchor = self.group_anchor(&ectx, const_anchor);
                     stamp_points(
                         pm,
                         &group.points,
@@ -396,7 +398,7 @@ impl Node for StampNode {
                     &img,
                     const_scale,
                     const_rotation_deg,
-                    self.anchor.fraction(),
+                    const_anchor.fraction(),
                     &pix_paint,
                 );
             }
@@ -432,9 +434,7 @@ impl Node for StampNode {
             h.update(b"iconsprite");
             h.update(sprite.as_bytes());
         }
-        let (fx, fy) = self.anchor.fraction();
-        h.update(&fx.to_le_bytes());
-        h.update(&fy.to_le_bytes());
+        self.anchor.param_hash(h);
         h.update(&self.offset[0].to_le_bytes());
         h.update(&self.offset[1].to_le_bytes());
     }
@@ -530,6 +530,7 @@ impl NodeFactory for StampFactory {
         let scale_jitter = r.number_or("scale-jitter", 0.0)?;
         let position_jitter_px = r.number_or("position-jitter-px", 0.0)?;
         let opacity = r.number_or("opacity", 1.0)?;
+        let anchor = r.enum_or("anchor", Anchor::Center, TEXT_ANCHORS)?;
         let parts = r.finish();
 
         let (scale_expr, scale_expr_src) =
@@ -538,11 +539,6 @@ impl NodeFactory for StampFactory {
             parse_expr_field(fields, "rotation-deg-expr", &maplibre_expr::Type::Number)?;
         let (opacity_expr, opacity_expr_src) =
             parse_expr_field(fields, "opacity-expr", &maplibre_expr::Type::Number)?;
-        let anchor_s = read_string_or(fields, "anchor", ctx, "center")?;
-        let anchor = Anchor::parse(&anchor_s).ok_or_else(|| FactoryError::BadField {
-            field: "anchor".into(),
-            msg: format!("unknown anchor `{anchor_s}`"),
-        })?;
         let (anchor_expr, anchor_expr_src) =
             parse_expr_field(fields, "anchor-expr", &maplibre_expr::Type::String)?;
         let offset = read_xy(fields, "offset", ctx, [0.0, 0.0])?;
@@ -628,8 +624,8 @@ impl NodeFactory for StampFactory {
                 "opacity-expr": {
                     "description": "A MapLibre number expression giving opacity, evaluated per feature group; overrides the constant `opacity`.",
                 },
-                "anchor": { "type": "string", "enum": ["center", "left", "right", "top", "bottom", "top-left", "top-right", "bottom-left", "bottom-right"],
-                            "description": "Which part of the sprite sits on the point (MapLibre `icon-anchor`): `bottom` puts its bottom edge's middle there, say, for a pin. Rotation and scale turn about the point. Default `center`." },
+                "anchor": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": enum_names(TEXT_ANCHORS),
+                            "description": "Which part of the sprite sits on the point (MapLibre `icon-anchor`): `bottom` puts its bottom edge's middle there, say, for a pin. Rotation and scale turn about the point. Default `center`." })),
                 "anchor-expr": {
                     "description": "A MapLibre string expression naming the anchor per feature group (data-driven `icon-anchor`): one of the `anchor` names. It takes the place of `anchor` for that group; a group whose result is not an anchor name, or whose evaluation fails, uses `anchor`, and a result that is not an anchor name is reported once per node.",
                 },

@@ -9,7 +9,7 @@ use crate::Polygon;
 
 use super::convert::{polygon_to_f, polygons_from_shapes};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BoolOp {
     Union,
     Intersection,

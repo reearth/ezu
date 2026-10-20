@@ -9,20 +9,21 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    FactoryError, In, InEnum, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::color_interp::{interpolate, InterpSpace};
 use crate::nodes::common::{
-    raster_or_sprite_output, read_space, unwrap_raster_or_sprite, wrap_raster_like,
+    raster_or_sprite_output, read_space, space_schema, unwrap_raster_or_sprite, wrap_raster_like,
     ACCEPTS_RASTER_OR_SPRITE,
 };
 
 struct MixNode {
     t: In<f64>,
-    space: InterpSpace,
+    space: InEnum<InterpSpace>,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
 }
@@ -54,11 +55,12 @@ impl Node for MixNode {
             return Err(EvalError::Other("mix: a/b size mismatch".into()));
         }
         let t = (self.t.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
+        let space = self.space.get(ctx)?;
         let mut out = RasterBuf::new(a.width, a.height);
         for i in (0..a.pixels.len()).step_by(4) {
             let ca = demul(&a.pixels[i..i + 4]);
             let cb = demul(&b.pixels[i..i + 4]);
-            let m = interpolate(ca, cb, t, self.space);
+            let m = interpolate(ca, cb, t, space);
             let oa = m[3].clamp(0.0, 1.0);
             out.pixels[i] = to_u8(m[0] * oa);
             out.pixels[i + 1] = to_u8(m[1] * oa);
@@ -69,7 +71,7 @@ impl Node for MixNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"mix");
-        h.update(&[self.space.hash_tag()]);
+        self.space.param_hash(h);
         self.t.param_hash(h);
     }
     fn param_refs(&self) -> Vec<String> {
@@ -89,9 +91,9 @@ impl NodeFactory for MixFactory {
     ) -> Result<BuiltNode, FactoryError> {
         let a = take_input_ref(fields, "a")?;
         let b = take_input_ref(fields, "b")?;
-        let space = read_space(fields)?;
         // Scalar ports start after the two fixed raster inputs.
         let mut r = InReader::new(fields, ctx, 2);
+        let space = read_space(&mut r, fields)?;
         let t = r.number_or("t", 0.5)?;
         let parts = r.finish();
 
@@ -138,7 +140,7 @@ impl NodeFactory for MixFactory {
                 "a": schema_frag::node_ref(),
                 "b": schema_frag::node_ref(),
                 "t": schema_frag::unit_number(),
-                "space": { "type": "string", "enum": ["rgb", "hsl", "hsv", "hcl", "lab"], "default": "rgb", "description": "Colour space the interpolation runs in; hue-based spaces take the shortest path." },
+                "space": space_schema("Colour space the interpolation runs in; hue-based spaces take the shortest path."),
             },
             "required": ["a", "b"],
         })

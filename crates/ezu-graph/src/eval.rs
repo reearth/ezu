@@ -137,7 +137,7 @@ impl ParamValues {
     }
 
     pub fn get(&self, name: &str) -> Option<ScalarValue> {
-        self.values.get(name).copied()
+        self.values.get(name).cloned()
     }
 }
 

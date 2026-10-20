@@ -378,6 +378,55 @@ func TestRenderParams(t *testing.T) {
 	}
 }
 
+// A string param is overridden the way a number is, checked against its
+// enum, and published in the params schema with that enum.
+func TestRenderStringParam(t *testing.T) {
+	ctx, renderer := open(t, stainedGlassStyle)
+	style := `{"name":"modes","tile-size":16,
+		"params":{"mode":{"type":"string","enum":["multiply","screen"],"default":"multiply"}},
+		"nodes":{
+			"base":{"op":"solid","color":"#808080"},
+			"over":{"op":"solid","color":"#ff4020"},
+			"out":{"op":"blend","base":"@base","over":"@over","mode":"$mode"}},
+		"output":"@out"}`
+	if _, err := renderer.SetStyle(ctx, []byte(style)); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := renderer.ParamsSchema(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Properties map[string]struct {
+			Type string   `json:"type"`
+			Enum []string `json:"enum"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(schema, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if m := doc.Properties["mode"]; m.Type != "string" || strings.Join(m.Enum, ",") != "multiply,screen" {
+		t.Errorf("mode is declared %+v", m)
+	}
+
+	render := func(params map[string]any) ([]byte, error) {
+		return renderer.RenderTile(ctx, Tile{}, Render{Format: FormatRGBA, Params: params})
+	}
+	plain, err := render(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if same, err := render(map[string]any{"mode": "multiply"}); err != nil || string(same) != string(plain) {
+		t.Errorf("the default given explicitly renders differently (%v)", err)
+	}
+	if screen, err := render(map[string]any{"mode": "screen"}); err != nil || string(screen) == string(plain) {
+		t.Errorf("screen renders as the default does (%v)", err)
+	}
+	if _, err := render(map[string]any{"mode": "overlay"}); !IsKind(err, KindInvalidStyle) {
+		t.Errorf("a value outside the enum gave %v, want InvalidStyle", err)
+	}
+}
+
 // Warnings are the current style's: a raster node that names no source
 // falls back to the only one declared and says so when the graph is built,
 // and a style that raises none answers an empty slice.

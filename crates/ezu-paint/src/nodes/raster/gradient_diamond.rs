@@ -2,26 +2,28 @@
 //! Useful for retro / pixel-art halos and square decorations.
 
 use ezu_graph::{
-    schema_frag, BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, In, InReader,
-    Node, NodeFactory, PortKind, PortSpec, PortValue,
+    schema_frag, BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, In, InEnum,
+    InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::color_interp::InterpSpace;
 use crate::nodes::common::{
-    hash_stops, read_anchor, read_space, read_stops, read_xy, resolve_stops, sample_stops, Anchor,
-    StopsIn,
+    anchor_schema, hash_stops, read_space, read_stops, read_xy, resolve_stops, sample_stops,
+    space_schema, Anchor, StopsIn, ANCHORS,
 };
-use crate::nodes::raster::generator_kind::{parse_generator_kind, GeneratorKind};
+use crate::nodes::raster::generator_kind::{
+    generator_kind_schema, parse_generator_kind, GeneratorKind,
+};
 use crate::nodes::raster::gradient_common::render_gradient;
 
 struct GradientDiamondNode {
     center: [f32; 2],
     radius: In<f64>,
     stops: StopsIn,
-    space: InterpSpace,
-    anchor: Anchor,
+    space: InEnum<InterpSpace>,
+    anchor: InEnum<Anchor>,
     out_kind: GeneratorKind,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
@@ -41,7 +43,9 @@ impl Node for GradientDiamondNode {
         }
     }
     fn coord_space(&self) -> CoordSpace {
-        match (self.out_kind, self.anchor) {
+        // Descriptive only, so the declared anchor stands for whatever a
+        // `$param` sets it to at render time.
+        match (self.out_kind, self.anchor.fallback()) {
             (GeneratorKind::Sprite { .. }, _) => CoordSpace::Tile,
             (_, Anchor::Tile) => CoordSpace::Tile,
             (_, Anchor::World) => CoordSpace::World,
@@ -56,21 +60,22 @@ impl Node for GradientDiamondNode {
         let center = self.center;
         // Resolved here, so a `$param` stop costs one lookup per eval
         // rather than one per pixel.
-        let stops = &resolve_stops(&self.stops, self.space, ctx, inputs)?;
-        let space = self.space;
+        let space = self.space.get(ctx)?;
+        let anchor = self.anchor.get(ctx)?;
+        let stops = &resolve_stops(&self.stops, space, ctx, inputs)?;
         let sample = |ux: f32, uy: f32| -> [f32; 4] {
             let t = ((ux - center[0]).abs() + (uy - center[1]).abs()) / r;
             sample_stops(stops, t, space)
         };
-        Ok(render_gradient(ctx, self.out_kind, self.anchor, sample))
+        Ok(render_gradient(ctx, self.out_kind, anchor, sample))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"gradient-diamond");
         h.update(&self.center[0].to_le_bytes());
         h.update(&self.center[1].to_le_bytes());
         self.radius.param_hash(h);
-        h.update(&[self.anchor as u8]);
-        h.update(&[self.space.hash_tag()]);
+        self.anchor.param_hash(h);
+        self.space.param_hash(h);
         hash_stops(&self.stops, h);
         let (tag, dims) = self.out_kind.hash_tag();
         h.update(&tag);
@@ -95,9 +100,9 @@ impl NodeFactory for GradientDiamondFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let center = read_xy(fields, "center", ctx, [0.5, 0.5])?;
-        let space = read_space(fields)?;
-        let anchor = read_anchor(fields, "anchor", ctx)?;
         let mut r = InReader::new(fields, ctx, 0);
+        let space = read_space(&mut r, fields)?;
+        let anchor = r.enum_or("anchor", Anchor::Tile, ANCHORS)?;
         let stops = read_stops(fields, "stops", &mut r)?;
         let radius = r.number_or("radius", 0.5)?;
         let parts = r.finish();
@@ -126,9 +131,9 @@ impl NodeFactory for GradientDiamondFactory {
                            "items": { "type": "array", "minItems": 2, "maxItems": 2,
                                       "items": [schema_frag::nested_number(serde_json::json!({ "type": "number" })), schema_frag::nested_color()] },
                            "description": "`[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order." },
-                "anchor": { "type": "string", "enum": ["tile", "world"], "default": "tile" },
-                "space": { "type": "string", "enum": ["rgb", "hsl", "hsv", "hcl", "lab"], "default": "rgb", "description": "Colour space the stops interpolate in; hue-based spaces take the shortest path." },
-                "kind": { "type": "string", "enum": ["raster", "sprite"], "default": "raster" },
+                "anchor": anchor_schema("tile", None),
+                "space": space_schema("Colour space the stops interpolate in; hue-based spaces take the shortest path."),
+                "kind": generator_kind_schema(),
                 "width-px": { "type": "integer", "minimum": 1 },
                 "height-px": { "type": "integer", "minimum": 1 },
             },

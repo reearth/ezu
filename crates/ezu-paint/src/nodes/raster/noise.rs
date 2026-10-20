@@ -36,14 +36,17 @@
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, In, InReader,
-    Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf, ScalarField,
+    read_enum_baked, schema_frag, BuiltNode, CoordSpace, EnumTable, EvalCtx, EvalError, FactoryCtx,
+    FactoryError, In, InEnum, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    RasterBuf, ScalarField,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{default_field_seed, read_number_or, read_optional_string, Anchor};
-use crate::nodes::raster::noise_field::{fbm, NoiseKind, Sampler, ScalePx, NOISE_TYPES};
+use crate::nodes::common::{anchor_schema, default_field_seed, read_number_or, Anchor, ANCHORS};
+use crate::nodes::raster::noise_field::{
+    fbm, noise_type_schema, NoiseKind, Sampler, ScalePx, NOISE_TYPES,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OutputKind {
@@ -51,8 +54,15 @@ enum OutputKind {
     Scalar,
 }
 
+/// `kind` decides the node's output port, so it is read at build time.
+const OUTPUT_KINDS: EnumTable<OutputKind> = &[
+    ("raster", OutputKind::Raster),
+    ("scalar", OutputKind::Scalar),
+    ("scalar-field", OutputKind::Scalar),
+];
+
 struct NoiseNode {
-    kind: NoiseKind,
+    kind: InEnum<NoiseKind>,
     out_kind: OutputKind,
     scale: ScalePx,
     octaves: u32,
@@ -64,7 +74,7 @@ struct NoiseNode {
     low: In<[f32; 4]>,
     high: In<[f32; 4]>,
     opacity: In<f64>,
-    anchor: Anchor,
+    anchor: InEnum<Anchor>,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
 }
@@ -83,7 +93,9 @@ impl Node for NoiseNode {
         }
     }
     fn coord_space(&self) -> CoordSpace {
-        match self.anchor {
+        // Descriptive only, so the declared anchor stands for whatever a
+        // `$param` sets it to at render time.
+        match self.anchor.fallback() {
             Anchor::World => CoordSpace::World,
             Anchor::Tile => CoordSpace::Tile,
         }
@@ -101,25 +113,27 @@ impl Node for NoiseNode {
         let gain = self.gain.get(ctx, inputs)?;
         let warp_amp = self.warp_amp.get(ctx, inputs)?;
         let warp_freq = self.warp_freq.get(ctx, inputs)?;
+        let noise = self.kind.get(ctx)?;
+        let anchor = self.anchor.get(ctx)?;
 
         // Anchoring decides the default seed: a world-anchored field has to
         // be the same field in every tile, so it cannot use a per-tile one.
         let seed = self
             .seed
-            .unwrap_or_else(|| default_field_seed(self.anchor, ctx.rng_seed));
-        let main = Sampler::build(self.kind, seed);
+            .unwrap_or_else(|| default_field_seed(anchor, ctx.rng_seed));
+        let main = Sampler::build(noise, seed);
         // Warp uses an offset seed so the warp field decorrelates from
         // the main field. Only built when warp is active.
         let warp = if warp_amp != 0.0 {
             Some((
-                Sampler::build(self.kind, seed.wrapping_add(0x9E37_79B9)),
-                Sampler::build(self.kind, seed.wrapping_add(0x1234_5678)),
+                Sampler::build(noise, seed.wrapping_add(0x9E37_79B9)),
+                Sampler::build(noise, seed.wrapping_add(0x1234_5678)),
             ))
         } else {
             None
         };
 
-        let (origin_x, origin_y) = match self.anchor {
+        let (origin_x, origin_y) = match anchor {
             Anchor::World => (ctx.tile.x as f64 * tile_size, ctx.tile.y as f64 * tile_size),
             Anchor::Tile => (0.0, 0.0),
         };
@@ -187,7 +201,7 @@ impl Node for NoiseNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"noise");
-        h.update(&[self.kind.tag()]);
+        self.kind.param_hash(h);
         h.update(match self.out_kind {
             OutputKind::Raster => b"r",
             OutputKind::Scalar => b"s",
@@ -215,10 +229,7 @@ impl Node for NoiseNode {
         self.low.param_hash(h);
         self.high.param_hash(h);
         self.opacity.param_hash(h);
-        h.update(match self.anchor {
-            Anchor::Tile => &[0u8],
-            Anchor::World => &[1u8],
-        });
+        self.anchor.param_hash(h);
     }
     fn param_refs(&self) -> Vec<String> {
         self.param_refs.clone()
@@ -235,28 +246,11 @@ impl NodeFactory for NoiseFactory {
         fields: &serde_json::Map<String, Value>,
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
-        let kind = match read_optional_string(fields, "type")?.as_deref() {
-            None => NoiseKind::Perlin,
-            Some(s) => NoiseKind::parse(s).ok_or_else(|| FactoryError::BadField {
-                field: "type".into(),
-                msg: format!(
-                    "unknown noise type `{s}`, expected {}",
-                    NOISE_TYPES.join("/")
-                ),
-            })?,
-        };
-        let out_kind = match read_optional_string(fields, "kind")?.as_deref() {
-            None | Some("raster") => OutputKind::Raster,
-            Some("scalar") | Some("scalar-field") => OutputKind::Scalar,
-            Some(other) => {
-                return Err(FactoryError::BadField {
-                    field: "kind".into(),
-                    msg: format!("expected `raster` or `scalar`, got `{other}`"),
-                });
-            }
-        };
+        let out_kind = read_enum_baked(fields, ctx, "kind", OutputKind::Raster, OUTPUT_KINDS)?;
 
         let mut r = InReader::new(fields, ctx, 0);
+        let kind = r.enum_or("type", NoiseKind::Perlin, NOISE_TYPES)?;
+        let anchor = r.enum_or("anchor", Anchor::World, ANCHORS)?;
         let scale = ScalePx::read(&mut r, fields)?;
         // `octaves` is clamped to an integer range at build time and
         // stored as a `u32`, so it stays a static field rather than an
@@ -271,17 +265,6 @@ impl NodeFactory for NoiseFactory {
                 field: "seed".into(),
                 msg: "expected non-negative integer".into(),
             })? as u32),
-        };
-
-        let anchor = match read_optional_string(fields, "anchor")?.as_deref() {
-            None | Some("world") => Anchor::World,
-            Some("tile") => Anchor::Tile,
-            Some(other) => {
-                return Err(FactoryError::BadField {
-                    field: "anchor".into(),
-                    msg: format!("unknown anchor `{other}`, expected tile/world"),
-                });
-            }
         };
 
         let lacunarity = r.number_or("lacunarity", 2.0)?;
@@ -318,16 +301,12 @@ impl NodeFactory for NoiseFactory {
         serde_json::json!({
             "description": "Procedural noise source. With `kind: raster` (default) the noise is mapped to RGBA via `low-color`/`high-color`/`opacity`. With `kind: scalar` it emits a `ScalarField` of raw fBm values — compose with `map-range` before feeding `hillshade`/`color-ramp`. Every `type` lands in [-1, 1]. `white`/`value`/`perlin`/`simplex` sit around 0. `worley` and `cell` both divide the plane into cells around scattered sites: `worley` is `1 − 2·distance` to the nearest site, +1 on the site and falling towards the cell's edge, and `cell` is the nearest site's own random value, flat across its cell and spread evenly over [-1, 1] — one tone per cell, for stones, panes or patches. `anchor=world` (default) keeps the field seamless across tile borders.",
             "properties": {
-                "type": {
-                    "type": "string",
-                    "enum": NOISE_TYPES,
-                    "default": "perlin",
-                },
-                "kind": {
+                "type": noise_type_schema(),
+                "kind": schema_frag::in_enum(serde_json::json!({
                     "type": "string",
                     "enum": ["raster", "scalar"],
                     "default": "raster",
-                },
+                })),
                 "scale-px": ScalePx::schema(),
                 "octaves": { "type": "integer", "minimum": 1, "maximum": 12, "default": 1 },
                 "lacunarity": schema_frag::in_number(serde_json::json!({ "type": "number", "default": 2.0 })),
@@ -338,7 +317,7 @@ impl NodeFactory for NoiseFactory {
                 "low-color": schema_frag::color(),
                 "high-color": schema_frag::color(),
                 "opacity": schema_frag::unit_number(),
-                "anchor": { "type": "string", "enum": ["tile", "world"], "default": "world" },
+                "anchor": anchor_schema("world", None),
             },
             "required": ["scale-px"],
         })

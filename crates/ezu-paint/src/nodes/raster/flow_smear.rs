@@ -32,16 +32,16 @@
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, InReader, Node, NodeFactory, PaddingIn, PortKind, PortSpec, PortValue, RasterBuf,
+    schema_frag, take_input_ref, BuiltNode, Connection, EnumTable, EvalCtx, EvalError, FactoryCtx,
+    FactoryError, InEnum, InReader, Node, NodeFactory, PaddingIn, PortKind, PortSpec, PortValue,
+    RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::imaging::Bilinear;
 use crate::nodes::common::{
-    raster_or_sprite_output, read_string_or, unwrap_raster_or_sprite, wrap_raster_like,
-    ACCEPTS_RASTER_OR_SPRITE,
+    raster_or_sprite_output, unwrap_raster_or_sprite, wrap_raster_like, ACCEPTS_RASTER_OR_SPRITE,
 };
 
 /// Field length below which a pixel counts as flat. Two 8-bit steps from
@@ -65,10 +65,18 @@ enum Taper {
     Smooth,
 }
 
+const SIDES: EnumTable<Sides> = &[
+    ("both", Sides::Both),
+    ("forward", Sides::Forward),
+    ("backward", Sides::Backward),
+];
+
+const TAPERS: EnumTable<Taper> = &[("flat", Taper::Flat), ("smooth", Taper::Smooth)];
+
 struct FlowSmearNode {
     length: PaddingIn,
-    sides: Sides,
-    taper: Taper,
+    sides: InEnum<Sides>,
+    taper: InEnum<Taper>,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
 }
@@ -106,7 +114,8 @@ impl Node for FlowSmearNode {
             // No walk reaches a whole step.
             return Ok(wrap_raster_like(src, kind));
         }
-        let hann = match self.taper {
+        let sides = self.sides.get(ctx)?;
+        let hann = match self.taper.get(ctx)? {
             Taper::Flat => None,
             Taper::Smooth => Some(hann_table()),
         };
@@ -138,10 +147,10 @@ impl Node for FlowSmearNode {
                     // Gathering from upstream is what carries the input
                     // downstream, so `forward` walks against the field
                     // and `backward` with it.
-                    if self.sides != Sides::Backward {
+                    if sides != Sides::Backward {
                         walk.run(-dx, -dy, &mut acc, &mut weight_sum);
                     }
-                    if self.sides != Sides::Forward {
+                    if sides != Sides::Forward {
                         walk.run(dx, dy, &mut acc, &mut weight_sum);
                     }
                 }
@@ -156,15 +165,8 @@ impl Node for FlowSmearNode {
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"flow-smear");
         self.length.param_hash(h);
-        h.update(match self.sides {
-            Sides::Both => b"bo",
-            Sides::Forward => b"fw",
-            Sides::Backward => b"bw",
-        });
-        h.update(match self.taper {
-            Taper::Flat => b"fl",
-            Taper::Smooth => b"sm",
-        });
+        self.sides.param_hash(h);
+        self.taper.param_hash(h);
     }
     fn param_refs(&self) -> Vec<String> {
         self.param_refs.clone()
@@ -277,29 +279,9 @@ impl NodeFactory for FlowSmearFactory {
     ) -> Result<BuiltNode, FactoryError> {
         let input = take_input_ref(fields, "input")?;
         let field = take_input_ref(fields, "field")?;
-        let sides = match read_string_or(fields, "sides", ctx, "both")?.as_str() {
-            "both" => Sides::Both,
-            "forward" => Sides::Forward,
-            "backward" => Sides::Backward,
-            other => {
-                return Err(FactoryError::BadField {
-                    field: "sides".into(),
-                    msg: format!("expected `both`, `forward` or `backward`, got `{other}`"),
-                });
-            }
-        };
-        let taper = match read_string_or(fields, "taper", ctx, "flat")?.as_str() {
-            "flat" => Taper::Flat,
-            "smooth" => Taper::Smooth,
-            other => {
-                return Err(FactoryError::BadField {
-                    field: "taper".into(),
-                    msg: format!("expected `flat` or `smooth`, got `{other}`"),
-                });
-            }
-        };
-
         let mut r = InReader::new(fields, ctx, 2);
+        let sides = r.enum_or("sides", Sides::Both, SIDES)?;
+        let taper = r.enum_or("taper", Taper::Flat, TAPERS)?;
         let length = PaddingIn::read_or(&mut r, fields, "length-px", 12.0)?;
         let parts = r.finish();
 
@@ -348,10 +330,10 @@ impl NodeFactory for FlowSmearFactory {
                 "length-px": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0, "default": 12,
                                 "description": "Walk length in px each way, at full field length." })),
                 "length-px-max": { "type": "number", "minimum": 0.0, "description": "Upper bound on `length-px` for padding, required when `length-px` is an `@node` port. Values above it are clamped." },
-                "sides": { "type": "string", "enum": ["both", "forward", "backward"], "default": "both",
-                           "description": "`both` smears each way along the field, so a speck becomes a stroke centred on it; `forward` smears only the way the field points, so a speck trails a comet tail downstream; `backward` smears only against it, so the tail runs upstream." },
-                "taper": { "type": "string", "enum": ["flat", "smooth"], "default": "flat",
-                           "description": "`flat` weights every sample alike; `smooth` fades them towards the ends of the walk (a Hann window), softening the stroke ends." },
+                "sides": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": ["both", "forward", "backward"], "default": "both",
+                           "description": "`both` smears each way along the field, so a speck becomes a stroke centred on it; `forward` smears only the way the field points, so a speck trails a comet tail downstream; `backward` smears only against it, so the tail runs upstream." })),
+                "taper": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": ["flat", "smooth"], "default": "flat",
+                           "description": "`flat` weights every sample alike; `smooth` fades them towards the ends of the walk (a Hann window), softening the stroke ends." })),
             },
             "required": ["input", "field"],
         })

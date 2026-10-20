@@ -12,16 +12,20 @@
 
 use ezu_features::ops::boundary::{polygon_boundary, polygon_boundary_without_clip_edges};
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EnumTable, EvalCtx, EvalError,
+    FactoryCtx, FactoryError, InEnum, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value, read_optional_string, FeatureGroup};
+use crate::nodes::common::{downcast_features, features_value, FeatureGroup};
+
+/// `clip-edges`: whether to drop the edges a tile's clip added.
+const CLIP_EDGES: EnumTable<bool> = &[("keep", false), ("drop", true)];
 
 struct BoundaryNode {
-    drop_clip_edges: bool,
+    drop_clip_edges: InEnum<bool>,
+    param_refs: Vec<String>,
 }
 
 impl Node for BoundaryNode {
@@ -44,7 +48,7 @@ impl Node for BoundaryNode {
     }
     fn eval(
         &self,
-        _ctx: &EvalCtx<'_>,
+        ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
         let feats = downcast_features(
@@ -52,13 +56,14 @@ impl Node for BoundaryNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
+        let drop_clip_edges = self.drop_clip_edges.get(ctx)?;
         // Per group: convert each feature's polygons to boundary polylines
         // (existing lines and points pass through), carrying properties.
         let mut out_groups = Vec::with_capacity(feats.groups.len());
         for g in &feats.groups {
             let mut lines = g.lines.clone();
             for p in &g.polygons {
-                if self.drop_clip_edges {
+                if drop_clip_edges {
                     lines.extend(polygon_boundary_without_clip_edges(p, feats.extent));
                 } else {
                     lines.extend(polygon_boundary(p));
@@ -75,10 +80,10 @@ impl Node for BoundaryNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"boundary");
-        // Nothing more for the default, so its hash predates the option.
-        if self.drop_clip_edges {
-            h.update(b"clip-edges:drop");
-        }
+        self.drop_clip_edges.param_hash(h);
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -90,21 +95,16 @@ impl NodeFactory for BoundaryFactory {
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
-        _ctx: &FactoryCtx<'_>,
+        ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let features = take_input_ref(fields, "features")?;
-        let drop_clip_edges = match read_optional_string(fields, "clip-edges")?.as_deref() {
-            None | Some("keep") => false,
-            Some("drop") => true,
-            Some(other) => {
-                return Err(FactoryError::BadField {
-                    field: "clip-edges".into(),
-                    msg: format!("unknown clip-edges '{other}', expected keep/drop"),
-                });
-            }
-        };
+        let mut r = InReader::new(fields, ctx, 1);
+        let drop_clip_edges = r.enum_or("clip-edges", false, CLIP_EDGES)?;
         Ok(BuiltNode {
-            node: Box::new(BoundaryNode { drop_clip_edges }),
+            node: Box::new(BoundaryNode {
+                drop_clip_edges,
+                param_refs: r.finish().param_refs,
+            }),
             connections: vec![Connection {
                 port: "features".into(),
                 src: features,
@@ -116,8 +116,8 @@ impl NodeFactory for BoundaryFactory {
             "description": "Convert each polygon to its boundary rings (exterior + holes) as polylines. Existing polylines and points pass through.",
             "properties": {
                 "features": schema_frag::node_ref(),
-                "clip-edges": { "type": "string", "enum": ["keep", "drop"], "default": "keep",
-                    "description": "What to do with the straight edges a vector tile adds where it clips a polygon at the tile buffer, just outside the tile. `keep` outlines them like any other edge; `drop` leaves them out, splitting a ring into open polylines where they were. Use `drop` when a wide stroke on the outline (a coastal band, say) shows a band along every tile seam: the stroke on those edges reaches into the tile. `drop` removes every segment that lies entirely past one side of the tile and runs within 15° of that side; the tolerance is what lets it work after a `buffer`, which can bend the clip line slightly. A real shoreline outside the tile running nearly parallel to its edge is dropped too, but nothing inside the tile goes missing, and a rectangle exactly on the tile border is kept." },
+                "clip-edges": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": ["keep", "drop"], "default": "keep",
+                    "description": "What to do with the straight edges a vector tile adds where it clips a polygon at the tile buffer, just outside the tile. `keep` outlines them like any other edge; `drop` leaves them out, splitting a ring into open polylines where they were. Use `drop` when a wide stroke on the outline (a coastal band, say) shows a band along every tile seam: the stroke on those edges reaches into the tile. `drop` removes every segment that lies entirely past one side of the tile and runs within 15° of that side; the tolerance is what lets it work after a `buffer`, which can bend the clip line slightly. A real shoreline outside the tile running nearly parallel to its edge is dropped too, but nothing inside the tile goes missing, and a rectangle exactly on the tile border is kept." })),
             },
             "required": ["features"],
         })

@@ -13,7 +13,9 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::raster::generator_kind::{parse_generator_kind, GeneratorKind};
+use crate::nodes::raster::generator_kind::{
+    generator_kind_schema, parse_generator_kind, GeneratorKind,
+};
 
 struct CircleNode {
     color: In<[f32; 4]>,
@@ -140,7 +142,7 @@ impl NodeFactory for CircleFactory {
                 "color": schema_frag::color(),
                 "radius-frac": schema_frag::unit_number(),
                 "hardness": schema_frag::unit_number(),
-                "kind": { "type": "string", "enum": ["raster", "sprite"], "default": "raster" },
+                "kind": generator_kind_schema(),
                 "width-px": { "type": "integer", "minimum": 1 },
                 "height-px": { "type": "integer", "minimum": 1 },
             },

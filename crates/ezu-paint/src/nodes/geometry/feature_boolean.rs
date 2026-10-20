@@ -7,16 +7,27 @@
 
 use ezu_features::ops::boolean::{polygon_boolean, BoolOp};
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, InfluenceCtx, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EnumTable, EvalCtx, EvalError,
+    FactoryCtx, FactoryError, InEnum, InReader, InfluenceCtx, Node, NodeFactory, PortKind,
+    PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value, read_optional_string, FeatureGroup};
+use crate::nodes::common::{downcast_features, features_value, FeatureGroup};
+
+/// `xor` is another name for `symmetric-difference`.
+const MODES: EnumTable<BoolOp> = &[
+    ("union", BoolOp::Union),
+    ("intersection", BoolOp::Intersection),
+    ("difference", BoolOp::Difference),
+    ("symmetric-difference", BoolOp::SymmetricDifference),
+    ("xor", BoolOp::SymmetricDifference),
+];
 
 struct FeatureBooleanNode {
-    op: BoolOp,
+    op: InEnum<BoolOp>,
+    param_refs: Vec<String>,
 }
 
 impl Node for FeatureBooleanNode {
@@ -54,9 +65,10 @@ impl Node for FeatureBooleanNode {
     }
     fn eval(
         &self,
-        _ctx: &EvalCtx<'_>,
+        ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
+        let op = self.op.get(ctx)?;
         let a = downcast_features(
             inputs[0]
                 .as_ref()
@@ -69,7 +81,7 @@ impl Node for FeatureBooleanNode {
         )?;
         let a_polys: Vec<_> = a.polygons().cloned().collect();
         let b_polys: Vec<_> = b.polygons().cloned().collect();
-        let polygons = polygon_boolean(&a_polys, &b_polys, self.op);
+        let polygons = polygon_boolean(&a_polys, &b_polys, op);
         if polygons.is_empty() {
             return Ok(features_value(a.extent, vec![]));
         }
@@ -80,12 +92,10 @@ impl Node for FeatureBooleanNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"feature-boolean");
-        h.update(match self.op {
-            BoolOp::Union => b"u",
-            BoolOp::Intersection => b"i",
-            BoolOp::Difference => b"d",
-            BoolOp::SymmetricDifference => b"s",
-        });
+        self.op.param_hash(h);
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -97,26 +107,17 @@ impl NodeFactory for FeatureBooleanFactory {
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
-        _ctx: &FactoryCtx<'_>,
+        ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let a = take_input_ref(fields, "a")?;
         let b = take_input_ref(fields, "b")?;
-        let op = match read_optional_string(fields, "mode")?.as_deref() {
-            None | Some("union") => BoolOp::Union,
-            Some("intersection") => BoolOp::Intersection,
-            Some("difference") => BoolOp::Difference,
-            Some("symmetric-difference") | Some("xor") => BoolOp::SymmetricDifference,
-            Some(other) => {
-                return Err(FactoryError::BadField {
-                    field: "mode".into(),
-                    msg: format!(
-                        "expected one of union/intersection/difference/symmetric-difference, got `{other}`"
-                    ),
-                });
-            }
-        };
+        let mut r = InReader::new(fields, ctx, 2);
+        let op = r.enum_or("mode", BoolOp::Union, MODES)?;
         Ok(BuiltNode {
-            node: Box::new(FeatureBooleanNode { op }),
+            node: Box::new(FeatureBooleanNode {
+                op,
+                param_refs: r.finish().param_refs,
+            }),
             connections: vec![
                 Connection {
                     port: "a".into(),
@@ -135,11 +136,11 @@ impl NodeFactory for FeatureBooleanFactory {
             "properties": {
                 "a": schema_frag::node_ref(),
                 "b": schema_frag::node_ref(),
-                "mode": {
+                "mode": schema_frag::in_enum(serde_json::json!({
                     "type": "string",
-                    "enum": ["union", "intersection", "difference", "symmetric-difference", "xor"],
+                    "enum": ezu_graph::enum_names(MODES),
                     "default": "union",
-                },
+                })),
             },
             "required": ["a", "b"],
         })

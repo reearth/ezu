@@ -15,15 +15,13 @@
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue, ScalarField,
+    schema_frag, take_input_ref, BuiltNode, Connection, EnumTable, EvalCtx, EvalError, FactoryCtx,
+    FactoryError, InEnum, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, ScalarField,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::read_optional_string;
-
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Channel {
     R,
     G,
@@ -32,30 +30,28 @@ enum Channel {
     Luminance,
 }
 
-impl Channel {
-    fn parse(s: &str) -> Option<Self> {
-        match s {
-            "r" | "R" | "red" => Some(Channel::R),
-            "g" | "G" | "green" => Some(Channel::G),
-            "b" | "B" | "blue" => Some(Channel::B),
-            "a" | "A" | "alpha" => Some(Channel::A),
-            "luminance" | "luma" | "y" => Some(Channel::Luminance),
-            _ => None,
-        }
-    }
-    fn tag(self) -> u8 {
-        match self {
-            Channel::R => 0,
-            Channel::G => 1,
-            Channel::B => 2,
-            Channel::A => 3,
-            Channel::Luminance => 4,
-        }
-    }
-}
+/// The schema's names first, then the other spellings accepted for each.
+const CHANNELS: EnumTable<Channel> = &[
+    ("r", Channel::R),
+    ("g", Channel::G),
+    ("b", Channel::B),
+    ("a", Channel::A),
+    ("luminance", Channel::Luminance),
+    ("R", Channel::R),
+    ("red", Channel::R),
+    ("G", Channel::G),
+    ("green", Channel::G),
+    ("B", Channel::B),
+    ("blue", Channel::B),
+    ("A", Channel::A),
+    ("alpha", Channel::A),
+    ("luma", Channel::Luminance),
+    ("y", Channel::Luminance),
+];
 
 struct PickChannelNode {
-    channel: Channel,
+    channel: InEnum<Channel>,
+    param_refs: Vec<String>,
 }
 
 impl Node for PickChannelNode {
@@ -75,20 +71,21 @@ impl Node for PickChannelNode {
     }
     fn eval(
         &self,
-        _ctx: &EvalCtx<'_>,
+        ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
         let src = inputs[0]
             .as_ref()
             .and_then(PortValue::as_raster)
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
+        let channel = self.channel.get(ctx)?;
         let w = src.width;
         let h = src.height;
         let count = (w * h) as usize;
         let mut values: Vec<f32> = Vec::with_capacity(count);
         for i in (0..src.pixels.len()).step_by(4) {
             let a = src.pixels[i + 3] as f32 / 255.0;
-            let v = match self.channel {
+            let v = match channel {
                 Channel::A => a,
                 Channel::R | Channel::G | Channel::B | Channel::Luminance => {
                     if a <= 0.0 {
@@ -97,7 +94,7 @@ impl Node for PickChannelNode {
                         let r = (src.pixels[i] as f32 / 255.0) / a;
                         let g = (src.pixels[i + 1] as f32 / 255.0) / a;
                         let b = (src.pixels[i + 2] as f32 / 255.0) / a;
-                        match self.channel {
+                        match channel {
                             Channel::R => r,
                             Channel::G => g,
                             Channel::B => b,
@@ -121,7 +118,10 @@ impl Node for PickChannelNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"pick-channel");
-        h.update(&[self.channel.tag()]);
+        self.channel.param_hash(h);
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -133,18 +133,16 @@ impl NodeFactory for PickChannelFactory {
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
-        _ctx: &FactoryCtx<'_>,
+        ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let input = take_input_ref(fields, "input")?;
-        let channel = match read_optional_string(fields, "channel")?.as_deref() {
-            None | Some("luminance") | Some("luma") | Some("y") => Channel::Luminance,
-            Some(s) => Channel::parse(s).ok_or_else(|| FactoryError::BadField {
-                field: "channel".into(),
-                msg: format!("expected one of r/g/b/a/luminance, got `{s}`"),
-            })?,
-        };
+        let mut r = InReader::new(fields, ctx, 1);
+        let channel = r.enum_or("channel", Channel::Luminance, CHANNELS)?;
         Ok(BuiltNode {
-            node: Box::new(PickChannelNode { channel }),
+            node: Box::new(PickChannelNode {
+                channel,
+                param_refs: r.finish().param_refs,
+            }),
             connections: vec![Connection {
                 port: "input".into(),
                 src: input,
@@ -156,11 +154,11 @@ impl NodeFactory for PickChannelFactory {
             "description": "Extract a single channel of an RGBA raster as a [0, 1] ScalarField. RGB channels are read in non-premultiplied space; `luminance` is Rec. 601 luma over the non-premultiplied colour. Bridges the raster pipeline into scalar-field ops (`map-range`, `threshold`, `color-ramp`).",
             "properties": {
                 "input": schema_frag::node_ref(),
-                "channel": {
+                "channel": schema_frag::in_enum(serde_json::json!({
                     "type": "string",
                     "enum": ["r", "g", "b", "a", "luminance"],
                     "default": "luminance",
-                },
+                })),
             },
             "required": ["input"],
         })

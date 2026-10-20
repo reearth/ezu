@@ -393,27 +393,36 @@
                 ]
               },
               "composite": {
-                "default": "source-over",
-                "description": "Porter-Duff operator, by its W3C Compositing name. `over`, `source`, and `dest-out` / `erase` are accepted for `source-over`, `copy` and `destination-out`.",
-                "enum": [
-                  "clear",
-                  "copy",
-                  "destination",
-                  "source-over",
-                  "destination-over",
-                  "source-in",
-                  "destination-in",
-                  "source-out",
-                  "destination-out",
-                  "source-atop",
-                  "destination-atop",
-                  "xor",
-                  "over",
-                  "source",
-                  "dest-out",
-                  "erase"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "source-over",
+                    "description": "Porter-Duff operator, by its W3C Compositing name. `over`, `source`, and `dest-out` / `erase` are accepted for `source-over`, `copy` and `destination-out`.",
+                    "enum": [
+                      "clear",
+                      "copy",
+                      "destination",
+                      "source-over",
+                      "destination-over",
+                      "source-in",
+                      "destination-in",
+                      "source-out",
+                      "destination-out",
+                      "source-atop",
+                      "destination-atop",
+                      "xor",
+                      "over",
+                      "source",
+                      "dest-out",
+                      "erase"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "mask": {
                 "description": "Reference to another node (`@name`).",
@@ -421,26 +430,35 @@
                 "type": "string"
               },
               "mode": {
-                "default": "normal",
-                "enum": [
-                  "normal",
-                  "multiply",
-                  "screen",
-                  "overlay",
-                  "darken",
-                  "lighten",
-                  "color-dodge",
-                  "color-burn",
-                  "hard-light",
-                  "soft-light",
-                  "difference",
-                  "exclusion",
-                  "hue",
-                  "saturation",
-                  "color",
-                  "luminosity"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "normal",
+                    "enum": [
+                      "normal",
+                      "multiply",
+                      "screen",
+                      "overlay",
+                      "darken",
+                      "lighten",
+                      "color-dodge",
+                      "color-burn",
+                      "hard-light",
+                      "soft-light",
+                      "difference",
+                      "exclusion",
+                      "hue",
+                      "saturation",
+                      "color",
+                      "luminosity"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "op": {
                 "const": "blend",
@@ -517,13 +535,22 @@
             "description": "Convert each polygon to its boundary rings (exterior + holes) as polylines. Existing polylines and points pass through.",
             "properties": {
               "clip-edges": {
-                "default": "keep",
-                "description": "What to do with the straight edges a vector tile adds where it clips a polygon at the tile buffer, just outside the tile. `keep` outlines them like any other edge; `drop` leaves them out, splitting a ring into open polylines where they were. Use `drop` when a wide stroke on the outline (a coastal band, say) shows a band along every tile seam: the stroke on those edges reaches into the tile. `drop` removes every segment that lies entirely past one side of the tile and runs within 15° of that side; the tolerance is what lets it work after a `buffer`, which can bend the clip line slightly. A real shoreline outside the tile running nearly parallel to its edge is dropped too, but nothing inside the tile goes missing, and a rectangle exactly on the tile border is kept.",
-                "enum": [
-                  "keep",
-                  "drop"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "keep",
+                    "description": "What to do with the straight edges a vector tile adds where it clips a polygon at the tile buffer, just outside the tile. `keep` outlines them like any other edge; `drop` leaves them out, splitting a ring into open polylines where they were. Use `drop` when a wide stroke on the outline (a coastal band, say) shows a band along every tile seam: the stroke on those edges reaches into the tile. `drop` removes every segment that lies entirely past one side of the tile and runs within 15° of that side; the tolerance is what lets it work after a `buffer`, which can bend the clip line slightly. A real shoreline outside the tile running nearly parallel to its edge is dropped too, but nothing inside the tile goes missing, and a rectangle exactly on the tile border is kept.",
+                    "enum": [
+                      "keep",
+                      "drop"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "features": {
                 "description": "Reference to another node (`@name`).",
@@ -710,13 +737,22 @@
                 "type": "string"
               },
               "join": {
-                "default": "miter",
-                "enum": [
-                  "miter",
-                  "round",
-                  "bevel"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "miter",
+                    "enum": [
+                      "miter",
+                      "round",
+                      "bevel"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "op": {
                 "const": "buffer",
@@ -763,40 +799,67 @@
             "description": "Rearrange RGBA channels. Each output (`r`/`g`/`b`/`a`) names which input channel feeds it, the input's `luminance` (Rec. 601 luma, as `pick-channel` reads it), or a constant (`0`/`1`). Identity by default. Operates in non-premultiplied sRGB.",
             "properties": {
               "a": {
-                "enum": [
-                  "r",
-                  "g",
-                  "b",
-                  "a",
-                  "luminance",
-                  "0",
-                  "1"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "enum": [
+                      "r",
+                      "g",
+                      "b",
+                      "a",
+                      "luminance",
+                      "0",
+                      "1"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "b": {
-                "enum": [
-                  "r",
-                  "g",
-                  "b",
-                  "a",
-                  "luminance",
-                  "0",
-                  "1"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "enum": [
+                      "r",
+                      "g",
+                      "b",
+                      "a",
+                      "luminance",
+                      "0",
+                      "1"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "g": {
-                "enum": [
-                  "r",
-                  "g",
-                  "b",
-                  "a",
-                  "luminance",
-                  "0",
-                  "1"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "enum": [
+                      "r",
+                      "g",
+                      "b",
+                      "a",
+                      "luminance",
+                      "0",
+                      "1"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "input": {
                 "description": "Reference to another node (`@name`).",
@@ -808,16 +871,25 @@
                 "description": "Selects the `channel-shuffle` operation."
               },
               "r": {
-                "enum": [
-                  "r",
-                  "g",
-                  "b",
-                  "a",
-                  "luminance",
-                  "0",
-                  "1"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "enum": [
+                      "r",
+                      "g",
+                      "b",
+                      "a",
+                      "luminance",
+                      "0",
+                      "1"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               }
             },
             "required": [
@@ -854,12 +926,21 @@
                 "type": "integer"
               },
               "kind": {
-                "default": "raster",
-                "enum": [
-                  "raster",
-                  "sprite"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "raster",
+                    "enum": [
+                      "raster",
+                      "sprite"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "op": {
                 "const": "circle",
@@ -1021,13 +1102,22 @@
                 "type": "string"
               },
               "interpolation": {
-                "default": "linear",
-                "description": "`linear` (default) blends the colours of the two stops around a value. `step` gives a value the colour of the stop at or below it (the first stop's below them all), as MapLibre's `step` does, so the ramp paints flat bands. Ignored with `ramp-expr`.",
-                "enum": [
-                  "linear",
-                  "step"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "linear",
+                    "description": "`linear` (default) blends the colours of the two stops around a value. `step` gives a value the colour of the stop at or below it (the first stop's below them all), as MapLibre's `step` does, so the ramp paints flat bands. Ignored with `ramp-expr`.",
+                    "enum": [
+                      "linear",
+                      "step"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "op": {
                 "const": "color-ramp",
@@ -1052,16 +1142,25 @@
                 "description": "A MapLibre color expression over `heatmap-density` (e.g. a `heatmap-color` value). When present it overrides `stops`: the expression is baked into a 256-entry LUT per eval (zoom in context), inputs clamp to [0, 1], and lookups interpolate linearly between entries — mirroring MapLibre's 256-px ramp texture. `stops` is only required when this is absent."
               },
               "space": {
-                "default": "rgb",
-                "description": "Colour space the stops interpolate in. `rgb` (default) is a straight sRGB lerp; `hsl`/`hsv`/`hcl` interpolate hue on the shortest path; `hcl`/`lab` are perceptual (ported from the MapLibre style spec).",
-                "enum": [
-                  "rgb",
-                  "hsl",
-                  "hsv",
-                  "hcl",
-                  "lab"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "rgb",
+                    "description": "Colour space the stops interpolate in. `rgb` (default) is a straight sRGB lerp; `hsl`/`hsv`/`hcl` interpolate hue on the shortest path; `hcl`/`lab` are perceptual (ported from the MapLibre style spec).",
+                    "enum": [
+                      "rgb",
+                      "hsl",
+                      "hsv",
+                      "hcl",
+                      "lab"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "stops": {
                 "description": "Either half of a stop may be a `$param`, so a ramp can be recoloured or rescaled at render time. The table is sorted by `value` on every eval, so a param may reorder it.",
@@ -1552,16 +1651,25 @@
                 "type": "number"
               },
               "boundary": {
-                "default": "clamp",
-                "description": "How to read past the input's edge: `clamp` repeats the edge pixel, `transparent` reads nothing, `mirror` reflects the image, and `wrap` (or `repeat`) tiles it, so what leaves one edge comes back in at the opposite one.",
-                "enum": [
-                  "clamp",
-                  "transparent",
-                  "mirror",
-                  "wrap",
-                  "repeat"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "clamp",
+                    "description": "How to read past the input's edge: `clamp` repeats the edge pixel, `transparent` reads nothing, `mirror` reflects the image, and `wrap` (or `repeat`) tiles it, so what leaves one edge comes back in at the opposite one.",
+                    "enum": [
+                      "clamp",
+                      "transparent",
+                      "mirror",
+                      "wrap",
+                      "repeat"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "displacement": {
                 "description": "Reference to another node (`@name`).",
@@ -1612,12 +1720,21 @@
                 "type": "string"
               },
               "method": {
-                "default": "floyd-steinberg",
-                "enum": [
-                  "floyd-steinberg",
-                  "ordered"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "floyd-steinberg",
+                    "enum": [
+                      "floyd-steinberg",
+                      "ordered"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "op": {
                 "const": "dither",
@@ -1634,12 +1751,21 @@
                 "type": "array"
               },
               "space": {
-                "default": "lab",
-                "enum": [
-                  "lab",
-                  "rgb"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "lab",
+                    "enum": [
+                      "lab",
+                      "rgb"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               }
             },
             "required": [
@@ -1825,14 +1951,23 @@
                 "description": "Selects the `expr` operation."
               },
               "type": {
-                "default": "number",
-                "description": "The scalar type the expression must produce (build-time typechecked).",
-                "enum": [
-                  "number",
-                  "color",
-                  "bool"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "number",
+                    "description": "The scalar type the expression must produce (build-time typechecked).",
+                    "enum": [
+                      "number",
+                      "color",
+                      "bool"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               }
             },
             "required": [
@@ -1856,15 +1991,24 @@
                 "type": "string"
               },
               "mode": {
-                "default": "union",
-                "enum": [
-                  "union",
-                  "intersection",
-                  "difference",
-                  "symmetric-difference",
-                  "xor"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "union",
+                    "enum": [
+                      "union",
+                      "intersection",
+                      "difference",
+                      "symmetric-difference",
+                      "xor"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "op": {
                 "const": "feature-boolean",
@@ -1914,12 +2058,21 @@
                 "type": "string"
               },
               "stitch": {
-                "description": "Join the layer to its 8 neighbouring tiles, for effects that reach further than the tile's thin buffer: wide strokes along outlines, large buffers, closings. Each tile contributes only the area it owns, so nothing is drawn twice. `merge` unions polygons with identical properties so no edge remains where tiles meet; `pieces` keeps every piece as its tile cut it (cheaper, and identical when the layer is only filled). Costs fetching and decoding up to 8 more tiles for this layer only; a neighbour the host cannot provide falls back to this tile's own buffer data. Omit to read this tile alone.",
-                "enum": [
-                  "merge",
-                  "pieces"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "description": "Join the layer to its 8 neighbouring tiles, for effects that reach further than the tile's thin buffer: wide strokes along outlines, large buffers, closings. Each tile contributes only the area it owns, so nothing is drawn twice. `merge` unions polygons with identical properties so no edge remains where tiles meet; `pieces` keeps every piece as its tile cut it (cheaper, and identical when the layer is only filled). Costs fetching and decoding up to 8 more tiles for this layer only; a neighbour the host cannot provide falls back to this tile's own buffer data. Omit to read this tile alone. Read when the graph is built: a `$param` gives its default.",
+                    "enum": [
+                      "merge",
+                      "pieces"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               }
             },
             "required": [
@@ -1969,40 +2122,49 @@
                 ]
               },
               "fn": {
-                "enum": [
-                  "abs",
-                  "neg",
-                  "floor",
-                  "ceil",
-                  "round",
-                  "fract",
-                  "sign",
-                  "sqrt",
-                  "exp",
-                  "log",
-                  "log2",
-                  "log10",
-                  "sin",
-                  "cos",
-                  "tan",
-                  "asin",
-                  "acos",
-                  "atan",
-                  "add",
-                  "sub",
-                  "mul",
-                  "div",
-                  "mod",
-                  "min",
-                  "max",
-                  "pow",
-                  "atan2",
-                  "step",
-                  "clamp",
-                  "lerp",
-                  "smoothstep"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "enum": [
+                      "abs",
+                      "neg",
+                      "floor",
+                      "ceil",
+                      "round",
+                      "fract",
+                      "sign",
+                      "sqrt",
+                      "exp",
+                      "log",
+                      "log2",
+                      "log10",
+                      "sin",
+                      "cos",
+                      "tan",
+                      "asin",
+                      "acos",
+                      "atan",
+                      "add",
+                      "sub",
+                      "mul",
+                      "div",
+                      "mod",
+                      "min",
+                      "max",
+                      "pow",
+                      "atan2",
+                      "step",
+                      "clamp",
+                      "lerp",
+                      "smoothstep"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "op": {
                 "const": "field-math",
@@ -2265,14 +2427,23 @@
             "description": "Direction raster from an elevation field: which way the ground falls, rises, or runs level at each pixel. R = 0.5 + 0.5·vx and G = 0.5 + 0.5·vy in pixel axes (+x east, +y south), B = 0, opaque; flat 50% grey means no direction. This is `displace`'s encoding, so the output feeds `displace` directly, and it is what `flow-smear` reads to streak a texture along the terrain. The vector's length is the slope angle over `max-deg` (capped at 1), or 1 everywhere the ground slopes with `normalize`. Missing samples (NaN or the field's nodata value) get the opaque no-flow grey, so `displace` and `flow-smear` leave them in place; a missing neighbour counts as the centre value, so the ground around a hole does not flow into or out of it.",
             "properties": {
               "direction": {
-                "default": "downhill",
-                "description": "`downhill` follows the fall line, `uphill` points the other way, and `along` follows the contour lines with downhill on its right-hand side (counter-clockwise around a summit on a north-up map).",
-                "enum": [
-                  "downhill",
-                  "uphill",
-                  "along"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "downhill",
+                    "description": "`downhill` follows the fall line, `uphill` points the other way, and `along` follows the contour lines with downhill on its right-hand side (counter-clockwise around a summit on a north-up map).",
+                    "enum": [
+                      "downhill",
+                      "uphill",
+                      "along"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "exaggeration": {
                 "oneOf": [
@@ -2370,23 +2541,41 @@
                 "description": "Selects the `flow-smear` operation."
               },
               "sides": {
-                "default": "both",
-                "description": "`both` smears each way along the field, so a speck becomes a stroke centred on it; `forward` smears only the way the field points, so a speck trails a comet tail downstream; `backward` smears only against it, so the tail runs upstream.",
-                "enum": [
-                  "both",
-                  "forward",
-                  "backward"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "both",
+                    "description": "`both` smears each way along the field, so a speck becomes a stroke centred on it; `forward` smears only the way the field points, so a speck trails a comet tail downstream; `backward` smears only against it, so the tail runs upstream.",
+                    "enum": [
+                      "both",
+                      "forward",
+                      "backward"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "taper": {
-                "default": "flat",
-                "description": "`flat` weights every sample alike; `smooth` fades them towards the ends of the walk (a Hann window), softening the stroke ends.",
-                "enum": [
-                  "flat",
-                  "smooth"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "flat",
+                    "description": "`flat` weights every sample alike; `smooth` fades them towards the ends of the walk (a Hann window), softening the stroke ends.",
+                    "enum": [
+                      "flat",
+                      "smooth"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               }
             },
             "required": [
@@ -2401,12 +2590,21 @@
             "description": "Conic (sweep) gradient around `center`. Gradient parameter is the clockwise angle from `start-angle` (degrees) normalized to [0, 1). 0° points along +x. `kind: sprite` switches to sprite-local [0, 1] coords.",
             "properties": {
               "anchor": {
-                "default": "tile",
-                "enum": [
-                  "tile",
-                  "world"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "tile",
+                    "enum": [
+                      "tile",
+                      "world"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "center": {
                 "default": [
@@ -2425,28 +2623,46 @@
                 "type": "integer"
               },
               "kind": {
-                "default": "raster",
-                "enum": [
-                  "raster",
-                  "sprite"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "raster",
+                    "enum": [
+                      "raster",
+                      "sprite"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "op": {
                 "const": "gradient-conic",
                 "description": "Selects the `gradient-conic` operation."
               },
               "space": {
-                "default": "rgb",
-                "description": "Colour space the stops interpolate in; hue-based spaces take the shortest path.",
-                "enum": [
-                  "rgb",
-                  "hsl",
-                  "hsv",
-                  "hcl",
-                  "lab"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "rgb",
+                    "description": "Colour space the stops interpolate in; hue-based spaces take the shortest path.",
+                    "enum": [
+                      "rgb",
+                      "hsl",
+                      "hsv",
+                      "hcl",
+                      "lab"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "start-angle": {
                 "oneOf": [
@@ -2505,12 +2721,21 @@
             "description": "Diamond gradient from `center`. Gradient parameter is Manhattan (|dx| + |dy|) distance / radius. `kind: sprite` switches to sprite-local [0, 1] coords.",
             "properties": {
               "anchor": {
-                "default": "tile",
-                "enum": [
-                  "tile",
-                  "world"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "tile",
+                    "enum": [
+                      "tile",
+                      "world"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "center": {
                 "default": [
@@ -2529,12 +2754,21 @@
                 "type": "integer"
               },
               "kind": {
-                "default": "raster",
-                "enum": [
-                  "raster",
-                  "sprite"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "raster",
+                    "enum": [
+                      "raster",
+                      "sprite"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "op": {
                 "const": "gradient-diamond",
@@ -2555,16 +2789,25 @@
                 ]
               },
               "space": {
-                "default": "rgb",
-                "description": "Colour space the stops interpolate in; hue-based spaces take the shortest path.",
-                "enum": [
-                  "rgb",
-                  "hsl",
-                  "hsv",
-                  "hcl",
-                  "lab"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "rgb",
+                    "description": "Colour space the stops interpolate in; hue-based spaces take the shortest path.",
+                    "enum": [
+                      "rgb",
+                      "hsl",
+                      "hsv",
+                      "hcl",
+                      "lab"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "stops": {
                 "description": "`[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order.",
@@ -2611,12 +2854,21 @@
             "description": "Linear gradient from `start` to `end` (fractional coords). `kind: raster` (default) samples in tile/world coords; `kind: sprite` samples in [0, 1] sprite coords at `width-px × height-px`.",
             "properties": {
               "anchor": {
-                "default": "tile",
-                "enum": [
-                  "tile",
-                  "world"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "tile",
+                    "enum": [
+                      "tile",
+                      "world"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "end": {
                 "default": [
@@ -2635,28 +2887,46 @@
                 "type": "integer"
               },
               "kind": {
-                "default": "raster",
-                "enum": [
-                  "raster",
-                  "sprite"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "raster",
+                    "enum": [
+                      "raster",
+                      "sprite"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "op": {
                 "const": "gradient-linear",
                 "description": "Selects the `gradient-linear` operation."
               },
               "space": {
-                "default": "rgb",
-                "description": "Colour space the stops interpolate in; hue-based spaces take the shortest path.",
-                "enum": [
-                  "rgb",
-                  "hsl",
-                  "hsv",
-                  "hcl",
-                  "lab"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "rgb",
+                    "description": "Colour space the stops interpolate in; hue-based spaces take the shortest path.",
+                    "enum": [
+                      "rgb",
+                      "hsl",
+                      "hsv",
+                      "hcl",
+                      "lab"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "start": {
                 "default": [
@@ -2715,12 +2985,21 @@
             "description": "Radial gradient from `center` outward. Gradient parameter is Euclidean distance / radius. `aspect > 1` stretches the ellipse along X, `< 1` along Y. `kind: sprite` switches to sprite-local [0, 1] coords.",
             "properties": {
               "anchor": {
-                "default": "tile",
-                "enum": [
-                  "tile",
-                  "world"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "tile",
+                    "enum": [
+                      "tile",
+                      "world"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "aspect": {
                 "oneOf": [
@@ -2753,12 +3032,21 @@
                 "type": "integer"
               },
               "kind": {
-                "default": "raster",
-                "enum": [
-                  "raster",
-                  "sprite"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "raster",
+                    "enum": [
+                      "raster",
+                      "sprite"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "op": {
                 "const": "gradient-radial",
@@ -2779,16 +3067,25 @@
                 ]
               },
               "space": {
-                "default": "rgb",
-                "description": "Colour space the stops interpolate in; hue-based spaces take the shortest path.",
-                "enum": [
-                  "rgb",
-                  "hsl",
-                  "hsv",
-                  "hcl",
-                  "lab"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "rgb",
+                    "description": "Colour space the stops interpolate in; hue-based spaces take the shortest path.",
+                    "enum": [
+                      "rgb",
+                      "hsl",
+                      "hsv",
+                      "hcl",
+                      "lab"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "stops": {
                 "description": "`[[t, color], ...]`. Either half of a pair may be a `$param`; the table is sorted by `t` on every eval, so stops need not be declared in order.",
@@ -2835,14 +3132,23 @@
             "description": "Parallels and meridians crossing the tile, as labelled polylines.",
             "properties": {
               "axes": {
-                "default": "both",
-                "description": "Which families to emit: parallels of latitude, meridians of longitude, or both.",
-                "enum": [
-                  "both",
-                  "parallels",
-                  "meridians"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "both",
+                    "description": "Which families to emit: parallels of latitude, meridians of longitude, or both.",
+                    "enum": [
+                      "both",
+                      "parallels",
+                      "meridians"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "extent": {
                 "default": 4096,
@@ -3022,12 +3328,21 @@
                 "type": "string"
               },
               "mode": {
-                "default": "shade",
-                "enum": [
-                  "shade",
-                  "relief"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "shade",
+                    "enum": [
+                      "shade",
+                      "relief"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "multidirectional": {
                 "default": false,
@@ -3246,11 +3561,21 @@
                 "description": "A MapLibre filter expression (JSON array, e.g. [\">\", [\"coalesce\", [\"get\", \"variant-index\"], 0], 0]), evaluated per box against every property the box carries, `part` included, with `geometry-type` `Polygon`. A box is emitted only when the expression is truthy; one whose expression errors is dropped. Picks out, say, the labels that moved off their first position, to draw a leader line to their feature."
               },
               "include": {
-                "default": "placed",
-                "description": "`placed` emits the labels that placed; `all` adds the candidates that lost their collision test or were dropped by `dedupe-key-expr`, with `placed: false`, at their first anchor. Duplicate copies of one label are never emitted.",
-                "enum": [
-                  "placed",
-                  "all"
+                "oneOf": [
+                  {
+                    "default": "placed",
+                    "description": "`placed` emits the labels that placed; `all` adds the candidates that lost their collision test or were dropped by `dedupe-key-expr`, with `placed: false`, at their first anchor. Duplicate copies of one label are never emitted.",
+                    "enum": [
+                      "placed",
+                      "all"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
                 ]
               },
               "labels": {
@@ -3902,40 +4227,49 @@
                 ]
               },
               "fn": {
-                "enum": [
-                  "abs",
-                  "neg",
-                  "floor",
-                  "ceil",
-                  "round",
-                  "fract",
-                  "sign",
-                  "sqrt",
-                  "exp",
-                  "log",
-                  "log2",
-                  "log10",
-                  "sin",
-                  "cos",
-                  "tan",
-                  "asin",
-                  "acos",
-                  "atan",
-                  "add",
-                  "sub",
-                  "mul",
-                  "div",
-                  "mod",
-                  "min",
-                  "max",
-                  "pow",
-                  "atan2",
-                  "step",
-                  "clamp",
-                  "lerp",
-                  "smoothstep"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "enum": [
+                      "abs",
+                      "neg",
+                      "floor",
+                      "ceil",
+                      "round",
+                      "fract",
+                      "sign",
+                      "sqrt",
+                      "exp",
+                      "log",
+                      "log2",
+                      "log10",
+                      "sin",
+                      "cos",
+                      "tan",
+                      "asin",
+                      "acos",
+                      "atan",
+                      "add",
+                      "sub",
+                      "mul",
+                      "div",
+                      "mod",
+                      "min",
+                      "max",
+                      "pow",
+                      "atan2",
+                      "step",
+                      "clamp",
+                      "lerp",
+                      "smoothstep"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "op": {
                 "const": "math",
@@ -4016,16 +4350,25 @@
                 "description": "Selects the `mix` operation."
               },
               "space": {
-                "default": "rgb",
-                "description": "Colour space the interpolation runs in; hue-based spaces take the shortest path.",
-                "enum": [
-                  "rgb",
-                  "hsl",
-                  "hsv",
-                  "hcl",
-                  "lab"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "rgb",
+                    "description": "Colour space the interpolation runs in; hue-based spaces take the shortest path.",
+                    "enum": [
+                      "rgb",
+                      "hsl",
+                      "hsv",
+                      "hcl",
+                      "lab"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "t": {
                 "oneOf": [
@@ -4054,13 +4397,22 @@
             "description": "Quantize a raster into uniform square blocks. `mode` selects how each block is summarized: `average` (default) takes the mean of covered pixels (smooth, classic mosaic); `nearest` takes the block's centre pixel (crisp, no inter-colour blending). World-anchored by default so adjacent map tiles share the same block grid.",
             "properties": {
               "anchor": {
-                "default": "world",
-                "description": "`world` (default) makes the block grid seamless across map tiles by growing the upstream pad. `tile` restarts the grid at every map tile's top-left and requires no extra padding.",
-                "enum": [
-                  "world",
-                  "tile"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "world",
+                    "description": "`world` (default) makes the block grid seamless across map tiles by growing the upstream pad. `tile` restarts the grid at every map tile's top-left and requires no extra padding. Read when the graph is built: a `$param` gives its default.",
+                    "enum": [
+                      "tile",
+                      "world"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "block": {
                 "oneOf": [
@@ -4087,13 +4439,22 @@
                 "type": "string"
               },
               "mode": {
-                "default": "average",
-                "description": "`average` (default) blends covered pixels into a mean colour. `nearest` samples the block's centre pixel verbatim — produces hard block edges without inter-colour averaging.",
-                "enum": [
-                  "average",
-                  "nearest"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "average",
+                    "description": "`average` (default) blends covered pixels into a mean colour. `nearest` samples the block's centre pixel verbatim — produces hard block edges without inter-colour averaging. Read when the graph is built: a `$param` gives its default.",
+                    "enum": [
+                      "average",
+                      "nearest"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "op": {
                 "const": "mosaic",
@@ -4112,12 +4473,21 @@
             "description": "Procedural noise source. With `kind: raster` (default) the noise is mapped to RGBA via `low-color`/`high-color`/`opacity`. With `kind: scalar` it emits a `ScalarField` of raw fBm values — compose with `map-range` before feeding `hillshade`/`color-ramp`. Every `type` lands in [-1, 1]. `white`/`value`/`perlin`/`simplex` sit around 0. `worley` and `cell` both divide the plane into cells around scattered sites: `worley` is `1 − 2·distance` to the nearest site, +1 on the site and falling towards the cell's edge, and `cell` is the nearest site's own random value, flat across its cell and spread evenly over [-1, 1] — one tone per cell, for stones, panes or patches. `anchor=world` (default) keeps the field seamless across tile borders.",
             "properties": {
               "anchor": {
-                "default": "world",
-                "enum": [
-                  "tile",
-                  "world"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "world",
+                    "enum": [
+                      "tile",
+                      "world"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "gain": {
                 "oneOf": [
@@ -4138,12 +4508,21 @@
                 "type": "string"
               },
               "kind": {
-                "default": "raster",
-                "enum": [
-                  "raster",
-                  "scalar"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "raster",
+                    "enum": [
+                      "raster",
+                      "scalar"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "lacunarity": {
                 "oneOf": [
@@ -4225,16 +4604,25 @@
                 "type": "integer"
               },
               "type": {
-                "default": "perlin",
-                "enum": [
-                  "white",
-                  "value",
-                  "perlin",
-                  "simplex",
-                  "worley",
-                  "cell"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "perlin",
+                    "enum": [
+                      "white",
+                      "value",
+                      "perlin",
+                      "simplex",
+                      "worley",
+                      "cell"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "warp-amp": {
                 "oneOf": [
@@ -4274,15 +4662,24 @@
             "description": "Extract a single channel of an RGBA raster as a [0, 1] ScalarField. RGB channels are read in non-premultiplied space; `luminance` is Rec. 601 luma over the non-premultiplied colour. Bridges the raster pipeline into scalar-field ops (`map-range`, `threshold`, `color-ramp`).",
             "properties": {
               "channel": {
-                "default": "luminance",
-                "enum": [
-                  "r",
-                  "g",
-                  "b",
-                  "a",
-                  "luminance"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "luminance",
+                    "enum": [
+                      "r",
+                      "g",
+                      "b",
+                      "a",
+                      "luminance"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "input": {
                 "description": "Reference to another node (`@name`).",
@@ -4305,30 +4702,48 @@
             "description": "Draw the source raster onto the canvas exactly once. `fit:none` (default) uses position/anchor/scale; `cover`/`contain`/`stretch` derive the destination rect from the canvas (and treat `position-px` as an offset from canvas center). Companion to `tiling` (repeats) and `stamp` (per-point).",
             "properties": {
               "anchor": {
-                "default": "top-left",
-                "description": "Only used when fit=none.",
-                "enum": [
-                  "top-left",
-                  "top-center",
-                  "top-right",
-                  "center-left",
-                  "center",
-                  "center-right",
-                  "bottom-left",
-                  "bottom-center",
-                  "bottom-right"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "top-left",
+                    "description": "Only used when fit=none.",
+                    "enum": [
+                      "top-left",
+                      "top-center",
+                      "top-right",
+                      "center-left",
+                      "center",
+                      "center-right",
+                      "bottom-left",
+                      "bottom-center",
+                      "bottom-right"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "fit": {
-                "default": "none",
-                "enum": [
-                  "none",
-                  "cover",
-                  "contain",
-                  "stretch"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "none",
+                    "enum": [
+                      "none",
+                      "cover",
+                      "contain",
+                      "stretch"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "input": {
                 "description": "Reference to another node (`@name`).",
@@ -4414,12 +4829,21 @@
             "description": "Regular lattice of points covering the tile.",
             "properties": {
               "anchor": {
-                "default": "tile",
-                "enum": [
-                  "tile",
-                  "world"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "tile",
+                    "enum": [
+                      "tile",
+                      "world"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "extent": {
                 "default": 4096,
@@ -4536,13 +4960,22 @@
             "description": "Random points at a given mean spacing, covering the tile. Where `point-grid` puts exactly one point in the middle of every cell, this one draws a *count* per cell — 0 to 3, averaging 1 — and places each point at a random spot inside it, so the set has the clumps and gaps of a real random scatter and no residual pitch. Reach for `point-grid` when the regularity is the point (a halftone screen, a tiling of panes to fracture) and for `point-scatter` when it is the enemy (stipple, foliage, grain, scattered symbols). Jittering a `point-grid` is not a substitute: one point per cell means an even density, and the lattice frequency stays plainly visible.",
             "properties": {
               "anchor": {
-                "default": "world",
-                "description": "`world` indexes the cells off global (0, 0), so adjacent tiles agree on the points they share and the scatter is seamless — the usual choice. `tile` indexes off the tile's own corner, giving every tile the same point set and a visible seam.",
-                "enum": [
-                  "tile",
-                  "world"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "world",
+                    "description": "`world` indexes the cells off global (0, 0), so adjacent tiles agree on the points they share and the scatter is seamless — the usual choice. `tile` indexes off the tile's own corner, giving every tile the same point set and a visible seam.",
+                    "enum": [
+                      "tile",
+                      "world"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "extent": {
                 "default": 4096,
@@ -4666,13 +5099,22 @@
                 "type": "array"
               },
               "space": {
-                "default": "lab",
-                "description": "Colour space the nearest-colour distance is measured in.",
-                "enum": [
-                  "lab",
-                  "rgb"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "lab",
+                    "description": "Colour space the nearest-colour distance is measured in.",
+                    "enum": [
+                      "lab",
+                      "rgb"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               }
             },
             "required": [
@@ -4981,12 +5423,21 @@
                 "type": "integer"
               },
               "kind": {
-                "default": "raster",
-                "enum": [
-                  "raster",
-                  "sprite"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "raster",
+                    "enum": [
+                      "raster",
+                      "sprite"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "op": {
                 "const": "solid",
@@ -5033,19 +5484,28 @@
             "description": "Stamp a sprite at every input point. Lines and polygons are ignored. Rotation, scale and position jitter are world-deterministic — a given point gets the same jitter no matter which tile renders it, and the three do not correlate. Provide either an `image` input (one sprite for every point) or, for a data-driven `icon-image`, a `sprite` atlas ref plus a `name-expr` that names each feature's icon.",
             "properties": {
               "anchor": {
-                "description": "Which part of the sprite sits on the point (MapLibre `icon-anchor`): `bottom` puts its bottom edge's middle there, say, for a pin. Rotation and scale turn about the point. Default `center`.",
-                "enum": [
-                  "center",
-                  "left",
-                  "right",
-                  "top",
-                  "bottom",
-                  "top-left",
-                  "top-right",
-                  "bottom-left",
-                  "bottom-right"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "description": "Which part of the sprite sits on the point (MapLibre `icon-anchor`): `bottom` puts its bottom edge's middle there, say, for a pin. Rotation and scale turn about the point. Default `center`.",
+                    "enum": [
+                      "center",
+                      "left",
+                      "right",
+                      "top",
+                      "bottom",
+                      "top-left",
+                      "top-right",
+                      "bottom-left",
+                      "bottom-right"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "anchor-expr": {
                 "description": "A MapLibre string expression naming the anchor per feature group (data-driven `icon-anchor`): one of the `anchor` names. It takes the place of `anchor` for that group; a group whose result is not an anchor name, or whose evaluation fails, uses `anchor`, and a result that is not an anchor name is reported once per node."
@@ -5184,13 +5644,22 @@
             "description": "Crisp constant-width vector stroke along feature polylines (tiny-skia), with cap/join and optional pixel `dasharray`. The sharp counterpart to `line` (painterly brush) — for clean cartographic road/boundary lines.",
             "properties": {
               "cap": {
-                "default": "butt",
-                "enum": [
-                  "butt",
-                  "round",
-                  "square"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "butt",
+                    "enum": [
+                      "butt",
+                      "round",
+                      "square"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "color": {
                 "description": "sRGB hex color, `$param` reference, or `@node` scalar port.",
@@ -5240,13 +5709,22 @@
                 ]
               },
               "join": {
-                "default": "miter",
-                "enum": [
-                  "miter",
-                  "round",
-                  "bevel"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "miter",
+                    "enum": [
+                      "miter",
+                      "round",
+                      "bevel"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "op": {
                 "const": "stroke",
@@ -5353,19 +5831,28 @@
                 "type": "boolean"
               },
               "anchor": {
-                "description": "Which part of the label block sits on the point (point placement). Default `center`. Ignored when `anchor-offsets` is set.",
-                "enum": [
-                  "center",
-                  "left",
-                  "right",
-                  "top",
-                  "bottom",
-                  "top-left",
-                  "top-right",
-                  "bottom-left",
-                  "bottom-right"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "description": "Which part of the label block sits on the point (point placement). Default `center`. Ignored when `anchor-offsets` is set.",
+                    "enum": [
+                      "center",
+                      "left",
+                      "right",
+                      "top",
+                      "bottom",
+                      "top-left",
+                      "top-right",
+                      "bottom-left",
+                      "bottom-right"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "anchor-expr": {
                 "description": "A MapLibre string expression (data-driven MapLibre `text-anchor`), evaluated per feature group with the tile's zoom, naming which part of the label block sits on the point: one of `center`, `left`, `right`, `top`, `bottom`, `top-left`, `top-right`, `bottom-left`, `bottom-right`. It takes the place of `anchor` for that group, with `offset-em` (or `radial-offset`) shifting the block as it would for that constant anchor, and `justify: auto` following it. A group whose result is not an anchor name, or whose evaluation fails, uses `anchor`; a result that is not an anchor name is reported once per node. Ignored, with a warning, when `anchor-offsets` or `anchor-variants` is set, since those name the anchors themselves. Point placement only."
@@ -5533,19 +6020,28 @@
                 "type": "boolean"
               },
               "icon-anchor": {
-                "description": "Which part of the icon sits on the point (MapLibre `icon-anchor`). Default `center`.",
-                "enum": [
-                  "center",
-                  "left",
-                  "right",
-                  "top",
-                  "bottom",
-                  "top-left",
-                  "top-right",
-                  "bottom-left",
-                  "bottom-right"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "description": "Which part of the icon sits on the point (MapLibre `icon-anchor`). Default `center`.",
+                    "enum": [
+                      "center",
+                      "left",
+                      "right",
+                      "top",
+                      "bottom",
+                      "top-left",
+                      "top-right",
+                      "bottom-left",
+                      "bottom-right"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "icon-ignore-placement": {
                 "description": "MapLibre `icon-ignore-placement`; with text present it pairs with `ignore-placement` the same way as the overlap flags. Default false.",
@@ -5616,12 +6112,22 @@
                 "type": "string"
               },
               "icon-text-fit": {
-                "description": "MapLibre `icon-text-fit`: stretch the icon to the box its label occupies, on the named axes. The sprite's `stretchX`/`stretchY`/`content` metadata decides which bands absorb the growth, so a shield keeps its corners; a sprite without it scales whole. The fitted box is also the icon's collision box. Default `none`.",
-                "enum": [
-                  "none",
-                  "width",
-                  "height",
-                  "both"
+                "oneOf": [
+                  {
+                    "description": "MapLibre `icon-text-fit`: stretch the icon to the box its label occupies, on the named axes. The sprite's `stretchX`/`stretchY`/`content` metadata decides which bands absorb the growth, so a shield keeps its corners; a sprite without it scales whole. The fitted box is also the icon's collision box. Default `none`.",
+                    "enum": [
+                      "none",
+                      "width",
+                      "height",
+                      "both"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
                 ]
               },
               "icon-text-fit-padding": {
@@ -5638,14 +6144,23 @@
                 "type": "boolean"
               },
               "justify": {
-                "description": "Line alignment within the wrapped block. Default `auto` (follows the anchor's horizontal side).",
-                "enum": [
-                  "auto",
-                  "left",
-                  "center",
-                  "right"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "description": "Line alignment within the wrapped block. Default `auto` (follows the anchor's horizontal side).",
+                    "enum": [
+                      "auto",
+                      "left",
+                      "center",
+                      "right"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "justify-expr": {
                 "description": "A MapLibre string expression (data-driven MapLibre `text-justify`), evaluated per feature group with the tile's zoom, naming `auto`, `left`, `center` or `right`; takes the place of `justify` for that group. A result that names no value (reported once per node) or an evaluation error uses `justify`."
@@ -5744,13 +6259,22 @@
                 "type": "boolean"
               },
               "overlap": {
-                "description": "What a label does when it collides with labels placed before it. `never` (default): it tries each of its positions (`anchor-offsets`) and drops if none is free. `always` (MapLibre `text-allow-overlap`): it shows at its first position without trying the others, whatever it overlaps. `fallback`: it tries every position as `never` does, and the symbol's text-only or icon-only fallbacks when `icon-optional` / `text-optional` allow them, and only when all are blocked shows at its first position, overlapping; `label-boxes` marks it `overlapped`. A shown label still reserves its box (blocking later labels) unless `ignore-placement`. On a symbol with an icon, `always` takes effect only with `icon-allow-overlap` set too, while `fallback` applies to the whole symbol.",
-                "enum": [
-                  "never",
-                  "always",
-                  "fallback"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "description": "What a label does when it collides with labels placed before it. `never` (default): it tries each of its positions (`anchor-offsets`) and drops if none is free. `always` (MapLibre `text-allow-overlap`): it shows at its first position without trying the others, whatever it overlaps. `fallback`: it tries every position as `never` does, and the symbol's text-only or icon-only fallbacks when `icon-optional` / `text-optional` allow them, and only when all are blocked shows at its first position, overlapping; `label-boxes` marks it `overlapped`. A shown label still reserves its box (blocking later labels) unless `ignore-placement`. On a symbol with an icon, `always` takes effect only with `icon-allow-overlap` set too, while `fallback` applies to the whole symbol.",
+                    "enum": [
+                      "never",
+                      "always",
+                      "fallback"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "padding-expr": {
                 "description": "A MapLibre number expression (MapLibre `text-padding`), evaluated per feature group; overrides the constant `padding-px` for that group's collision boxes."
@@ -5761,21 +6285,39 @@
                 "type": "number"
               },
               "placement": {
-                "description": "MapLibre `symbol-placement`. `point` (default) labels each feature point, and each polygon once at its `polygon-anchor`. `line` repeats labels along each polyline every `spacing-px`; `line-center` places one at each line's arc-length midpoint. Line placement ignores wrapping (`max-width-em`) and lays out a single line along the path.",
-                "enum": [
-                  "point",
-                  "line",
-                  "line-center"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "description": "MapLibre `symbol-placement`. `point` (default) labels each feature point, and each polygon once at its `polygon-anchor`. `line` repeats labels along each polyline every `spacing-px`; `line-center` places one at each line's arc-length midpoint. Line placement ignores wrapping (`max-width-em`) and lays out a single line along the path.",
+                    "enum": [
+                      "point",
+                      "line",
+                      "line-center"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "polygon-anchor": {
-                "description": "Where point placement labels a polygon. `pole` (default) is its pole of inaccessibility, the interior spot farthest from its outline, where MapLibre places it. `centroid` is its area-weighted centroid with any holes cut out, the polygon's balance point, for a label that belongs in the middle of an area such as a block number; where the centroid falls outside the polygon (a C or U shape) the pole is used instead. Past a source's `max-zoom` the anchor is found on the polygon as the source tile holds it, so every deeper zoom labels it in the same place. At the zooms the source serves, each tile finds the anchor on the polygon as that tile was cut, so a polygon reaching further past a tile edge than the tile's buffer gets a separate anchor in each tile it crosses, as in MapLibre; stitching the `features` node does not change that, and tiles generated with a buffer wider than the polygon do. Point placement only.",
-                "enum": [
-                  "pole",
-                  "centroid"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "description": "Where point placement labels a polygon. `pole` (default) is its pole of inaccessibility, the interior spot farthest from its outline, where MapLibre places it. `centroid` is its area-weighted centroid with any holes cut out, the polygon's balance point, for a label that belongs in the middle of an area such as a block number; where the centroid falls outside the polygon (a C or U shape) the pole is used instead. Past a source's `max-zoom` the anchor is found on the polygon as the source tile holds it, so every deeper zoom labels it in the same place. At the zooms the source serves, each tile finds the anchor on the polygon as that tile was cut, so a polygon reaching further past a tile edge than the tile's buffer gets a separate anchor in each tile it crosses, as in MapLibre; stitching the `features` node does not change that, and tiles generated with a buffer wider than the polygon do. Point placement only.",
+                    "enum": [
+                      "pole",
+                      "centroid"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "radial-offset": {
                 "description": "Deprecated: use `anchor-offsets` entries with `radial-em`. MapLibre `text-radial-offset`: em distance each `anchor-variants` entry pushes the block away from the point in its direction. Default 0.",
@@ -5837,13 +6379,22 @@
                 "type": "boolean"
               },
               "transform": {
-                "description": "Case transform applied before shaping. Default `none`.",
-                "enum": [
-                  "none",
-                  "uppercase",
-                  "lowercase"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "description": "Case transform applied before shaping. Default `none`.",
+                    "enum": [
+                      "none",
+                      "uppercase",
+                      "lowercase"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "transform-expr": {
                 "description": "A MapLibre string expression (data-driven MapLibre `text-transform`), evaluated per feature group with the tile's zoom, naming `none`, `uppercase` or `lowercase`; takes the place of `transform` for that group. A result that names no value (reported once per node) or an evaluation error uses `transform`."
@@ -5895,19 +6446,28 @@
                 "type": "boolean"
               },
               "anchor": {
-                "description": "Which part of the label block sits on the point (point placement). Default `center`. Ignored when `anchor-offsets` is set.",
-                "enum": [
-                  "center",
-                  "left",
-                  "right",
-                  "top",
-                  "bottom",
-                  "top-left",
-                  "top-right",
-                  "bottom-left",
-                  "bottom-right"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "description": "Which part of the label block sits on the point (point placement). Default `center`. Ignored when `anchor-offsets` is set.",
+                    "enum": [
+                      "center",
+                      "left",
+                      "right",
+                      "top",
+                      "bottom",
+                      "top-left",
+                      "top-right",
+                      "bottom-left",
+                      "bottom-right"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "anchor-expr": {
                 "description": "A MapLibre string expression (data-driven MapLibre `text-anchor`), evaluated per feature group with the tile's zoom, naming which part of the label block sits on the point: one of `center`, `left`, `right`, `top`, `bottom`, `top-left`, `top-right`, `bottom-left`, `bottom-right`. It takes the place of `anchor` for that group, with `offset-em` (or `radial-offset`) shifting the block as it would for that constant anchor, and `justify: auto` following it. A group whose result is not an anchor name, or whose evaluation fails, uses `anchor`; a result that is not an anchor name is reported once per node. Ignored, with a warning, when `anchor-offsets` or `anchor-variants` is set, since those name the anchors themselves. Point placement only."
@@ -6075,19 +6635,28 @@
                 "type": "boolean"
               },
               "icon-anchor": {
-                "description": "Which part of the icon sits on the point (MapLibre `icon-anchor`). Default `center`.",
-                "enum": [
-                  "center",
-                  "left",
-                  "right",
-                  "top",
-                  "bottom",
-                  "top-left",
-                  "top-right",
-                  "bottom-left",
-                  "bottom-right"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "description": "Which part of the icon sits on the point (MapLibre `icon-anchor`). Default `center`.",
+                    "enum": [
+                      "center",
+                      "left",
+                      "right",
+                      "top",
+                      "bottom",
+                      "top-left",
+                      "top-right",
+                      "bottom-left",
+                      "bottom-right"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "icon-ignore-placement": {
                 "description": "MapLibre `icon-ignore-placement`; with text present it pairs with `ignore-placement` the same way as the overlap flags. Default false.",
@@ -6158,12 +6727,22 @@
                 "type": "string"
               },
               "icon-text-fit": {
-                "description": "MapLibre `icon-text-fit`: stretch the icon to the box its label occupies, on the named axes. The sprite's `stretchX`/`stretchY`/`content` metadata decides which bands absorb the growth, so a shield keeps its corners; a sprite without it scales whole. The fitted box is also the icon's collision box. Default `none`.",
-                "enum": [
-                  "none",
-                  "width",
-                  "height",
-                  "both"
+                "oneOf": [
+                  {
+                    "description": "MapLibre `icon-text-fit`: stretch the icon to the box its label occupies, on the named axes. The sprite's `stretchX`/`stretchY`/`content` metadata decides which bands absorb the growth, so a shield keeps its corners; a sprite without it scales whole. The fitted box is also the icon's collision box. Default `none`.",
+                    "enum": [
+                      "none",
+                      "width",
+                      "height",
+                      "both"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
                 ]
               },
               "icon-text-fit-padding": {
@@ -6180,14 +6759,23 @@
                 "type": "boolean"
               },
               "justify": {
-                "description": "Line alignment within the wrapped block. Default `auto` (follows the anchor's horizontal side).",
-                "enum": [
-                  "auto",
-                  "left",
-                  "center",
-                  "right"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "description": "Line alignment within the wrapped block. Default `auto` (follows the anchor's horizontal side).",
+                    "enum": [
+                      "auto",
+                      "left",
+                      "center",
+                      "right"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "justify-expr": {
                 "description": "A MapLibre string expression (data-driven MapLibre `text-justify`), evaluated per feature group with the tile's zoom, naming `auto`, `left`, `center` or `right`; takes the place of `justify` for that group. A result that names no value (reported once per node) or an evaluation error uses `justify`."
@@ -6286,13 +6874,22 @@
                 "type": "boolean"
               },
               "overlap": {
-                "description": "What a label does when it collides with labels placed before it. `never` (default): it tries each of its positions (`anchor-offsets`) and drops if none is free. `always` (MapLibre `text-allow-overlap`): it shows at its first position without trying the others, whatever it overlaps. `fallback`: it tries every position as `never` does, and the symbol's text-only or icon-only fallbacks when `icon-optional` / `text-optional` allow them, and only when all are blocked shows at its first position, overlapping; `label-boxes` marks it `overlapped`. A shown label still reserves its box (blocking later labels) unless `ignore-placement`. On a symbol with an icon, `always` takes effect only with `icon-allow-overlap` set too, while `fallback` applies to the whole symbol.",
-                "enum": [
-                  "never",
-                  "always",
-                  "fallback"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "description": "What a label does when it collides with labels placed before it. `never` (default): it tries each of its positions (`anchor-offsets`) and drops if none is free. `always` (MapLibre `text-allow-overlap`): it shows at its first position without trying the others, whatever it overlaps. `fallback`: it tries every position as `never` does, and the symbol's text-only or icon-only fallbacks when `icon-optional` / `text-optional` allow them, and only when all are blocked shows at its first position, overlapping; `label-boxes` marks it `overlapped`. A shown label still reserves its box (blocking later labels) unless `ignore-placement`. On a symbol with an icon, `always` takes effect only with `icon-allow-overlap` set too, while `fallback` applies to the whole symbol.",
+                    "enum": [
+                      "never",
+                      "always",
+                      "fallback"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "padding-expr": {
                 "description": "A MapLibre number expression (MapLibre `text-padding`), evaluated per feature group; overrides the constant `padding-px` for that group's collision boxes."
@@ -6303,21 +6900,39 @@
                 "type": "number"
               },
               "placement": {
-                "description": "MapLibre `symbol-placement`. `point` (default) labels each feature point, and each polygon once at its `polygon-anchor`. `line` repeats labels along each polyline every `spacing-px`; `line-center` places one at each line's arc-length midpoint. Line placement ignores wrapping (`max-width-em`) and lays out a single line along the path.",
-                "enum": [
-                  "point",
-                  "line",
-                  "line-center"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "description": "MapLibre `symbol-placement`. `point` (default) labels each feature point, and each polygon once at its `polygon-anchor`. `line` repeats labels along each polyline every `spacing-px`; `line-center` places one at each line's arc-length midpoint. Line placement ignores wrapping (`max-width-em`) and lays out a single line along the path.",
+                    "enum": [
+                      "point",
+                      "line",
+                      "line-center"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "polygon-anchor": {
-                "description": "Where point placement labels a polygon. `pole` (default) is its pole of inaccessibility, the interior spot farthest from its outline, where MapLibre places it. `centroid` is its area-weighted centroid with any holes cut out, the polygon's balance point, for a label that belongs in the middle of an area such as a block number; where the centroid falls outside the polygon (a C or U shape) the pole is used instead. Past a source's `max-zoom` the anchor is found on the polygon as the source tile holds it, so every deeper zoom labels it in the same place. At the zooms the source serves, each tile finds the anchor on the polygon as that tile was cut, so a polygon reaching further past a tile edge than the tile's buffer gets a separate anchor in each tile it crosses, as in MapLibre; stitching the `features` node does not change that, and tiles generated with a buffer wider than the polygon do. Point placement only.",
-                "enum": [
-                  "pole",
-                  "centroid"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "description": "Where point placement labels a polygon. `pole` (default) is its pole of inaccessibility, the interior spot farthest from its outline, where MapLibre places it. `centroid` is its area-weighted centroid with any holes cut out, the polygon's balance point, for a label that belongs in the middle of an area such as a block number; where the centroid falls outside the polygon (a C or U shape) the pole is used instead. Past a source's `max-zoom` the anchor is found on the polygon as the source tile holds it, so every deeper zoom labels it in the same place. At the zooms the source serves, each tile finds the anchor on the polygon as that tile was cut, so a polygon reaching further past a tile edge than the tile's buffer gets a separate anchor in each tile it crosses, as in MapLibre; stitching the `features` node does not change that, and tiles generated with a buffer wider than the polygon do. Point placement only.",
+                    "enum": [
+                      "pole",
+                      "centroid"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "radial-offset": {
                 "description": "Deprecated: use `anchor-offsets` entries with `radial-em`. MapLibre `text-radial-offset`: em distance each `anchor-variants` entry pushes the block away from the point in its direction. Default 0.",
@@ -6379,13 +6994,22 @@
                 "type": "boolean"
               },
               "transform": {
-                "description": "Case transform applied before shaping. Default `none`.",
-                "enum": [
-                  "none",
-                  "uppercase",
-                  "lowercase"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "description": "Case transform applied before shaping. Default `none`.",
+                    "enum": [
+                      "none",
+                      "uppercase",
+                      "lowercase"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "transform-expr": {
                 "description": "A MapLibre string expression (data-driven MapLibre `text-transform`), evaluated per feature group with the tile's zoom, naming `none`, `uppercase` or `lowercase`; takes the place of `transform` for that group. A result that names no value (reported once per node) or an evaluation error uses `transform`."
@@ -6475,13 +7099,22 @@
             "description": "Tile-filling rectangle polygon source. `cover: canvas` grows it over the padded canvas, so geometry built from it — Voronoi cells, hatch lines — reaches past the tile's edge and neighbouring tiles build the same shapes along their shared border.",
             "properties": {
               "cover": {
-                "default": "tile",
-                "description": "`tile` is the visible tile exactly; `canvas` adds the canvas padding on every side.",
-                "enum": [
-                  "tile",
-                  "canvas"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "tile",
+                    "description": "`tile` is the visible tile exactly; `canvas` adds the canvas padding on every side.",
+                    "enum": [
+                      "tile",
+                      "canvas"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "extent": {
                 "default": 4096,
@@ -6503,13 +7136,22 @@
             "description": "Repeat a raster across the canvas with bilinear wrap-around sampling. Primary use case is paper / canvas texture composition. Does not stretch-to-fit — use a dedicated `cover`/`contain` node if that's what you want.",
             "properties": {
               "anchor": {
-                "default": "world",
-                "description": "`world` (default) makes the pattern seamless across map tiles; `tile` restarts the pattern at every map tile's top-left.",
-                "enum": [
-                  "world",
-                  "tile"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "world",
+                    "description": "`world` (default) makes the pattern seamless across map tiles; `tile` restarts the pattern at every map tile's top-left.",
+                    "enum": [
+                      "tile",
+                      "world"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "input": {
                 "description": "Reference to another node (`@name`).",
@@ -6865,24 +7507,42 @@
                 "type": "number"
               },
               "anchor": {
-                "default": "world",
-                "enum": [
-                  "tile",
-                  "world"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "world",
+                    "enum": [
+                      "tile",
+                      "world"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "boundary": {
-                "default": "clamp",
-                "description": "How to read past the input's edge: `clamp` repeats the edge pixel, `transparent` reads nothing, `mirror` reflects the image, and `wrap` (or `repeat`) tiles it, so what leaves one edge comes back in at the opposite one.",
-                "enum": [
-                  "clamp",
-                  "transparent",
-                  "mirror",
-                  "wrap",
-                  "repeat"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "clamp",
+                    "description": "How to read past the input's edge: `clamp` repeats the edge pixel, `transparent` reads nothing, `mirror` reflects the image, and `wrap` (or `repeat`) tiles it, so what leaves one edge comes back in at the opposite one.",
+                    "enum": [
+                      "clamp",
+                      "transparent",
+                      "mirror",
+                      "wrap",
+                      "repeat"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "gain": {
                 "oneOf": [
@@ -6963,16 +7623,25 @@
                 "type": "integer"
               },
               "type": {
-                "default": "perlin",
-                "enum": [
-                  "white",
-                  "value",
-                  "perlin",
-                  "simplex",
-                  "worley",
-                  "cell"
-                ],
-                "type": "string"
+                "oneOf": [
+                  {
+                    "default": "perlin",
+                    "enum": [
+                      "white",
+                      "value",
+                      "perlin",
+                      "simplex",
+                      "worley",
+                      "cell"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference to a `string` param.",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               }
             },
             "required": [
@@ -7135,6 +7804,14 @@
           "description": {
             "type": "string"
           },
+          "enum": {
+            "description": "`string` params only: the values the param may take. The default must be one of them, and a field with a fixed set of names that reads the param must accept every one.",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
           "max": {
             "type": "number"
           },
@@ -7145,7 +7822,8 @@
             "enum": [
               "color",
               "number",
-              "bool"
+              "bool",
+              "string"
             ]
           }
         },

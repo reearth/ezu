@@ -7,13 +7,13 @@
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    schema_frag, take_input_ref, BuiltNode, Connection, EnumTable, EvalCtx, EvalError, FactoryCtx,
+    FactoryError, In, InEnum, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::read_string_or;
 use crate::nodes::raster::palette::{Palette, ResolvedPalette};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,6 +21,14 @@ enum Method {
     FloydSteinberg,
     Ordered,
 }
+
+/// `fs` and `bayer` are shorter names for the two methods.
+const METHODS: EnumTable<Method> = &[
+    ("floyd-steinberg", Method::FloydSteinberg),
+    ("ordered", Method::Ordered),
+    ("fs", Method::FloydSteinberg),
+    ("bayer", Method::Ordered),
+];
 
 // 4×4 Bayer threshold matrix, normalised to (value + 0.5)/16 in [0, 1).
 #[rustfmt::skip]
@@ -33,7 +41,7 @@ const BAYER4: [f32; 16] = [
 
 struct DitherNode {
     palette: Palette,
-    method: Method,
+    method: InEnum<Method>,
     /// Ordered-dither strength, clamped to [0, 1] when resolved.
     amount: In<f64>,
     /// `input`, then a scalar port if `amount` is wired to one.
@@ -65,7 +73,7 @@ impl Node for DitherNode {
         // Resolved and re-projected once, outside the pixel loops.
         let palette = self.palette.resolve(ctx, inputs)?;
         let mut out = RasterBuf::new(src.width, src.height);
-        match self.method {
+        match self.method.get(ctx)? {
             Method::Ordered => {
                 let amount = self.amount.get(ctx, inputs)?.clamp(0.0, 1.0) as f32;
                 self.ordered(src, &palette, amount, w, h, &mut out)
@@ -76,10 +84,7 @@ impl Node for DitherNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"dither");
-        h.update(&[match self.method {
-            Method::FloydSteinberg => 0,
-            Method::Ordered => 1,
-        }]);
+        self.method.param_hash(h);
         // A literal amount hashes as the clamped number it always did, so
         // existing styles keep their cache keys.
         match &self.amount {
@@ -203,17 +208,8 @@ impl NodeFactory for DitherFactory {
     ) -> Result<BuiltNode, FactoryError> {
         let input = take_input_ref(fields, "input")?;
         let mut r = InReader::new(fields, ctx, 1);
-        let palette = Palette::from_fields(fields, ctx, &mut r)?;
-        let method = match read_string_or(fields, "method", ctx, "floyd-steinberg")?.as_str() {
-            "floyd-steinberg" | "fs" => Method::FloydSteinberg,
-            "ordered" | "bayer" => Method::Ordered,
-            other => {
-                return Err(FactoryError::BadField {
-                    field: "method".into(),
-                    msg: format!("method must be `floyd-steinberg` or `ordered`, got `{other}`"),
-                })
-            }
-        };
+        let palette = Palette::from_fields(fields, &mut r)?;
+        let method = r.enum_or("method", Method::FloydSteinberg, METHODS)?;
         let amount = r.number_or("amount", 0.5)?;
         let parts = r.finish();
 
@@ -251,9 +247,9 @@ impl NodeFactory for DitherFactory {
                     "items": schema_frag::nested_color(),
                     "description": "Each entry is `#rrggbb` / `#rrggbbaa` (alpha ignored for matching) or a `$param`, so a palette can be recoloured at render time.",
                 },
-                "method": { "type": "string", "enum": ["floyd-steinberg", "ordered"], "default": "floyd-steinberg" },
+                "method": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": ["floyd-steinberg", "ordered"], "default": "floyd-steinberg" })),
                 "amount": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.5, "description": "Ordered-dither strength (ignored for floyd-steinberg)." })),
-                "space": { "type": "string", "enum": ["lab", "rgb"], "default": "lab" },
+                "space": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": ["lab", "rgb"], "default": "lab" })),
             },
             "required": ["input", "palette"],
         })

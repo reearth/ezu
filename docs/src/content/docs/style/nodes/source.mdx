@@ -42,7 +42,7 @@ Sample features from a host-bound feature layer. `source` names an `mvt`/`pmtile
 | `min-zoom` | integer (0…24) | no | Style-level minimum zoom. Below this zoom the node emits an empty layer (the asset is not even loaded). |
 | `min-zoom-field` | string | no | Per-feature property name carrying its data-side `min_zoom`. Features with `<field> > z` are dropped. |
 | `source` | string | no | Name of an `mvt`, `pmtiles`, or `geojson` entry in the document's `sources`. Omitting it resolves to the only such source and warns at build time. |
-| `stitch` | `merge` \| `pieces` | no | Join the layer to its 8 neighbouring tiles, for effects that reach further than the tile's thin buffer: wide strokes along outlines, large buffers, closings. Each tile contributes only the area it owns, so nothing is drawn twice. `merge` unions polygons with identical properties so no edge remains where tiles meet; `pieces` keeps every piece as its tile cut it (cheaper, and identical when the layer is only filled). Costs fetching and decoding up to 8 more tiles for this layer only; a neighbour the host cannot provide falls back to this tile's own buffer data. Omit to read this tile alone. |
+| `stitch` | `merge` \| `pieces` \| `$param` | no | Join the layer to its 8 neighbouring tiles, for effects that reach further than the tile's thin buffer: wide strokes along outlines, large buffers, closings. Each tile contributes only the area it owns, so nothing is drawn twice. `merge` unions polygons with identical properties so no edge remains where tiles meet; `pieces` keeps every piece as its tile cut it (cheaper, and identical when the layer is only filled). Costs fetching and decoding up to 8 more tiles for this layer only; a neighbour the host cannot provide falls back to this tile's own buffer data. Omit to read this tile alone. Read when the graph is built: a `$param` gives its default. |
 
 ### `graticule`
 
@@ -57,7 +57,7 @@ Parallels and meridians crossing the tile, as labelled polylines.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `axes` | `both` \| `parallels` \| `meridians` | no | Which families to emit: parallels of latitude, meridians of longitude, or both. |
+| `axes` | `both` \| `parallels` \| `meridians` \| `$param` | no | Which families to emit: parallels of latitude, meridians of longitude, or both. |
 | `extent` | integer (1…∞) | no | Coordinate extent of the emitted geometry, matching the features it is drawn alongside. |
 | `interval-deg` | number \| `$param` \| `@node` | no | Spacing in degrees, for both axes unless `interval-x-deg` or `interval-y-deg` overrides one. Omit to pick one from the zoom along the 30/10/5/2/1 ladder. |
 | `interval-x-deg` | number \| `$param` \| `@node` | no | Degrees of longitude between meridians, overriding `interval-deg` on that axis. |
@@ -104,7 +104,7 @@ Regular lattice of points covering the tile.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `anchor` | `tile` \| `world` | no | — |
+| `anchor` | `tile` \| `world` \| `$param` | no | — |
 | `extent` | integer (1…∞) | no | — |
 | `offset-x` | number \| `$param` \| `@node` | no | — |
 | `offset-y` | number \| `$param` \| `@node` | no | — |
@@ -119,7 +119,7 @@ Random points at a given mean spacing, covering the tile. Where `point-grid` put
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `anchor` | `tile` \| `world` | no | `world` indexes the cells off global (0, 0), so adjacent tiles agree on the points they share and the scatter is seamless — the usual choice. `tile` indexes off the tile's own corner, giving every tile the same point set and a visible seam. |
+| `anchor` | `tile` \| `world` \| `$param` | no | `world` indexes the cells off global (0, 0), so adjacent tiles agree on the points they share and the scatter is seamless — the usual choice. `tile` indexes off the tile's own corner, giving every tile the same point set and a visible seam. |
 | `extent` | integer (1…∞) | no | — |
 | `seed` | integer (0…∞) | no | Optional explicit u32 seed. Change it to get a different scatter at the same spacing, or to keep two `point-scatter` nodes from landing on each other. Default: a fixed constant, so the pattern is stable across tiles and runs. |
 | `spacing` | number (0…∞) \| `$param` \| `@node` | no | Mean spacing in *extent* units, not pixels — one point per `spacing` × `spacing` cell on average. `extent` below is the coordinate space (4096 by default), so a 512 px tile averages 8 points across at `spacing: 512`. Paint ops downstream take pixels, so the two do not match. Required unless both `spacing-x` and `spacing-y` are given. |
@@ -149,6 +149,6 @@ Tile-filling rectangle polygon source. `cover: canvas` grows it over the padded 
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `cover` | `tile` \| `canvas` | no | `tile` is the visible tile exactly; `canvas` adds the canvas padding on every side. |
+| `cover` | `tile` \| `canvas` \| `$param` | no | `tile` is the visible tile exactly; `canvas` adds the canvas padding on every side. |
 | `extent` | integer (1…∞) | no | — |
 

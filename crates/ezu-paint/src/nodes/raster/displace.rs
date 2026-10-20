@@ -24,21 +24,22 @@ use std::sync::Arc;
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, InReader, Node, NodeFactory, PaddingIn, PortKind, PortSpec, PortValue, RasterBuf,
+    FactoryError, InEnum, InReader, Node, NodeFactory, PaddingIn, PortKind, PortSpec, PortValue,
+    RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    boundary_schema, image_or_field_output, read_boundary, resample_field, sample_bilinear,
+    boundary_schema, image_or_field_output, resample_field, sample_bilinear,
     unwrap_raster_or_sprite, wrap_raster_like, BoundaryMode, ACCEPTS_IMAGE_OR_FIELD,
-    ACCEPTS_RASTER_OR_SPRITE,
+    ACCEPTS_RASTER_OR_SPRITE, BOUNDARIES,
 };
 
 struct DisplaceNode {
     amp_x: PaddingIn,
     amp_y: PaddingIn,
-    boundary: BoundaryMode,
+    boundary: InEnum<BoundaryMode>,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
 }
@@ -78,6 +79,7 @@ impl Node for DisplaceNode {
         let (disp, _) = unwrap_raster_or_sprite(disp_input, "displacement")?;
         let amp_x = self.amp_x.get(ctx, inputs)?;
         let amp_y = self.amp_y.get(ctx, inputs)?;
+        let boundary = self.boundary.get(ctx)?;
         // The offset at pixel `(x, y)`, read from the matching pixel of
         // the displacement raster. Output is the same size as the input;
         // where the displacement raster is smaller, the missing region
@@ -86,7 +88,7 @@ impl Node for DisplaceNode {
             let dpix = if x < disp.width && y < disp.height {
                 disp.pixel(x, y)
             } else {
-                match self.boundary {
+                match boundary {
                     BoundaryMode::Clamp => disp.pixel(
                         x.min(disp.width.saturating_sub(1)),
                         y.min(disp.height.saturating_sub(1)),
@@ -112,7 +114,7 @@ impl Node for DisplaceNode {
                 let (dx, dy) = offset(x, y);
                 let sx = x as f64 + dx;
                 let sy = y as f64 + dy;
-                let px = sample_bilinear(&src, sx, sy, self.boundary);
+                let px = sample_bilinear(&src, sx, sy, boundary);
                 let i = ((y * w + x) * 4) as usize;
                 out.pixels[i..i + 4].copy_from_slice(&px);
             }
@@ -123,7 +125,7 @@ impl Node for DisplaceNode {
         h.update(b"displace");
         self.amp_x.param_hash(h);
         self.amp_y.param_hash(h);
-        h.update(&[self.boundary.tag()]);
+        self.boundary.param_hash(h);
     }
     fn param_refs(&self) -> Vec<String> {
         self.param_refs.clone()
@@ -142,9 +144,8 @@ impl NodeFactory for DisplaceFactory {
     ) -> Result<BuiltNode, FactoryError> {
         let input = take_input_ref(fields, "input")?;
         let disp = take_input_ref(fields, "displacement")?;
-        let boundary = read_boundary(fields, "boundary", BoundaryMode::Clamp)?;
-
         let mut r = InReader::new(fields, ctx, 2);
+        let boundary = r.enum_or("boundary", BoundaryMode::Clamp, BOUNDARIES)?;
         // `amp-px` is the shared default for the per-axis amplitudes; when
         // `amp-x-px` / `amp-y-px` are omitted they inherit `amp-px` as-is
         // (same literal / `$param` / `@node` binding).

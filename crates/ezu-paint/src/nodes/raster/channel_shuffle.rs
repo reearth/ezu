@@ -13,18 +13,17 @@
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    schema_frag, take_input_ref, BuiltNode, Connection, EnumTable, EvalCtx, EvalError, FactoryCtx,
+    FactoryError, InEnum, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    raster_or_sprite_output, read_optional_string, unwrap_raster_or_sprite, wrap_raster_like,
-    ACCEPTS_RASTER_OR_SPRITE,
+    raster_or_sprite_output, unwrap_raster_or_sprite, wrap_raster_like, ACCEPTS_RASTER_OR_SPRITE,
 };
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Src {
     R,
     G,
@@ -35,19 +34,25 @@ enum Src {
     One,
 }
 
+/// The schema's names first, then the upper-case channel letters and the
+/// two other names for luminance.
+const SOURCES: EnumTable<Src> = &[
+    ("r", Src::R),
+    ("g", Src::G),
+    ("b", Src::B),
+    ("a", Src::A),
+    ("luminance", Src::Luminance),
+    ("0", Src::Zero),
+    ("1", Src::One),
+    ("R", Src::R),
+    ("G", Src::G),
+    ("B", Src::B),
+    ("A", Src::A),
+    ("luma", Src::Luminance),
+    ("y", Src::Luminance),
+];
+
 impl Src {
-    fn parse(s: &str) -> Option<Self> {
-        match s {
-            "r" | "R" => Some(Src::R),
-            "g" | "G" => Some(Src::G),
-            "b" | "B" => Some(Src::B),
-            "a" | "A" => Some(Src::A),
-            "luminance" | "luma" | "y" => Some(Src::Luminance),
-            "0" => Some(Src::Zero),
-            "1" => Some(Src::One),
-            _ => None,
-        }
-    }
     fn pick(self, rgba: [f32; 4]) -> f32 {
         match self {
             Src::R => rgba[0],
@@ -60,21 +65,11 @@ impl Src {
             Src::One => 1.0,
         }
     }
-    fn tag(self) -> u8 {
-        match self {
-            Src::R => 0,
-            Src::G => 1,
-            Src::B => 2,
-            Src::A => 3,
-            Src::Zero => 4,
-            Src::One => 5,
-            Src::Luminance => 6,
-        }
-    }
 }
 
 struct ChannelShuffleNode {
-    sources: [Src; 4],
+    sources: [InEnum<Src>; 4],
+    param_refs: Vec<String>,
 }
 
 impl Node for ChannelShuffleNode {
@@ -94,13 +89,19 @@ impl Node for ChannelShuffleNode {
     }
     fn eval(
         &self,
-        _ctx: &EvalCtx<'_>,
+        ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
         let input = inputs[0]
             .as_ref()
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
         let (src, kind) = unwrap_raster_or_sprite(input, "input")?;
+        let sources = [
+            self.sources[0].get(ctx)?,
+            self.sources[1].get(ctx)?,
+            self.sources[2].get(ctx)?,
+            self.sources[3].get(ctx)?,
+        ];
         let mut out = RasterBuf::new(src.width, src.height);
         for i in (0..src.pixels.len()).step_by(4) {
             let a_in = src.pixels[i + 3] as f32 / 255.0;
@@ -115,10 +116,10 @@ impl Node for ChannelShuffleNode {
             } else {
                 [0.0, 0.0, 0.0, 0.0]
             };
-            let r = self.sources[0].pick(rgba).clamp(0.0, 1.0);
-            let g = self.sources[1].pick(rgba).clamp(0.0, 1.0);
-            let b = self.sources[2].pick(rgba).clamp(0.0, 1.0);
-            let a = self.sources[3].pick(rgba).clamp(0.0, 1.0);
+            let r = sources[0].pick(rgba).clamp(0.0, 1.0);
+            let g = sources[1].pick(rgba).clamp(0.0, 1.0);
+            let b = sources[2].pick(rgba).clamp(0.0, 1.0);
+            let a = sources[3].pick(rgba).clamp(0.0, 1.0);
             out.pixels[i] = (r * a * 255.0).round() as u8;
             out.pixels[i + 1] = (g * a * 255.0).round() as u8;
             out.pixels[i + 2] = (b * a * 255.0).round() as u8;
@@ -128,12 +129,12 @@ impl Node for ChannelShuffleNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"channel-shuffle");
-        h.update(&[
-            self.sources[0].tag(),
-            self.sources[1].tag(),
-            self.sources[2].tag(),
-            self.sources[3].tag(),
-        ]);
+        for s in &self.sources {
+            s.param_hash(h);
+        }
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
     }
 }
 
@@ -145,25 +146,18 @@ impl NodeFactory for ChannelShuffleFactory {
     fn build(
         &self,
         fields: &serde_json::Map<String, Value>,
-        _ctx: &FactoryCtx<'_>,
+        ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let input = take_input_ref(fields, "input")?;
-        let pick = |name: &str, default: Src| -> Result<Src, FactoryError> {
-            match read_optional_string(fields, name)? {
-                None => Ok(default),
-                Some(s) => Src::parse(&s).ok_or_else(|| FactoryError::BadField {
-                    field: name.into(),
-                    msg: format!("expected one of r/g/b/a/luminance/0/1, got `{s}`"),
-                }),
-            }
-        };
-        let r = pick("r", Src::R)?;
-        let g = pick("g", Src::G)?;
-        let b = pick("b", Src::B)?;
-        let a = pick("a", Src::A)?;
+        let mut rd = InReader::new(fields, ctx, 1);
+        let r = rd.enum_or("r", Src::R, SOURCES)?;
+        let g = rd.enum_or("g", Src::G, SOURCES)?;
+        let b = rd.enum_or("b", Src::B, SOURCES)?;
+        let a = rd.enum_or("a", Src::A, SOURCES)?;
         Ok(BuiltNode {
             node: Box::new(ChannelShuffleNode {
                 sources: [r, g, b, a],
+                param_refs: rd.finish().param_refs,
             }),
             connections: vec![Connection {
                 port: "input".into(),
@@ -172,10 +166,10 @@ impl NodeFactory for ChannelShuffleFactory {
         })
     }
     fn schema(&self) -> Value {
-        let choice = serde_json::json!({
+        let choice = schema_frag::in_enum(serde_json::json!({
             "type": "string",
             "enum": ["r", "g", "b", "a", "luminance", "0", "1"],
-        });
+        }));
         serde_json::json!({
             "description": "Rearrange RGBA channels. Each output (`r`/`g`/`b`/`a`) names which input channel feeds it, the input's `luminance` (Rec. 601 luma, as `pick-channel` reads it), or a constant (`0`/`1`). Identity by default. Operates in non-premultiplied sRGB.",
             "properties": {

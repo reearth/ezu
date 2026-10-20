@@ -19,6 +19,9 @@ pub enum BuildGraphError {
         source: FactoryError,
     },
 
+    #[error("param `{name}`: {msg}")]
+    Param { name: String, msg: String },
+
     #[error(transparent)]
     Expand(#[from] spec::ExpandError),
 
@@ -79,6 +82,12 @@ pub fn build_graph(
     doc: &spec::Document,
     registry: &NodeRegistry,
 ) -> Result<Graph, BuildGraphError> {
+    for (name, decl) in &doc.params {
+        decl.check().map_err(|msg| BuildGraphError::Param {
+            name: name.clone(),
+            msg,
+        })?;
+    }
     let expanded = spec::expand_functions(doc)?;
     let (doc, kind_checks) = match &expanded {
         Some(e) => (&e.doc, e.kind_checks.as_slice()),

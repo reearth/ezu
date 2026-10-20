@@ -26,15 +26,16 @@
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
+    schema_frag, take_input_ref, BuiltNode, Connection, EnumTable, EvalCtx, EvalError, FactoryCtx,
+    FactoryError, In, InEnum, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    RasterBuf,
 };
 
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::color_interp::{interpolate_converted, to_space, InterpSpace};
-use crate::nodes::common::{read_space, read_string_or};
+use crate::nodes::common::{read_space, space_schema};
 
 #[derive(Debug, Clone, Copy)]
 struct Stop {
@@ -62,11 +63,16 @@ enum Interpolation {
     Step,
 }
 
+const INTERPOLATIONS: EnumTable<Interpolation> = &[
+    ("linear", Interpolation::Linear),
+    ("step", Interpolation::Step),
+];
+
 struct ColorRampNode {
     /// Empty iff `ramp_expr` is set (the factory requires one of the two).
     stops: Vec<StopIn>,
-    space: InterpSpace,
-    interpolation: Interpolation,
+    space: InEnum<InterpSpace>,
+    interpolation: InEnum<Interpolation>,
     /// Optional raw MapLibre color expression over `heatmap-density`;
     /// overrides `stops` (see the module docs for the LUT semantics).
     ramp_expr: Option<maplibre_expr::Expr>,
@@ -102,15 +108,17 @@ impl Node for ColorRampNode {
         // per eval (zoom is in the context, so zoom×density curves work);
         // otherwise resolve the stop table — once here, never per pixel.
         let lut = self.ramp_expr.as_ref().map(|e| build_lut(e, ctx.tile.z));
+        let space = self.space.get(ctx)?;
+        let interpolation = self.interpolation.get(ctx)?;
         let stops = match &lut {
             Some(_) => Vec::new(),
-            None => resolve_stops(&self.stops, self.space, ctx, inputs)?,
+            None => resolve_stops(&self.stops, space, ctx, inputs)?,
         };
         let sample = |v: f32| -> [u8; 4] {
             match &lut {
                 Some(lut) => sample_lut(lut, v),
-                None => match self.interpolation {
-                    Interpolation::Linear => sample_stops(&stops, v, self.space),
+                None => match interpolation {
+                    Interpolation::Linear => sample_stops(&stops, v, space),
                     Interpolation::Step => step_stops(&stops, v),
                 },
             }
@@ -166,10 +174,8 @@ impl Node for ColorRampNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"color-ramp");
-        h.update(&[self.space.hash_tag()]);
-        if self.interpolation == Interpolation::Step {
-            h.update(b"step");
-        }
+        self.space.param_hash(h);
+        self.interpolation.param_hash(h);
         for s in &self.stops {
             s.value.param_hash(h);
             s.color.param_hash(h);
@@ -326,23 +332,14 @@ impl NodeFactory for ColorRampFactory {
             }
             None => (None, None),
         };
-        let space = read_space(fields)?;
-        let interpolation = match read_string_or(fields, "interpolation", ctx, "linear")?.as_str() {
-            "linear" => Interpolation::Linear,
-            "step" => Interpolation::Step,
-            other => {
-                return Err(FactoryError::BadField {
-                    field: "interpolation".into(),
-                    msg: format!("expected `linear` or `step`, got `{other}`"),
-                })
-            }
-        };
-        if ramp_expr.is_some() && fields.contains_key("interpolation") {
-            ctx.warn("`interpolation` ignored: `ramp-expr` sets the ramp");
-        }
         // One reader for the whole node, so a `$param` inside `stops`
         // lands in the same `param_refs` the evaluator keys the cache on.
         let mut r = InReader::new(fields, ctx, 1);
+        let space = read_space(&mut r, fields)?;
+        let interpolation = r.enum_or("interpolation", Interpolation::Linear, INTERPOLATIONS)?;
+        if ramp_expr.is_some() && fields.contains_key("interpolation") {
+            ctx.warn("`interpolation` ignored: `ramp-expr` sets the ramp");
+        }
         let stops = match fields.get("stops") {
             Some(raw) => parse_stops(raw, &mut r)?,
             None if ramp_expr.is_some() => Vec::new(),
@@ -398,8 +395,8 @@ impl NodeFactory for ColorRampFactory {
                     },
                     "description": "Either half of a stop may be a `$param`, so a ramp can be recoloured or rescaled at render time. The table is sorted by `value` on every eval, so a param may reorder it.",
                 },
-                "interpolation": { "type": "string", "enum": ["linear", "step"], "default": "linear", "description": "`linear` (default) blends the colours of the two stops around a value. `step` gives a value the colour of the stop at or below it (the first stop's below them all), as MapLibre's `step` does, so the ramp paints flat bands. Ignored with `ramp-expr`." },
-                "space": { "type": "string", "enum": ["rgb", "hsl", "hsv", "hcl", "lab"], "default": "rgb", "description": "Colour space the stops interpolate in. `rgb` (default) is a straight sRGB lerp; `hsl`/`hsv`/`hcl` interpolate hue on the shortest path; `hcl`/`lab` are perceptual (ported from the MapLibre style spec)." },
+                "interpolation": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": ["linear", "step"], "default": "linear", "description": "`linear` (default) blends the colours of the two stops around a value. `step` gives a value the colour of the stop at or below it (the first stop's below them all), as MapLibre's `step` does, so the ramp paints flat bands. Ignored with `ramp-expr`." })),
+                "space": space_schema("Colour space the stops interpolate in. `rgb` (default) is a straight sRGB lerp; `hsl`/`hsv`/`hcl` interpolate hue on the shortest path; `hcl`/`lab` are perceptual (ported from the MapLibre style spec)."),
                 "opacity": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0, "maximum": 1.0,
                              "description": "Uniform output-alpha multiplier (layer opacity). Default 1.0. Feed an `expr` node via `@node` for a zoom curve." })),
             },

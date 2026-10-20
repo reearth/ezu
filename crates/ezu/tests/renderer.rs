@@ -111,3 +111,49 @@ async fn resolved_assets_draw_what_bound_ones_draw() {
     assert!(drawn.chunks(4).any(|p| p[3] > 0), "the label drew");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// A string param is overridden through `RenderOptions::params` the way a
+/// number is, its `enum` checked there, and its declaration published in
+/// the params schema the host builds controls from.
+#[test]
+fn a_string_param_is_overridden_and_checked_per_render() {
+    use ezu::renderer::{ErrorKind, OutputFormat, RenderOptions};
+
+    let style = r##"{
+      "name": "modes",
+      "tile-size": 16,
+      "params": {
+        "mode": { "type": "string", "enum": ["multiply", "screen"], "default": "multiply" }
+      },
+      "nodes": {
+        "base": { "op": "solid", "color": "#808080" },
+        "over": { "op": "solid", "color": "#ff4020" },
+        "out":  { "op": "blend", "base": "@base", "over": "@over", "mode": "$mode" }
+      },
+      "output": "@out"
+    }"##;
+    let r = Renderer::new(style).expect("builds");
+    assert_eq!(
+        r.params_schema()["properties"]["mode"]["enum"],
+        serde_json::json!(["multiply", "screen"])
+    );
+    let render = |mode: Option<&str>| {
+        r.render_tile(
+            0,
+            0,
+            0,
+            RenderOptions {
+                format: OutputFormat::Rgba,
+                params: mode
+                    .map(|m| vec![("mode".to_string(), m.to_string())])
+                    .unwrap_or_default(),
+                ..RenderOptions::default()
+            },
+        )
+    };
+    let plain = render(None).expect("renders");
+    assert_eq!(render(Some("multiply")).expect("renders"), plain);
+    assert_ne!(render(Some("screen")).expect("renders"), plain);
+    let err = render(Some("overlay")).expect_err("not in the enum");
+    assert_eq!(err.kind(), ErrorKind::InvalidStyle);
+}

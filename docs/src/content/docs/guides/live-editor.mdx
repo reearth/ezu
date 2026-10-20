@@ -39,7 +39,8 @@ curl 'http://127.0.0.1:8080/tiles/13/7276/3225.png?paper=%23ffe0f0&softness=2'
 
 - **Params panel** — controls generated from the style's `params` block: a
   number field for every number (with a slider under it when both `min` and
-  `max` are set), colour pickers, toggles. A typed number outside `min`/`max` is
+  `max` are set), colour pickers, toggles, a menu for a string with an `enum`
+  and a text field for one without. A typed number outside `min`/`max` is
   pulled back to the nearest bound. `reset` returns to the declared defaults. Each colour has a hex field beside its swatch, so a value can be
   pasted in from anywhere it was picked and copied back out — clicking the field
   selects it. CSS shorthand is understood on the way in (`#fff`, `#fffa`, and

@@ -23,15 +23,14 @@
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue, RasterBuf,
-    ScalarField,
+    schema_frag, take_input_ref, BuiltNode, Connection, EnumTable, EvalCtx, EvalError, FactoryCtx,
+    FactoryError, In, InEnum, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    RasterBuf, ScalarField,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use super::terrain_common::horn_gradient;
-use crate::nodes::common::read_string_or;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OutputMode {
@@ -39,13 +38,16 @@ enum OutputMode {
     Relief,
 }
 
+const MODES: EnumTable<OutputMode> =
+    &[("shade", OutputMode::Shade), ("relief", OutputMode::Relief)];
+
 struct HillshadeNode {
     azimuth_deg: In<f64>,
     altitude_deg: In<f64>,
     z_factor: In<f64>,
     exaggeration: In<f64>,
     multidirectional: In<bool>,
-    mode: OutputMode,
+    mode: InEnum<OutputMode>,
     /// `relief` shadow colour (default opaque black). Slopes darker than
     /// flat ground are tinted with this.
     shadow_color: Option<In<[f32; 4]>>,
@@ -97,15 +99,9 @@ impl Node for HillshadeNode {
                 None => None,
             },
         };
+        let mode = self.mode.get(ctx)?;
         let out = if self.multidirectional.get(ctx, inputs)? {
-            render_multidirectional(
-                field,
-                altitude_deg,
-                z_factor,
-                exaggeration,
-                self.mode,
-                relief,
-            )
+            render_multidirectional(field, altitude_deg, z_factor, exaggeration, mode, relief)
         } else {
             render_single(
                 field,
@@ -113,7 +109,7 @@ impl Node for HillshadeNode {
                 altitude_deg,
                 z_factor,
                 exaggeration,
-                self.mode,
+                mode,
                 relief,
             )
         };
@@ -126,10 +122,7 @@ impl Node for HillshadeNode {
         self.z_factor.param_hash(h);
         self.exaggeration.param_hash(h);
         self.multidirectional.param_hash(h);
-        h.update(match self.mode {
-            OutputMode::Shade => b"sh",
-            OutputMode::Relief => b"rl",
-        });
+        self.mode.param_hash(h);
         if let Some(c) = &self.shadow_color {
             h.update(&[1]);
             c.param_hash(h);
@@ -307,17 +300,8 @@ impl NodeFactory for HillshadeFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let input = take_input_ref(fields, "field")?;
-        let mode = match read_string_or(fields, "mode", ctx, "shade")?.as_str() {
-            "shade" => OutputMode::Shade,
-            "relief" => OutputMode::Relief,
-            other => {
-                return Err(FactoryError::BadField {
-                    field: "mode".into(),
-                    msg: format!("expected `shade` or `relief`, got `{other}`"),
-                });
-            }
-        };
         let mut r = InReader::new(fields, ctx, 1);
+        let mode = r.enum_or("mode", OutputMode::Shade, MODES)?;
         let azimuth_deg = r.number_or("azimuth-deg", 315.0)?;
         let altitude_deg = r.number_or("altitude-deg", 45.0)?;
         let z_factor = r.number_or("z-factor", 1.0)?;
@@ -370,7 +354,7 @@ impl NodeFactory for HillshadeFactory {
                                   "description": "Extra vertical exaggeration on top of z-factor." })),
                 "multidirectional": { "oneOf": [{"type": "boolean"}, {"type": "string", "pattern": "^[$@].+"}], "default": false,
                                        "description": "ESRI-style 4-direction weighted hillshade — softer, more legible at small zooms." },
-                "mode": { "type": "string", "enum": ["shade", "relief"], "default": "shade" },
+                "mode": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": ["shade", "relief"], "default": "shade" })),
                 "shadow-color": schema_frag::color(),
                 "highlight-color": schema_frag::color(),
             },

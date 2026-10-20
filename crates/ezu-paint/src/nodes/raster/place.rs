@@ -19,16 +19,17 @@
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EnumTable, EvalCtx, EvalError,
+    FactoryCtx, FactoryError, In, InEnum, InReader, Node, NodeFactory, PortKind, PortSpec,
+    PortValue,
 };
 use serde_json::Value;
 use tiny_skia::{PixmapPaint, Transform};
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    canvas_into_raster, make_canvas, read_optional_string, read_xy, unwrap_raster_or_sprite,
-    FramedImage, ACCEPTS_RASTER_OR_SPRITE,
+    canvas_into_raster, make_canvas, read_xy, unwrap_raster_or_sprite, FramedImage,
+    ACCEPTS_RASTER_OR_SPRITE,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +39,13 @@ enum Fit {
     Contain,
     Stretch,
 }
+
+const FITS: EnumTable<Fit> = &[
+    ("none", Fit::None),
+    ("cover", Fit::Cover),
+    ("contain", Fit::Contain),
+    ("stretch", Fit::Stretch),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Anchor9 {
@@ -51,6 +59,18 @@ enum Anchor9 {
     BottomCenter,
     BottomRight,
 }
+
+const ANCHORS: EnumTable<Anchor9> = &[
+    ("top-left", Anchor9::TopLeft),
+    ("top-center", Anchor9::TopCenter),
+    ("top-right", Anchor9::TopRight),
+    ("center-left", Anchor9::CenterLeft),
+    ("center", Anchor9::Center),
+    ("center-right", Anchor9::CenterRight),
+    ("bottom-left", Anchor9::BottomLeft),
+    ("bottom-center", Anchor9::BottomCenter),
+    ("bottom-right", Anchor9::BottomRight),
+];
 
 impl Anchor9 {
     /// Return the (fx, fy) in `[0, 1]` × `[0, 1]` of the anchor point
@@ -72,9 +92,9 @@ impl Anchor9 {
 }
 
 struct PlaceNode {
-    fit: Fit,
+    fit: InEnum<Fit>,
     position_px: [f32; 2],
-    anchor: Anchor9,
+    anchor: InEnum<Anchor9>,
     scale: In<f64>,
     rotation_deg: In<f64>,
     opacity: In<f64>,
@@ -123,9 +143,10 @@ impl Node for PlaceNode {
         // canvas space. All builders end with `pre_translate(-ax, -ay)`
         // so the source-image anchor point ends up at the chosen
         // canvas position before rotation.
-        let transform = match self.fit {
+        let fit = self.fit.get(ctx)?;
+        let transform = match fit {
             Fit::None => {
-                let (fx, fy) = self.anchor.fractions();
+                let (fx, fy) = self.anchor.get(ctx)?.fractions();
                 let ax = sw * fx;
                 let ay = sh * fy;
                 Transform::from_translate(self.position_px[0] + pad, self.position_px[1] + pad)
@@ -134,7 +155,7 @@ impl Node for PlaceNode {
                     .pre_translate(-ax, -ay)
             }
             Fit::Cover | Fit::Contain => {
-                let s_uniform = if self.fit == Fit::Cover {
+                let s_uniform = if fit == Fit::Cover {
                     (tile_w / sw).max(tile_h / sh)
                 } else {
                     (tile_w / sw).min(tile_h / sh)
@@ -167,15 +188,10 @@ impl Node for PlaceNode {
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"place");
-        match self.fit {
-            Fit::None => h.update(&[0]),
-            Fit::Cover => h.update(&[1]),
-            Fit::Contain => h.update(&[2]),
-            Fit::Stretch => h.update(&[3]),
-        }
+        self.fit.param_hash(h);
         h.update(&self.position_px[0].to_le_bytes());
         h.update(&self.position_px[1].to_le_bytes());
-        h.update(&(self.anchor as u8).to_le_bytes());
+        self.anchor.param_hash(h);
         self.scale.param_hash(h);
         self.rotation_deg.param_hash(h);
         self.opacity.param_hash(h);
@@ -196,37 +212,10 @@ impl NodeFactory for PlaceFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let input = take_input_ref(fields, "input")?;
-        let fit = match read_optional_string(fields, "fit")?.as_deref() {
-            None | Some("none") => Fit::None,
-            Some("cover") => Fit::Cover,
-            Some("contain") => Fit::Contain,
-            Some("stretch") => Fit::Stretch,
-            Some(other) => {
-                return Err(FactoryError::BadField {
-                    field: "fit".into(),
-                    msg: format!("expected `none`/`cover`/`contain`/`stretch`, got `{other}`"),
-                });
-            }
-        };
         let position_px = read_xy(fields, "position-px", ctx, [0.0, 0.0])?;
-        let anchor = match read_optional_string(fields, "anchor")?.as_deref() {
-            None | Some("top-left") => Anchor9::TopLeft,
-            Some("top-center") => Anchor9::TopCenter,
-            Some("top-right") => Anchor9::TopRight,
-            Some("center-left") => Anchor9::CenterLeft,
-            Some("center") => Anchor9::Center,
-            Some("center-right") => Anchor9::CenterRight,
-            Some("bottom-left") => Anchor9::BottomLeft,
-            Some("bottom-center") => Anchor9::BottomCenter,
-            Some("bottom-right") => Anchor9::BottomRight,
-            Some(other) => {
-                return Err(FactoryError::BadField {
-                    field: "anchor".into(),
-                    msg: format!("unknown anchor `{other}`"),
-                });
-            }
-        };
         let mut r = InReader::new(fields, ctx, 1);
+        let fit = r.enum_or("fit", Fit::None, FITS)?;
+        let anchor = r.enum_or("anchor", Anchor9::TopLeft, ANCHORS)?;
         let scale = r.number_or("scale", 1.0)?;
         let rotation_deg = r.number_or("rotation-deg", 0.0)?;
         let opacity = r.number_or("opacity", 1.0)?;
@@ -263,19 +252,19 @@ impl NodeFactory for PlaceFactory {
             "description": "Draw the source raster onto the canvas exactly once. `fit:none` (default) uses position/anchor/scale; `cover`/`contain`/`stretch` derive the destination rect from the canvas (and treat `position-px` as an offset from canvas center). Companion to `tiling` (repeats) and `stamp` (per-point).",
             "properties": {
                 "input": schema_frag::node_ref(),
-                "fit": { "type": "string",
+                "fit": schema_frag::in_enum(serde_json::json!({ "type": "string",
                          "enum": ["none", "cover", "contain", "stretch"],
-                         "default": "none" },
+                         "default": "none" })),
                 "position-px": { "type": "array",
                                  "items": { "type": "number" },
                                  "minItems": 2, "maxItems": 2,
                                  "description": "fit=none: canvas pixel where the image's `anchor` point lands. Other fits: offset from canvas center." },
-                "anchor": { "type": "string",
+                "anchor": schema_frag::in_enum(serde_json::json!({ "type": "string",
                             "enum": ["top-left", "top-center", "top-right",
                                      "center-left", "center", "center-right",
                                      "bottom-left", "bottom-center", "bottom-right"],
                             "default": "top-left",
-                            "description": "Only used when fit=none." },
+                            "description": "Only used when fit=none." })),
                 "scale": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0,
                            "description": "Uniform scale for fit=none. Ignored for other fits." })),
                 "rotation-deg": schema_frag::in_number(serde_json::json!({ "type": "number",

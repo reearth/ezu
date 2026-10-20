@@ -80,6 +80,7 @@
   .param-row .phex { flex: 1; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; padding: 2px 4px; border: 1px solid #d8d2bf; border-radius: 3px; background: #fff; color: #382a1f; }
   .param-row .phex.bad { border-color: #a03434; color: #a03434; }
   .param-row input[type=checkbox] { margin: 0; accent-color: #5a4636; }
+  .param-row select, .param-row .ptext { max-width: 120px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; padding: 2px 4px; border: 1px solid #d8d2bf; border-radius: 3px; background: #fff; color: #382a1f; }
   .params-empty { padding: 12px; font-size: 11px; color: #8a7a6a; text-align: center; }
 
   .feat-popup { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; max-width: 380px; }
@@ -942,7 +943,8 @@
   // --- Style params ----------------------------------------------------
   // Controls are generated from GET /style/params (a JSON Schema derived
   // from the document's `params` block): sliders for bounded numbers,
-  // color pickers for colors, checkboxes for bools. Only values that
+  // color pickers for colors, checkboxes for bools, a menu for a string
+  // with an `enum` and a text field for one without. Only values that
   // differ from the declared default ride on the tile URL.
   const $paramsPanel = document.getElementById('params-panel');
   const $paramsList = document.getElementById('params-list');
@@ -1175,6 +1177,38 @@
           setOverride(String(input.checked), input.checked === !!decl.default);
         });
         head.insertBefore(input, label);
+        row.appendChild(head);
+      } else if (decl.type === 'string') {
+        const cur = paramOverrides.has(name) ? paramOverrides.get(name) : String(decl.default ?? '');
+        if (Array.isArray(decl.enum)) {
+          // A declared set of values is a menu: the tile server rejects
+          // anything outside it, so there is nothing else worth typing.
+          const select = document.createElement('select');
+          select.className = 'pval';
+          for (const v of decl.enum) {
+            const opt = document.createElement('option');
+            opt.value = v;
+            opt.textContent = v;
+            select.appendChild(opt);
+          }
+          select.value = cur;
+          select.addEventListener('change', () => {
+            setOverride(select.value, select.value === decl.default);
+          });
+          head.appendChild(select);
+        } else {
+          const input = document.createElement('input');
+          input.type = 'text';
+          input.className = 'ptext';
+          input.value = cur;
+          input.spellcheck = false;
+          input.autocapitalize = 'off';
+          input.setAttribute('autocomplete', 'off');
+          input.addEventListener('input', () => {
+            setOverride(input.value, input.value === decl.default);
+          });
+          head.appendChild(input);
+        }
         row.appendChild(head);
       } else {
         continue; // unknown kind — skip rather than render junk

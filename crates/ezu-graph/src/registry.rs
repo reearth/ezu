@@ -402,10 +402,16 @@ impl NodeRegistry {
                         "type": "object",
                         "required": ["type", "default"],
                         "properties": {
-                            "type": { "enum": ["color", "number", "bool"] },
+                            "type": { "enum": ["color", "number", "bool", "string"] },
                             "default": {},
                             "min": { "type": "number" },
                             "max": { "type": "number" },
+                            "enum": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": { "type": "string" },
+                                "description": "`string` params only: the values the param may take. The default must be one of them, and a field with a fixed set of names that reads the param must accept every one."
+                            },
                             "description": { "type": "string" }
                         }
                     }
@@ -609,6 +615,24 @@ pub mod schema_frag {
                     "type": "string",
                     "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
                     "description": "`$param` reference."
+                }
+            ]
+        })
+    }
+
+    /// Wrap a fixed-set string schema (`{ "type": "string", "enum": … }`)
+    /// so the field also accepts a `$param` of kind `string` (an
+    /// [`InEnum`](crate::input::InEnum) field, or one read at build time
+    /// with [`read_enum_baked`](crate::input::read_enum_baked)). No
+    /// `@node` form: no node produces a string.
+    pub fn in_enum(literal: Value) -> Value {
+        json!({
+            "oneOf": [
+                literal,
+                {
+                    "type": "string",
+                    "pattern": "^\\$[A-Za-z_][A-Za-z0-9_-]*$",
+                    "description": "`$param` reference to a `string` param."
                 }
             ]
         })

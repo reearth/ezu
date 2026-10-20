@@ -2,12 +2,11 @@
 //! `dither`. Distance is measured in perceptual CIELAB (ΔE, the default) or
 //! plain RGB.
 
-use ezu_graph::{EvalCtx, EvalError, FactoryCtx, FactoryError, In, InReader, PortValue};
+use ezu_graph::{EnumTable, EvalCtx, EvalError, FactoryError, In, InEnum, InReader, PortValue};
 use serde_json::{Map, Value};
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::color_interp::rgb_to_lab;
-use crate::nodes::common::read_string_or;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Metric {
@@ -15,12 +14,15 @@ pub(super) enum Metric {
     Lab,
 }
 
+/// The distance spaces a palette match can measure in.
+pub(super) const METRICS: EnumTable<Metric> = &[("lab", Metric::Lab), ("rgb", Metric::Rgb)];
+
 /// A declared colour palette. Each entry is a literal or a `$param`, so
 /// the table — and its projection into the metric space — is resolved
 /// once per eval by [`Palette::resolve`].
 pub(super) struct Palette {
     colors: Vec<In<[f32; 4]>>,
-    metric: Metric,
+    metric: InEnum<Metric>,
 }
 
 /// A palette resolved for one eval, with each entry projected into the
@@ -39,7 +41,6 @@ impl Palette {
     /// fields.
     pub(super) fn from_fields(
         fields: &Map<String, Value>,
-        ctx: &FactoryCtx<'_>,
         r: &mut InReader<'_, '_>,
     ) -> Result<Self, FactoryError> {
         let raw = fields
@@ -59,16 +60,7 @@ impl Palette {
         for (i, v) in arr.iter().enumerate() {
             colors.push(r.nested(&format!("palette[{i}]"), v)?);
         }
-        let metric = match read_string_or(fields, "space", ctx, "lab")?.as_str() {
-            "lab" => Metric::Lab,
-            "rgb" => Metric::Rgb,
-            other => {
-                return Err(FactoryError::BadField {
-                    field: "space".into(),
-                    msg: format!("distance space must be `lab` or `rgb`, got `{other}`"),
-                })
-            }
-        };
+        let metric = r.enum_or("space", Metric::Lab, METRICS)?;
         Ok(Self { colors, metric })
     }
 
@@ -84,19 +76,17 @@ impl Palette {
             let rgba = c.get(ctx, inputs)?;
             colors.push([rgba[0], rgba[1], rgba[2]]);
         }
-        let coords = colors.iter().map(|&c| project(c, self.metric)).collect();
+        let metric = self.metric.get(ctx)?;
+        let coords = colors.iter().map(|&c| project(c, metric)).collect();
         Ok(ResolvedPalette {
             colors,
             coords,
-            metric: self.metric,
+            metric,
         })
     }
 
     pub(super) fn hash(&self, h: &mut Xxh3) {
-        h.update(&[match self.metric {
-            Metric::Rgb => 0,
-            Metric::Lab => 1,
-        }]);
+        self.metric.param_hash(h);
         for c in &self.colors {
             c.param_hash(h);
         }

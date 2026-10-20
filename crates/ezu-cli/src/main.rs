@@ -112,7 +112,8 @@ struct CommonArgs {
     /// Override a document parameter, as `name=value` (repeatable).
     /// Values are validated against the style's `params` declarations:
     /// numbers respect `min`/`max`, colors are `#rrggbb[aa]`, bools
-    /// are `true`/`false`.
+    /// are `true`/`false`, strings one of their `enum` when they declare
+    /// one.
     #[arg(long = "param", value_name = "NAME=VALUE")]
     params: Vec<String>,
     /// Refuse to render a style that raises build warnings — an
@@ -2092,6 +2093,37 @@ fn parse_bbox(s: &str) -> Result<BBox, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `--param` checks a string param against its `enum`, as it checks
+    /// a number against its range.
+    #[test]
+    fn a_string_param_flag_must_be_one_of_its_enum() {
+        let doc = Document::from_json(
+            r##"{
+              "name": "p",
+              "params": {
+                "mode": { "type": "string", "enum": ["multiply", "screen"], "default": "screen" },
+                "note": { "type": "string", "default": "" }
+              },
+              "nodes": { "out": { "op": "solid", "color": "#000000" } },
+              "output": "@out"
+            }"##,
+        )
+        .unwrap();
+        let flags = |f: &[&str]| f.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let values = parse_cli_params(&flags(&["mode=multiply", "note=a=b"]), &doc).unwrap();
+        assert_eq!(
+            values.get("mode"),
+            Some(ezu::graph::ScalarValue::String("multiply".into()))
+        );
+        // Only the first `=` splits, so free text may hold one.
+        assert_eq!(
+            values.get("note"),
+            Some(ezu::graph::ScalarValue::String("a=b".into()))
+        );
+        let err = parse_cli_params(&flags(&["mode=overlay"]), &doc).unwrap_err();
+        assert!(err.to_string().contains("not one of"), "{err}");
+    }
 
     /// A network-free style: a translucent polygon, blurred so it reads
     /// across tile edges, over a translucent paper.

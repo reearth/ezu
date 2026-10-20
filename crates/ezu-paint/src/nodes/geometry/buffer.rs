@@ -9,17 +9,45 @@ use ezu_features::ops::buffer::{
     buffer_lines, buffer_points, buffer_polygons, BufferJoin, BufferOpts,
 };
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, InfluenceCtx, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    enum_names, schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EnumTable, EvalCtx,
+    EvalError, FactoryCtx, FactoryError, In, InEnum, InReader, InfluenceCtx, Node, NodeFactory,
+    PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value, read_optional_string, FeatureGroup};
+use crate::nodes::common::{downcast_features, features_value, FeatureGroup};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Join {
+    Miter,
+    Round,
+    Bevel,
+}
+
+const JOINS: EnumTable<Join> = &[
+    ("miter", Join::Miter),
+    ("round", Join::Round),
+    ("bevel", Join::Bevel),
+];
+
+impl Join {
+    fn buffer_join(self) -> BufferJoin {
+        match self {
+            Join::Bevel => BufferJoin::Bevel,
+            Join::Round => BufferJoin::Round {
+                max_segment_angle_rad: 0.25,
+            },
+            Join::Miter => BufferJoin::Miter {
+                min_angle_rad: 5.0 * PI / 180.0,
+            },
+        }
+    }
+}
 
 struct BufferNode {
     distance: In<f64>,
-    join: BufferJoin,
+    join: InEnum<Join>,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
 }
@@ -58,7 +86,7 @@ impl Node for BufferNode {
         let px = feats.extent as f64 / ctx.canvas.tile_w.max(1) as f64;
         let opts = BufferOpts {
             distance: self.distance.get(ctx, inputs)? * px,
-            join: self.join,
+            join: self.join.get(ctx)?.buffer_join(),
         };
         // Per group: buffer each feature's geometry into polygons, carrying
         // properties.
@@ -79,19 +107,7 @@ impl Node for BufferNode {
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"buffer");
         self.distance.param_hash(h);
-        match self.join {
-            BufferJoin::Bevel => h.update(&[0]),
-            BufferJoin::Miter { min_angle_rad } => {
-                h.update(&[1]);
-                h.update(&min_angle_rad.to_le_bytes());
-            }
-            BufferJoin::Round {
-                max_segment_angle_rad,
-            } => {
-                h.update(&[2]);
-                h.update(&max_segment_angle_rad.to_le_bytes());
-            }
-        }
+        self.join.param_hash(h);
     }
     fn param_refs(&self) -> Vec<String> {
         self.param_refs.clone()
@@ -109,25 +125,8 @@ impl NodeFactory for BufferFactory {
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
         let features = take_input_ref(fields, "features")?;
-        let join_kind =
-            read_optional_string(fields, "join")?.unwrap_or_else(|| "miter".to_string());
-        let join = match join_kind.as_str() {
-            "bevel" => BufferJoin::Bevel,
-            "round" => BufferJoin::Round {
-                max_segment_angle_rad: 0.25,
-            },
-            "miter" => BufferJoin::Miter {
-                min_angle_rad: 5.0 * PI / 180.0,
-            },
-            other => {
-                return Err(FactoryError::BadField {
-                    field: "join".into(),
-                    msg: format!("unknown join '{other}', expected miter/round/bevel"),
-                });
-            }
-        };
-
         let mut r = InReader::new(fields, ctx, 1);
+        let join = r.enum_or("join", Join::Miter, JOINS)?;
         let distance = r.number("distance")?;
         let parts = r.finish();
 
@@ -160,7 +159,7 @@ impl NodeFactory for BufferFactory {
                 "features": schema_frag::node_ref(),
                 "distance": schema_frag::in_number(serde_json::json!({ "type": "number",
                               "description": "Offset distance in tile pixels. Positive inflates, negative erodes (polygons only)." })),
-                "join": { "type": "string", "enum": ["miter", "round", "bevel"], "default": "miter" },
+                "join": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": enum_names(JOINS), "default": "miter" })),
             },
             "required": ["features", "distance"],
         })
