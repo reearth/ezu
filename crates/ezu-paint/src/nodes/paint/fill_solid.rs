@@ -14,7 +14,7 @@ use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
     canvas_into_raster, color_f32_to_u8, downcast_features, empty_raster, make_canvas,
-    rgba8_to_color, tint_alpha_color,
+    tint_alpha_color,
 };
 use crate::{paint_polygons, WatercolorStyle};
 
@@ -22,6 +22,9 @@ struct FillSolidNode {
     fill: In<[f32; 4]>,
     fill_alpha: In<f64>,
     edge: Option<In<[f32; 4]>>,
+    /// Opacity multiplied into the outline's own alpha. `fill-alpha` leaves
+    /// the outline alone, so this is how a fade reaches it too.
+    edge_alpha: In<f64>,
     edge_width: In<f64>,
     blur_sigma: PaddingIn,
     /// Optional data-driven fill: a MapLibre color expression evaluated per
@@ -35,11 +38,15 @@ struct FillSolidNode {
     /// per feature group. When set, it overrides the constant `edge`; its
     /// alpha is the outline's opacity, as the constant's is.
     edge_expr: Option<maplibre_expr::Expr>,
-    /// Raw `fill-expr` / `opacity-expr` / `edge-expr` JSON text, kept only
-    /// for a stable hash.
+    /// Optional data-driven outline opacity: a MapLibre number expression
+    /// evaluated per feature group. When set, it overrides `edge-alpha`.
+    edge_alpha_expr: Option<maplibre_expr::Expr>,
+    /// Raw `fill-expr` / `opacity-expr` / `edge-expr` / `edge-alpha-expr`
+    /// JSON text, kept only for a stable hash.
     fill_expr_src: Option<String>,
     opacity_expr_src: Option<String>,
     edge_expr_src: Option<String>,
+    edge_alpha_expr_src: Option<String>,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
 }
@@ -87,16 +94,22 @@ impl Node for FillSolidNode {
             Some(e) => Some(color_f32_to_u8(e.get(ctx, inputs)?)),
             None => None,
         };
-        let edge_color = edge.map(rgba8_to_color);
+        let edge_alpha = self.edge_alpha.get(ctx, inputs)? as f32;
+        let edge_color = edge.map(|e| tint_alpha_color(e, edge_alpha));
         let edge_width = self.edge_width.get(ctx, inputs)? as f32;
         let blur_sigma = self.blur_sigma.get(ctx, inputs)? as f32;
         let mut canvas = make_canvas(ctx)?;
 
-        if self.fill_expr.is_some() || self.opacity_expr.is_some() || self.edge_expr.is_some() {
+        if self.fill_expr.is_some()
+            || self.opacity_expr.is_some()
+            || self.edge_expr.is_some()
+            || self.edge_alpha_expr.is_some()
+        {
             // Data-driven fill: resolve a color, opacity and/or outline per
             // feature group and accumulate each group's polygons onto the
             // same canvas. Whichever expression is absent (or errors for a
-            // group) falls back to the constant `fill` / `fill-alpha` / `edge`.
+            // group) falls back to the constant `fill` / `fill-alpha` /
+            // `edge` / `edge-alpha`.
             let const_fill = color_f32_to_u8(self.fill.get(ctx, inputs)?);
             let z = ctx.tile.z;
             for group in &feats.groups {
@@ -121,17 +134,23 @@ impl Node for FillSolidNode {
                     },
                     None => fill_alpha,
                 };
-                let edge = match &self.edge_expr {
+                let edge_rgba = match &self.edge_expr {
                     Some(expr) => match maplibre_expr::evaluate(expr, &ectx) {
-                        Ok(maplibre_expr::Value::Color(c)) => {
-                            Some(rgba8_to_color(color_f32_to_u8([
-                                c.r as f32, c.g as f32, c.b as f32, c.a as f32,
-                            ])))
-                        }
-                        _ => edge_color,
+                        Ok(maplibre_expr::Value::Color(c)) => Some(color_f32_to_u8([
+                            c.r as f32, c.g as f32, c.b as f32, c.a as f32,
+                        ])),
+                        _ => edge,
                     },
-                    None => edge_color,
+                    None => edge,
                 };
+                let edge_alpha = match &self.edge_alpha_expr {
+                    Some(expr) => match maplibre_expr::evaluate(expr, &ectx) {
+                        Ok(maplibre_expr::Value::Number(n)) => n as f32,
+                        _ => edge_alpha,
+                    },
+                    None => edge_alpha,
+                };
+                let edge = edge_rgba.map(|e| tint_alpha_color(e, edge_alpha));
                 let style = WatercolorStyle {
                     fill: tint_alpha_color(fill, alpha),
                     edge,
@@ -178,6 +197,11 @@ impl Node for FillSolidNode {
             h.update(b"edgeexpr");
             h.update(s.as_bytes());
         }
+        self.edge_alpha.param_hash(h);
+        if let Some(s) = &self.edge_alpha_expr_src {
+            h.update(b"edgealphaexpr");
+            h.update(s.as_bytes());
+        }
     }
     fn param_refs(&self) -> Vec<String> {
         self.param_refs.clone()
@@ -199,6 +223,7 @@ impl NodeFactory for FillSolidFactory {
         let fill = r.color("fill")?;
         let fill_alpha = r.number_or("fill-alpha", 1.0)?;
         let edge = r.color_opt("edge")?;
+        let edge_alpha = r.number_or("edge-alpha", 1.0)?;
         let edge_width = r.number_or("edge-width", 1.0)?;
         let blur_sigma = PaddingIn::read_or(&mut r, fields, "blur-sigma", 0.0)?;
         // `fill-expr`: a raw MapLibre color expression, compiled once and
@@ -244,6 +269,14 @@ impl NodeFactory for FillSolidFactory {
         // evaluated per feature group at paint time. Overrides `edge`.
         let (edge_expr, edge_expr_src) =
             super::stamp::parse_expr_field(fields, "edge-expr", &maplibre_expr::Type::Color)?;
+        // `edge-alpha-expr`: a raw MapLibre number expression for the
+        // outline's opacity, evaluated per feature group. Overrides
+        // `edge-alpha`.
+        let (edge_alpha_expr, edge_alpha_expr_src) = super::stamp::parse_expr_field(
+            fields,
+            "edge-alpha-expr",
+            &maplibre_expr::Type::Number,
+        )?;
         let parts = r.finish();
 
         let mut ports = vec![PortSpec {
@@ -263,14 +296,17 @@ impl NodeFactory for FillSolidFactory {
                 fill,
                 fill_alpha,
                 edge,
+                edge_alpha,
                 edge_width,
                 blur_sigma,
                 fill_expr,
                 opacity_expr,
                 edge_expr,
+                edge_alpha_expr,
                 fill_expr_src,
                 opacity_expr_src,
                 edge_expr_src,
+                edge_alpha_expr_src,
                 ports,
                 param_refs: parts.param_refs,
             }),
@@ -292,7 +328,12 @@ impl NodeFactory for FillSolidFactory {
                 },
                 "edge": schema_frag::color(),
                 "edge-expr": {
-                    "description": "A MapLibre color expression for the outline (MapLibre data-driven `fill-outline-color`), evaluated per feature group at paint time. When present it overrides the constant `edge`; the color's alpha is the outline's opacity, as `edge`'s is, and `fill-alpha` does not fade it. A group whose expression doesn't resolve to a color falls back to `edge`, or draws no outline when `edge` is left out.",
+                    "description": "A MapLibre color expression for the outline (MapLibre data-driven `fill-outline-color`), evaluated per feature group at paint time. When present it overrides the constant `edge`; the color's alpha is the outline's opacity, as `edge`'s is, times `edge-alpha`; `fill-alpha` does not fade it. A group whose expression doesn't resolve to a color falls back to `edge`, or draws no outline when `edge` is left out.",
+                },
+                "edge-alpha": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0, "maximum": 1.0, "default": 1,
+                    "description": "Opacity multiplied into the outline's own alpha. `fill-alpha` fades the fill alone, so to fade the outline with it, as MapLibre's `fill-opacity` fades `fill-outline-color`, give both the same value." })),
+                "edge-alpha-expr": {
+                    "description": "A MapLibre number expression for the outline's opacity, evaluated per feature group at paint time. When present it overrides the constant `edge-alpha`; a group whose expression doesn't resolve to a number falls back to `edge-alpha`.",
                 },
                 "edge-width": schema_frag::px_number(),
                 "blur-sigma": schema_frag::px_number(),

@@ -2400,8 +2400,27 @@
                 "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|[$@][A-Za-z_][A-Za-z0-9_-]*)$",
                 "type": "string"
               },
+              "edge-alpha": {
+                "oneOf": [
+                  {
+                    "default": 1,
+                    "description": "Opacity multiplied into the outline's own alpha. `fill-alpha` fades the fill alone, so to fade the outline with it, as MapLibre's `fill-opacity` fades `fill-outline-color`, give both the same value.",
+                    "maximum": 1.0,
+                    "minimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "edge-alpha-expr": {
+                "description": "A MapLibre number expression for the outline's opacity, evaluated per feature group at paint time. When present it overrides the constant `edge-alpha`; a group whose expression doesn't resolve to a number falls back to `edge-alpha`."
+              },
               "edge-expr": {
-                "description": "A MapLibre color expression for the outline (MapLibre data-driven `fill-outline-color`), evaluated per feature group at paint time. When present it overrides the constant `edge`; the color's alpha is the outline's opacity, as `edge`'s is, and `fill-alpha` does not fade it. A group whose expression doesn't resolve to a color falls back to `edge`, or draws no outline when `edge` is left out."
+                "description": "A MapLibre color expression for the outline (MapLibre data-driven `fill-outline-color`), evaluated per feature group at paint time. When present it overrides the constant `edge`; the color's alpha is the outline's opacity, as `edge`'s is, times `edge-alpha`; `fill-alpha` does not fade it. A group whose expression doesn't resolve to a color falls back to `edge`, or draws no outline when `edge` is left out."
               },
               "edge-width": {
                 "oneOf": [

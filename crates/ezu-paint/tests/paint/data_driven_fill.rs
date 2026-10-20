@@ -223,3 +223,46 @@ fn edge_expr_falls_back_to_edge_or_to_no_outline() {
         render_square("park", r##""fill": "#dddddd""##),
     );
 }
+
+#[test]
+fn edge_alpha_fades_the_outline_as_a_translucent_edge_would() {
+    // `edge-alpha` multiplies the outline's alpha: half of an opaque edge
+    // is the edge at `80`, and left out (1) it changes nothing.
+    assert_eq!(
+        render_square(
+            "park",
+            r##""fill": "#dddddd", "edge-width": 3, "edge": "#0000ff", "edge-alpha": 0.5"##
+        ),
+        render_square(
+            "park",
+            r##""fill": "#dddddd", "edge-width": 3, "edge": "#0000ff80""##
+        ),
+    );
+    assert_eq!(
+        render_square(
+            "park",
+            r##""fill": "#dddddd", "edge-width": 3, "edge": "#0000ff", "edge-alpha": 1"##
+        ),
+        render_square(
+            "park",
+            r##""fill": "#dddddd", "edge-width": 3, "edge": "#0000ff""##
+        ),
+    );
+}
+
+#[test]
+fn edge_alpha_expr_renders_as_each_groups_literal() {
+    let expr = r##""fill": "#dddddd", "edge-width": 3, "edge": "#0000ff",
+        "edge-alpha-expr": ["match", ["get","class"], "road", 0.25, 0.75]"##;
+    let faint = render_square(
+        "road",
+        r##""fill": "#dddddd", "edge-width": 3, "edge": "#0000ff", "edge-alpha": 0.25"##,
+    );
+    let strong = render_square(
+        "park",
+        r##""fill": "#dddddd", "edge-width": 3, "edge": "#0000ff", "edge-alpha": 0.75"##,
+    );
+    assert_ne!(faint, strong, "the literals should differ");
+    assert_eq!(render_square("road", expr), faint);
+    assert_eq!(render_square("park", expr), strong);
+}

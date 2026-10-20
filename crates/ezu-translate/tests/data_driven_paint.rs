@@ -302,3 +302,44 @@ fn an_unreadable_fill_outline_color_warns() {
     let fill = nodes.values().find(|n| n["op"] == "fill-solid").unwrap();
     assert!(fill.get("edge").is_none() && fill.get("edge-expr").is_none());
 }
+
+#[test]
+fn fill_opacity_fades_the_outline_too() {
+    // MapLibre's `fill-opacity` fades `fill-outline-color` along with the
+    // fill; the node keeps the two apart, so the opacity is written to the
+    // outline's own field as well.
+    let fill_for = |paint: serde_json::Value| {
+        let style = style_with_layer(json!({
+            "id": "polys", "type": "fill", "source": "src", "source-layer": "land",
+            "paint": paint
+        }));
+        let (recipe, report) = convert(&style, &ConvertOptions::default()).expect("conversion");
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        let text = serde_json::to_string(&recipe).unwrap();
+        ezu_style::Document::from_json(&text).expect("recipe parses as ezu Document");
+        recipe["nodes"]
+            .as_object()
+            .unwrap()
+            .values()
+            .find(|n| n["op"] == "fill-solid")
+            .expect("a fill-solid")
+            .clone()
+    };
+    let fill = fill_for(json!({
+        "fill-color": "#eeeeee", "fill-outline-color": "#333333", "fill-opacity": 0.4
+    }));
+    assert_eq!(fill["fill-alpha"], 0.4);
+    assert_eq!(fill["edge-alpha"], 0.4);
+
+    let opacity = json!(["interpolate", ["linear"], ["zoom"], 10, 0, 14, 0.8]);
+    let outline = json!(["match", ["get", "class"], "park", "#336633", "#333333"]);
+    let fill = fill_for(json!({
+        "fill-color": "#eeeeee", "fill-outline-color": outline, "fill-opacity": opacity
+    }));
+    assert_eq!(fill["opacity-expr"], opacity);
+    assert_eq!(fill["edge-alpha-expr"], opacity);
+
+    // No outline, nothing to fade.
+    let fill = fill_for(json!({ "fill-color": "#eeeeee", "fill-opacity": 0.4 }));
+    assert!(fill.get("edge-alpha").is_none());
+}

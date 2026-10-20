@@ -94,7 +94,9 @@ Solid polygon fill with optional outline and Gaussian blur.
 | `blur-sigma` | number (0…∞) \| `$param` \| `@node` | no | — |
 | `blur-sigma-max` | number (0…∞) | no | Upper bound on `blur-sigma` for padding, required when `blur-sigma` is an `@node` port. Values above it are clamped. |
 | `edge` | color \| `$param` \| `@node` | no | sRGB hex color, `$param` reference, or `@node` scalar port. |
-| `edge-expr` | — | no | A MapLibre color expression for the outline (MapLibre data-driven `fill-outline-color`), evaluated per feature group at paint time. When present it overrides the constant `edge`; the color's alpha is the outline's opacity, as `edge`'s is, and `fill-alpha` does not fade it. A group whose expression doesn't resolve to a color falls back to `edge`, or draws no outline when `edge` is left out. |
+| `edge-alpha` | number (0…1) \| `$param` \| `@node` | no | Opacity multiplied into the outline's own alpha. `fill-alpha` fades the fill alone, so to fade the outline with it, as MapLibre's `fill-opacity` fades `fill-outline-color`, give both the same value. |
+| `edge-alpha-expr` | — | no | A MapLibre number expression for the outline's opacity, evaluated per feature group at paint time. When present it overrides the constant `edge-alpha`; a group whose expression doesn't resolve to a number falls back to `edge-alpha`. |
+| `edge-expr` | — | no | A MapLibre color expression for the outline (MapLibre data-driven `fill-outline-color`), evaluated per feature group at paint time. When present it overrides the constant `edge`; the color's alpha is the outline's opacity, as `edge`'s is, times `edge-alpha`; `fill-alpha` does not fade it. A group whose expression doesn't resolve to a color falls back to `edge`, or draws no outline when `edge` is left out. |
 | `edge-width` | number (0…∞) \| `$param` \| `@node` | no | — |
 | `features` | `@node` | yes | Reference to another node (`@name`). |
 | `fill` | color \| `$param` \| `@node` | yes | sRGB hex color, `$param` reference, or `@node` scalar port. |

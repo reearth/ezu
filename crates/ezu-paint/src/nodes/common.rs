@@ -847,10 +847,6 @@ pub(super) fn color_to_premul_u8(c: [f32; 4]) -> [u8; 4] {
     ]
 }
 
-pub(super) fn rgba8_to_color(c: [u8; 4]) -> tiny_skia::Color {
-    tiny_skia::Color::from_rgba8(c[0], c[1], c[2], c[3])
-}
-
 pub(super) fn tint_alpha_color(c: [u8; 4], alpha_mul: f32) -> tiny_skia::Color {
     let a = ((c[3] as f32) * alpha_mul.clamp(0.0, 1.0)).round() as u8;
     tiny_skia::Color::from_rgba8(c[0], c[1], c[2], a)

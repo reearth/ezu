@@ -94,6 +94,17 @@ pub(crate) fn convert_fill(
         spec["edge-expr"] = expr;
         spec["edge-width"] = Value::from(1.0);
     }
+    // MapLibre's `fill-opacity` fades the outline as well as the fill, while
+    // the node's `fill-alpha` / `opacity-expr` fade the fill alone, so the
+    // same opacity goes to the outline's own field.
+    if spec.get("edge-width").is_some() {
+        if let Some(a) = opacity {
+            spec["edge-alpha"] = Value::from(a);
+        }
+        if let Some(expr) = spec.get("opacity-expr").cloned() {
+            spec["edge-alpha-expr"] = expr;
+        }
+    }
     nodes.insert(fill_id.clone(), spec);
     outputs.push(fill_id);
 }

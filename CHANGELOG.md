@@ -352,6 +352,11 @@ mean is spelled out in
   `inside` keeps it within `radius`. The blur fades to the ring's outer
   edge wherever it sits. `ezu translate` writes `outside` for a layer with a
   stroke, so a stroked circle is as large as MapLibre draws it.
+- `fill-solid` takes `edge-alpha` and `edge-alpha-expr`, an opacity for the
+  outline alone (default 1), since `fill-alpha` and `opacity-expr` fade the
+  fill and leave the outline as it is. `ezu translate` gives the outline the
+  layer's `fill-opacity` through them, so a faded fill's outline fades with
+  it, as in MapLibre.
 
 ### Changed
 
