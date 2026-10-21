@@ -84,6 +84,8 @@ mod noise_warp;
 mod params;
 #[path = "paint/pixel_filters.rs"]
 mod pixel_filters;
+#[path = "paint/pixel_ratio_filters.rs"]
+mod pixel_ratio_filters;
 #[path = "paint/point_grid_padding.rs"]
 mod point_grid_padding;
 #[path = "paint/point_scatter_randomness.rs"]

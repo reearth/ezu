@@ -55,7 +55,16 @@ impl Node for BlurNode {
         let input = inputs[0]
             .as_ref()
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
-        let sigma = self.sigma.get(ctx, inputs)? as f32;
+        // `sigma` is style pixels, clamped to its padded bound before it
+        // is converted. A canvas-sized raster or field is blurred in
+        // device pixels, so a denser canvas blurs over the same ground; a
+        // sprite stays in style pixels whatever the ratio.
+        let sigma_style = self.sigma.get(ctx, inputs)?;
+        let sigma = if input.as_sprite().is_some() {
+            sigma_style as f32
+        } else {
+            ctx.px(sigma_style) as f32
+        };
         if let Some(field) = input.as_scalar_field() {
             if sigma <= 0.0 {
                 return Ok(input.clone());

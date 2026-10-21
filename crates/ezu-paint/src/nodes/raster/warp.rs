@@ -85,13 +85,20 @@ impl Node for WarpNode {
             .as_ref()
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
 
+        // `scale-px` and the amplitudes are style pixels. On the canvas
+        // they grow with the pixel ratio, so a denser tile is displaced by
+        // the same field over the same world positions; a sprite stays in
+        // style pixels whatever the ratio.
+        let sprite = input.as_sprite().is_some();
+        let px = |v: f64| if sprite { v } else { ctx.px(v) };
         // A non-positive wavelength (from a port) leaves that axis of the
         // displacement field constant.
-        let (inv_scale_x, inv_scale_y) = self.scale.inv(ctx, inputs)?;
+        let (inv_scale_x, inv_scale_y) = self.scale.inv(ctx, inputs, px)?;
         let lacunarity = self.lacunarity.get(ctx, inputs)?;
         let gain = self.gain.get(ctx, inputs)?;
-        let amp_x = self.amp_x.get(ctx, inputs)?;
-        let amp_y = self.amp_y.get(ctx, inputs)?;
+        // Clamped to the padded bound in style pixels, then converted.
+        let amp_x = px(self.amp_x.get(ctx, inputs)?);
+        let amp_y = px(self.amp_y.get(ctx, inputs)?);
         let noise = self.kind.get(ctx)?;
         let anchor = self.anchor.get(ctx)?;
         let boundary = self.boundary.get(ctx)?;
@@ -104,8 +111,15 @@ impl Node for WarpNode {
         let nx = Sampler::build(noise, seed);
         let ny = Sampler::build(noise, seed.wrapping_add(0x9E37_79B9));
 
-        let pad = ctx.canvas.pad as f64;
-        let tile_size = ctx.canvas.tile_w as f64;
+        let mut pad = ctx.canvas.pad as f64;
+        let mut tile_size = ctx.canvas.tile_w as f64;
+        if sprite && ctx.canvas.pixel_ratio != 1.0 {
+            // A sprite's pixels are style pixels, so the canvas's margin
+            // and tile step are taken back to style pixels for it.
+            let r = ctx.canvas.pixel_ratio as f64;
+            pad /= r;
+            tile_size /= r;
+        }
         let (origin_x, origin_y) = match anchor {
             Anchor::World => (ctx.tile.x as f64 * tile_size, ctx.tile.y as f64 * tile_size),
             Anchor::Tile => (0.0, 0.0),

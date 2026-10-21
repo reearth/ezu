@@ -96,7 +96,16 @@ impl Node for MorphNode {
         let input = inputs[0]
             .as_ref()
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
-        let radius = (self.radius.get(ctx, inputs)?.round().clamp(0.0, 256.0)) as u32;
+        // Whole style pixels first, as the pad was reserved for, then the
+        // device radius: a canvas-sized raster or field at a higher pixel
+        // ratio takes the same ground in more pixels. A sprite stays in
+        // style pixels whatever the ratio.
+        let radius = self.radius.get(ctx, inputs)?.round().clamp(0.0, 256.0);
+        let radius = if input.as_sprite().is_some() {
+            radius
+        } else {
+            ctx.px(radius).round()
+        } as u32;
         if let Some(field) = input.as_scalar_field() {
             if radius == 0 {
                 return Ok(input.clone());

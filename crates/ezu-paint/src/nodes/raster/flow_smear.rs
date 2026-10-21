@@ -41,7 +41,8 @@ use xxhash_rust::xxh3::Xxh3;
 
 use crate::imaging::Bilinear;
 use crate::nodes::common::{
-    raster_or_sprite_output, unwrap_raster_or_sprite, wrap_raster_like, ACCEPTS_RASTER_OR_SPRITE,
+    raster_or_sprite_output, unwrap_raster_or_sprite, wrap_raster_like, RasterKind,
+    ACCEPTS_RASTER_OR_SPRITE,
 };
 
 /// Field length below which a pixel counts as flat. Two 8-bit steps from
@@ -110,6 +111,13 @@ impl Node for FlowSmearNode {
             .and_then(PortValue::as_raster)
             .ok_or_else(|| EvalError::MissingInput("field".into()))?;
         let length = self.length.get(ctx, inputs)?.max(0.0) as f32;
+        // Style pixels, clamped to the padded bound above; the walk steps
+        // in canvas pixels, so a denser canvas walks the same ground in
+        // more steps. A sprite stays in style pixels whatever the ratio.
+        let length = match kind {
+            RasterKind::Sprite => length,
+            RasterKind::Raster => ctx.px32(length),
+        };
         if length < 1.0 || field.width == 0 || field.height == 0 {
             // No walk reaches a whole step.
             return Ok(wrap_raster_like(src, kind));

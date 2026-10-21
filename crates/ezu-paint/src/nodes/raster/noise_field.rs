@@ -219,12 +219,25 @@ impl ScalePx {
     /// whose value is not positive — only possible from a port or an
     /// unbounded `$param` — gets 0, a field that does not vary along it,
     /// rather than an infinite frequency.
+    ///
+    /// `px` takes a wavelength from style pixels to the pixels the field is
+    /// sampled in: `ctx.px` on the canvas, so a denser canvas samples the
+    /// same pattern at its own density, and the identity on a sprite, which
+    /// stays in style pixels at every pixel ratio.
     pub(super) fn inv(
         &self,
         ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
+        px: impl Fn(f64) -> f64,
     ) -> Result<(f64, f64), EvalError> {
-        let inv = |v: f64| if v > 0.0 { 1.0 / v } else { 0.0 };
+        let inv = |v: f64| {
+            let v = px(v);
+            if v > 0.0 {
+                1.0 / v
+            } else {
+                0.0
+            }
+        };
         Ok((inv(self.x.get(ctx, inputs)?), inv(self.y.get(ctx, inputs)?)))
     }
 

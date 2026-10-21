@@ -77,8 +77,19 @@ impl Node for DisplaceNode {
             .as_ref()
             .ok_or_else(|| EvalError::MissingInput("displacement".into()))?;
         let (disp, _) = unwrap_raster_or_sprite(disp_input, "displacement")?;
-        let amp_x = self.amp_x.get(ctx, inputs)?;
-        let amp_y = self.amp_y.get(ctx, inputs)?;
+        // The amplitudes are style pixels, clamped to their padded bound
+        // and then converted: a canvas-sized raster or field at a higher
+        // pixel ratio is displaced over the same ground. A sprite stays in
+        // style pixels whatever the ratio.
+        let px = |v: f64| {
+            if input.as_sprite().is_some() {
+                v
+            } else {
+                ctx.px(v)
+            }
+        };
+        let amp_x = px(self.amp_x.get(ctx, inputs)?);
+        let amp_y = px(self.amp_y.get(ctx, inputs)?);
         let boundary = self.boundary.get(ctx)?;
         // The offset at pixel `(x, y)`, read from the matching pixel of
         // the displacement raster. Output is the same size as the input;

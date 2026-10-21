@@ -4,6 +4,11 @@
 //! Useful as a synthetic alternative to a `.myb` file when the user
 //! just wants "draw a line of width N in color C" without authoring a
 //! brush.
+//!
+//! A brush is a value like a `.myb` file, so its sizes are style pixels
+//! at every pixel ratio: `width-px` is not converted here. The paint op
+//! that strokes with the brush scales it to the canvas, the same for a
+//! synthesized brush as for one loaded from a file.
 
 use std::sync::Arc;
 
@@ -121,7 +126,7 @@ impl NodeFactory for BrushSolidFactory {
             "description": "Synthesize a crisp constant-width hokusai brush. No scatter / no jitter — dabs are stacked densely so the stroke reads as a solid line.",
             "properties": {
                 "width-px": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.4,
-                              "description": "Stroke width in canvas pixels." })),
+                              "description": "Stroke width in pixels." })),
                 "color": schema_frag::color(),
                 "hardness": schema_frag::unit_number(),
                 "aa": schema_frag::unit_number(),

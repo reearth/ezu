@@ -76,7 +76,8 @@ impl Node for DitherNode {
         match self.method.get(ctx)? {
             Method::Ordered => {
                 let amount = self.amount.get(ctx, inputs)?.clamp(0.0, 1.0) as f32;
-                self.ordered(src, &palette, amount, w, h, &mut out)
+                let ratio = ctx.canvas.pixel_ratio;
+                self.ordered(src, &palette, amount, ratio, w, h, &mut out)
             }
             Method::FloydSteinberg => self.floyd_steinberg(src, &palette, w, h, &mut out),
         }
@@ -99,15 +100,27 @@ impl Node for DitherNode {
 }
 
 impl DitherNode {
+    /// `ratio` is the canvas's pixel ratio: one cell of the Bayer matrix
+    /// covers one style pixel, so a denser canvas draws the same pattern
+    /// rather than a finer one.
+    #[allow(clippy::too_many_arguments)]
     fn ordered(
         &self,
         src: &RasterBuf,
         palette: &ResolvedPalette,
         amount: f32,
+        ratio: f32,
         w: usize,
         h: usize,
         out: &mut RasterBuf,
     ) {
+        let cell = |v: usize| {
+            if ratio == 1.0 {
+                v % 4
+            } else {
+                (v as f64 / ratio as f64).floor() as usize % 4
+            }
+        };
         for y in 0..h {
             for x in 0..w {
                 let i = (y * w + x) * 4;
@@ -115,7 +128,7 @@ impl DitherNode {
                 if a <= 0.0 {
                     continue;
                 }
-                let bias = (BAYER4[(y % 4) * 4 + (x % 4)] + 0.5) / 16.0 - 0.5;
+                let bias = (BAYER4[cell(y) * 4 + cell(x)] + 0.5) / 16.0 - 0.5;
                 let d = bias * amount;
                 let rgb = [
                     ((src.pixels[i] as f32 / 255.0 / a) + d).clamp(0.0, 1.0),

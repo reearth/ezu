@@ -30,7 +30,7 @@ use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
     canvas_into_raster, make_canvas, read_xy, unwrap_raster_or_sprite, warn_renamed, FramedImage,
-    ACCEPTS_RASTER_OR_SPRITE,
+    RasterKind, ACCEPTS_RASTER_OR_SPRITE,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,7 +107,7 @@ impl Node for PlaceNode {
         let input = inputs[0]
             .as_ref()
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
-        let (src, _) = unwrap_raster_or_sprite(input, "input")?;
+        let (src, kind) = unwrap_raster_or_sprite(input, "input")?;
         let mut canvas = make_canvas(ctx)?;
         let Some(framed) = FramedImage::new(&src) else {
             return Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))));
@@ -120,6 +120,14 @@ impl Node for PlaceNode {
         let sh = src.height as f32;
 
         let scale = (self.scale.get(ctx, inputs)? as f32).max(0.0);
+        // A sprite's pixels are style pixels, so at a higher pixel ratio it
+        // is drawn that much larger; a canvas-sized raster is already in
+        // canvas pixels. `position-px` is style pixels either way.
+        let scale = match kind {
+            RasterKind::Sprite => ctx.px32(scale),
+            RasterKind::Raster => scale,
+        };
+        let position_px = [ctx.px32(self.position_px[0]), ctx.px32(self.position_px[1])];
         let rotation_deg = self.rotation_deg.get(ctx, inputs)? as f32;
         let opacity = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
 
@@ -133,7 +141,7 @@ impl Node for PlaceNode {
                 let (fx, fy) = self.anchor.get(ctx)?.fraction();
                 let ax = sw * fx;
                 let ay = sh * fy;
-                Transform::from_translate(self.position_px[0] + pad, self.position_px[1] + pad)
+                Transform::from_translate(position_px[0] + pad, position_px[1] + pad)
                     .pre_rotate(rotation_deg)
                     .pre_scale(scale, scale)
                     .pre_translate(-ax, -ay)
@@ -144,8 +152,8 @@ impl Node for PlaceNode {
                 } else {
                     (tile_w / sw).min(tile_h / sh)
                 };
-                let cx = tile_w * 0.5 + self.position_px[0] + pad;
-                let cy = tile_h * 0.5 + self.position_px[1] + pad;
+                let cx = tile_w * 0.5 + position_px[0] + pad;
+                let cy = tile_h * 0.5 + position_px[1] + pad;
                 Transform::from_translate(cx, cy)
                     .pre_rotate(rotation_deg)
                     .pre_scale(s_uniform, s_uniform)
@@ -154,8 +162,8 @@ impl Node for PlaceNode {
             Fit::Stretch => {
                 let sx = tile_w / sw;
                 let sy = tile_h / sh;
-                let cx = tile_w * 0.5 + self.position_px[0] + pad;
-                let cy = tile_h * 0.5 + self.position_px[1] + pad;
+                let cx = tile_w * 0.5 + position_px[0] + pad;
+                let cy = tile_h * 0.5 + position_px[1] + pad;
                 Transform::from_translate(cx, cy)
                     .pre_rotate(rotation_deg)
                     .pre_scale(sx, sy)
@@ -243,7 +251,7 @@ impl NodeFactory for PlaceFactory {
                 "position-px": { "type": "array",
                                  "items": { "type": "number" },
                                  "minItems": 2, "maxItems": 2,
-                                 "description": "fit=none: canvas pixel where the image's `anchor` point lands. Other fits: offset from canvas center." },
+                                 "description": "fit=none: point in pixels from the tile's top-left where the image's `anchor` point lands. Other fits: offset from canvas center." },
                 "anchor": schema_frag::in_enum(serde_json::json!({ "type": "string",
                             "enum": ezu_graph::enum_names(ANCHORS),
                             "default": "top-left",

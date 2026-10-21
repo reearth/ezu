@@ -87,7 +87,11 @@ impl Node for MosaicNode {
             .as_ref()
             .and_then(PortValue::as_raster)
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
-        let block = (self.block.get(ctx, inputs)?.round() as i64).max(1);
+        // Whole style pixels, as the pad was reserved for, then canvas
+        // pixels: at a higher pixel ratio a block covers the same ground
+        // in more pixels, on the same world grid.
+        let block = ctx.px(self.block.get(ctx, inputs)?.round()).round();
+        let block = (block as i64).max(1);
         if block == 1 {
             return Ok(PortValue::Raster(src.clone()));
         }
@@ -252,7 +256,7 @@ impl NodeFactory for MosaicFactory {
                 "input": schema_frag::node_ref(),
                 "block": schema_frag::in_number(serde_json::json!({
                     "type": "integer", "minimum": 1,
-                    "description": "Block edge length in canvas pixels. With `anchor: world` the block size sets the canvas padding, which is fixed before anything renders — so this needs an upper bound the build can see: a literal, a `$param` with `max`, or `block-max` beside an `@node` port."
+                    "description": "Block edge length in pixels. With `anchor: world` the block size sets the canvas padding, which is fixed before anything renders — so this needs an upper bound the build can see: a literal, a `$param` with `max`, or `block-max` beside an `@node` port."
                 })),
                 "block-max": { "type": "number", "minimum": 0.0, "description": "Upper bound on `block` for padding, required when `block` is an `@node` port. Values above it are clamped." },
                 "anchor": anchor_schema("world", Some("`world` (default) makes the block grid seamless across map tiles by growing the upstream pad. `tile` restarts the grid at every map tile's top-left and requires no extra padding. Read when the graph is built: a `$param` gives its default.")),

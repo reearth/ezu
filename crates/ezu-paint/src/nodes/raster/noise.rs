@@ -151,7 +151,13 @@ impl Node for NoiseNode {
             _ => (0.0, 0.0),
         };
 
-        let (inv_scale_x, inv_scale_y) = self.scale.inv(ctx, inputs)?;
+        // `scale-px` and `warp-amp` are style pixels. On the canvas they
+        // grow with the pixel ratio, so a denser tile samples the same
+        // field at the same world positions, only more finely; a sprite
+        // stays in style pixels whatever the ratio.
+        let px = |v: f64| if sprite.is_some() { v } else { ctx.px(v) };
+        let warp_amp = px(warp_amp);
+        let (inv_scale_x, inv_scale_y) = self.scale.inv(ctx, inputs, px)?;
         let warp_inv_scale_x = inv_scale_x * warp_freq;
         let warp_inv_scale_y = inv_scale_y * warp_freq;
 

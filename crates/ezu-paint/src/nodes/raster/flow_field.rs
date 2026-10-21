@@ -34,7 +34,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use super::terrain_common::horn_gradient;
+use super::terrain_common::{horn_gradient, pixel_pitch};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Direction {
@@ -84,8 +84,9 @@ impl Node for FlowFieldNode {
         let w = field.width;
         let h = field.height;
         let mut out = RasterBuf::new(w, h);
-        let inv_x = exaggeration / (8.0 * field.metres_per_pixel_x().max(1e-6));
-        let inv_y = exaggeration / (8.0 * field.metres_per_pixel_y().max(1e-6));
+        let (pitch_x, pitch_y) = pixel_pitch(field, ctx);
+        let inv_x = exaggeration / (8.0 * pitch_x.max(1e-6));
+        let inv_y = exaggeration / (8.0 * pitch_y.max(1e-6));
         let max_rad = max_deg.to_radians().max(1e-4);
         for y in 0..h {
             for x in 0..w {

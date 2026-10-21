@@ -26,7 +26,8 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    anchor_schema, read_xy, unwrap_raster_or_sprite, Anchor, ACCEPTS_RASTER_OR_SPRITE, ANCHORS,
+    anchor_schema, read_xy, unwrap_raster_or_sprite, Anchor, RasterKind, ACCEPTS_RASTER_OR_SPRITE,
+    ANCHORS,
 };
 
 struct TilingNode {
@@ -66,7 +67,7 @@ impl Node for TilingNode {
         let input = inputs[0]
             .as_ref()
             .ok_or_else(|| EvalError::MissingInput("input".into()))?;
-        let (src, _) = unwrap_raster_or_sprite(input, "input")?;
+        let (src, kind) = unwrap_raster_or_sprite(input, "input")?;
         let (pw, ph) = ctx.canvas.padded_dims();
         let pad = ctx.canvas.pad as f64;
         let tile_size = ctx.canvas.tile_w as f64;
@@ -79,11 +80,18 @@ impl Node for TilingNode {
             Anchor::Tile => (0.0, 0.0),
         };
 
+        // The period in canvas pixels. `scale-px` is style pixels, and so
+        // is a sprite's own width, the default period; both grow with the
+        // pixel ratio, so a denser tile repeats the pattern over the same
+        // ground. A canvas-sized raster is already in canvas pixels.
         let scale = match &self.scale_px {
-            Some(s) => s.get(ctx, inputs)?,
-            None => src.width as f64,
-        }
-        .max(0.5);
+            Some(s) => ctx.px(s.get(ctx, inputs)?.max(0.5)),
+            None => match kind {
+                RasterKind::Sprite => ctx.px(src.width as f64),
+                RasterKind::Raster => src.width as f64,
+            },
+        };
+        let offset_px = [ctx.px(self.offset_px[0]), ctx.px(self.offset_px[1])];
         // Source pixels span [0, src.w/h); one full repetition covers
         // `scale` canvas pixels. So canvas_px / scale * src.w gives the
         // source-pixel coordinate before wraparound.
@@ -109,8 +117,8 @@ impl Node for TilingNode {
         let src_px = &src.pixels;
         for y in 0..ph {
             for x in 0..pw {
-                let cx = origin_x + x as f64 - pad - self.offset_px[0];
-                let cy = origin_y + y as f64 - pad - self.offset_px[1];
+                let cx = origin_x + x as f64 - pad - offset_px[0];
+                let cy = origin_y + y as f64 - pad - offset_px[1];
                 let (rx, ry) = if needs_rotation {
                     (cx * cos_t - cy * sin_t, cx * sin_t + cy * cos_t)
                 } else {
@@ -253,9 +261,9 @@ impl NodeFactory for TilingFactory {
                 "input": schema_frag::node_ref(),
                 "anchor": anchor_schema("world", Some("`world` (default) makes the pattern seamless across map tiles; `tile` restarts the pattern at every map tile's top-left.")),
                 "scale-px": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.5,
-                              "description": "Canvas pixels per one source repetition. Defaults to the source image's native width." })),
+                              "description": "Pixels per one source repetition. Defaults to the source image's native width." })),
                 "offset-px": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2,
-                               "description": "Pattern offset in canvas pixels [x, y]." },
+                               "description": "Pattern offset in pixels [x, y]." },
                 "rotation-deg": schema_frag::in_number(serde_json::json!({ "type": "number",
                                   "description": "Rotation of the pattern in degrees (clockwise)." })),
                 "opacity": schema_frag::unit_number(),

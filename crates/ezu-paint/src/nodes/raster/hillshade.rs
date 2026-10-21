@@ -30,7 +30,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use super::terrain_common::horn_gradient;
+use super::terrain_common::{horn_gradient, pixel_pitch};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OutputMode {
@@ -100,18 +100,12 @@ impl Node for HillshadeNode {
             },
         };
         let mode = self.mode.get(ctx)?;
+        let pitch = pixel_pitch(field, ctx);
+        let scale = z_factor * exaggeration;
         let out = if self.multidirectional.get(ctx, inputs)? {
-            render_multidirectional(field, altitude_deg, z_factor, exaggeration, mode, relief)
+            render_multidirectional(field, pitch, altitude_deg, scale, mode, relief)
         } else {
-            render_single(
-                field,
-                azimuth_deg,
-                altitude_deg,
-                z_factor,
-                exaggeration,
-                mode,
-                relief,
-            )
+            render_single(field, pitch, azimuth_deg, altitude_deg, scale, mode, relief)
         };
         Ok(PortValue::Raster(Arc::new(out)))
     }
@@ -141,33 +135,33 @@ impl Node for HillshadeNode {
     }
 }
 
+/// `scale` is `z-factor × exaggeration`, and `pitch` the ground a pixel
+/// spans per axis, from [`pixel_pitch`].
 fn render_single(
     field: &ScalarField,
+    pitch: (f32, f32),
     azimuth_deg: f32,
     altitude_deg: f32,
-    z_factor: f32,
-    exaggeration: f32,
+    scale: f32,
     mode: OutputMode,
     relief: ReliefStyle,
 ) -> RasterBuf {
     let light = Light::new(altitude_deg, (450.0 - azimuth_deg).to_radians());
-    let scale = z_factor * exaggeration;
-    render_with(field, mode, relief, |dx, dy| {
+    render_with(field, pitch, mode, relief, |dx, dy| {
         shade_sample(dx, dy, scale, &light)
     })
 }
 
 fn render_multidirectional(
     field: &ScalarField,
+    pitch: (f32, f32),
     altitude_deg: f32,
-    z_factor: f32,
-    exaggeration: f32,
+    scale: f32,
     mode: OutputMode,
     relief: ReliefStyle,
 ) -> RasterBuf {
     // ESRI-style weighted sum over four light directions
     // (225°, 270°, 315°, 360°). Weights from the published recipe.
-    let scale = z_factor * exaggeration;
     let dirs = [(225.0f32, 1.0), (270.0, 2.0), (315.0, 2.0), (360.0, 1.0)];
     let weight_sum: f32 = dirs.iter().map(|(_, w)| *w).sum();
     let lights: Vec<(Light, f32)> = dirs
@@ -177,7 +171,7 @@ fn render_multidirectional(
             (light, w / weight_sum)
         })
         .collect();
-    render_with(field, mode, relief, |dx, dy| {
+    render_with(field, pitch, mode, relief, |dx, dy| {
         lights
             .iter()
             .map(|(light, w)| w * shade_sample(dx, dy, scale, light))
@@ -187,6 +181,7 @@ fn render_multidirectional(
 
 fn render_with(
     field: &ScalarField,
+    (pitch_x, pitch_y): (f32, f32),
     mode: OutputMode,
     relief: ReliefStyle,
     sample: impl Fn(f32, f32) -> f32,
@@ -196,8 +191,8 @@ fn render_with(
     let mut out = RasterBuf::new(w, h);
     // 8 * pitch is the Horn-method divisor for the central
     // differences below; bake it in once.
-    let inv_x = 1.0 / (8.0 * field.metres_per_pixel_x().max(1e-6));
-    let inv_y = 1.0 / (8.0 * field.metres_per_pixel_y().max(1e-6));
+    let inv_x = 1.0 / (8.0 * pitch_x.max(1e-6));
+    let inv_y = 1.0 / (8.0 * pitch_y.max(1e-6));
     // Shade of flat ground (zero gradient) — the illumination baseline.
     // `relief` normalises against it so flat terrain is fully transparent.
     let flat = sample(0.0, 0.0).clamp(0.0, 1.0);

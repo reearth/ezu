@@ -1,6 +1,24 @@
 //! Shared helpers for the gradient nodes (hillshade, slope, flow-field).
 
-use ezu_graph::ScalarField;
+use ezu_graph::{EvalCtx, ScalarField};
+
+/// The ground one pixel of `field` spans, per axis: its metres per pixel
+/// when it has a geographic scale, else one style pixel.
+///
+/// A field from a DEM carries metres per pixel worked out from the
+/// canvas it was stitched onto, so a denser canvas already measures the
+/// same slope. A field without one (`noise`, a gradient, `density`) is
+/// laid out in style pixels stretched over the canvas, so its unit is
+/// one style pixel: `1 / pixel_ratio` canvas pixels. At a ratio of 1
+/// that is the `1.0` the field reports on its own.
+pub(super) fn pixel_pitch(field: &ScalarField, ctx: &EvalCtx<'_>) -> (f32, f32) {
+    let ratio = ctx.canvas.pixel_ratio;
+    if field.geo_scale.is_none() && ratio != 1.0 {
+        let p = 1.0 / ratio;
+        return (p, p);
+    }
+    (field.metres_per_pixel_x(), field.metres_per_pixel_y())
+}
 
 /// Horn (1981) 3×3 weighted central differences. Returns
 /// `(dz/dx, dz/dy)` in metres-per-metre once `inv_x` / `inv_y` carry

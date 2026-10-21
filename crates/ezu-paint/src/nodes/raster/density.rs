@@ -155,6 +155,10 @@ impl Node for DensityNode {
             if radius <= 0.0 || amplitude <= 0.0 {
                 continue;
             }
+            // Clamped in style pixels above, then spread over canvas
+            // pixels: a denser canvas splats the same kernel over the same
+            // ground, and a point's peak stays the same.
+            let radius = ctx.px32(radius);
             for &(x, y) in &group.points {
                 // Tile-local extent units → canvas px, exactly like `stamp`.
                 // No culling: points in the MVT buffer splat their in-canvas
