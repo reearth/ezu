@@ -999,16 +999,19 @@ fn plain_icon(
         (0.5 - fx) * w + cfg.offset[0] * gi.size,
         (0.5 - fy) * h + cfg.offset[1] * gi.size,
     );
-    // The collision box is the unrotated rect, as MapLibre's point-placed
-    // icon box is; a rotated icon only reaches further on the canvas, which
-    // `half` covers for the off-canvas reject.
-    let rel = Aabb {
-        min_x: offset.0 - 0.5 * w,
-        min_y: offset.1 - 0.5 * h,
-        max_x: offset.0 + 0.5 * w,
-        max_y: offset.1 + 0.5 * h,
-    }
-    .inflate(gi.padding);
+    // A turned icon collides by the axis-aligned bounds of its padded box
+    // turned about the anchor, the envelope MapLibre takes for a rotated
+    // point icon, just as a turned label does.
+    let rel = rotated_bounds(
+        Aabb {
+            min_x: offset.0 - 0.5 * w,
+            min_y: offset.1 - 0.5 * h,
+            max_x: offset.0 + 0.5 * w,
+            max_y: offset.1 + 0.5 * h,
+        }
+        .inflate(gi.padding),
+        gi.rotate_deg,
+    );
     let half = if gi.rotate_deg == 0.0 {
         (0.5 * w, 0.5 * h)
     } else {
@@ -1031,7 +1034,8 @@ fn plain_icon(
 /// A symbol's icon stretched to the box `block` occupies (MapLibre
 /// `icon-text-fit`). The sprite's nine-slice bands absorb the growth, so the
 /// stretched image is pre-composed here and drawn at 1:1; the collision box is
-/// the fitted content box, which is what the label actually reserves.
+/// the fitted content box, which is what the label actually reserves (its
+/// envelope once `icon-rotate-deg` turns it).
 #[allow(clippy::too_many_arguments)]
 fn fitted_icon(
     cfg: &IconConfig,
@@ -1089,7 +1093,7 @@ fn fitted_icon(
             opacity: gi.opacity,
             half,
         }),
-        fitted.inflate(gi.padding),
+        rotated_bounds(fitted.inflate(gi.padding), gi.rotate_deg),
     )
 }
 
@@ -4101,7 +4105,7 @@ fn text_schema(stage: Stage) -> Value {
                 "icon-offset": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2,
                                  "description": "MapLibre `icon-offset`: shift [x, y] in px, itself scaled by `icon-size`. Default [0, 0]." },
                 "icon-rotate-deg": { "type": "number",
-                                     "description": "MapLibre `icon-rotate`: rotation in degrees clockwise about the anchor point, as MapLibre turns an icon: an icon whose `icon-anchor` is off its centre, or that has an `icon-offset`, swings round the point with the offset turning with it, as `stamp` turns its image. The collision box stays the unturned rect. Default 0." },
+                                     "description": "MapLibre `icon-rotate`: rotation in degrees clockwise about the anchor point, as MapLibre turns an icon: an icon whose `icon-anchor` is off its centre, or that has an `icon-offset`, swings round the point with the offset turning with it, as `stamp` turns its image. The icon collides by the axis-aligned bounds of its turned, padded box, the envelope MapLibre takes, as a turned label does. Default 0." },
                 "icon-rotate-deg-expr": { "description": "A MapLibre number expression (degrees clockwise); overrides `icon-rotate-deg`." },
                 "icon-opacity": schema_frag::unit_number(),
                 "icon-opacity-expr": { "description": "A MapLibre number expression giving the icon's opacity; overrides `icon-opacity`." },

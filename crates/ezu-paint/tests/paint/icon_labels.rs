@@ -501,3 +501,76 @@ fn a_turned_icon_swings_round_its_anchor_point() {
         "text's icon and stamp turn about the same point"
     );
 }
+
+/// Pixel bounds of the opaque red the collision boxes are filled with.
+fn red_bounds(r: &RasterBuf) -> (u32, u32, u32, u32) {
+    let mut b = (u32::MAX, u32::MAX, 0, 0);
+    for y in 0..r.height {
+        for x in 0..r.width {
+            let p = r.pixel(x, y);
+            if p[3] >= 200 && p[0] > p[1] && p[0] > p[2] {
+                b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
+            }
+        }
+    }
+    assert!(b.0 <= b.2, "the collision box must draw");
+    b
+}
+
+#[test]
+fn a_turned_icon_collides_by_the_envelope_of_its_turned_box() {
+    // MapLibre turns an icon's padded collision box about the anchor and
+    // takes its axis-aligned bounds. Without padding, so the box is the
+    // icon's own rect: with `icon-anchor: left` the 16 px icon
+    // spans x 64..80 beside the point; a quarter turn carries the box below
+    // the point to x 56..72, y 64..80, and a 45° turn widens it to the
+    // diagonal's reach.
+    let boxes = |rotate: f32| {
+        let recipe = format!(
+            r##"{{
+      "name": "icon-turned-box",
+      "tile-size": {TILE},
+      "sources": {{
+        "src":   {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
+        "sheet": {{ "type": "sprite", "image": "builtin:atlas",
+                    "index": {{ "dot": {{ "x": 0, "y": 0, "width": 16, "height": 16 }} }} }}
+      }},
+      "nodes": {{
+        "feats":  {{ "op": "features", "source": "src", "layer": "pois" }},
+        "labels": {{ "op": "text-labels", "features": "@feats", "source": "src", "layer": "pois",
+                     {ICON}, "icon-anchor": "left", "icon-rotate-deg": {rotate},
+                     "icon-padding-px": 0 }},
+        "placed": {{ "op": "label-placement", "labels": ["@labels"] }},
+        "boxes":  {{ "op": "label-boxes", "placement": "@placed", "parts": ["collision"] }},
+        "out":    {{ "op": "fill-solid", "features": "@boxes", "fill": "#ff0000" }}
+      }},
+      "output": "@out"
+    }}"##
+        );
+        let r = render_with_features_and_sprite(
+            &recipe,
+            TILE,
+            PAD,
+            T0,
+            &[("src.pois", layer("pois", poi()))],
+            "atlas",
+            dot_sheet(),
+        );
+        let (x0, y0, x1, y1) = red_bounds(&r);
+        // Back to tile px, the far edge exclusive.
+        (x0 - PAD, y0 - PAD, x1 + 1 - PAD, y1 + 1 - PAD)
+    };
+    assert_eq!(boxes(0.0), (64, 56, 80, 72), "the unturned box");
+    assert_eq!(boxes(90.0), (56, 64, 72, 80), "a quarter turn");
+    // At 45° the box's corners reach 16·cos 45° ≈ 11.3 px either side of
+    // its turned centre (64 + 5.66, 64 + 5.66).
+    let (x0, y0, x1, y1) = boxes(45.0);
+    assert!(
+        (58..=59).contains(&x0) && (80..=81).contains(&x1),
+        "x {x0}..{x1}"
+    );
+    assert!(
+        (58..=59).contains(&y0) && (80..=81).contains(&y1),
+        "y {y0}..{y1}"
+    );
+}

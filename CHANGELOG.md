@@ -607,6 +607,13 @@ mean is spelled out in
   already turned its image, and `label-boxes` reports the icon's quad
   there. Icons without rotation, and centred icons without an offset, draw
   as before.
+- A turned icon on `text` and `text-labels` collided by its unturned box,
+  so an icon turned by `icon-rotate-deg` could overlap a neighbour where it
+  reached past that box, or be blocked by one it no longer covered. It now
+  collides by the axis-aligned bounds of its padded box turned about the
+  anchor point, the envelope MapLibre takes and the one a turned label
+  already used, and `label-boxes` reports that box as its `collision` part.
+  Placement changes only for symbols whose icon is turned.
 
 ## 0.12.0 — 2026-10-12
 
