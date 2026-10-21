@@ -107,6 +107,10 @@ const STROKE_ALIGNS: EnumTable<StrokeAlign> = &[
     ("inside", StrokeAlign::Inside),
 ];
 
+/// How far, in device px, the fill runs on under an opaque `outside` ring:
+/// the width of an anti-aliased edge.
+const UNDER_RING_PX: f32 = 1.0;
+
 impl StrokeAlign {
     /// The radius the ring's centreline runs along, the width it is
     /// stroked at, and how far out the circle as a whole reaches, for a
@@ -299,18 +303,35 @@ impl Node for CirclesNode {
                 (radius, 0.0, radius)
             };
 
+            // An `outside` ring and the fill meet at the radius, each with
+            // a soft anti-aliased edge there, and a pixel the boundary
+            // crosses is only partly covered by both together: a faint
+            // seam. Under an opaque ring the fill runs on by the width of
+            // that edge, so the ring's soft inner edge blends into fill
+            // rather than into the background, as MapLibre mixes the two
+            // colours across the boundary. Under a ring that is translucent,
+            // or that `blur` fades, that extra fill would show through, so
+            // it stops at the radius.
+            let fill_radius = match stroke_align {
+                StrokeAlign::Outside
+                    if ring_width > 0.0 && stroke_color.is_opaque() && blur <= 0.0 =>
+                {
+                    radius + UNDER_RING_PX
+                }
+                _ => radius,
+            };
             let pm = canvas.pixmap_mut();
             for &(x, y) in &group.points {
                 let px = x as f32 * sx + pad;
                 let py = y as f32 * sy + pad;
                 let mut pb = PathBuilder::new();
-                pb.push_circle(px, py, radius);
+                pb.push_circle(px, py, fill_radius);
                 let Some(path) = pb.finish() else {
                     continue;
                 };
                 // A centred ring runs along the fill's own outline.
                 let ring_path;
-                let ring = if ring_radius == radius {
+                let ring = if ring_radius == fill_radius {
                     Some(&path)
                 } else {
                     let mut pb = PathBuilder::new();
@@ -500,7 +521,7 @@ impl NodeFactory for CirclesFactory {
                     "description": "A MapLibre number expression (px) for the stroke ring, evaluated per feature group; overrides the constant `stroke-width`. A ring is drawn only when width > 0.",
                 },
                 "stroke-align": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": enum_names(STROKE_ALIGNS), "default": "center",
-                                  "description": "Where the stroke ring sits against `radius`. `center` straddles it, half inside and half outside; `outside` lies wholly outside it, from `radius` to `radius + stroke-width`, as MapLibre draws `circle-stroke-width`; `inside` lies wholly within it, so the circle never grows past `radius`. The fill always reaches `radius`." })),
+                                  "description": "Where the stroke ring sits against `radius`. `center` straddles it, half inside and half outside; `outside` lies wholly outside it, from `radius` to `radius + stroke-width`, as MapLibre draws `circle-stroke-width`; `inside` lies wholly within it, so the circle never grows past `radius`. The fill always reaches `radius`; under an opaque, unblurred `outside` ring it runs a pixel further, so fill and ring meet without a seam." })),
                 "stroke-color": schema_frag::color(),
                 "stroke-color-expr": {
                     "description": "A MapLibre color expression for the stroke ring, evaluated per feature group; overrides the constant `stroke-color`.",

@@ -314,3 +314,35 @@ fn stroke_align_places_the_ring_against_the_radius() {
     let (inside, _) = ring_at(r#", "stroke-align": "inside""#);
     assert_eq!((inside[0], inside[inside.len() - 1]), (6, 9));
 }
+
+#[test]
+fn an_outside_ring_meets_its_fill_without_a_seam() {
+    // Fill and ring in the same opaque colour: drawn as one disk out to the
+    // ring's outer edge, every pixel well inside that edge is solid, the
+    // ones the radius crosses included.
+    let r = render_one(
+        "x",
+        r##""radius": 9.6, "color": "#ffffff", "stroke-width": 3,
+            "stroke-color": "#ffffff", "stroke-align": "outside""##,
+    );
+    let mut thinnest = 255;
+    for y in 0..64u32 {
+        for x in 0..64u32 {
+            let (dx, dy) = (x as f32 + 0.5 - 32.0, y as f32 + 0.5 - 32.0);
+            if (dx * dx + dy * dy).sqrt() <= 9.6 + 3.0 - 1.0 {
+                thinnest = thinnest.min(r.pixel(x, y)[3]);
+            }
+        }
+    }
+    assert_eq!(thinnest, 255, "a pixel on the radius shows the ground");
+
+    // A translucent ring keeps the fill at its radius, so none of the fill
+    // shows through the ring.
+    let r = render_one(
+        "x",
+        r##""radius": 10, "color": "#ff0000", "stroke-width": 4,
+            "stroke-color": "#0000ff80", "stroke-align": "outside""##,
+    );
+    let p = r.pixel(32 + 10, 32);
+    assert_eq!(p[0], 0, "no fill under the ring: {p:?}");
+}

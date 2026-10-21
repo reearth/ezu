@@ -646,6 +646,14 @@ mean is spelled out in
   away, read between pixels at a fractional ratio, and a ratio-2 render
   matches the ratio-1 one. A sprite's pixels stay style pixels, and
   renders at ratio 1 are unchanged.
+- A `circles` ring with `stroke-align: outside`, as `ezu translate` draws
+  `circle-stroke-width`, met its fill at the radius with two soft edges,
+  and a pixel the radius crossed was only partly covered by both: a faint
+  ring of the ground showed through between them. Under an opaque,
+  unblurred ring the fill now runs a pixel further, so the ring's inner
+  edge blends into the fill, as MapLibre mixes the two. A translucent or
+  blurred ring keeps the fill at the radius, so no extra fill shows
+  through it, and `center` and `inside` rings draw as before.
 
 ## 0.12.0 — 2026-10-12
 

@@ -1064,7 +1064,7 @@
                 "oneOf": [
                   {
                     "default": "center",
-                    "description": "Where the stroke ring sits against `radius`. `center` straddles it, half inside and half outside; `outside` lies wholly outside it, from `radius` to `radius + stroke-width`, as MapLibre draws `circle-stroke-width`; `inside` lies wholly within it, so the circle never grows past `radius`. The fill always reaches `radius`.",
+                    "description": "Where the stroke ring sits against `radius`. `center` straddles it, half inside and half outside; `outside` lies wholly outside it, from `radius` to `radius + stroke-width`, as MapLibre draws `circle-stroke-width`; `inside` lies wholly within it, so the circle never grows past `radius`. The fill always reaches `radius`; under an opaque, unblurred `outside` ring it runs a pixel further, so fill and ring meet without a seam.",
                     "enum": [
                       "center",
                       "outside",
