@@ -52,8 +52,8 @@ Any other paint or layout property that translate does not convert is named in
 a warning, `` `name` is not supported — ignored ``. Among those a style is
 likely to carry: `line-blur`, `line-gradient`, `line-round-limit` (a round
 join is always drawn round, where MapLibre mitres one that barely bends, a
-difference of a few hundredths of the half-width), `fill-sort-key` / `line-sort-key` / `circle-sort-key`,
-`fill-extrusion-height` / `-base` / `-pattern` / `-vertical-gradient`,
+difference of a few hundredths of the half-width),
+`fill-sort-key` / `line-sort-key` / `circle-sort-key`, `fill-extrusion-height` / `-base` / `-pattern` / `-vertical-gradient`,
 `hillshade-accent-color`, `text-halo-blur`, `icon-color` / `icon-halo-*`,
 `text-translate` / `icon-translate`, `text-writing-mode` and
 `symbol-z-order`. `fill-antialias: false` warns too, since ezu always
@@ -81,8 +81,8 @@ anti-aliases.
 
 **Lines and fills**
 
-- Data-driven `fill-pattern` / `line-pattern` — only a constant pattern name
-  converts. (Data-driven `icon-image` *is* supported, as are data-driven
+- Data-driven `fill-pattern` — only a constant pattern name converts.
+  (Data-driven `line-pattern` and `icon-image` *are* supported, as are data-driven
   *values*: fill/line/circle colour, opacity, width, radius, and the `icon-*` and
   text paint properties, all emitted as `*-expr`.)
 - `line-gap-width` on `line-pattern` layers — the gap applies to plain `line`

@@ -204,8 +204,8 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 | `fill-solid` | `Features → Raster` | wraps `paint_polygons` |
 | `fill-dabs` | `Features → Raster` | wraps `paint_polygons_dabs` |
 | `line` | `Features + Brush → Raster` | wraps `paint_lines` |
-| `stroke` | `Features → Raster` | Crisp constant-width `tiny-skia` vector stroke with cap / join, optional `dasharray`, and a `gap-width` that renders MapLibre's `line-gap-width` casing annulus — clean cartographic lines rather than brushwork |
-| `line-stamp` | `Features + Raster\|Sprite → Raster` | Repeat a sprite along each polyline, tangent-rotated and fit to the line width — MapLibre `line-pattern` |
+| `stroke` | `Features → Raster` | Crisp constant-width `tiny-skia` vector stroke with cap / join and a `miter-limit`, optional `dasharray`, an `offset-px` beside the line (MapLibre `line-offset`), and a `gap-width` that renders MapLibre's `line-gap-width` casing annulus — clean cartographic lines rather than brushwork |
+| `line-stamp` | `Features + Raster\|Sprite → Raster` | Repeat a sprite along each polyline, tangent-rotated and fit to the line width, optionally `offset-px` beside it — MapLibre `line-pattern` |
 | `circles` | `Features → Raster` | Crisp filled disks at feature points with per-feature radius / colour / stroke — the vector counterpart to MapLibre's `circle` |
 | `stamp` | `Features + Raster\|Sprite → Raster` | Paint a sprite at every feature point, with world-deterministic jitter |
 | `text` | `Features → Raster` | SDF glyph labels with self-contained collision — see [Text labels](#text-labels) |
@@ -449,7 +449,8 @@ tiles. `build_dem_sources(doc)` walks the style's `sources` block,
 building one fetcher (terrarium, mapbox-rgb or custom, PNG or WebP) per
 declared source; `bind_dem_sources(&mut tile_loader, &registry, tile,
 canvas)` fetches the 3×3 neighbourhood (date-line-wrapping in X,
-edge-clamping in Y), bilinear-resamples it onto the padded canvas,
+edge-clamping in Y), resamples it bilinearly onto the padded canvas,
+reading the DEM between its sample centres as MapLibre's hillshade does,
 and binds the resulting `ScalarField` under the bare source name so
 the style's `dem` node (`source: "<name>"`) picks it up. Requests beyond the source's
 `max-zoom` upsample from the appropriate ancestor tile. Decoded tiles

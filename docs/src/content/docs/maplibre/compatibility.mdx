@@ -18,8 +18,9 @@ skipped, [gaps and differences](/ezu/maplibre/gaps-and-differences/).
 
 Two structural facts first:
 
-- The **ordered layer list becomes a `blend` chain** — painter's algorithm written
-  as a graph.
+- The **ordered layer list becomes a `stack`** — painter's algorithm written
+  as a graph, each layer composited over the ones below (a long list is split
+  into a chain of narrower stacks, to the same pixels).
 - The recipe is **zoom-independent**. Zoom and data functions are emitted as raw
   expressions on `*-expr` fields and evaluated per tile, so one recipe renders
   correctly at every zoom.
