@@ -18,18 +18,39 @@ pub enum OutputFormat {
     Rgba,
 }
 
+/// The densest [`RenderOptions::pixel_ratio`] a render accepts. Memory
+/// grows with its square, and no display needs more.
+pub const MAX_PIXEL_RATIO: f32 = 4.0;
+
 /// Per-render options: output encoding, canvas overrides, parameters.
 #[derive(Clone, Debug)]
 pub struct RenderOptions {
     /// Encoding of the returned bytes.
     pub format: OutputFormat,
-    /// Override the style's canvas size for this render (hi-DPI,
-    /// previews). `None` keeps the renderer's: the style's `tile-size`, or
+    /// Override the style's canvas size for this render (previews, finer
+    /// detail). `None` keeps the renderer's: the style's `tile-size`, or
     /// what `Renderer::set_tile_size` set in its place.
+    ///
+    /// This is a size in style pixels: a larger tile shows the same area
+    /// with more of them, so lines, text and blurs keep their pixel sizes
+    /// and come out finer against the map. For a retina tile — the same
+    /// map at a higher density — set [`pixel_ratio`](Self::pixel_ratio).
     pub tile_size: Option<u32>,
-    /// Override the margin rendered outside the tile. `None` takes the
-    /// style's `pad`, floored by what the graph's filters reach for.
+    /// Override the margin rendered outside the tile, in style pixels.
+    /// `None` takes the style's `pad`, floored by what the graph's filters
+    /// reach for.
     pub pad: Option<u32>,
+    /// Device pixels per style pixel, from `1` to
+    /// [`MAX_PIXEL_RATIO`]; fractions are allowed. `2` renders a retina
+    /// tile: twice the tile size and margin, with every width, text size,
+    /// blur, spacing and offset the style gives in pixels doubled, so the
+    /// tile is the `1` tile at twice the density, as MapLibre's `@2x`
+    /// tiles are. Placement decisions (which labels show) do not change
+    /// with it.
+    ///
+    /// The canvas is `tile_size × pixel_ratio` rounded to a whole pixel,
+    /// and the ratio the render uses is the one that rounding lands on.
+    pub pixel_ratio: f32,
     /// Effort the PNG encoder spends. Ignored by the other formats.
     pub png_compression: PngCompression,
     /// Opt into the parallel evaluator. Only meaningful when the crate
@@ -50,6 +71,7 @@ impl Default for RenderOptions {
             format: OutputFormat::Png,
             tile_size: None,
             pad: None,
+            pixel_ratio: 1.0,
             png_compression: PngCompression::Default,
             parallel: false,
             params: Vec::new(),

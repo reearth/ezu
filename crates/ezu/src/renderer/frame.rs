@@ -160,7 +160,8 @@ impl Renderer {
     /// own tile size is left as it was. `opts` carries the rest of a render
     /// — `pad`, `params`; its `format` is replaced by raw pixels, and a
     /// `tile_size` other than the frame's is refused with
-    /// [`ErrorKind::InvalidStyle`], as is a frame with no size.
+    /// [`ErrorKind::InvalidStyle`], as are a `pixel_ratio` other than `1`
+    /// (the dpi sets a frame's density) and a frame with no size.
     ///
     /// Tiles render one after another, row by row from the top.
     pub fn render_frame<E>(
@@ -216,6 +217,16 @@ impl Renderer {
             return Err(invalid(format!(
                 "the frame renders at tile size {}; leave tile_size unset, not {t}",
                 frame.tile_size
+            ))
+            .into());
+        }
+        // A frame's density is its dpi: the scale and dpi already fix how
+        // many output pixels the tiles take, so a ratio has nothing left
+        // to set.
+        if opts.pixel_ratio != 1.0 {
+            return Err(invalid(format!(
+                "a frame's density comes from its dpi; leave pixel_ratio at 1, not {}",
+                opts.pixel_ratio
             ))
             .into());
         }
@@ -490,6 +501,11 @@ mod tests {
         assert!(refused(
             r.render_frame(&f, other_size, no_bind).unwrap_err()
         ));
+        let denser = RenderOptions {
+            pixel_ratio: 2.0,
+            ..RenderOptions::default()
+        };
+        assert!(refused(r.render_frame(&f, denser, no_bind).unwrap_err()));
         let sizeless = Frame {
             tile_size: 0,
             ..f.clone()

@@ -98,7 +98,7 @@ pub use frame::{FrameBinder, RenderFrameError};
 pub use frame_features::{
     FeatureCoords, FrameFeatureCollector, FrameFeatureNode, FrameFeatures, PageFeatures,
 };
-pub use options::{BindOptions, OutputFormat, RenderOptions};
+pub use options::{BindOptions, OutputFormat, RenderOptions, MAX_PIXEL_RATIO};
 pub use source_set::{SourceData, SourceSet};
 pub use sources::{SourceInfo, SourceKind};
 
@@ -866,7 +866,13 @@ impl Renderer {
             .map(|node| self.features_node(node))
             .collect::<Result<Vec<_>, _>>()?;
         let capture = features::Capture::new(ixs);
-        let tile_size = opts.tile_size.unwrap_or(self.render_tile_size());
+        // Pixel coordinates are the image's, so a denser render's are too.
+        let tile_size = device_canvas(
+            opts.tile_size.unwrap_or(self.render_tile_size()),
+            0,
+            opts.pixel_ratio,
+        )?
+        .tile_w;
         let image = self.render_from(z, x, y, set, opts, Some(&capture))?;
         let features = nodes
             .iter()
@@ -1112,7 +1118,7 @@ impl Renderer {
             ),
         };
         let tile_id = GraphTileId { z, x, y };
-        let canvas = CanvasInfo::square(tile_size, pad);
+        let canvas = device_canvas(tile_size, pad, opts.pixel_ratio)?;
         let mut tile_loader = TileLoader::new(&self.assets, tile_id);
         let requested = self.graph.asset_inputs();
 
@@ -1451,6 +1457,32 @@ fn already_bound_otherwise(name: &str) -> Error {
         UnknownSource,
         format!("source `{name}` already bound as a different kind"),
     )
+}
+
+/// The canvas a render of `tile_size` style pixels with a `pad` style
+/// pixel margin draws on at `pixel_ratio`.
+///
+/// The tile rounds to a whole number of device pixels, and the ratio the
+/// nodes scale their px fields by is the one that rounding lands on, so
+/// a width and the geometry it is drawn along always agree. The margin
+/// rounds up: one narrower than asked would clip what the filters reach.
+fn device_canvas(tile_size: u32, pad: u32, pixel_ratio: f32) -> Result<CanvasInfo, Error> {
+    if !(1.0..=MAX_PIXEL_RATIO).contains(&pixel_ratio) {
+        return Err(err(
+            InvalidStyle,
+            format!("pixel ratio must be between 1 and {MAX_PIXEL_RATIO}, not {pixel_ratio}"),
+        ));
+    }
+    if pixel_ratio == 1.0 {
+        return Ok(CanvasInfo::square(tile_size, pad));
+    }
+    let device = (tile_size as f64 * pixel_ratio as f64).round().max(1.0) as u32;
+    let ratio = device as f32 / tile_size as f32;
+    let canvas = CanvasInfo::square(device, 0).with_pixel_ratio(ratio);
+    Ok(CanvasInfo {
+        pad: canvas.px_ceil(pad),
+        ..canvas
+    })
 }
 
 /// Shared finish step: evaluate the graph and encode the result.
@@ -2221,5 +2253,59 @@ mod tests {
         let e = Error::new(MvtDecode, "invalid tag value: 0");
         assert_eq!(e.name(), "MvtDecode");
         assert_eq!(e.to_string(), "invalid tag value: 0");
+    }
+
+    #[test]
+    fn a_pixel_ratio_scales_the_tile_and_its_margin() {
+        let c = device_canvas(256, 10, 1.0).expect("plain");
+        assert_eq!((c.tile_w, c.pad, c.pixel_ratio), (256, 10, 1.0));
+        let c = device_canvas(256, 10, 2.0).expect("retina");
+        assert_eq!(
+            (c.tile_w, c.tile_h, c.pad, c.pixel_ratio),
+            (512, 512, 20, 2.0)
+        );
+        // A fraction rounds the tile, and the ratio follows the rounding so
+        // widths and geometry agree; the margin rounds up.
+        let c = device_canvas(100, 3, 1.333).expect("fractional");
+        assert_eq!((c.tile_w, c.pad), (133, 4));
+        assert_eq!(c.pixel_ratio, 1.33);
+        for bad in [0.5, 0.0, 4.5, f32::NAN, f32::INFINITY] {
+            let e = device_canvas(256, 0, bad).expect_err("refused");
+            assert_eq!(e.kind(), InvalidStyle, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_retina_render_is_twice_the_size_and_draws_widths_twice_as_wide() {
+        let r = Renderer::new(
+            r##"{ "name": "line", "tile-size": 32,
+                  "nodes": {
+                    "l": { "op": "literal-geometry", "lines": [[[0, 2048], [4096, 2048]]] },
+                    "s": { "op": "stroke", "features": "@l", "width-px": 4, "color": "#000000" }
+                  },
+                  "output": "s" }"##,
+        )
+        .expect("builds");
+        let rows = |ratio: f32| {
+            let px = r
+                .render_tile(
+                    0,
+                    0,
+                    0,
+                    RenderOptions {
+                        format: OutputFormat::Rgba,
+                        pixel_ratio: ratio,
+                        ..RenderOptions::default()
+                    },
+                )
+                .expect("renders");
+            let side = ((px.len() / 4) as f64).sqrt() as usize;
+            let inked = (0..side)
+                .filter(|y| px[(y * side + side / 2) * 4 + 3] > 128)
+                .count();
+            (side, inked)
+        };
+        assert_eq!(rows(1.0), (32, 4));
+        assert_eq!(rows(2.0), (64, 8));
     }
 }
