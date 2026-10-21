@@ -13,6 +13,11 @@ mean is spelled out in
 
 ### Added
 
+- `label-boxes` boxes carry `label-layer`, the id of the `text-labels` node
+  the label came from, so one output can tell apart two layers labelling the
+  same features, such as a number and a name on the same points. Like `part`
+  and the other added properties, it overwrites a feature property of the
+  same name.
 - `label-boxes` with `include: "all"` reports the point labels a `text` or
   `text-labels` node culled because their box reaches past `max-extent-px`,
   with `placed: false` and `drop-reason: "culled"`, at their first position

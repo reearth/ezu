@@ -295,6 +295,7 @@ properties, plus:
 | `part` | `text`: the laid-out text block, no padding. `icon`: the icon, turned by `icon-rotate`. `background`: the label's background box, set by `background-padding` or `background-color`, painted or not. `glyph`: one glyph of a line label. `collision`: a box placement tested, `padding-px` included. |
 | `placed` | `true`, or `false` for a candidate that did not place (only with `include: "all"`); its `drop-reason` says why: `collision`, `dedupe`, or `culled` for a point label whose box reaches past `max-extent-px`. |
 | `label-id` | Shared by every box of one label, and the same on every tile. |
+| `label-layer` | The id of the `text-labels` node the label came from, which tells apart two layers labelling the same features, such as a number and a name on the same points. |
 
 `parts` picks which kinds to emit (default: all of them), `labels` limits the
 output to one of the placement's layers, and `filter-expr` keeps only the boxes

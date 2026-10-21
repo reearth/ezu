@@ -86,6 +86,9 @@ pub(super) struct LabelSet {
     /// they are kept only so `label-boxes` can report them, since a host
     /// listing every label's fate would otherwise lose them silently.
     pub culled: Vec<CulledLabel>,
+    /// The id of the `text` / `text-labels` node that produced the set,
+    /// which `label-boxes` stamps on every box as `label-layer`.
+    pub layer: Arc<str>,
 }
 
 /// A label culled for its size, measured as it would have been placed: a

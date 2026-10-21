@@ -1246,6 +1246,10 @@ struct TextNode {
     /// Whether this node draws its labels itself or hands its candidates to
     /// a shared `label-placement` node.
     stage: Stage,
+    /// This node's id in the recipe, handed on with its labels so
+    /// `label-boxes` can say which layer a label came from: two label
+    /// layers over the same features are otherwise indistinguishable.
+    node_id: Arc<str>,
     /// Font asset keys in fallback order: a `font` source's `url`, or a
     /// `glyphs` source's asset key (its `{range}` URL template).
     font_keys: Vec<String>,
@@ -2924,6 +2928,7 @@ impl TextNode {
             collide: self.collide,
             outline_sdf: self.outline_sdf,
             culled: Vec::new(),
+            layer: self.node_id.clone(),
         }
     }
 }
@@ -3011,6 +3016,13 @@ impl Node for TextNode {
         // otherwise a `text` and a `text-labels` node with identical fields
         // would share an entry and hand back the wrong value.
         h.update(&[self.stage as u8]);
+        // A label layer carries its node's id to `label-boxes`, so two
+        // otherwise identical `text-labels` nodes must not share an entry.
+        // A `text` node keeps its labels to itself, and its key without it.
+        if self.stage == Stage::Labels {
+            h.update(self.node_id.as_bytes());
+            h.update(&[0]);
+        }
         for key in &self.font_keys {
             h.update(key.as_bytes());
             h.update(&[0]);
@@ -3872,6 +3884,7 @@ fn build_text_node(
     Ok(BuiltNode {
         node: Box::new(TextNode {
             stage,
+            node_id: ctx.node.into(),
             font_keys,
             text,
             text_expr,

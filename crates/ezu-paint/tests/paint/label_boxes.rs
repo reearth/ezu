@@ -525,6 +525,57 @@ fn a_culled_label_takes_no_space() {
 }
 
 #[test]
+fn each_box_names_the_label_layer_it_came_from() {
+    // Two label layers over the same points, alike in every field: only
+    // `label-layer` tells their boxes apart, and a feature property of that
+    // name is overwritten.
+    let layer_node = |id: &str| {
+        format!(
+            r#""{id}": {{ "op": "text-labels", "features": "@feats", "source": "src", "layer": "pts",
+                         "font": ["body"], "text": ["get", "name"], "size": 16,
+                         "overlap": "always" }}"#
+        )
+    };
+    let rc = format!(
+        r##"{{
+      "name": "label-boxes-layers",
+      "tile-size": {TILE},
+      "sources": {{
+        "src":  {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
+        "body": {{ "type": "font", "url": "{font}" }}
+      }},
+      "nodes": {{
+        "feats":  {{ "op": "features", "source": "src", "layer": "pts" }},
+        {number},
+        {name},
+        "placed": {{ "op": "label-placement", "labels": ["@number", "@name"] }},
+        "boxes":  {{ "op": "label-boxes", "placement": "@placed", "parts": ["text"] }},
+        "fill":   {{ "op": "fill-solid", "features": "@boxes", "fill": "#0000ff" }}
+      }},
+      "output": "@fill"
+    }}"##,
+        font = font_url(),
+        number = layer_node("number"),
+        name = layer_node("name"),
+    );
+    let mut f = point("HH", 2048, 2048);
+    f.properties.insert(
+        "label-layer".to_string(),
+        Value::String("from-the-source".to_string()),
+    );
+    let all = boxes(&run_centre(&rc, vec![f]));
+    let mut layers: Vec<String> = all
+        .iter()
+        .map(|b| match b.props.get("label-layer") {
+            Some(maplibre_expr::Value::String(s)) => s.clone(),
+            other => panic!("label-layer: {other:?}"),
+        })
+        .collect();
+    layers.sort();
+    assert_eq!(layers, ["name", "number"]);
+}
+
+#[test]
 fn a_culled_label_copied_into_several_tiles_keeps_one_id() {
     // As for a placed label: each tile's window holds two copies, and each
     // tile reports the label once, under the same id.

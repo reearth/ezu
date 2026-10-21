@@ -153,6 +153,10 @@ impl Emitter<'_> {
             "label-id".into(),
             maplibre_expr::Value::Number(props.label_id),
         );
+        properties.insert(
+            "label-layer".into(),
+            maplibre_expr::Value::String(props.label_layer.into()),
+        );
         let group = FeatureGroup {
             properties: Arc::new(properties),
             polygons: vec![ezu_features::Polygon {
@@ -217,6 +221,18 @@ struct Props<'a> {
     /// the label did not place.
     variant_index: Option<usize>,
     label_id: f64,
+    /// The id of the `text-labels` node the label came from.
+    label_layer: &'a str,
+}
+
+/// One label to emit: its identity and the payload its boxes come from.
+struct Label<'a> {
+    /// See [`label_id`].
+    id: f64,
+    /// The id of the `text-labels` node it came from.
+    layer: &'a str,
+    candidate: &'a LabelCandidate,
+    draw: &'a LabelDraw,
 }
 
 /// What placement decided for one label.
@@ -271,22 +287,20 @@ impl LabelBoxesNode {
         variant: usize,
         outcome: Outcome,
     ) {
-        if let (Some(c), Some(draw)) = (set.candidates.get(cand), set.draws.get(cand)) {
-            self.emit_label(out, label_id(layer, c), c, draw, variant, outcome);
+        if let (Some(candidate), Some(draw)) = (set.candidates.get(cand), set.draws.get(cand)) {
+            let label = Label {
+                id: label_id(layer, candidate),
+                layer: &set.layer,
+                candidate,
+                draw,
+            };
+            self.emit_label(out, label, variant, outcome);
         }
     }
 
-    /// Emit the boxes of label `c` (drawn by `draw`) at collision variant
-    /// `variant`.
-    fn emit_label(
-        &self,
-        out: &mut Emitter,
-        label_id: f64,
-        c: &LabelCandidate,
-        draw: &LabelDraw,
-        variant: usize,
-        outcome: Outcome,
-    ) {
+    /// Emit the boxes of `label` at collision variant `variant`.
+    fn emit_label(&self, out: &mut Emitter, label: Label<'_>, variant: usize, outcome: Outcome) {
+        let (c, draw) = (label.candidate, label.draw);
         let source = match draw {
             LabelDraw::Point { properties, .. } | LabelDraw::Line { properties, .. } => properties,
         };
@@ -301,7 +315,8 @@ impl LabelBoxesNode {
             source,
             outcome,
             variant_index,
-            label_id,
+            label_id: label.id,
+            label_layer: label.layer,
         };
         match draw {
             LabelDraw::Point {
@@ -457,10 +472,14 @@ impl Node for LabelBoxesNode {
                 // source repeats across the tile window: the shared id does.
                 let mut seen = HashSet::new();
                 for culled in &set.culled {
-                    let id = label_id(layer, &culled.candidate);
-                    if seen.insert(id.to_bits()) {
-                        let (c, draw) = (&culled.candidate, &culled.draw);
-                        self.emit_label(&mut out, id, c, draw, 0, Outcome::Culled);
+                    let label = Label {
+                        id: label_id(layer, &culled.candidate),
+                        layer: &set.layer,
+                        candidate: &culled.candidate,
+                        draw: &culled.draw,
+                    };
+                    if seen.insert(label.id.to_bits()) {
+                        self.emit_label(&mut out, label, 0, Outcome::Culled);
                     }
                 }
             }
@@ -571,7 +590,7 @@ impl NodeFactory for LabelBoxesFactory {
                 .into(),
         );
         serde_json::json!({
-            "description": "The boxes a `label-placement` node measured its labels by, as polygons — one per box — so any geometry and paint op can draw them: a bordered or rounded badge (`buffer` → `stroke`), an offset shadow (`transform`), or a debug overlay of placement. Reads the decisions already made, so nothing is placed twice and the boxes match what `text-draw` draws; labels placed from a neighbour tile's candidates are included, so boxes continue across tile edges. Each polygon carries the labelled feature's properties plus `part` (`text`, `icon`, `background`, `glyph` or `collision`), `placed` (false for a candidate that did not place, with `include: all`) and `label-id` (shared by every box of one label, the same on every tile). A placed label also carries `overlapped` (true when it overlaps a label placed before it, which only `overlap: always` or `fallback` permits) and `variant-index`: where the position it took sits in the list it was tried from (`anchor-offsets`, or the anchors of the deprecated `anchor-variants`), 0 for the first position, for a lone one and for a line label, and absent when the variant shown draws no text. A label that did not place carries `drop-reason` instead: `collision` when it lost its collision test, `dedupe` when its layer's `dedupe-key-expr` dropped it because a label with the same key had already placed within `dedupe-distance-px`, `culled` when its box reaches past its layer's `max-extent-px`, so it never reached placement (it takes no space and is not drawn). A point label gives its `text` block (no padding), `icon` (rotated by `icon-rotate`), `background` box (with `background-padding` or `background-color`) and the `collision` box or boxes it was tested with, padding included. A label turned by `rotate-deg` gives its `text` and `background` as quads turned about its anchor, and its `collision` box as their axis-aligned bounds. A line label gives one `glyph` quad per glyph, rotated along the path, and the axis-aligned `collision` box placement tested for each glyph.",
+            "description": "The boxes a `label-placement` node measured its labels by, as polygons — one per box — so any geometry and paint op can draw them: a bordered or rounded badge (`buffer` → `stroke`), an offset shadow (`transform`), or a debug overlay of placement. Reads the decisions already made, so nothing is placed twice and the boxes match what `text-draw` draws; labels placed from a neighbour tile's candidates are included, so boxes continue across tile edges. Each polygon carries the labelled feature's properties plus `part` (`text`, `icon`, `background`, `glyph` or `collision`), `placed` (false for a candidate that did not place, with `include: all`), `label-id` (shared by every box of one label, the same on every tile) and `label-layer` (the id of the `text-labels` node the label came from, which tells apart two layers labelling the same features, such as a number and a name on the same points). These overwrite a feature property of the same name.A placed label also carries `overlapped` (true when it overlaps a label placed before it, which only `overlap: always` or `fallback` permits) and `variant-index`: where the position it took sits in the list it was tried from (`anchor-offsets`, or the anchors of the deprecated `anchor-variants`), 0 for the first position, for a lone one and for a line label, and absent when the variant shown draws no text. A label that did not place carries `drop-reason` instead: `collision` when it lost its collision test, `dedupe` when its layer's `dedupe-key-expr` dropped it because a label with the same key had already placed within `dedupe-distance-px`, `culled` when its box reaches past its layer's `max-extent-px`, so it never reached placement (it takes no space and is not drawn). A point label gives its `text` block (no padding), `icon` (rotated by `icon-rotate`), `background` box (with `background-padding` or `background-color`) and the `collision` box or boxes it was tested with, padding included. A label turned by `rotate-deg` gives its `text` and `background` as quads turned about its anchor, and its `collision` box as their axis-aligned bounds. A line label gives one `glyph` quad per glyph, rotated along the path, and the axis-aligned `collision` box placement tested for each glyph.",
             "properties": {
                 "placement": schema_frag::node_ref(),
                 "labels": labels,
