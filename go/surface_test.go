@@ -1,6 +1,7 @@
 package ezu
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -424,6 +425,52 @@ func TestRenderStringParam(t *testing.T) {
 	}
 	if _, err := render(map[string]any{"mode": "overlay"}); !IsKind(err, KindInvalidStyle) {
 		t.Errorf("a value outside the enum gave %v, want InvalidStyle", err)
+	}
+}
+
+// A label's fixed-name fields follow a string param per render as well: an
+// override of `transform` draws what the literal draws.
+func TestRenderStringParamOnALabel(t *testing.T) {
+	ctx, renderer := open(t, stainedGlassStyle)
+	style := func(transform string) []byte {
+		return []byte(`{"name":"label-case","tile-size":64,
+		"params":{"case":{"type":"string","enum":["none","uppercase"],"default":"none"}},
+		"sources":{
+			"pins":{"type":"geojson","data":{"type":"FeatureCollection","features":[
+				{"type":"Feature","properties":{"name":"Ab"},
+				 "geometry":{"type":"Point","coordinates":[0,0]}}]}},
+			"noto":{"type":"glyphs","url":"https://example.invalid/{fontstack}/{range}.pbf",
+				"fontstack":"Noto Sans Regular"}},
+		"nodes":{
+			"pins":{"op":"features","source":"pins","layer":"pins"},
+			"out":{"op":"text","features":"@pins","font":["noto"],"text":["get","name"],
+				"size":16,"color":"#000000","transform":` + transform + `}},
+		"output":"@out"}`)
+	}
+	render := func(styleJSON []byte, params map[string]any) []byte {
+		t.Helper()
+		if _, err := renderer.SetStyle(ctx, styleJSON); err != nil {
+			t.Fatal(err)
+		}
+		if err := renderer.BindSource(ctx, "noto", readFile(t, "../crates/ezu-core/tests/glyphs/0-255.pbf")); err != nil {
+			t.Fatal(err)
+		}
+		out, err := renderer.RenderTile(ctx, Tile{}, Render{Format: FormatRGBA, Params: params})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	none := render(style(`"none"`), nil)
+	upper := render(style(`"uppercase"`), nil)
+	if bytes.Equal(none, upper) {
+		t.Fatal("an uppercase label draws as the plain one does; the glyphs did not reach it")
+	}
+	if got := render(style(`"$case"`), nil); !bytes.Equal(got, none) {
+		t.Error("the param at its default draws other pixels than the literal default")
+	}
+	if got := render(style(`"$case"`), map[string]any{"case": "uppercase"}); !bytes.Equal(got, upper) {
+		t.Error("an uppercase override draws other pixels than the literal uppercase")
 	}
 }
 
