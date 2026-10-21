@@ -381,6 +381,13 @@ mean is spelled out in
   pixel stays a hard-edged block, as MapLibre's `raster-resampling` does.
   It applies to overzoomed tiles and to tiles whose size differs from the
   canvas's.
+- `ezu translate` carries a raster layer's `raster-opacity`,
+  `raster-hue-rotate`, `raster-saturation`, `raster-contrast`,
+  `raster-brightness-min` and `raster-brightness-max` over to the `raster`
+  node, a zoom curve through an `expr` node, and a constant
+  `raster-resampling` over to the source. They used to be dropped with a
+  warning. When layers over one source want different resampling, the
+  later one reads a copy of the source carrying its own.
 
 ### Changed
 

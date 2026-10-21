@@ -45,14 +45,6 @@ fn a_property_nothing_reads_warns() {
     }
 
     let w = warnings_for(json!({
-        "id": "r", "type": "raster", "source": "r",
-        "paint": { "raster-opacity": 0.5, "raster-saturation": -1, "raster-fade-duration": 0 }
-    }));
-    assert!(names_unsupported(&w, "raster-opacity"), "{w:?}");
-    assert!(names_unsupported(&w, "raster-saturation"), "{w:?}");
-    assert!(!names_unsupported(&w, "raster-fade-duration"), "{w:?}");
-
-    let w = warnings_for(json!({
         "id": "t", "type": "symbol", "source": "s", "source-layer": "x",
         "layout": { "text-field": "x" },
         "paint": { "text-halo-blur": 1 }
@@ -94,6 +86,19 @@ fn what_changes_nothing_on_a_tile_stays_quiet() {
     let w = warnings_for(json!({
         "id": "f", "type": "fill", "source": "s", "source-layer": "x",
         "paint": { "fill-color": "#888", "fill-antialias": true }
+    }));
+    assert!(w.is_empty(), "{w:?}");
+
+    // Every raster paint property is carried over, and a fade in time
+    // has nothing to fade on a static tile.
+    let w = warnings_for(json!({
+        "id": "r", "type": "raster", "source": "r",
+        "paint": {
+            "raster-opacity": 0.5, "raster-saturation": -1, "raster-contrast": 0.2,
+            "raster-hue-rotate": 30, "raster-brightness-min": 0.1,
+            "raster-brightness-max": 0.9, "raster-resampling": "nearest",
+            "raster-fade-duration": 0
+        }
     }));
     assert!(w.is_empty(), "{w:?}");
 }

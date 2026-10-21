@@ -19,7 +19,7 @@ pub(crate) use fill::{convert_fill, convert_fill_extrusion};
 pub(crate) use heatmap::convert_heatmap;
 pub(crate) use hillshade::convert_hillshade;
 pub(crate) use line::convert_line;
-pub(crate) use raster::convert_raster;
+pub(crate) use raster::{convert_raster, ResamplingClaims};
 pub(crate) use symbol::{convert_symbol, emit_label_placement};
 
 /// Put a layer's zoom band on a node that gates on `min-zoom`/`max-zoom`
@@ -91,6 +91,15 @@ fn read_properties(ty: &str) -> &'static [&'static str] {
             "hillshade-exaggeration",
             "hillshade-shadow-color",
             "hillshade-highlight-color",
+        ],
+        "raster" => &[
+            "raster-opacity",
+            "raster-hue-rotate",
+            "raster-saturation",
+            "raster-contrast",
+            "raster-brightness-min",
+            "raster-brightness-max",
+            "raster-resampling",
         ],
         "symbol" => &[
             "symbol-placement",

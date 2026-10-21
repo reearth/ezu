@@ -52,7 +52,6 @@ Any other paint or layout property that translate does not convert is named in
 a warning, `` `name` is not supported — ignored ``. Among those a style is
 likely to carry: `line-blur`, `line-gradient`, `line-miter-limit`,
 `line-round-limit`, `fill-sort-key` / `line-sort-key` / `circle-sort-key`,
-every `raster-*` paint property but `raster-fade-duration`,
 `fill-extrusion-height` / `-base` / `-pattern` / `-vertical-gradient`,
 `hillshade-accent-color`, `text-halo-blur`, `icon-color` / `icon-halo-*`,
 `text-translate` / `icon-translate`, `text-writing-mode` and
@@ -95,6 +94,15 @@ anti-aliases.
 - `line-blur`.
 - `background-pattern`, and a `background-opacity` that is an expression or
   sits beside an expression `background-color`.
+
+**Raster**
+
+- `raster-resampling` carries over only as a constant; a zoom expression
+  warns and samples linearly. ezu samples a raster where the host stitches
+  the source's tiles, so the setting lives on the source: when two layers
+  over one source want different sampling, the second reads a copy of the
+  source (`<source>__nearest` or `<source>__linear`), and its tiles are
+  fetched once for each.
 
 **3-D**
 

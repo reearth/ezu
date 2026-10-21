@@ -323,6 +323,9 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
     // document `pad` is lifted to cover this so kernels aren't clipped at
     // tile borders; today only `heatmap` → `density` reports a requirement.
     let mut required_pad: u32 = 0;
+    // The resampling each raster source took from the first layer that
+    // read it.
+    let mut resampling_claims = layers::ResamplingClaims::new();
 
     for layer in layers {
         let Some(layer) = layer.as_object() else {
@@ -383,9 +386,16 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
                 &sources,
                 &mut report,
             ),
-            "raster" => {
-                convert_raster(id, layer, &mut nodes, &mut outputs, zoom_range, &mut report)
-            }
+            "raster" => convert_raster(
+                id,
+                layer,
+                &mut nodes,
+                &mut outputs,
+                zoom_range,
+                &mut source_defs,
+                &mut resampling_claims,
+                &mut report,
+            ),
             "circle" => convert_circle(
                 id,
                 layer,
