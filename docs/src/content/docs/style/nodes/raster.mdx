@@ -217,7 +217,7 @@ Reduce to a fixed `palette` with dithering so gradients survive a small palette.
 
 ### `edge-detect`
 
-Sobel gradient magnitude per channel, scaled by `strength` and clamped to [0, 255]. Pass-through over Raster / Sprite. Use after a hillshade for stylised outlines, or on a flat fill to derive an outline mask.
+Sobel gradient magnitude per channel, scaled by `strength` and clamped to [0, 255]. Pass-through over Raster / Sprite. The kernel's neighbours sit one style pixel apart, so a canvas at a higher pixel ratio draws edges as wide on the map; a sprite's pixels are style pixels. Use after a hillshade for stylised outlines, or on a flat fill to derive an outline mask.
 
 <figure class="op-demo">
   <div class="op-demo__images">
@@ -598,7 +598,7 @@ Scale CIELAB chroma uniformly by `amount` (1 = identity, 0 = greyscale, &gt;1 = 
 
 ### `sharpen`
 
-4-neighbour Laplacian sharpen on a raster, sprite or scalar field; the output is the same kind as the input. Amplifies each pixel relative to its orthogonal neighbours by `amount`. Around 0.5–1.0 is a typical unsharp-mask look; negative values give a soft halo. Sharpening an elevation field (`dem`) before `hillshade` or `slope` steepens the flanks of ridges and valleys, so the shading draws crisper crests; a field is not clamped, so values can overshoot past the field's range next to a sharp step. A field keeps its nodata value and geographic scale; a nodata neighbour counts as the centre value, so a hole does not distort its rim, and a nodata sample stays nodata. Grows upstream pad by 1.
+4-neighbour Laplacian sharpen on a raster, sprite or scalar field; the output is the same kind as the input. Amplifies each pixel relative to its orthogonal neighbours by `amount`, the neighbours one style pixel away, so a canvas at a higher pixel ratio sharpens the same detail. Around 0.5–1.0 is a typical unsharp-mask look; negative values give a soft halo. Sharpening an elevation field (`dem`) before `hillshade` or `slope` steepens the flanks of ridges and valleys, so the shading draws crisper crests; a field is not clamped, so values can overshoot past the field's range next to a sharp step. A field keeps its nodata value and geographic scale; a nodata neighbour counts as the centre value, so a hole does not distort its rim, and a nodata sample stays nodata. Grows upstream pad by 1.
 
 <figure class="op-demo op-demo--pair">
   <div class="op-demo__images">

@@ -16,7 +16,8 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    raster_or_sprite_output, unwrap_raster_or_sprite, wrap_raster_like, ACCEPTS_RASTER_OR_SPRITE,
+    raster_or_sprite_output, unwrap_raster_or_sprite, wrap_raster_like, NeighbourTaps, RasterKind,
+    ACCEPTS_RASTER_OR_SPRITE,
 };
 
 struct EdgeDetectNode {
@@ -51,30 +52,31 @@ impl Node for EdgeDetectNode {
         let w = src.width;
         let h = src.height;
         let mut out = RasterBuf::new(w, h);
-        // Sample with clamp-to-edge so we don't need an explicit
-        // border. Edge pixels degenerate to a zero gradient on the
-        // missing side, which is the expected behaviour for raster
-        // ops that grow the upstream pad.
-        let sample = |x: i32, y: i32, c: usize| -> i32 {
-            let xc = x.clamp(0, w as i32 - 1) as u32;
-            let yc = y.clamp(0, h as i32 - 1) as u32;
-            src.pixels[((yc * w + xc) * 4) as usize + c] as i32
+        // The kernel's neighbours sit one style pixel away: a device
+        // pixel per pixel-ratio step on the canvas, so a denser canvas
+        // finds the same edges at the same width, and one pixel on a
+        // sprite, whose pixels stay style pixels.
+        let step = match kind {
+            RasterKind::Raster => ctx.px32(1.0),
+            RasterKind::Sprite => 1.0,
         };
+        let tap = NeighbourTaps::new(&src, step);
         for y in 0..h as i32 {
             for x in 0..w as i32 {
                 let off = ((y as u32 * w + x as u32) * 4) as usize;
                 for c in 0..4 {
-                    let p00 = sample(x - 1, y - 1, c);
-                    let p10 = sample(x, y - 1, c);
-                    let p20 = sample(x + 1, y - 1, c);
-                    let p01 = sample(x - 1, y, c);
-                    let p21 = sample(x + 1, y, c);
-                    let p02 = sample(x - 1, y + 1, c);
-                    let p12 = sample(x, y + 1, c);
-                    let p22 = sample(x + 1, y + 1, c);
-                    let gx = (p20 + 2 * p21 + p22) - (p00 + 2 * p01 + p02);
-                    let gy = (p02 + 2 * p12 + p22) - (p00 + 2 * p10 + p20);
-                    let mag = ((gx * gx + gy * gy) as f32).sqrt() * strength;
+                    let p00 = tap.at(x, y, -1, -1, c);
+                    let p10 = tap.at(x, y, 0, -1, c);
+                    let p20 = tap.at(x, y, 1, -1, c);
+                    let p01 = tap.at(x, y, -1, 0, c);
+                    let p21 = tap.at(x, y, 1, 0, c);
+                    let p02 = tap.at(x, y, -1, 1, c);
+                    let p12 = tap.at(x, y, 0, 1, c);
+                    let p22 = tap.at(x, y, 1, 1, c);
+                    // Whole channel values keep every sum exact in f32.
+                    let gx = (p20 + 2.0 * p21 + p22) - (p00 + 2.0 * p01 + p02);
+                    let gy = (p02 + 2.0 * p12 + p22) - (p00 + 2.0 * p10 + p20);
+                    let mag = (gx * gx + gy * gy).sqrt() * strength;
                     out.pixels[off + c] = mag.clamp(0.0, 255.0) as u8;
                 }
             }
@@ -128,7 +130,7 @@ impl NodeFactory for EdgeDetectFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Sobel gradient magnitude per channel, scaled by `strength` and clamped to [0, 255]. Pass-through over Raster / Sprite. Use after a hillshade for stylised outlines, or on a flat fill to derive an outline mask.",
+            "description": "Sobel gradient magnitude per channel, scaled by `strength` and clamped to [0, 255]. Pass-through over Raster / Sprite. The kernel's neighbours sit one style pixel apart, so a canvas at a higher pixel ratio draws edges as wide on the map; a sprite's pixels are style pixels. Use after a hillshade for stylised outlines, or on a flat fill to derive an outline mask.",
             "properties": {
                 "input": schema_frag::node_ref(),
                 "strength": schema_frag::in_number(serde_json::json!({

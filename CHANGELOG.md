@@ -640,6 +640,12 @@ mean is spelled out in
   now carries the layer's `line-miter-limit`, or 2 when it sets none, as
   the `stroke`'s `miter-limit`; a zoom curve goes through an `expr` node.
   `line-round-limit` still warns.
+- `edge-detect` and `sharpen` read the pixels one device pixel either side
+  of each pixel, so at pixel ratio 2 they drew edges and overshoot half as
+  wide on the map as at ratio 1. Their neighbours now sit one style pixel
+  away, read between pixels at a fractional ratio, and a ratio-2 render
+  matches the ratio-1 one. A sprite's pixels stay style pixels, and
+  renders at ratio 1 are unchanged.
 
 ## 0.12.0 — 2026-10-12
 

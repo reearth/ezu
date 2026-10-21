@@ -295,3 +295,68 @@ fn hillshade_of_a_field_without_ground_scale_keeps_its_relief() {
     }
     assert!(worst <= 12, "ratio-2 hillshade is off by {worst}");
 }
+
+/// Every pixel of the ratio-1 render against the 2×2 block of ratio-2
+/// pixels covering the same style pixel.
+fn max_diff_over_blocks(one: &RasterBuf, two: &RasterBuf) -> u8 {
+    let mut worst = 0;
+    for y in 0..one.height {
+        for x in 0..one.width {
+            let p = one.pixel(x, y);
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let q = two.pixel(2 * x + dx, 2 * y + dy);
+                for c in 0..4 {
+                    worst = worst.max(p[c].abs_diff(q[c]));
+                }
+            }
+        }
+    }
+    worst
+}
+
+/// Black on the left half of the tile, `right` on the other, meeting on
+/// a pixel edge at every ratio.
+fn halves(right: &str, filter: &str) -> String {
+    format!(
+        r##"{{
+      "name": "demo",
+      "tile-size": 32,
+      "nodes": {{
+        "step": {{ "op": "gradient-linear", "start": [0, 0.5], "end": [1, 0.5],
+                   "stops": [[0.5, "#000000"], [0.5, "{right}"]] }},
+        "out":  {filter}
+      }},
+      "output": "@out"
+    }}"##
+    )
+}
+
+#[test]
+fn edge_detect_finds_edges_as_wide_at_double_density() {
+    // The kernel's neighbours sit a style pixel away, so the band it draws
+    // along a step covers the same style pixels at either ratio, where
+    // reading the device pixel either side would draw it half as wide.
+    let json = halves(
+        "#ffffff",
+        r#"{ "op": "edge-detect", "input": "@step", "strength": 0.2 }"#,
+    );
+    let one = render_at(&json, 32, 1, Z0, &[]);
+    let two = render_at(&json, 32, 2, Z0, &[]);
+    assert_eq!(one.pixel(15, 8)[0], 204, "the band is drawn");
+    assert_eq!(max_diff_over_blocks(&one, &two), 0);
+}
+
+#[test]
+fn sharpen_rings_as_wide_at_double_density() {
+    // A step from black to grey: the overshoot sharpening draws on the
+    // grey side of it spans the same style pixels at either ratio.
+    let json = halves(
+        "#808080",
+        r#"{ "op": "sharpen", "input": "@step", "amount": 1 }"#,
+    );
+    let one = render_at(&json, 32, 1, Z0, &[]);
+    let two = render_at(&json, 32, 2, Z0, &[]);
+    assert_eq!(one.pixel(16, 8)[0], 255, "the overshoot is drawn");
+    assert_eq!(one.pixel(17, 8)[0], 128, "one style pixel wide");
+    assert_eq!(max_diff_over_blocks(&one, &two), 0);
+}

@@ -22,7 +22,8 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    image_or_field_output, unwrap_raster_or_sprite, wrap_raster_like, ACCEPTS_IMAGE_OR_FIELD,
+    image_or_field_output, unwrap_raster_or_sprite, wrap_raster_like, NeighbourTaps, RasterKind,
+    ACCEPTS_IMAGE_OR_FIELD,
 };
 
 struct SharpenNode {
@@ -58,6 +59,8 @@ impl Node for SharpenNode {
                 return Ok(input.clone());
             }
             let mut values = vec![0f32; field.values.len()];
+            // A field spans the canvas, so its neighbours sit one style
+            // pixel away too.
             crate::imaging::laplacian_sharpen_field(
                 &field.values,
                 &mut values,
@@ -65,6 +68,7 @@ impl Node for SharpenNode {
                 field.height as usize,
                 amount,
                 field.nodata,
+                ctx.px32(1.0),
             );
             return Ok(PortValue::ScalarField(Arc::new(ScalarField {
                 values: values.into(),
@@ -77,28 +81,31 @@ impl Node for SharpenNode {
         }
         let w = src.width;
         let h = src.height;
-        // Convolution with the cross Laplacian:
+        // Convolution with the cross Laplacian, its neighbours one style
+        // pixel away: a device pixel per pixel-ratio step on the canvas,
+        // so a denser canvas sharpens the same detail, and one pixel on a
+        // sprite, whose pixels stay style pixels:
         //     0  -k   0
         //    -k 1+4k -k
         //     0  -k   0
         // Applied per channel on premultiplied data, then clamped.
         // Premultiplied is fine here: the kernel is a linear filter
         // and stays consistent across alpha values.
-        let sample = |x: i32, y: i32, c: usize| -> i32 {
-            let xc = x.clamp(0, w as i32 - 1) as u32;
-            let yc = y.clamp(0, h as i32 - 1) as u32;
-            src.pixels[((yc * w + xc) * 4) as usize + c] as i32
+        let step = match kind {
+            RasterKind::Raster => ctx.px32(1.0),
+            RasterKind::Sprite => 1.0,
         };
+        let tap = NeighbourTaps::new(&src, step);
         let mut out = RasterBuf::new(w, h);
         for y in 0..h as i32 {
             for x in 0..w as i32 {
                 let off = ((y as u32 * w + x as u32) * 4) as usize;
                 for c in 0..4 {
-                    let centre = sample(x, y, c) as f32;
-                    let neigh = sample(x - 1, y, c) as f32
-                        + sample(x + 1, y, c) as f32
-                        + sample(x, y - 1, c) as f32
-                        + sample(x, y + 1, c) as f32;
+                    let centre = tap.at(x, y, 0, 0, c);
+                    let neigh = tap.at(x, y, -1, 0, c)
+                        + tap.at(x, y, 1, 0, c)
+                        + tap.at(x, y, 0, -1, c)
+                        + tap.at(x, y, 0, 1, c);
                     let v = centre * (1.0 + 4.0 * amount) - neigh * amount;
                     out.pixels[off + c] = v.clamp(0.0, 255.0) as u8;
                 }
@@ -153,7 +160,7 @@ impl NodeFactory for SharpenFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "4-neighbour Laplacian sharpen on a raster, sprite or scalar field; the output is the same kind as the input. Amplifies each pixel relative to its orthogonal neighbours by `amount`. Around 0.5–1.0 is a typical unsharp-mask look; negative values give a soft halo. Sharpening an elevation field (`dem`) before `hillshade` or `slope` steepens the flanks of ridges and valleys, so the shading draws crisper crests; a field is not clamped, so values can overshoot past the field's range next to a sharp step. A field keeps its nodata value and geographic scale; a nodata neighbour counts as the centre value, so a hole does not distort its rim, and a nodata sample stays nodata. Grows upstream pad by 1.",
+            "description": "4-neighbour Laplacian sharpen on a raster, sprite or scalar field; the output is the same kind as the input. Amplifies each pixel relative to its orthogonal neighbours by `amount`, the neighbours one style pixel away, so a canvas at a higher pixel ratio sharpens the same detail. Around 0.5–1.0 is a typical unsharp-mask look; negative values give a soft halo. Sharpening an elevation field (`dem`) before `hillshade` or `slope` steepens the flanks of ridges and valleys, so the shading draws crisper crests; a field is not clamped, so values can overshoot past the field's range next to a sharp step. A field keeps its nodata value and geographic scale; a nodata neighbour counts as the centre value, so a hole does not distort its rim, and a nodata sample stays nodata. Grows upstream pad by 1.",
             "properties": {
                 "input": schema_frag::node_ref(),
                 "amount": schema_frag::in_number(serde_json::json!({

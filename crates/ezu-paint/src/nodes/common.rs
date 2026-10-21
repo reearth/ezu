@@ -1097,6 +1097,50 @@ pub(super) enum RasterKind {
     Sprite,
 }
 
+/// Reads for a small kernel whose neighbours sit `step` pixels apart, so a
+/// filter written for 1-pixel neighbours covers the same ground on a
+/// denser canvas. Reads past the edge repeat the edge pixel. A whole-number
+/// step reads single pixels; a fractional one, at a pixel ratio such as
+/// 1.5, blends the pixels around each neighbour bilinearly.
+pub(super) struct NeighbourTaps<'a> {
+    src: &'a RasterBuf,
+    step: f32,
+    /// `step` as whole pixels, when it is one.
+    whole: Option<i32>,
+}
+
+impl<'a> NeighbourTaps<'a> {
+    pub(super) fn new(src: &'a RasterBuf, step: f32) -> Self {
+        let whole = (step.fract() == 0.0).then_some(step as i32);
+        Self { src, step, whole }
+    }
+
+    /// Channel `c` of the neighbour `(kx, ky)` steps from pixel `(x, y)`,
+    /// as a float holding the whole channel value for a whole step.
+    #[inline]
+    pub(super) fn at(&self, x: i32, y: i32, kx: i32, ky: i32, c: usize) -> f32 {
+        let (w, h) = (self.src.width, self.src.height);
+        let read = |px: usize, py: usize| self.src.pixels[(py * w as usize + px) * 4 + c] as f32;
+        if let Some(d) = self.whole {
+            let px = (x + kx * d).clamp(0, w as i32 - 1) as usize;
+            let py = (y + ky * d).clamp(0, h as i32 - 1) as usize;
+            return read(px, py);
+        }
+        let b = crate::imaging::Bilinear::new(
+            w as usize,
+            h as usize,
+            (x as i64, y as i64),
+            (kx as f32 * self.step, ky as f32 * self.step),
+        );
+        b.lerp(
+            read(b.x0, b.y0),
+            read(b.x1, b.y0),
+            read(b.x0, b.y1),
+            read(b.x1, b.y1),
+        )
+    }
+}
+
 /// Resolve a polymorphic Raster/Sprite output kind from the first
 /// connected input. Used by `Node::output` for pass-through filter
 /// nodes (`blur`, `hsl`, …). Falls back to `Raster` if the input is
