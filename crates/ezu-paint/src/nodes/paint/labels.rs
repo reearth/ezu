@@ -40,6 +40,28 @@ use ezu_core::text::{
 /// Accepts-list for a `Labels` port.
 pub(super) const ACCEPTS_LABELS: &[PortKind] = &[PortKind::Labels];
 
+/// The tile's size in style pixels — the frame labels are laid out,
+/// collided and kept in.
+///
+/// Labels never see device pixels until [`draw_labels`] scales them onto
+/// the canvas. Placement works on boxes measured against a grid and on
+/// anchors quantized to world positions; doing it at the canvas's density
+/// would round those differently and could let a denser render place a
+/// different set of labels. Laid out in style pixels, a retina tile places
+/// exactly the labels the plain one does.
+pub(super) fn label_frame(ctx: &EvalCtx<'_>) -> (f32, f32) {
+    let c = ctx.canvas;
+    if c.pixel_ratio == 1.0 {
+        return (c.tile_w as f32, c.tile_h as f32);
+    }
+    // The device size is the style size times the ratio, rounded; undoing
+    // it lands back on the whole number the style asked for.
+    (
+        (c.tile_w as f32 / c.pixel_ratio).round(),
+        (c.tile_h as f32 / c.pixel_ratio).round(),
+    )
+}
+
 /// One label layer's placement candidates plus everything needed to draw
 /// them, flowing along a `Labels` port. `draws` is index-aligned with
 /// `candidates`, so a [`collide::Placement`] selects both.
@@ -468,6 +490,11 @@ pub(super) fn draw_labels(
     let pad = canvas.pad() as f32;
     let padded_w = canvas.tile_width() as f32 + 2.0 * pad;
     let padded_h = canvas.tile_height() as f32 + 2.0 * pad;
+    // Everything in `set` is in style pixels (see `label_frame`); each
+    // position and size goes through `px` on its way onto the canvas, so a
+    // denser canvas draws the same labels with larger, sharper glyphs.
+    let px = |v: f32| ctx.px32(v);
+    let padding_px = px(set.padding_px);
     // Per-eval SDF glyph cache for outline fonts (`None` keeps the vector
     // path). Outline glyphs are rasterized to an SDF once and reused.
     let sdf_cache = set.outline_sdf.then(OutlineSdfCache::new);
@@ -495,11 +522,15 @@ pub(super) fn draw_labels(
             continue;
         };
         let offset = icon.turned_offset();
-        let (ax, ay) = (anchor.0 + pad + offset.0, anchor.1 + pad + offset.1);
-        if ax + icon.half.0 < 0.0
-            || ax - icon.half.0 > padded_w
-            || ay + icon.half.1 < 0.0
-            || ay - icon.half.1 > padded_h
+        let (ax, ay) = (
+            px(anchor.0) + pad + px(offset.0),
+            px(anchor.1) + pad + px(offset.1),
+        );
+        let half = (px(icon.half.0), px(icon.half.1));
+        if ax + half.0 < 0.0
+            || ax - half.0 > padded_w
+            || ay + half.1 < 0.0
+            || ay - half.1 > padded_h
         {
             continue;
         }
@@ -512,7 +543,7 @@ pub(super) fn draw_labels(
         };
         let t = Transform::from_translate(ax, ay)
             .pre_rotate(icon.rotation_deg)
-            .pre_scale(icon.scale, icon.scale)
+            .pre_scale(px(icon.scale), px(icon.scale))
             .pre_translate(img.width as f32 * -0.5, img.height as f32 * -0.5);
         framed.draw(
             &mut pm,
@@ -549,12 +580,18 @@ pub(super) fn draw_labels(
                 else {
                     continue;
                 };
-                let (ax, ay) = (anchor.0 + pad, anchor.1 + pad);
+                let paint = &device_paint(ctx, paint);
+                let background = background.map(|bg| BackgroundDraw {
+                    padding: bg.padding.map(px),
+                    radius_px: px(bg.radius_px),
+                    ..bg
+                });
+                let (ax, ay) = (px(anchor.0) + pad, px(anchor.1) + pad);
                 let rel = label_rect(block, paint.size_px, background.as_ref());
                 if *rotation_deg != 0.0 {
                     let reach = rotated_bounds(rel, *rotation_deg);
                     if set.collide {
-                        let r = reach.inflate(set.padding_px);
+                        let r = reach.inflate(padding_px);
                         if ax + r.max_x < 0.0
                             || ax + r.min_x > padded_w
                             || ay + r.max_y < 0.0
@@ -563,7 +600,7 @@ pub(super) fn draw_labels(
                             continue;
                         }
                     }
-                    if let Some(bg) = background {
+                    if let Some(bg) = &background {
                         fill_background_rotated(&mut pm, rel, (ax, ay), *rotation_deg, bg);
                     }
                     let view = faces.view(fonts);
@@ -586,14 +623,14 @@ pub(super) fn draw_labels(
                     max_y: ay + rel.max_y,
                 };
                 if set.collide {
-                    let r = rect.inflate(set.padding_px);
+                    let r = rect.inflate(padding_px);
                     if r.max_x < 0.0 || r.min_x > padded_w || r.max_y < 0.0 || r.min_y > padded_h {
                         continue;
                     }
                 }
                 // Per label: the box, then the halo and glyphs `draw` lays
                 // over it. The layer's icons all went down before any of it.
-                if let Some(bg) = background {
+                if let Some(bg) = &background {
                     fill_background(&mut pm, rect, bg);
                 }
                 let view = faces.view(fonts);
@@ -616,8 +653,10 @@ pub(super) fn draw_labels(
                 paints,
                 ..
             } => {
+                let paint = &device_paint(ctx, paint);
+                let perp_px = px(*perp_px);
                 // The margin covers one glyph's reach from its centre sample.
-                let margin = paint.size_px + set.padding_px + perp_px.abs();
+                let margin = paint.size_px + padding_px + perp_px.abs();
                 let (mut min_x, mut min_y, mut max_x, mut max_y) =
                     (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
                 for g in placements {
@@ -626,6 +665,7 @@ pub(super) fn draw_labels(
                     min_y = min_y.min(g.y);
                     max_y = max_y.max(g.y);
                 }
+                let (min_x, min_y, max_x, max_y) = (px(min_x), px(min_y), px(max_x), px(max_y));
                 if max_x + pad + margin < 0.0
                     || min_x + pad - margin > padded_w
                     || max_y + pad + margin < 0.0
@@ -636,8 +676,8 @@ pub(super) fn draw_labels(
                 let shifted: Vec<GlyphPlacement> = placements
                     .iter()
                     .map(|g| GlyphPlacement {
-                        x: g.x + pad,
-                        y: g.y + pad,
+                        x: px(g.x) + pad,
+                        y: px(g.y) + pad,
                         angle: g.angle,
                     })
                     .collect();
@@ -647,7 +687,7 @@ pub(super) fn draw_labels(
                     &view,
                     &mut pm,
                     &shifted,
-                    *perp_px,
+                    perp_px,
                     paint,
                     paints,
                     sdf_cache.as_ref(),
@@ -657,6 +697,17 @@ pub(super) fn draw_labels(
     }
     log_outline_sdf_stats(sdf_cache.as_ref());
     Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))))
+}
+
+/// `paint`, laid out in style pixels, at the canvas's density.
+fn device_paint(ctx: &EvalCtx<'_>, paint: &TextPaint) -> TextPaint {
+    TextPaint {
+        size_px: ctx.px32(paint.size_px),
+        halo_width_px: ctx.px32(paint.halo_width_px),
+        halo_blur_px: ctx.px32(paint.halo_blur_px),
+        strikethrough_px: ctx.px32(paint.strikethrough_px),
+        ..*paint
+    }
 }
 
 /// Downcast a `Labels` port value to `T`, or report which port failed.

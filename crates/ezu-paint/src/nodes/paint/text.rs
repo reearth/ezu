@@ -80,8 +80,8 @@ use ezu_core::text::{
 
 use super::icon_fit::{fitted_content_box, stretch_image, IconTextFit, NineSlice};
 use super::labels::{
-    draw_labels, label_rect, rotated_bounds, set_id, BackgroundDraw, FaceCache, IconDraw,
-    LabelDraw, LabelSet, PointVariant,
+    draw_labels, label_frame, label_rect, rotated_bounds, set_id, BackgroundDraw, FaceCache,
+    IconDraw, LabelDraw, LabelSet, PointVariant,
 };
 
 // The label's layout is fixed when the graph is built — its sizes, offsets
@@ -1852,8 +1852,8 @@ impl TextNode {
         let const_opacity = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
         let const_icon_opacity = self.icon_opacity(ctx, inputs)?;
 
-        let tile_w = ctx.canvas.tile_w as f32;
-        let tile_h = ctx.canvas.tile_h as f32;
+        // Style pixels: `draw_labels` scales the result onto the canvas.
+        let (tile_w, tile_h) = label_frame(ctx);
         let z = ctx.tile.z;
         // Gather the neighbour feature groups once (collision only), decoded
         // here and reused by the single evaluation pass below.
@@ -2278,8 +2278,8 @@ impl TextNode {
             None
         };
 
-        let tile_w = ctx.canvas.tile_w as f32;
-        let tile_h = ctx.canvas.tile_h as f32;
+        // Style pixels: `draw_labels` scales the result onto the canvas.
+        let (tile_w, tile_h) = label_frame(ctx);
         let z = ctx.tile.z;
         // Gather the neighbour feature groups once (collision only): each bound
         // neighbour layer, filtered exactly like this tile's own features.

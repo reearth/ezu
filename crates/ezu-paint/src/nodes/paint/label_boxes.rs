@@ -31,7 +31,8 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use super::labels::{
-    labels_input, rotated_corners, text_rect, LabelDraw, LabelSet, PlacedLabels, ACCEPTS_LABELS,
+    label_frame, labels_input, rotated_corners, text_rect, LabelDraw, LabelSet, PlacedLabels,
+    ACCEPTS_LABELS,
 };
 use crate::nodes::common::{features_value_culled, FeatureGroup};
 use ezu_core::text::{
@@ -406,9 +407,11 @@ impl Node for LabelBoxesNode {
             }
         }
         let include_rejected = self.include_rejected.get(ctx)?;
+        // The boxes are in the style pixels labels are laid out in.
+        let (tile_w, tile_h) = label_frame(ctx);
         let mut out = Emitter {
-            sx: self.extent as f32 / ctx.canvas.tile_w.max(1) as f32,
-            sy: self.extent as f32 / ctx.canvas.tile_h.max(1) as f32,
+            sx: self.extent as f32 / tile_w.max(1.0),
+            sy: self.extent as f32 / tile_h.max(1.0),
             filter: self.filter_expr.as_ref(),
             z: ctx.tile.z,
             groups: Vec::new(),

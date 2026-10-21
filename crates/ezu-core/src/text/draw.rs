@@ -61,8 +61,10 @@ fn glyph_fill(paint: &TextPaint, sections: &[SectionPaint], section: u16) -> [f3
         .unwrap_or(paint.color)
 }
 
-/// The shader's `EDGE_GAMMA` anti-aliasing constant (at device pixel
-/// ratio 1 — ezu tiles are 1:1).
+/// The shader's `EDGE_GAMMA` anti-aliasing constant at a device pixel ratio
+/// of one. MapLibre divides it by the ratio; here sizes arrive in device
+/// pixels, so dividing by a font scale taken from them does the same, and
+/// the anti-aliased edge stays about one device pixel wide at any density.
 const EDGE_GAMMA: f32 = 0.105;
 
 /// The `(buff, gamma)` a halo field pass uses: the edge pulled out by

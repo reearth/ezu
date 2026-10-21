@@ -239,6 +239,27 @@ pub fn features_of_node(
     std::sync::Arc<ezu_paint::nodes::FilteredFeatures>,
     std::sync::Arc<RasterBuf>,
 ) {
+    features_of_node_on(
+        json,
+        CanvasInfo::square(tile_size, pad),
+        tile,
+        features,
+        node,
+    )
+}
+
+/// [`features_of_node`] on a canvas the caller states — a denser one, say.
+#[allow(dead_code)]
+pub fn features_of_node_on(
+    json: &str,
+    canvas: CanvasInfo,
+    tile: TileId,
+    features: &[(&str, ezu_features::FeatureLayer)],
+    node: &str,
+) -> (
+    std::sync::Arc<ezu_paint::nodes::FilteredFeatures>,
+    std::sync::Arc<RasterBuf>,
+) {
     use ezu_graph::{NodeIx, NodeObserver};
     use ezu_paint::host::TileLoader;
     use ezu_paint::nodes::FilteredFeatures;
@@ -278,12 +299,7 @@ pub fn features_of_node(
     }
     let out = Evaluator::new(&graph, &cache, &loader)
         .with_observer(&catch)
-        .render(
-            tile,
-            CanvasInfo::square(tile_size, pad),
-            &ParamValues::new(),
-            0,
-        )
+        .render(tile, canvas, &ParamValues::new(), 0)
         .expect("render");
     let raster = match out {
         PortValue::Raster(r) => r,
