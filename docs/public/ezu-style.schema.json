@@ -5334,8 +5334,70 @@
             "type": "object"
           },
           {
-            "description": "Sample a host-bound RGBA tile pyramid (satellite imagery, pre-rendered basemaps) as a canvas-padded Raster. `source` names a `raster` entry in the document's `sources` block; omitting it falls back to the document's only `raster` source, with a build warning.",
+            "description": "Sample a host-bound RGBA tile pyramid (satellite imagery, pre-rendered basemaps) as a canvas-padded Raster. `source` names a `raster` entry in the document's `sources` block; omitting it falls back to the document's only `raster` source, with a build warning. The colour fields adjust the imagery with the formulas of MapLibre's raster layer, applied in its order: hue, saturation, contrast, then the brightness range. At their defaults the pixels pass through unchanged.",
             "properties": {
+              "brightness-max": {
+                "oneOf": [
+                  {
+                    "default": 1.0,
+                    "description": "What a channel at 1 becomes (MapLibre's `raster-brightness-max`).",
+                    "maximum": 1.0,
+                    "minimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "brightness-min": {
+                "oneOf": [
+                  {
+                    "default": 0.0,
+                    "description": "What a channel at 0 becomes; the range `0..1` is mapped linearly onto `brightness-min..brightness-max` (MapLibre's `raster-brightness-min`).",
+                    "maximum": 1.0,
+                    "minimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "contrast": {
+                "oneOf": [
+                  {
+                    "default": 0.0,
+                    "description": "Scales each channel around mid-grey: by `1 + contrast` below 0, by `1 / (1 - contrast)` above it (MapLibre's `raster-contrast`).",
+                    "maximum": 1.0,
+                    "minimum": -1.0,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "hue-rotate-deg": {
+                "oneOf": [
+                  {
+                    "default": 0.0,
+                    "description": "Turns every hue by this many degrees around the grey axis, keeping each pixel's channel sum (MapLibre's `raster-hue-rotate`).",
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
               "max-zoom": {
                 "description": "Style-level maximum zoom. Above this zoom the node emits transparent pixels.",
                 "maximum": 24,
@@ -5351,6 +5413,38 @@
               "op": {
                 "const": "raster",
                 "description": "Selects the `raster` operation."
+              },
+              "opacity": {
+                "oneOf": [
+                  {
+                    "default": 1.0,
+                    "description": "Multiplies the imagery's alpha (MapLibre's `raster-opacity`).",
+                    "maximum": 1.0,
+                    "minimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
+              "saturation": {
+                "oneOf": [
+                  {
+                    "default": 0.0,
+                    "description": "Moves each channel towards (below 0) or away from (above 0) the mean of the pixel's channels. -1 is grey; towards 1 the push grows without bound (MapLibre's `raster-saturation`).",
+                    "maximum": 1.0,
+                    "minimum": -1.0,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               },
               "source": {
                 "description": "Name of a `raster` source in the document's `sources` block. Omitting it resolves to the only such source and warns at build time.",

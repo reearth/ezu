@@ -128,12 +128,18 @@ Random points at a given mean spacing, covering the tile. Where `point-grid` put
 
 ### `raster`
 
-Sample a host-bound RGBA tile pyramid (satellite imagery, pre-rendered basemaps) as a canvas-padded Raster. `source` names a `raster` entry in the document's `sources` block; omitting it falls back to the document's only `raster` source, with a build warning.
+Sample a host-bound RGBA tile pyramid (satellite imagery, pre-rendered basemaps) as a canvas-padded Raster. `source` names a `raster` entry in the document's `sources` block; omitting it falls back to the document's only `raster` source, with a build warning. The colour fields adjust the imagery with the formulas of MapLibre's raster layer, applied in its order: hue, saturation, contrast, then the brightness range. At their defaults the pixels pass through unchanged.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
+| `brightness-max` | number (0…1) \| `$param` \| `@node` | no | What a channel at 1 becomes (MapLibre's `raster-brightness-max`). |
+| `brightness-min` | number (0…1) \| `$param` \| `@node` | no | What a channel at 0 becomes; the range `0..1` is mapped linearly onto `brightness-min..brightness-max` (MapLibre's `raster-brightness-min`). |
+| `contrast` | number (-1…1) \| `$param` \| `@node` | no | Scales each channel around mid-grey: by `1 + contrast` below 0, by `1 / (1 - contrast)` above it (MapLibre's `raster-contrast`). |
+| `hue-rotate-deg` | number \| `$param` \| `@node` | no | Turns every hue by this many degrees around the grey axis, keeping each pixel's channel sum (MapLibre's `raster-hue-rotate`). |
 | `max-zoom` | integer (0…24) | no | Style-level maximum zoom. Above this zoom the node emits transparent pixels. |
 | `min-zoom` | integer (0…24) | no | Style-level minimum zoom. Below this zoom the node emits transparent pixels, as for a tile the source does not have. |
+| `opacity` | number (0…1) \| `$param` \| `@node` | no | Multiplies the imagery's alpha (MapLibre's `raster-opacity`). |
+| `saturation` | number (-1…1) \| `$param` \| `@node` | no | Moves each channel towards (below 0) or away from (above 0) the mean of the pixel's channels. -1 is grey; towards 1 the push grows without bound (MapLibre's `raster-saturation`). |
 | `source` | string | no | Name of a `raster` source in the document's `sources` block. Omitting it resolves to the only such source and warns at build time. |
 
 ### `tile-bounds`

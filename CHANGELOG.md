@@ -370,6 +370,11 @@ mean is spelled out in
   travel, or to the left when negative, its corners mitred out to twice
   the offset and bevelled past that. `ezu translate` carries
   `line-offset` over to them; it used to drop it silently.
+- `raster` takes `opacity`, `hue-rotate-deg`, `saturation`, `contrast`,
+  `brightness-min` and `brightness-max`, each a number, `$param` or `@node`.
+  They adjust the imagery with the formulas and in the order of MapLibre's
+  raster layer, so the same values give the same pixels. At their defaults
+  the bound imagery passes through untouched.
 
 ### Changed
 

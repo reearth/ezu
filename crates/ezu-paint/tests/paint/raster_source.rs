@@ -134,3 +134,72 @@ fn dem_node_yields_a_zero_field_outside_its_zoom_band() {
         assert_eq!(f.values[0], if high { 100.0 } else { 0.0 }, "z{z}");
     }
 }
+
+#[test]
+fn raster_node_adjusts_colour_like_a_maplibre_raster_layer() {
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 8,
+      "sources": {
+        "photo": { "type": "raster",
+                   "url": "http://example.invalid/{z}/{x}/{y}.jpg" }
+      },
+      "nodes": { "out": { "op": "raster", "opacity": 0.5, "hue-rotate-deg": 120,
+                          "brightness-min": 0.2, "brightness-max": 0.8 } },
+      "output": "@out"
+    }"##;
+    let r = render_with_rasters(
+        json,
+        8,
+        0,
+        Z0,
+        &[("photo", solid_sprite(8, 8, [255, 0, 0, 255]))],
+    );
+    // Red turns green, then 0..1 maps onto 0.2..0.8 (51, 204), and half
+    // opacity halves the premultiplied colour.
+    assert_eq!(r.pixel(4, 4), [26, 102, 26, 128]);
+}
+
+#[test]
+fn raster_node_adjustment_follows_a_zoom_expression() {
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 8,
+      "sources": {
+        "photo": { "type": "raster",
+                   "url": "http://example.invalid/{z}/{x}/{y}.jpg" }
+      },
+      "nodes": {
+        "sat": { "op": "expr", "type": "number",
+                 "expr": ["interpolate", ["linear"], ["zoom"], 0, 0, 4, -1] },
+        "out": { "op": "raster", "saturation": "@sat" }
+      },
+      "output": "@out"
+    }"##;
+    let red = || [("photo", solid_sprite(8, 8, [255, 0, 0, 255]))];
+    for (z, want) in [(0, [255, 0, 0, 255]), (4, [85, 85, 85, 255])] {
+        let r = render_with_rasters(json, 8, 0, TileId { z, x: 0, y: 0 }, &red());
+        assert_eq!(r.pixel(4, 4), want, "z{z}");
+    }
+}
+
+#[test]
+fn raster_node_at_default_adjustment_passes_pixels_through() {
+    let json = r##"{
+      "name": "demo",
+      "tile-size": 8,
+      "sources": {
+        "photo": { "type": "raster",
+                   "url": "http://example.invalid/{z}/{x}/{y}.jpg" }
+      },
+      "nodes": { "out": { "op": "raster", "opacity": 1, "hue-rotate-deg": 0,
+                          "saturation": 0, "contrast": 0,
+                          "brightness-min": 0, "brightness-max": 1 } },
+      "output": "@out"
+    }"##;
+    // A translucent pixel whose colour the adjustment maths would round
+    // differently if it ran.
+    let px = [37, 11, 90, 101];
+    let r = render_with_rasters(json, 8, 0, Z0, &[("photo", solid_sprite(8, 8, px))]);
+    assert_eq!(r.pixel(4, 4), px);
+}
