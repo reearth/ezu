@@ -1328,7 +1328,7 @@ impl Renderer {
                     tile_loader.bind_scalar_field(name, field);
                     tile_loader.mix_content_hash(name, stitched_content(slots));
                 }
-                SourceDecl::Raster(_) => {
+                SourceDecl::Raster(spec) => {
                     let mut tiles: HashMap<(i32, i32), Arc<RasterTile>> =
                         HashMap::with_capacity(slots.len());
                     for (&(dx, dy), placed) in slots {
@@ -1352,6 +1352,7 @@ impl Renderer {
                                 oz.target.y,
                                 a.x,
                                 a.y,
+                                spec.resampling,
                             )),
                             None => t,
                         };
@@ -1359,14 +1360,16 @@ impl Renderer {
                     }
                     let borrowed: HashMap<(i32, i32), &RasterTile> =
                         tiles.iter().map(|(k, v)| (*k, &**v)).collect();
-                    let buf = stitch_padded_raster(&borrowed, canvas).ok_or_else(|| {
-                        err(
-                            RasterDecode,
-                            format!(
-                                "source `{name}`: missing centre tile (bind with coord [0, 0])"
-                            ),
-                        )
-                    })?;
+                    let buf = stitch_padded_raster(&borrowed, canvas, spec.resampling).ok_or_else(
+                        || {
+                            err(
+                                RasterDecode,
+                                format!(
+                                    "source `{name}`: missing centre tile (bind with coord [0, 0])"
+                                ),
+                            )
+                        },
+                    )?;
                     tile_loader.bind_raster(name, buf);
                     tile_loader.mix_content_hash(name, stitched_content(slots));
                 }

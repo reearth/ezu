@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 
 use ezu_graph::{CanvasInfo, RasterBuf};
+use ezu_style::Resampling;
 
 use crate::host::decode_image_bytes;
 
@@ -41,10 +42,12 @@ pub fn decode_raster_tile(bytes: &[u8], z: u8, x: u32, y: u32) -> Result<RasterT
 /// padded grid. `tiles` is keyed by `(dx, dy)` with `(0, 0)` being the
 /// rendered tile; missing slots edge-clamp to the centre so absent
 /// neighbours degrade gracefully. Returns `None` when the centre tile
-/// itself is missing.
+/// itself is missing. `resampling` picks how tile pixels that do not
+/// land one to one on the canvas are sampled.
 pub fn stitch_padded_raster(
     tiles: &HashMap<(i32, i32), &RasterTile>,
     canvas: CanvasInfo,
+    resampling: Resampling,
 ) -> Option<RasterBuf> {
     let centre = tiles.get(&(0, 0))?;
     let (pw, ph) = canvas.padded_dims();
@@ -53,13 +56,21 @@ pub fn stitch_padded_raster(
     // pixel sits at stays correct on a canvas that is not square.
     let tile_px_x = canvas.tile_w as f32;
     let tile_px_y = canvas.tile_h as f32;
+    // Nearest sampling picks the tile pixel under each canvas pixel's
+    // centre, as a GPU's nearest filter does; linear keeps sampling at
+    // the pixel's corner, where a canvas the tile's size reads each tile
+    // pixel exactly.
+    let at = match resampling {
+        Resampling::Linear => 0.0,
+        Resampling::Nearest => 0.5,
+    };
 
     let mut out = RasterBuf::new(pw, ph);
     for py in 0..ph {
-        let ty = (py as f32 - pad) / tile_px_y;
+        let ty = (py as f32 + at - pad) / tile_px_y;
         let (dy_off, ty_local) = split_fraction(ty);
         for px in 0..pw {
-            let tx = (px as f32 - pad) / tile_px_x;
+            let tx = (px as f32 + at - pad) / tile_px_x;
             let (dx_off, tx_local) = split_fraction(tx);
             let sample_tile = tiles
                 .get(&(dx_off, dy_off))
@@ -71,9 +82,19 @@ pub fn stitch_padded_raster(
                 })
                 .unwrap_or(centre);
             let size = sample_tile.size as f32;
-            let sx = (tx_local * size).clamp(0.0, size - 1.0001);
-            let sy = (ty_local * size).clamp(0.0, size - 1.0001);
-            let rgba = bilinear_rgba(&sample_tile.pixels, sample_tile.size, sx, sy);
+            let rgba = match resampling {
+                Resampling::Linear => {
+                    let sx = (tx_local * size).clamp(0.0, size - 1.0001);
+                    let sy = (ty_local * size).clamp(0.0, size - 1.0001);
+                    bilinear_rgba(&sample_tile.pixels, sample_tile.size, sx, sy)
+                }
+                Resampling::Nearest => nearest_rgba(
+                    &sample_tile.pixels,
+                    sample_tile.size,
+                    tx_local * size,
+                    ty_local * size,
+                ),
+            };
             let i = ((py * pw + px) * 4) as usize;
             out.pixels[i..i + 4].copy_from_slice(&rgba);
         }
@@ -81,8 +102,9 @@ pub fn stitch_padded_raster(
     Some(out)
 }
 
-/// Bilinear-upsample the sub-rectangle of `ancestor` covered by tile
-/// `(x, y)` at zoom offset `shift` levels below the ancestor's zoom.
+/// Upsample the sub-rectangle of `ancestor` covered by tile `(x, y)` at
+/// zoom offset `shift` levels below the ancestor's zoom, blending
+/// neighbouring pixels or repeating the nearest one as `resampling` says.
 /// Used for `max-zoom` overzoom and the `on-missing: upsample` parent
 /// walk.
 pub fn upsample_subregion_raster(
@@ -92,6 +114,7 @@ pub fn upsample_subregion_raster(
     y: u32,
     ax: u32,
     ay: u32,
+    resampling: Resampling,
 ) -> RasterTile {
     let scale = 1u32 << shift;
     let sub_size = ancestor.size as f32 / scale as f32;
@@ -101,18 +124,38 @@ pub fn upsample_subregion_raster(
     let mut pixels = Vec::with_capacity((out_size * out_size * 4) as usize);
     let ancestor_max = ancestor.size as f32 - 1.000_1;
     for py in 0..out_size {
-        let sy = (origin_y + sub_size * (py as f32 + 0.5) / out_size as f32 - 0.5)
-            .clamp(0.0, ancestor_max);
+        // Where the output pixel's centre falls in the ancestor, in its
+        // pixels.
+        let cy = origin_y + sub_size * (py as f32 + 0.5) / out_size as f32;
         for px in 0..out_size {
-            let sx = (origin_x + sub_size * (px as f32 + 0.5) / out_size as f32 - 0.5)
-                .clamp(0.0, ancestor_max);
-            pixels.extend_from_slice(&bilinear_rgba(&ancestor.pixels, ancestor.size, sx, sy));
+            let cx = origin_x + sub_size * (px as f32 + 0.5) / out_size as f32;
+            let rgba = match resampling {
+                // Pixel centres sit half a pixel in from their corners.
+                Resampling::Linear => bilinear_rgba(
+                    &ancestor.pixels,
+                    ancestor.size,
+                    (cx - 0.5).clamp(0.0, ancestor_max),
+                    (cy - 0.5).clamp(0.0, ancestor_max),
+                ),
+                Resampling::Nearest => nearest_rgba(&ancestor.pixels, ancestor.size, cx, cy),
+            };
+            pixels.extend_from_slice(&rgba);
         }
     }
     RasterTile {
         size: out_size,
         pixels,
     }
+}
+
+/// The pixel of a `size`-square RGBA8 grid that covers the point
+/// `(x, y)`, measured from the grid's corner in pixels; a point past an
+/// edge takes the edge pixel.
+#[inline]
+fn nearest_rgba(pixels: &[u8], size: u32, x: f32, y: f32) -> [u8; 4] {
+    let at = |v: f32| (v.max(0.0) as u32).min(size - 1);
+    let i = ((at(y) * size + at(x)) * 4) as usize;
+    [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
 }
 
 /// Bilinear sample of premultiplied RGBA8 at fractional pixel
@@ -161,7 +204,7 @@ mod tests {
     #[test]
     fn stitch_requires_centre() {
         let canvas = CanvasInfo::square(8, 2);
-        assert!(stitch_padded_raster(&HashMap::new(), canvas).is_none());
+        assert!(stitch_padded_raster(&HashMap::new(), canvas, Resampling::Linear).is_none());
     }
 
     #[test]
@@ -172,7 +215,7 @@ mod tests {
         let mut tiles: HashMap<(i32, i32), &RasterTile> = HashMap::new();
         tiles.insert((0, 0), &centre);
         tiles.insert((-1, 0), &left);
-        let out = stitch_padded_raster(&tiles, canvas).unwrap();
+        let out = stitch_padded_raster(&tiles, canvas, Resampling::Linear).unwrap();
         let px = |x: u32, y: u32| {
             let i = ((y * out.width + x) * 4) as usize;
             [
@@ -204,10 +247,78 @@ mod tests {
             pixels[i * 4..i * 4 + 4].copy_from_slice(c);
         }
         let ancestor = RasterTile { size: 2, pixels };
-        let child = upsample_subregion_raster(&ancestor, 1, 1, 1, 0, 0);
+        let child = upsample_subregion_raster(&ancestor, 1, 1, 1, 0, 0, Resampling::Linear);
         assert_eq!(child.size, 2);
         // Bottom-right sample of the child leans to the [40,40,40] cell.
         let i = ((child.size + 1) * 4) as usize;
         assert!(child.pixels[i] > 20, "got {:?}", &child.pixels[i..i + 4]);
+    }
+
+    /// A 2x2 tile of four distinct colours, one per pixel.
+    fn quadrants() -> RasterTile {
+        let colors = [
+            [10u8, 0, 0, 255],
+            [0, 20, 0, 255],
+            [0, 0, 30, 255],
+            [40, 40, 40, 255],
+        ];
+        RasterTile {
+            size: 2,
+            pixels: colors.concat(),
+        }
+    }
+
+    #[test]
+    fn nearest_upsample_repeats_the_covering_pixel() {
+        let ancestor = quadrants();
+        // Child (1, 1) covers only the ancestor's bottom-right pixel, so
+        // every pixel of it is that colour, unblended.
+        let child = upsample_subregion_raster(&ancestor, 1, 1, 1, 0, 0, Resampling::Nearest);
+        assert_eq!(child.pixels, [40u8, 40, 40, 255].repeat(4));
+        // Child (0, 0) likewise takes the top-left pixel alone.
+        let child = upsample_subregion_raster(&ancestor, 1, 0, 0, 0, 0, Resampling::Nearest);
+        assert_eq!(child.pixels, [10u8, 0, 0, 255].repeat(4));
+    }
+
+    #[test]
+    fn nearest_stitch_magnifies_into_hard_edged_blocks() {
+        // A 2x2 tile on a 4x4 canvas: each tile pixel becomes a 2x2 block
+        // of its own colour, where linear sampling blends neighbours.
+        let canvas = CanvasInfo::square(4, 0);
+        let tile = quadrants();
+        let mut tiles: HashMap<(i32, i32), &RasterTile> = HashMap::new();
+        tiles.insert((0, 0), &tile);
+        let out = stitch_padded_raster(&tiles, canvas, Resampling::Nearest).unwrap();
+        let px = |x: u32, y: u32| {
+            let i = ((y * out.width + x) * 4) as usize;
+            [
+                out.pixels[i],
+                out.pixels[i + 1],
+                out.pixels[i + 2],
+                out.pixels[i + 3],
+            ]
+        };
+        for y in 0..4 {
+            for x in 0..4 {
+                let want = &tile.pixels[(((y / 2) * 2 + x / 2) * 4) as usize..][..4];
+                assert_eq!(px(x, y), want, "({x}, {y})");
+            }
+        }
+        let linear = stitch_padded_raster(&tiles, canvas, Resampling::Linear).unwrap();
+        assert_ne!(linear.pixels, out.pixels);
+    }
+
+    #[test]
+    fn both_samplings_agree_at_one_to_one() {
+        // When the tile is as large as the canvas, each canvas pixel reads
+        // one tile pixel whichever way it samples.
+        let canvas = CanvasInfo::square(2, 0);
+        let tile = quadrants();
+        let mut tiles: HashMap<(i32, i32), &RasterTile> = HashMap::new();
+        tiles.insert((0, 0), &tile);
+        for r in [Resampling::Linear, Resampling::Nearest] {
+            let out = stitch_padded_raster(&tiles, canvas, r).unwrap();
+            assert_eq!(out.pixels, tile.pixels, "{r:?}");
+        }
     }
 }

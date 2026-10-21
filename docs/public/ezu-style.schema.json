@@ -8481,6 +8481,14 @@
                   "error"
                 ]
               },
+              "resampling": {
+                "default": "linear",
+                "description": "How tile pixels are sampled when they do not land one to one on the canvas (an overzoomed tile, or a tile size other than the canvas's): `linear` blends the nearest four, `nearest` repeats the one underneath as a hard-edged block (MapLibre's `raster-resampling`).",
+                "enum": [
+                  "linear",
+                  "nearest"
+                ]
+              },
               "type": {
                 "const": "raster"
               },

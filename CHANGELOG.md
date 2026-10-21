@@ -375,6 +375,12 @@ mean is spelled out in
   They adjust the imagery with the formulas and in the order of MapLibre's
   raster layer, so the same values give the same pixels. At their defaults
   the bound imagery passes through untouched.
+- A `raster` source takes `resampling`: `linear` (the default, as before)
+  blends neighbouring tile pixels where a tile is magnified or shrunk onto
+  the canvas, and `nearest` repeats the pixel underneath, so each tile
+  pixel stays a hard-edged block, as MapLibre's `raster-resampling` does.
+  It applies to overzoomed tiles and to tiles whose size differs from the
+  canvas's.
 
 ### Changed
 
@@ -384,6 +390,9 @@ mean is spelled out in
   could lead to still renders. Nodes gain `Node::reads_input` to say which
   inputs a render will read.
 
+- `ezu_paint::host::stitch_padded_raster` and `upsample_subregion_raster`
+  take the source's `Resampling` as a last argument; pass
+  `Resampling::Linear` to sample as before.
 - `ezu translate` writes `anchor-offsets` for `text-variable-anchor` and
   `overlap: "always"` for `text-allow-overlap` / `text-overlap: always`, in
   place of the now-deprecated `anchor-variants`, `radial-offset` and

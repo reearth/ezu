@@ -511,6 +511,7 @@ impl NodeRegistry {
                                     "max-zoom": { "type": "integer", "minimum": 0, "description": "Deepest zoom the source serves. Past it, tiles are upsampled from the covering ancestor." },
                                     "neighbor-fetch": { "type": "boolean", "default": true, "description": "Fetch the 8 neighbouring tiles too and stitch them, so the pad region holds real pixels." },
                                     "on-missing": { "enum": ["empty", "upsample", "error"], "default": "empty", "description": "404 within zoom range: transparent pixels, upsample a parent, or fail the tile." },
+                                    "resampling": { "enum": ["linear", "nearest"], "default": "linear", "description": "How tile pixels are sampled when they do not land one to one on the canvas (an overzoomed tile, or a tile size other than the canvas's): `linear` blends the nearest four, `nearest` repeats the one underneath as a hard-edged block (MapLibre's `raster-resampling`)." },
                                     "attribution": { "type": "string" }
                                 }
                             },

@@ -136,6 +136,7 @@ For `raster` and `dem`:
 | `neighbor-fetch` | fetch the 8 neighbouring tiles too and stitch them, so the pad region holds real pixels (and, for `dem`, slopes stay seamless across tile edges). Default `true` |
 | `on-missing` | in-range 404 policy: `empty` (default — transparent / zero elevation), `upsample` (walk up parents and upsample the covered sub-region), or `error` (fail the render, so a server can answer 404) |
 | `elevation-offset` | `dem` only: metres subtracted from every decoded sample, to rebase a geoid-relative dataset. Default `0` |
+| `resampling` | `raster` only: how tile pixels are sampled when they do not land one to one on the canvas (an overzoomed tile, or a tile size other than the canvas's). `linear` (default) blends the nearest four; `nearest` repeats the one underneath, so each tile pixel stays a hard-edged block (MapLibre's `raster-resampling`) |
 
 A pyramid's tile size is not declared, unlike MapLibre's `tileSize`: each tile's
 edge is read from its decoded image, which may be any square size, and the tile

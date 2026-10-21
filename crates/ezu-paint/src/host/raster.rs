@@ -265,7 +265,11 @@ impl RasterSourceState {
         }
         let borrowed: HashMap<(i32, i32), &RasterTile> =
             grid.iter().map(|(k, v)| (*k, v.as_ref())).collect();
-        Ok(stitch_padded_raster(&borrowed, canvas))
+        Ok(stitch_padded_raster(
+            &borrowed,
+            canvas,
+            self.spec.resampling,
+        ))
     }
 
     /// Fetch one tile, honouring `max-zoom` overzoom and the
@@ -291,7 +295,15 @@ impl RasterSourceState {
                     let tile = if shift == 0 {
                         t
                     } else {
-                        Arc::new(upsample_subregion_raster(&t, shift, x, y, ax, ay))
+                        Arc::new(upsample_subregion_raster(
+                            &t,
+                            shift,
+                            x,
+                            y,
+                            ax,
+                            ay,
+                            self.spec.resampling,
+                        ))
                     };
                     break Some(tile);
                 }

@@ -1192,6 +1192,26 @@ pub struct RasterSource {
     /// metadata (TileJSON `attribution` / PMTiles metadata).
     #[serde(default)]
     pub attribution: Option<String>,
+    /// How tile pixels are sampled when they do not land one to one on
+    /// the canvas: an overzoomed tile, or a tile whose size differs from
+    /// the canvas's.
+    #[serde(default)]
+    pub resampling: Resampling,
+}
+
+/// How a raster source's pixels are sampled onto the canvas when they
+/// are magnified or shrunk (MapLibre's `raster-resampling`).
+#[derive(Debug, Deserialize, PartialEq, Eq, Clone, Copy, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum Resampling {
+    /// Blend the four nearest pixels: smooth, the usual choice for
+    /// imagery.
+    #[default]
+    Linear,
+    /// Take the single nearest pixel, so each source pixel stays a
+    /// hard-edged block — for categorical or pixel-art imagery whose
+    /// colours must not mix.
+    Nearest,
 }
 
 fn default_dem_tile_size() -> u32 {
@@ -1491,6 +1511,7 @@ mod tests {
             "photo":   { "type": "raster",
                          "url": "https://example.com/{z}/{x}/{y}.jpg",
                          "min-zoom": 4, "max-zoom": 18, "on-missing": "upsample",
+                         "resampling": "nearest",
                          "attribution": "© Example Sat" },
             "archive": { "type": "raster", "url": "tiles.pmtiles" },
             "basemap": { "type": "mvt", "url": "https://example.com/t.json",
@@ -1507,10 +1528,12 @@ mod tests {
         assert_eq!(doc.sources["photo"].min_zoom(), Some(4));
         assert_eq!(r.on_missing, OnMissing::Upsample);
         assert!(r.neighbor_fetch);
+        assert_eq!(r.resampling, Resampling::Nearest);
         let SourceDecl::Raster(r) = &doc.sources["archive"] else {
             panic!("expected raster source");
         };
         assert_eq!(r.on_missing, OnMissing::Empty);
+        assert_eq!(r.resampling, Resampling::Linear);
         // Dedup: the doc attribution and basemap's identical one merge.
         assert_eq!(doc.attributions(), ["Style © Demo", "© Example Sat"]);
     }
