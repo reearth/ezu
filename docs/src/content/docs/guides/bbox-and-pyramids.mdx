@@ -222,11 +222,13 @@ or a malformed colour fails before rendering starts.
   The file is width × height × 4 bytes and records neither, so the reader
   brings them: a tile's tile size, a mosaic's tile count times that, a page's
   `--size-px`.
-- **Tile size** — `tile`, `bbox` and `tiles` take `--tile-size` to render each
-  tile at another size than the style's `tile-size`: `--tile-size 1024` on a
-  512 px style is a hi-DPI pyramid of the same tiles. The style's own pixel
-  sizes (line widths, text) are not scaled with it. `frame` has no such flag,
-  since its tile size is what meets the scale; `--zoom` is how to move it.
+- **Tile size and pixel ratio** — `tile`, `bbox` and `tiles` take
+  `--tile-size` to render each tile at another size than the style's
+  `tile-size`, over the same ground; the style's own pixel sizes (line widths,
+  text) are not scaled with it, so they draw finer. `--pixel-ratio 2` is the
+  hi-DPI pyramid: the same map at twice the density, its pixel sizes doubled
+  with the tile. `frame` has neither, since its tile size is what meets the
+  scale and its dpi is its density; `--zoom` is how to move it.
   `--pad` replaces the margin rendered around each tile, on every command
   including `frame`; the default, the style's `pad` raised to what its filters
   reach, rarely wants changing.

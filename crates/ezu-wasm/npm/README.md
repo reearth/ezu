@@ -153,11 +153,13 @@ class Renderer {
   clearCacheBudget(): void;
 
   // Single unified render. `opts.format` picks the encoder; `tileSize`
-  // / `pad` override the canvas for hi-DPI / preview.
+  // / `pad` override the canvas (in style pixels); `pixelRatio` renders
+  // the same tile at a higher density for hi-DPI screens.
   renderTile(z: number, x: number, y: number, opts?: {
     format?: "png" | "webp" | "rgba";      // default "png"
     tileSize?: number;
     pad?: number;
+    pixelRatio?: number;                   // 1 to 4, default 1
     // Render-time overrides for the style's declared `params`, validated
     // against the declarations (type, min/max) — an unknown name or an
     // out-of-range value throws. Names left out keep their default. One

@@ -41,6 +41,19 @@ canvas.getContext('2d').putImageData(
 when the destination is a canvas; use PNG/WebP when the bytes are going into an
 `<img>`, a cache, or over the network.
 
+On a hi-DPI screen pass `pixelRatio: window.devicePixelRatio` (1 to 4,
+fractions included). The tile comes back that many times larger on each side,
+with every width, text size and blur the style gives in pixels scaled with it
+and the same labels in the same spots, so drawn at the plain tile's size on the
+page it is the same map, sharp. `tileSize` is a different knob: a larger tile at
+the same pixel sizes, which draws finer.
+
+```js
+const ratio = window.devicePixelRatio;
+const px = r.renderTile(z, x, y, { format: 'rgba', pixelRatio: ratio });
+const side = Math.round(r.renderTileSize * ratio);
+```
+
 `r.warnings` lists what building the style's graph warned about — a node that
 works but relies on something the style does not say — for an editor that shows
 them next to the style, or a build that refuses a style with any.

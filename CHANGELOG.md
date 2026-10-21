@@ -285,10 +285,20 @@ mean is spelled out in
   which renders every tile at that size instead of the style's
   `tile-size`, as the embedding renderer's `tileSize` option does, and all
   of them and `ezu frame` take `--pad`, which replaces the margin rendered
-  outside each tile. `ezu serve` also answers `/tiles/{z}/{x}/{y}@2x.png`
-  (`@1x` to `@4x`, PNG or WebP) with the tile at that multiple of its tile
-  size, the URL a MapLibre client asks a hi-DPI tile by. `frame` takes no
-  `--tile-size`: its tile size is what meets the scale.
+  outside each tile. The style's pixel sizes stay as they are, so a larger
+  tile draws finer. `frame` takes no `--tile-size`: its tile size is what
+  meets the scale.
+- Tiles render at a device pixel ratio: `pixel_ratio` in Rust's
+  `RenderOptions`, `PixelRatio` in Go's `Render`, `pixelRatio` in the JS
+  render options, and `--pixel-ratio` on `ezu tile`, `bbox`, `tiles` and
+  `serve`, from 1 to 4 with fractions allowed. At 2 a tile is the same map
+  at twice the density, as MapLibre's retina tiles are: twice the tile
+  size and margin, with every line width, text and icon size, halo, blur,
+  dash, offset, spacing and noise scale the style gives in pixels doubled,
+  and the same labels placed in the same spots. `ezu serve` answers
+  `/tiles/{z}/{x}/{y}@2x.png` (`@1x` to `@4x`, PNG or WebP) with the tile
+  at that pixel ratio, the URL a MapLibre client asks a hi-DPI tile by.
+  A print frame takes no ratio: its dpi is its density.
 - `ezu bbox` takes `--concurrency`, as `frame` and `tiles` do, for how many
   of the mosaic's tiles render at once. It still defaults to the core count.
 - The CLI commands that write PNG take `--png-compression fast|default|best`,

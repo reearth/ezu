@@ -65,6 +65,12 @@ buffer, `ezu.FormatWebP` for lossless WebP, and `Params` overrides the style's
 [declared params](/ezu/style/params/) per render, validated the same way the
 CLI's `--param` is.
 
+`PixelRatio: 2` renders the retina tile for a hi-DPI screen: the same map at
+twice the density, twice the tile size with every width, text size and blur the
+style gives in pixels doubled, and the same labels in the same spots, as
+MapLibre's `@2x` tiles are. It takes 1 to 4, fractions included. `TileSize` is
+a different knob: a larger tile at the same pixel sizes, which draws finer.
+
 ## The bind loop
 
 Ask the renderer what the style declares rather than reading the style yourself:

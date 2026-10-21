@@ -37,8 +37,9 @@ Render commands share `--style`, `--assets-dir`, `--pmtiles` / `--mvt`,
 `--overzoom-levels`, `--pad`, and repeatable `--param NAME=VALUE` overrides
 validated against the style's `params` declarations. `tile`, `bbox`,
 `tiles` and `serve` also take `--tile-size`, to render at another size than
-the style's `tile-size`; `serve` answers `{y}@2x.png` with the tile at twice
-it.
+the style's `tile-size`, and `--pixel-ratio`, to render the same map at a
+higher density for hi-DPI screens; `serve` answers `{y}@2x.png` with the tile
+at pixel ratio 2.
 
 ```sh
 # Single tile — the reference styles bundle their own `sources` block,

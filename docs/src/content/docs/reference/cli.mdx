@@ -64,7 +64,9 @@ Options:
       --pad <PAD>
           Margin rendered around each tile before it is cropped, in pixels, in place of the style's `pad` raised to what its filters reach. Narrower than that reach, a tile's edge is computed from clamped data and seams against its neighbour
       --tile-size <TILE_SIZE>
-          Render each tile this many pixels square instead of at the style's `tile-size` — `1024` for a hi-DPI tile of a 512 px style, covering the same ground. The style's own pixel sizes (line widths, text, `pad`) are not scaled with it, so they draw finer
+          Render each tile this many pixels square instead of at the style's `tile-size`, covering the same ground. The style's own pixel sizes (line widths, text, `pad`) are not scaled with it, so they draw finer; for a hi-DPI tile of the same map use `--pixel-ratio`
+      --pixel-ratio <PIXEL_RATIO>
+          Device pixels per style pixel, from 1 to 4 (fractions allowed): `2` renders a retina tile, twice the tile size with every line width, text size, blur and `pad` doubled, as MapLibre's `@2x` tiles are
       --tile <TILE>
           Tile coordinate as `Z/X/Y`
       --out <OUT>
@@ -108,7 +110,9 @@ Options:
       --pad <PAD>
           Margin rendered around each tile before it is cropped, in pixels, in place of the style's `pad` raised to what its filters reach. Narrower than that reach, a tile's edge is computed from clamped data and seams against its neighbour
       --tile-size <TILE_SIZE>
-          Render each tile this many pixels square instead of at the style's `tile-size` — `1024` for a hi-DPI tile of a 512 px style, covering the same ground. The style's own pixel sizes (line widths, text, `pad`) are not scaled with it, so they draw finer
+          Render each tile this many pixels square instead of at the style's `tile-size`, covering the same ground. The style's own pixel sizes (line widths, text, `pad`) are not scaled with it, so they draw finer; for a hi-DPI tile of the same map use `--pixel-ratio`
+      --pixel-ratio <PIXEL_RATIO>
+          Device pixels per style pixel, from 1 to 4 (fractions allowed): `2` renders a retina tile, twice the tile size with every line width, text size, blur and `pad` doubled, as MapLibre's `@2x` tiles are
       --bbox <BBOX>
           Bounding box `min_lng,min_lat,max_lng,max_lat` (WGS84)
       --zoom <ZOOM>
@@ -216,7 +220,9 @@ Options:
       --pad <PAD>
           Margin rendered around each tile before it is cropped, in pixels, in place of the style's `pad` raised to what its filters reach. Narrower than that reach, a tile's edge is computed from clamped data and seams against its neighbour
       --tile-size <TILE_SIZE>
-          Render each tile this many pixels square instead of at the style's `tile-size` — `1024` for a hi-DPI tile of a 512 px style, covering the same ground. The style's own pixel sizes (line widths, text, `pad`) are not scaled with it, so they draw finer
+          Render each tile this many pixels square instead of at the style's `tile-size`, covering the same ground. The style's own pixel sizes (line widths, text, `pad`) are not scaled with it, so they draw finer; for a hi-DPI tile of the same map use `--pixel-ratio`
+      --pixel-ratio <PIXEL_RATIO>
+          Device pixels per style pixel, from 1 to 4 (fractions allowed): `2` renders a retina tile, twice the tile size with every line width, text size, blur and `pad` doubled, as MapLibre's `@2x` tiles are
       --bbox <BBOX>
           Bounding box `min_lng,min_lat,max_lng,max_lat` (WGS84). When omitted, every tile at each zoom is generated — at z=14 that is 268M tiles, so a bbox is strongly recommended
       --min-zoom <MIN_ZOOM>
@@ -370,7 +376,9 @@ Options:
       --overzoom-levels <OVERZOOM_LEVELS>
           When a requested tile is missing, fall back to a parent tile up to this many zoom levels up and re-project its geometry onto the requested tile (MVT "overzoom"). `0` disables [default: 4]
       --tile-size <TILE_SIZE>
-          Render each tile this many pixels square instead of at the style's `tile-size`. A request can still ask for a multiple of it per tile with `@2x` (up to `@4x`) before the extension. The style's own pixel sizes (line widths, text, `pad`) are not scaled with it
+          Render each tile this many pixels square instead of at the style's `tile-size`. The style's own pixel sizes (line widths, text, `pad`) are not scaled with it, so they draw finer
+      --pixel-ratio <PIXEL_RATIO>
+          Device pixels per style pixel for a tile requested without `@Nx`, from 1 to 4. A request asks for its own with `@2x` (up to `@4x`) before the extension: the same map at that density, its line widths, text and blurs scaled with it, as MapLibre's retina tiles
       --pad <PAD>
           Margin rendered around each tile before it is cropped, in pixels, in place of the style's `pad` raised to what its filters reach, for every style the server loads. Narrower than that reach, a tile's edge seams against its neighbour
       --png-compression <PNG_COMPRESSION>

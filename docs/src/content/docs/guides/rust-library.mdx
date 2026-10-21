@@ -33,10 +33,10 @@ tile_loader.bind_mvt(ezu::features::mvt::decode(&bytes)?);
 
 // The style's `pad` is a floor; the graph knows how far its filters
 // reach. Sizing the canvas from both is what the CLI and the wasm host do.
-let canvas = ezu::graph::CanvasInfo {
-    tile_size: doc.tile_size,
-    pad: doc.pad.max(graph.required_pad()?),
-};
+let canvas = ezu::graph::CanvasInfo::square(
+    doc.tile_size,
+    doc.pad.max(graph.required_pad()?),
+);
 
 let ev = ezu::graph::Evaluator::new(&graph, &cache, &tile_loader);
 let out = ev.render_parallel(
@@ -112,6 +112,24 @@ bound.
 let mut r = Renderer::new(&style_json)?;
 r.resolve_assets(Path::new("styles/")).await?;
 ```
+
+A retina tile is one option away. `pixel_ratio: 2.0` renders the same map at
+twice the density — twice the tile size and margin, every width, text size and
+blur the style gives in pixels doubled, the same labels in the same spots — as
+MapLibre's `@2x` tiles are. It takes 1 to 4, fractions included. `tile_size` is
+a different knob: a larger tile at the same pixel sizes, which draws finer.
+
+```rust
+let retina = r.render_tile(13, 7276, 3225, RenderOptions {
+    pixel_ratio: 2.0,
+    ..RenderOptions::default()
+})?;
+```
+
+Driving the graph yourself, the same comes from a canvas that says so: its sizes
+in device pixels and the ratio beside them, as
+`CanvasInfo::square(2 * tile_size, 2 * pad).with_pixel_ratio(2.0)`. Nodes scale
+their pixel fields by `ctx.px`, so an op of your own does the same.
 
 A page at a print scale is `compute_frame` and `render_frame`, which render the
 tiles the page covers at the tile size that meets the scale and crop them into

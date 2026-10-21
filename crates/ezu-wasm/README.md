@@ -143,6 +143,7 @@ class Renderer {
     format?: "png" | "webp" | "rgba";       // default "png"
     tileSize?: number;                       // override style canvas
     pad?: number;
+    pixelRatio?: number;                     // 1 to 4: hi-DPI density
     // Render-time overrides for the style's `params`. Validated against
     // the declarations (type, min/max) exactly as the CLI's `--param` is;
     // an unknown name or an out-of-range value throws. Names left out
@@ -274,9 +275,12 @@ whichever is larger — so a style that declares none still renders with
 enough.
 
 `opts.tileSize` and `opts.pad` override the style-level canvas
-geometry for that call. Useful for hi-DPI preview rendering without
-mutating the style. `setTileSize(size)` does the same for every render
-until `clearTileSize()` or `setStyle`.
+geometry for that call, in style pixels: a larger tile draws finer.
+`setTileSize(size)` does the same for every render until `clearTileSize()`
+or `setStyle`. `opts.pixelRatio` (1 to 4, fractions included) is the hi-DPI
+knob: the same map at that density, the tile that many times larger on each
+side with every width, text size and blur the style gives in pixels scaled
+with it, and the same labels in the same spots, as MapLibre's `@2x` tiles.
 
 ### Decoding a tile once
 

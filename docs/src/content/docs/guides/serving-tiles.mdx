@@ -34,16 +34,22 @@ and one process. But it renders the same bytes a library host would.
 
 ## Tile size and hi-DPI tiles
 
-A tile renders at the style's `tile-size` unless asked otherwise. `--tile-size`
-changes it for every tile a command writes — `ezu tile`, `ezu bbox`,
-`ezu tiles` and `ezu serve` all take it — and draws what the style with its
-`tile-size` edited would: the same ground on a bigger or smaller canvas.
+A hi-DPI screen wants the same map at a higher density: twice the pixels on
+each side, with every line twice as wide and every label twice as large, so
+it looks like the plain tile only sharper. That is the pixel ratio.
+`--pixel-ratio 2` on `ezu tile`, `ezu bbox`, `ezu tiles` and `ezu serve`
+renders it, from 1 to 4 with fractions allowed. Everything the style gives in
+pixels — line widths, text and icon sizes, halos, blurs, dashes, offsets,
+spacings, noise scales and `pad` — is multiplied by the ratio, and labels are
+placed exactly where the plain tile places them. Shrunk back by the ratio, a
+retina tile comes out very close to the plain one.
 
 `ezu serve` also takes the MapLibre and XYZ spelling for a hi-DPI tile in the
-URL: `/tiles/{z}/{x}/{y}@2x.png` is the tile at twice the size the server
-renders at, and `@1x` to `@4x` are accepted, on `.webp` as well. Point a
-MapLibre raster source at the `@2x` URL with the style's `tileSize` and a
-retina screen gets one tile pixel per device pixel.
+URL: `/tiles/{z}/{x}/{y}@2x.png` is the tile at pixel ratio 2, and `@1x` to
+`@4x` are accepted, on `.webp` as well. A URL without one renders at the
+server's `--pixel-ratio`, 1 unless given. Point a MapLibre raster source at
+the `@2x` URL with the style's `tileSize` and a retina screen gets one tile
+pixel per device pixel.
 
 ```js
 map.addSource('ezu', {
@@ -53,10 +59,16 @@ map.addSource('ezu', {
 });
 ```
 
-Neither enlarges the style's own pixel sizes: line widths, text and `pad` are
-in pixels of the canvas, so on a bigger canvas they draw finer. A style meant
-for hi-DPI output states its sizes for that canvas, or takes them as
-[params](/ezu/concepts/params-and-functions/) a client can raise.
+`--tile-size` is the other knob, and does something else: it renders every
+tile at that size instead of the style's `tile-size`, as the style with its
+`tile-size` edited would — the same ground on a bigger canvas, with the
+style's pixel sizes unchanged, so lines and text draw finer against the map.
+The two combine: the canvas is the tile size times the pixel ratio.
+
+Sprite icons are drawn from the sprite sheet the style names; at a ratio
+above 1 they are scaled up from it, so a host that wants them sharp binds the
+sheet's `@2x` version, whose pixel ratio the index records. Print frames take
+no pixel ratio: `ezu frame`'s dpi already fixes how many pixels a page has.
 
 `--pad` replaces the margin a tile renders with outside its edge. By default it
 is the style's `pad` raised to what its filters reach, and there is rarely a
