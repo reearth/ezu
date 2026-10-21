@@ -76,19 +76,25 @@ For many layers at once, `stack` composites a list in one node.
 **Masking.** `blend` with `composite: "source-atop"` clips the result to the base's alpha —
 Photoshop's clipping mask, and how a `fill-pattern` gets confined to its polygon.
 
-**Toggling a branch.** `switch` selects between two inputs, which is how
-`--keep-hidden` preserves a hidden MapLibre layer without drawing it. For more
-than two it takes `branches` picked by name, as MapLibre's `match` does, or
-`cases` picked by the first condition that holds, as `case` does:
+**Toggling a branch.** `switch` passes one of its inputs through: the first of
+its `cases` whose condition holds, as MapLibre's `case` does, or one of its
+`branches` picked by name, as `match` does. A single case is an on/off toggle,
+which is how `--keep-hidden` preserves a hidden MapLibre layer without drawing it:
 
 ```json
-"themed": { "op": "switch", "select": "$theme",
-            "branches": { "warm": "@warm", "cool": "@cool" }, "default": "@plain" },
+"labels": { "op": "switch",
+            "cases": [ { "when": "$labels", "then": "@with_labels" } ],
+            "default": "@plain" },
 "seasonal": { "op": "switch",
               "cases": [ { "when": "$winter", "then": "@snow" },
                          { "when": "@deep",   "then": "@detail" } ],
-              "default": "@summer" }
+              "default": "@summer" },
+"themed": { "op": "switch", "select": "$theme",
+            "branches": { "warm": "@warm", "cool": "@cool" }, "default": "@plain" }
 ```
+
+An older two-way form, `a` and `b` picked by `select`, is deprecated. It still
+works, and the build warns with the `cases` or `branches` that does the same.
 
 Only the branch taken is rendered. When the choice rests on literals or params the
 others are skipped outright, with everything only they need; a `@node` condition is
