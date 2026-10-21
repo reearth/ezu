@@ -28,7 +28,7 @@ pub type Hash128 = u128;
 /// Compose a cache key for one node evaluation.
 ///
 /// The key folds together:
-/// - the canvas (both tile axes + pad), so cached buffers always match
+/// - the canvas (both tile axes, pad and pixel ratio), so cached buffers always match
 ///   shape — a buffer cached for one shape must never be handed to a
 ///   render of another
 /// - the tile id (the evaluator always passes one: even a world-anchored
@@ -49,6 +49,9 @@ impl CacheKey {
         h.update(&canvas.tile_w.to_le_bytes());
         h.update(&canvas.tile_h.to_le_bytes());
         h.update(&canvas.pad.to_le_bytes());
+        // Two canvases of one size can still differ in density: a 512 px
+        // tile of a 512 px style is not the retina 256 px one.
+        h.update(&canvas.pixel_ratio.to_bits().to_le_bytes());
         if let Some(t) = tile {
             h.update(&[t.z]);
             h.update(&t.x.to_le_bytes());

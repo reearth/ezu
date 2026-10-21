@@ -369,8 +369,10 @@ impl<'a> Evaluator<'a> {
         let node = self.graph.node(ix);
         // What this node may drop depends on the ops *downstream* of it,
         // whose parameters are not otherwise part of its key.
+        // Reaches are worked out from the style's px fields, so they are
+        // style pixels; the cull compares them against the canvas.
         let ctx = &EvalCtx {
-            influence_pad: influence[ix],
+            influence_pad: ctx.canvas.px_ceil(influence[ix]),
             ..*ctx
         };
 

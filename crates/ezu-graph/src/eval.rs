@@ -23,21 +23,99 @@ pub struct TileId {
 /// asked for. The two axes are separate because not every render is a
 /// tile: a legend swatch is whatever shape the legend has room for, and
 /// its geometry is synthetic, so there is no projection to distort.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// Every size here is in device pixels — the pixels of the buffer being
+/// drawn. A style speaks in style pixels (a line `width-px`, a text
+/// `size`, a blur `sigma`), and [`pixel_ratio`](Self::pixel_ratio) is
+/// how many device pixels one of those covers: `2` for a retina tile,
+/// which shows the same map as the `1` tile at twice the density.
+#[derive(Debug, Clone, Copy)]
 pub struct CanvasInfo {
     pub tile_w: u32,
     pub tile_h: u32,
     pub pad: u32,
+    /// Device pixels per style pixel. `1` unless the host asked for a
+    /// denser render; nodes convert their px fields through
+    /// [`CanvasInfo::px`].
+    pub pixel_ratio: f32,
+}
+
+// By hand because of the `f32`: a ratio is never NaN (hosts validate
+// it), so comparing and hashing its bits is exact.
+impl PartialEq for CanvasInfo {
+    fn eq(&self, o: &Self) -> bool {
+        self.tile_w == o.tile_w
+            && self.tile_h == o.tile_h
+            && self.pad == o.pad
+            && self.pixel_ratio.to_bits() == o.pixel_ratio.to_bits()
+    }
+}
+
+impl Eq for CanvasInfo {}
+
+impl std::hash::Hash for CanvasInfo {
+    fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
+        self.tile_w.hash(h);
+        self.tile_h.hash(h);
+        self.pad.hash(h);
+        self.pixel_ratio.to_bits().hash(h);
+    }
 }
 
 impl CanvasInfo {
     /// The usual case: a square tile of `tile_size` px with `pad` px of
-    /// margin on every side.
+    /// margin on every side, one device pixel per style pixel.
     pub fn square(tile_size: u32, pad: u32) -> Self {
         Self {
             tile_w: tile_size,
             tile_h: tile_size,
             pad,
+            pixel_ratio: 1.0,
+        }
+    }
+
+    /// The same canvas declared to draw `ratio` device pixels per style
+    /// pixel. Only the ratio changes: the sizes are already in device
+    /// pixels, so a caller wanting a retina tile multiplies them itself.
+    pub fn with_pixel_ratio(mut self, ratio: f32) -> Self {
+        self.pixel_ratio = ratio;
+        self
+    }
+
+    /// `v` style pixels in device pixels.
+    ///
+    /// At a ratio of `1` this returns `v` itself, bit for bit, so a
+    /// render that never asks for a denser canvas draws exactly what it
+    /// drew before ratios existed.
+    pub fn px(&self, v: f64) -> f64 {
+        if self.pixel_ratio == 1.0 {
+            v
+        } else {
+            v * self.pixel_ratio as f64
+        }
+    }
+
+    /// [`px`](Self::px) for an `f32`.
+    pub fn px32(&self, v: f32) -> f32 {
+        if self.pixel_ratio == 1.0 {
+            v
+        } else {
+            v * self.pixel_ratio
+        }
+    }
+
+    /// A whole number of style pixels (a pad, a reach) in device pixels,
+    /// rounded up so the device margin is never narrower than asked.
+    /// Saturates at `u32::MAX`, which callers use for "unbounded".
+    pub fn px_ceil(&self, v: u32) -> u32 {
+        if self.pixel_ratio == 1.0 || v == u32::MAX {
+            return v;
+        }
+        let d = (v as f64 * self.pixel_ratio as f64).ceil();
+        if d >= u32::MAX as f64 {
+            u32::MAX
+        } else {
+            d as u32
         }
     }
 
@@ -159,6 +237,18 @@ pub struct EvalCtx<'a> {
 }
 
 impl EvalCtx<'_> {
+    /// `v` style pixels in device pixels — see [`CanvasInfo::px`]. Every
+    /// field a style writes in pixels goes through this before it meets
+    /// the canvas.
+    pub fn px(&self, v: f64) -> f64 {
+        self.canvas.px(v)
+    }
+
+    /// [`px`](Self::px) for an `f32`.
+    pub fn px32(&self, v: f32) -> f32 {
+        self.canvas.px32(v)
+    }
+
     /// The canvas rectangle, grown by this node's influence, outside
     /// which geometry cannot affect the rendered tile. In padded-canvas
     /// pixels; `None` when the reach is unbounded.
@@ -190,4 +280,29 @@ pub enum EvalError {
     Asset(#[from] AssetError),
     #[error("{0}")]
     Other(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CanvasInfo;
+
+    #[test]
+    fn style_pixels_scale_by_the_pixel_ratio() {
+        let one = CanvasInfo::square(256, 8);
+        assert_eq!(one.px(1.5), 1.5);
+        assert_eq!(one.px_ceil(7), 7);
+        let two = CanvasInfo::square(512, 16).with_pixel_ratio(2.0);
+        assert_eq!(two.px(1.5), 3.0);
+        assert_eq!(two.px32(0.25), 0.5);
+        let odd = CanvasInfo::square(384, 0).with_pixel_ratio(1.5);
+        assert_eq!(odd.px_ceil(7), 11, "a margin rounds up, never down");
+        assert_eq!(odd.px_ceil(u32::MAX), u32::MAX, "unbounded stays unbounded");
+    }
+
+    #[test]
+    fn canvases_of_one_size_and_different_density_differ() {
+        let a = CanvasInfo::square(512, 0);
+        let b = CanvasInfo::square(512, 0).with_pixel_ratio(2.0);
+        assert_ne!(a, b);
+    }
 }

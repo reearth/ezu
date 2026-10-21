@@ -162,6 +162,7 @@ pub fn render_swatch(
         tile_w: opts.width,
         tile_h: opts.height,
         pad: opts.pad.max(required),
+        pixel_ratio: 1.0,
     };
     let out = ev
         .render(swatch_tile(opts.zoom), canvas, params, 0)

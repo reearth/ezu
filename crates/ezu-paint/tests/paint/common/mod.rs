@@ -42,6 +42,7 @@ pub fn render_shaped(
         tile_w,
         tile_h,
         pad,
+        pixel_ratio: 1.0,
     };
     let out = ev
         .render(TileId { z: 0, x: 0, y: 0 }, canvas, &ParamValues::new(), 0)
