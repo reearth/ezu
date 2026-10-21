@@ -112,9 +112,8 @@ fn gate_on_zoom(
         gate.clone(),
         serde_json::json!({
             "op": "switch",
-            "a": format!("@{off}"),
-            "b": format!("@{fill}"),
-            "select": format!("@{zoom}")
+            "cases": [{ "when": format!("@{zoom}"), "then": format!("@{fill}") }],
+            "default": format!("@{off}")
         }),
     );
     gate

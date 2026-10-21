@@ -73,9 +73,9 @@ fn hidden_kept_and_gated_when_requested() {
         .values()
         .find(|n| n["op"] == "switch")
         .expect("a switch node");
-    assert_eq!(sw["select"], "a"); // off by default
-    assert_eq!(sw["a"], "@__hidden_off");
-    assert!(sw["b"].as_str().unwrap().starts_with('@'));
+    assert_eq!(sw["cases"][0]["when"], false); // off by default
+    assert_eq!(sw["default"], "@__hidden_off");
+    assert!(sw["cases"][0]["then"].as_str().unwrap().starts_with('@'));
 
     // The visible base layer is NOT gated (still a plain fill in outputs).
     assert!(fills(&recipe).contains(&"#111111".to_string()));
@@ -105,7 +105,7 @@ fn a_kept_hidden_label_layer_contributes_no_collision_candidates() {
     assert_eq!(nodes["hid__text"]["op"], "text");
     let gated = nodes
         .values()
-        .any(|n| n["op"] == "switch" && n["b"] == "@hid__text");
+        .any(|n| n["op"] == "switch" && n["cases"][0]["then"] == "@hid__text");
     assert!(gated, "the hidden layer's text node should be gated off");
 
     let text = serde_json::to_string(&recipe).unwrap();

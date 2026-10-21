@@ -157,8 +157,9 @@ pub struct ConvertOptions {
     /// How to treat `layout.visibility: "none"` layers. `false` (default)
     /// drops them. `true` keeps their nodes in the recipe but gates each
     /// behind a `switch` that defaults to a transparent branch — so the
-    /// layer is off yet present, and flipping the switch's `select` to `b`
-    /// turns it on (a build-time toggle, since `switch` resolves at build).
+    /// layer is off yet present, and setting the switch's case `when` to
+    /// `true` turns it on (a build-time toggle, since a literal `when`
+    /// resolves at build).
     /// A hidden label layer also stays out of the shared label placement, so
     /// it knocks nothing out while off; it places its own labels once on.
     pub keep_hidden: bool,
@@ -496,9 +497,9 @@ pub fn convert(style: &Value, opts: &ConvertOptions) -> Result<(Value, Report), 
 /// Fold the ordered output node ids into a single `stack` (painter's
 /// algorithm) and return the id of the final node.
 /// Gate the outputs a hidden layer pushed (`outputs[from..]`) behind a
-/// `switch` whose default `select: "a"` picks a shared transparent branch,
-/// so the layer is off but present. Set the switch's `select` to `"b"` to
-/// turn the layer on.
+/// `switch` whose one case is `when: false`, so its `default`, a shared
+/// transparent branch, is taken and the layer is off but present. Set the
+/// case's `when` to `true` to turn the layer on.
 fn gate_hidden(id: &str, nodes: &mut Map<String, Value>, outputs: &mut [String], from: usize) {
     if from >= outputs.len() {
         return;
@@ -517,9 +518,8 @@ fn gate_hidden(id: &str, nodes: &mut Map<String, Value>, outputs: &mut [String],
             sw.clone(),
             serde_json::json!({
                 "op": "switch",
-                "a": format!("@{OFF}"),
-                "b": format!("@{slot}"),
-                "select": "a"
+                "cases": [{ "when": false, "then": format!("@{slot}") }],
+                "default": format!("@{OFF}")
             }),
         );
         *slot = sw;

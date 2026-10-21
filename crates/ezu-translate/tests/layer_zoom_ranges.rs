@@ -77,6 +77,11 @@ fn background_drawn(band: Value, zooms: &[(u8, bool)]) {
     let recipe = translate(json!([layer]));
     let doc = ezu_style::Document::from_json(&serde_json::to_string(&recipe).unwrap()).unwrap();
     let graph = build_graph(&doc, &ezu_paint::nodes::default_registry()).unwrap();
+    assert!(
+        !graph.warnings().iter().any(|w| w.contains("deprecated")),
+        "{:?}",
+        graph.warnings()
+    );
     let cache = Cache::new();
     for &(z, drawn) in zooms {
         let tile = TileId { z, x: 0, y: 0 };
