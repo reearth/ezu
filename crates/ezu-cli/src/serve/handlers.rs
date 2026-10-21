@@ -305,8 +305,8 @@ async fn get_tile(
         (y_ext.as_str(), TileFormat::Png)
     };
     let (y_str, scale) = match y_str.split_once('@') {
-        Some((y, factor)) => (y, density(factor)?),
-        None => (y_str, 1),
+        Some((y, factor)) => (y, Some(density(factor)?)),
+        None => (y_str, None),
     };
     let y: u32 = y_str
         .parse()
@@ -331,22 +331,16 @@ async fn get_tile(
         }
         (Arc::clone(&snap.tiles), params)
     };
-    // `@Nx` draws the same tile on a canvas N times the size every tile
-    // renders at, as a hi-DPI map client asks for it.
-    let tile_size = match scale {
-        1 => None,
-        n => Some(tiles.tile_size().checked_mul(n).ok_or((
-            StatusCode::BAD_REQUEST,
-            format!("@{n}x of a {} px tile is too large", tiles.tile_size()),
-        ))?),
-    };
+    // `@Nx` draws the same map at N times the density, as a hi-DPI map
+    // client asks for it; without it the server's own ratio holds.
+    let pixel_ratio = scale.map(|n| n as f32);
 
     let bytes = tiles
         .render(tile, move |r, set, opts| {
             let opts = RenderOptions {
                 format: format.encoding(),
                 params,
-                tile_size: tile_size.or(opts.tile_size),
+                pixel_ratio: pixel_ratio.unwrap_or(opts.pixel_ratio),
                 png_compression,
                 ..opts
             };
@@ -517,14 +511,15 @@ mod tests {
 
     /// What `ezu serve` holds for `style`, its files under `root`.
     async fn serve(style: &str, root: &FsPath) -> Result<AppState, String> {
-        serve_at(style, root, None).await
+        serve_at(style, root, None, 1.0).await
     }
 
-    /// [`serve`], with `--tile-size`.
+    /// [`serve`], with `--tile-size` and `--pixel-ratio`.
     async fn serve_at(
         style: &str,
         root: &FsPath,
         tile_size: Option<u32>,
+        pixel_ratio: f32,
     ) -> Result<AppState, String> {
         let doc = ezu::style::Document::from_json(style).map_err(|e| e.to_string())?;
         let byte_cache = Arc::new(TileByteCache::new(1 << 20));
@@ -538,6 +533,7 @@ mod tests {
             overzoom_levels: 0,
             byte_cache,
             tile_size,
+            pixel_ratio,
             pad: None,
             png_compression: Default::default(),
         };
@@ -618,10 +614,11 @@ mod tests {
         (p.width(), p.height())
     }
 
-    /// `@2x` is the tile at twice the tile size: the tile a server started
-    /// with `--tile-size` of double the style's draws, byte for byte.
+    /// `@2x` is the retina tile: twice the tile size with the style's pixel
+    /// sizes doubled — what a server started with `--pixel-ratio 2` draws,
+    /// and not the plain tile of twice the size, whose blur stays narrow.
     #[tokio::test]
-    async fn an_at_2x_tile_is_the_tile_at_twice_the_size() {
+    async fn an_at_2x_tile_is_the_tile_at_twice_the_density() {
         let root = scratch("density");
         write_tile(
             &root,
@@ -640,10 +637,23 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(png_size(&double), (128, 128));
 
-        let big = serve_at(STITCHED, &root, Some(128)).await.unwrap();
+        let retina = serve_at(STITCHED, &root, None, 2.0).await.unwrap();
+        let (_, at_ratio) = request(&retina, "GET", "/tiles/14/14554/6454.png", "").await;
+        assert!(
+            double == at_ratio,
+            "@2x differs from a --pixel-ratio 2 tile"
+        );
+        // A URL's own density wins over the server's.
+        let (_, back) = request(&retina, "GET", "/tiles/14/14554/6454@1x.png", "").await;
+        assert!(
+            back == plain,
+            "@1x on a --pixel-ratio 2 server is not the plain tile"
+        );
+
+        let big = serve_at(STITCHED, &root, Some(128), 1.0).await.unwrap();
         let (_, at_128) = request(&big, "GET", "/tiles/14/14554/6454.png", "").await;
-        assert!(double == at_128, "@2x differs from a 128 px tile");
-        // The multiple is of the size the server renders at.
+        assert!(double != at_128, "@2x drew what a 128 px tile draws");
+        // The density multiplies the size the server renders at.
         let (_, quad) = request(&big, "GET", "/tiles/14/14554/6454@2x.webp", "").await;
         let quad = ezu::paint::host::decode_image_bytes(&quad).expect("a WebP");
         assert_eq!((quad.width, quad.height), (256, 256));

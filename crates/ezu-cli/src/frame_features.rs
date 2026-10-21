@@ -453,7 +453,10 @@ mod tests {
             let out = dir.join(out);
             let cmd = TileCmd {
                 common: common_for(&style),
-                size: TileSizeArgs { tile_size },
+                size: TileSizeArgs {
+                    tile_size,
+                    ..TileSizeArgs::default()
+                },
                 tile,
                 out: dir.join("tile.png"),
                 format: None,

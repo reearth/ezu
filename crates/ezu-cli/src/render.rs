@@ -57,6 +57,8 @@ pub(crate) struct Open<'a> {
     /// The tile size every render is drawn at in place of the style's,
     /// until [`TileRenderer::set_tile_size`] changes it.
     pub tile_size: Option<u32>,
+    /// Device pixels per style pixel every render is drawn at.
+    pub pixel_ratio: f32,
     /// Where `file:` paths in the style resolve.
     pub assets_dir: &'a Path,
     /// The style's vector tile sources, opened by the caller, which may
@@ -120,6 +122,7 @@ impl TileRenderer {
             overzoom_levels: o.overzoom_levels,
             base: RenderOptions {
                 pad: Some(o.pad),
+                pixel_ratio: o.pixel_ratio,
                 params: o.params,
                 parallel: !serial_eval(),
                 ..RenderOptions::default()
@@ -130,6 +133,16 @@ impl TileRenderer {
     /// The tile size every render is drawn at.
     pub(crate) fn tile_size(&self) -> u32 {
         self.renderer.render_tile_size()
+    }
+
+    /// The side of every rendered tile in device pixels: the tile size at
+    /// the pixel ratio, as the renderer rounds it.
+    pub(crate) fn device_tile_size(&self) -> u32 {
+        let r = self.base.pixel_ratio;
+        if r == 1.0 {
+            return self.tile_size();
+        }
+        (self.tile_size() as f64 * r as f64).round().max(1.0) as u32
     }
 
     /// The renderer every render goes through.

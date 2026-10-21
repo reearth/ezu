@@ -3,7 +3,7 @@
 //! Hosts the same surface area the now-retired `ezu-server` binary
 //! used to: an inline HTML editor at `/`, `GET/PUT /style`, rendered
 //! tiles at `/tiles/{z}/{x}/{y}.{png,webp}` (or `{y}@2x.png` and so on, for
-//! a tile at a multiple of the tile size), raw MVT bytes for the
+//! the retina tile at that pixel ratio), raw MVT bytes for the
 //! WASM demo at `/mvt/{z}/{x}/{y}`, and a registry-derived JSON
 //! Schema at `/schemas/ezu-style.json`. The editor uses the schema
 //! for client-side validation as you type.
@@ -62,11 +62,16 @@ pub struct ServeCmd {
     #[arg(long, default_value_t = 4)]
     overzoom_levels: u8,
     /// Render each tile this many pixels square instead of at the style's
-    /// `tile-size`. A request can still ask for a multiple of it per tile
-    /// with `@2x` (up to `@4x`) before the extension. The style's own pixel
-    /// sizes (line widths, text, `pad`) are not scaled with it.
+    /// `tile-size`. The style's own pixel sizes (line widths, text, `pad`)
+    /// are not scaled with it, so they draw finer.
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
     tile_size: Option<u32>,
+    /// Device pixels per style pixel for a tile requested without `@Nx`,
+    /// from 1 to 4. A request asks for its own with `@2x` (up to `@4x`)
+    /// before the extension: the same map at that density, its line
+    /// widths, text and blurs scaled with it, as MapLibre's retina tiles.
+    #[arg(long, value_parser = crate::parse_pixel_ratio)]
+    pixel_ratio: Option<f32>,
     /// Margin rendered around each tile before it is cropped, in pixels,
     /// in place of the style's `pad` raised to what its filters reach, for
     /// every style the server loads. Narrower than that reach, a tile's
@@ -128,6 +133,7 @@ pub async fn run(args: ServeCmd) -> Result<(), Box<dyn std::error::Error>> {
         overzoom_levels: args.overzoom_levels,
         byte_cache,
         tile_size: args.tile_size,
+        pixel_ratio: args.pixel_ratio.unwrap_or(1.0),
         pad: args.pad,
         png_compression: args.png.compression(),
     };

@@ -129,17 +129,38 @@ struct CommonArgs {
     pad: Option<u32>,
 }
 
-/// `--tile-size`, for the commands that render tiles at a size of the
-/// caller's choosing. `frame` has no such flag: its tile size is what meets
-/// the scale.
+/// `--tile-size` and `--pixel-ratio`, for the commands that render tiles at
+/// a size of the caller's choosing. `frame` has neither: its tile size is
+/// what meets the scale, and its dpi is its density.
 #[derive(Args, Debug, Clone, Copy, Default)]
 struct TileSizeArgs {
     /// Render each tile this many pixels square instead of at the style's
-    /// `tile-size` — `1024` for a hi-DPI tile of a 512 px style, covering
-    /// the same ground. The style's own pixel sizes (line widths, text,
-    /// `pad`) are not scaled with it, so they draw finer.
+    /// `tile-size`, covering the same ground. The style's own pixel sizes
+    /// (line widths, text, `pad`) are not scaled with it, so they draw
+    /// finer; for a hi-DPI tile of the same map use `--pixel-ratio`.
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
     tile_size: Option<u32>,
+    /// Device pixels per style pixel, from 1 to 4 (fractions allowed): `2`
+    /// renders a retina tile, twice the tile size with every line width,
+    /// text size, blur and `pad` doubled, as MapLibre's `@2x` tiles are.
+    #[arg(long, value_parser = parse_pixel_ratio)]
+    pixel_ratio: Option<f32>,
+}
+
+impl TileSizeArgs {
+    /// The pixel ratio to render at: `--pixel-ratio`, or 1.
+    fn pixel_ratio(&self) -> f32 {
+        self.pixel_ratio.unwrap_or(1.0)
+    }
+}
+
+/// `--pixel-ratio`: a number the renderer accepts.
+fn parse_pixel_ratio(s: &str) -> Result<f32, String> {
+    let max = ezu::renderer::MAX_PIXEL_RATIO;
+    s.parse::<f32>()
+        .ok()
+        .filter(|r| (1.0..=max).contains(r))
+        .ok_or_else(|| format!("expected a number from 1 to {max}, got `{s}`"))
 }
 
 /// Output raster format. Pure-Rust pipelines on both sides — WebP is
@@ -780,6 +801,7 @@ async fn open_style(
         doc,
         pad,
         tile_size: size.tile_size,
+        pixel_ratio: size.pixel_ratio(),
         assets_dir: &assets_dir,
         vector: Arc::new(vector),
         overzoom_levels: common.overzoom_levels,
@@ -1548,8 +1570,9 @@ async fn run_bbox(args: BboxCmd) -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // The mosaic is a frame that is exactly its tiles, so it renders, and
-    // gathers its features, the way a page does.
-    let t = tiles.tile_size();
+    // gathers its features, the way a page does. Its pixels are the
+    // tiles' device pixels.
+    let t = tiles.device_tile_size();
     let mosaic = Frame {
         zoom: args.zoom,
         tile_size: t,
@@ -2316,7 +2339,10 @@ mod tests {
 
         let bbox = |style: &Path, out: PathBuf, tile_size| BboxCmd {
             common: common(style),
-            size: TileSizeArgs { tile_size },
+            size: TileSizeArgs {
+                tile_size,
+                ..TileSizeArgs::default()
+            },
             bbox: BBox {
                 min_lng: 139.698,
                 min_lat: 35.658,
@@ -2339,7 +2365,10 @@ mod tests {
 
         let tiles_cmd = |style: &Path, out: PathBuf, tile_size| TilesCmd {
             common: common(style),
-            size: TileSizeArgs { tile_size },
+            size: TileSizeArgs {
+                tile_size,
+                ..TileSizeArgs::default()
+            },
             bbox: Some(BBox {
                 min_lng: 139.698,
                 min_lat: 35.658,
@@ -2603,6 +2632,13 @@ mod tests {
         };
         assert_eq!((t.size.tile_size, t.common.pad), (Some(1024), Some(0)));
         assert!(parse(&[&base[..], &["--tile-size", "0"]].concat()).is_err());
+        let Ok(Cmd::Tile(t)) = parse(&[&base[..], &["--pixel-ratio", "1.5"]].concat()) else {
+            panic!("tile takes --pixel-ratio");
+        };
+        assert_eq!(t.size.pixel_ratio(), 1.5);
+        for bad in ["0.5", "5", "2x"] {
+            assert!(parse(&[&base[..], &["--pixel-ratio", bad]].concat()).is_err());
+        }
         let frame = [
             "ezu",
             "frame",
@@ -2621,6 +2657,10 @@ mod tests {
         assert!(
             parse(&[&frame[..], &["--tile-size", "512"]].concat()).is_err(),
             "a frame's tile size follows from its scale"
+        );
+        assert!(
+            parse(&[&frame[..], &["--pixel-ratio", "2"]].concat()).is_err(),
+            "a frame's density is its dpi"
         );
         for cmd in [
             &[

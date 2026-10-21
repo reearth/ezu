@@ -47,6 +47,9 @@ pub struct Sources {
     pub byte_cache: Arc<TileByteCache>,
     /// `--tile-size`: what every style renders at in place of its own.
     pub tile_size: Option<u32>,
+    /// `--pixel-ratio`: the density a tile asked for without `@Nx`
+    /// renders at.
+    pub pixel_ratio: f32,
     /// `--pad`: the margin every style renders with in place of its own.
     pub pad: Option<u32>,
     /// `--png-compression`: the effort every PNG tile is encoded with.
@@ -100,6 +103,7 @@ impl StyleSnapshot {
             doc: &doc,
             pad,
             tile_size: sources.tile_size,
+            pixel_ratio: sources.pixel_ratio,
             assets_dir: &sources.assets_dir,
             vector: Arc::clone(&sources.feature_sources),
             overzoom_levels: sources.overzoom_levels,
