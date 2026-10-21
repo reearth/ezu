@@ -76,7 +76,7 @@ Three things to notice:
 - **`@name` wires nodes together.** `fill-solid` reads its geometry from the
   `features` node; `blend` reads two rasters. That is the whole graph syntax.
 - **The order in `nodes` means nothing.** Evaluation order comes from the
-  references, not the file. The `blend` chain is what puts water on top of the
+  references, not the file. The `blend` node is what puts water on top of the
   background.
 - **`output` must be a `Raster`.** `features` produces `Features`, which cannot be
   the output — the graph type-checks this at build time, before any pixel is

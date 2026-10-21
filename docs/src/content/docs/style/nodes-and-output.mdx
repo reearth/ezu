@@ -57,20 +57,21 @@ filter and zoom gates live, and is shared by every consumer of that layer:
 "roads":   { "op": "stroke", "features": "@roads_f", "color": "#333", "width-px": 1.5 }
 ```
 
-**Stacking.** Compositing is a `blend` chain — painter's algorithm as a graph.
-`ezu translate` emits exactly this from a MapLibre layer list:
+**Stacking.** Compositing is painter's algorithm as a graph: `stack` draws its
+`layers` bottom to top, each over the ones below. `ezu translate` emits exactly
+this from a MapLibre layer list:
 
 ```json
-"c1":  { "op": "blend", "base": "@bg",  "over": "@landuse" },
-"c2":  { "op": "blend", "base": "@c1",  "over": "@water" },
-"out": { "op": "blend", "base": "@c2",  "over": "@roads" }
+"out": { "op": "stack", "layers": ["@bg", "@landuse", "@water", "@roads"] }
 ```
 
-For many layers at once, `stack` composites a list in one node.
+A long list is split into a chain of narrower `stack` nodes, each taking the
+one below as its first layer, to the same pixels. `blend` composites a single
+pair, with a choice of blend mode and composite.
 
 <figure class="diagram">
-  <img src="/ezu/diagrams/blend-chain.svg" alt="Three layers stacked as a `blend` chain — the shape `ezu translate` emits from an ordered MapLibre layer list." loading="lazy" decoding="async" />
-  <figcaption>Three layers stacked as a `blend` chain — the shape `ezu translate` emits from an ordered MapLibre layer list.</figcaption>
+  <img src="/ezu/diagrams/layer-stack.svg" alt="Four layers composited by one `stack` node — the shape `ezu translate` emits from an ordered MapLibre layer list." loading="lazy" decoding="async" />
+  <figcaption>Four layers composited by one `stack` node — the shape `ezu translate` emits from an ordered MapLibre layer list.</figcaption>
 </figure>
 
 **Masking.** `blend` with `composite: "source-atop"` clips the result to the base's alpha —

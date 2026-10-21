@@ -1,5 +1,5 @@
 {
-  "name": "blend-chain-diagram",
+  "name": "layer-stack-diagram",
   "tile-size": 512,
   "pad": 8,
   "sources": {
@@ -44,20 +44,9 @@
       "color": "#b09a80",
       "width-px": 1.2
     },
-    "c1": {
-      "op": "blend",
-      "base": "@bg",
-      "over": "@earth"
-    },
-    "c2": {
-      "op": "blend",
-      "base": "@c1",
-      "over": "@water"
-    },
     "out": {
-      "op": "blend",
-      "base": "@c2",
-      "over": "@roads"
+      "op": "stack",
+      "layers": ["@bg", "@earth", "@water", "@roads"]
     }
   },
   "output": "@out"
