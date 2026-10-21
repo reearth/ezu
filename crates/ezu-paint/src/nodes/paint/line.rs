@@ -125,7 +125,9 @@ impl Node for LineNode {
             Some(o) => Some(o.get(ctx, inputs)? as f32),
             None => None,
         };
-        // Clone brush and apply optional radius / opacity overrides.
+        // Clone brush and apply optional radius / opacity overrides. The
+        // brush, its own radius and `radius-px` alike, is in style px until
+        // `to_device` scales it just before it strokes.
         let mut brush: Brush = (*brush_arc).clone();
         if let Some(r) = radius_px {
             set_radius(&mut brush, r);
@@ -133,6 +135,7 @@ impl Node for LineNode {
         if let Some(o) = opacity {
             set_opacity(&mut brush, o);
         }
+        let ratio = ctx.canvas.pixel_ratio;
         let color = self.color.get(ctx, inputs)?;
         let lin = srgb_to_linear_rgba(color);
         let style = LineStrokeStyle {
@@ -144,6 +147,7 @@ impl Node for LineNode {
             opacity_stroke_curve: resolve_curve(&self.opacity_stroke_curve, ctx, inputs)?,
             hardness_stroke_curve: resolve_curve(&self.hardness_stroke_curve, ctx, inputs)?,
             dtime_stroke_curve: resolve_curve(&self.dtime_stroke_curve, ctx, inputs)?,
+            pixel_ratio: ratio,
         };
 
         if self.color_expr.is_some() || self.radius_expr.is_some() || self.opacity_expr.is_some() {
@@ -164,6 +168,7 @@ impl Node for LineNode {
                 if let Some(o) = eval_opt_number(&self.opacity_expr, &ectx) {
                     set_opacity(&mut brush, o);
                 }
+                to_device(&mut brush, ratio);
                 let mut style = style.clone();
                 // The color's alpha is ignored, as the constant `color`'s
                 // is: the brush's opacity carries the stroke's alpha.
@@ -180,6 +185,7 @@ impl Node for LineNode {
             return Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))));
         }
 
+        to_device(&mut brush, ratio);
         let lines: Vec<_> = feats.lines().cloned().collect();
         paint_lines(
             &mut canvas,
@@ -233,6 +239,28 @@ impl Node for LineNode {
 /// radius below 0.05 px is held there so the log stays finite.
 fn set_radius(brush: &mut Brush, r: f32) {
     brush.get_mut(hokusai::BrushSetting::Radius).base_value = libm::logf(r.max(0.05));
+}
+
+/// Scale a brush in style px to draw `ratio` device px per style px.
+///
+/// Only the radius is in pixels: libmypaint measures dab spacing, the
+/// random and directional offsets and the tracking noise in multiples of
+/// the radius, so they follow it, and the dabs along a line keep their
+/// count and their jitter. The radius setting is log-space, so the ratio
+/// adds `ln(ratio)` to it. At a ratio of 1 the brush is left as it is.
+///
+/// The stroke's timing is left alone: `dtime` stays in seconds, so the
+/// brush sees speeds in device px per second, `ratio` times what a ratio
+/// of 1 gives. That keeps what moves the dab by speed in step with the
+/// canvas (`offset_by_speed` and the slow-tracking lag are px offsets
+/// proportional to it) and keeps the time-based settings
+/// (`dabs_per_second`, the slownesses) on the same timeline. Only a curve
+/// driven by a speed input sees the faster stroke, as a brush in MyPaint
+/// does on a zoomed-in canvas.
+fn to_device(brush: &mut Brush, ratio: f32) {
+    if ratio != 1.0 {
+        brush.get_mut(hokusai::BrushSetting::Radius).base_value += libm::logf(ratio);
+    }
 }
 
 /// Give the brush an opacity of `o`, held to `0..=1`.

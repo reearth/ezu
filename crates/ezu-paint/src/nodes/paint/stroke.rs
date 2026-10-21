@@ -232,9 +232,12 @@ impl Node for StrokeNode {
         let rgba8 = color_f32_to_u8(self.color.get(ctx, inputs)?);
         let opacity = self.opacity.get(ctx, inputs)? as f32;
         let const_color = tint_alpha_color(rgba8, opacity);
-        let const_width = (self.width_px.get(ctx, inputs)? as f32).max(0.0);
-        let const_gap = (self.gap_width_px.get(ctx, inputs)? as f32).max(0.0);
-        let const_offset = self.offset_px.get(ctx, inputs)?;
+        // Widths, gaps and offsets are written in style px and drawn in
+        // device px, so each one, constant or per group, goes through
+        // `ctx.px` once it is known.
+        let const_width = ctx.px32((self.width_px.get(ctx, inputs)? as f32).max(0.0));
+        let const_gap = ctx.px32((self.gap_width_px.get(ctx, inputs)? as f32).max(0.0));
+        let const_offset = ctx.px(self.offset_px.get(ctx, inputs)?);
         // Canvas px per feature unit, for offsetting in pixel space.
         let extent = feats.extent.max(1) as f64;
         let px_per_unit = (
@@ -253,10 +256,12 @@ impl Node for StrokeNode {
             ),
         };
         let dash_unit = self.dash_unit.get(ctx)?;
-        // The pattern in pixels for a stroke of `width`.
+        // The pattern in device pixels for a stroke of `width` (itself in
+        // device pixels, so a pattern in widths follows the ratio through it).
         let dash_px = |width: f32| match (&dash, dash_unit) {
             (Some(d), DashUnit::Width) => Some(d.iter().map(|l| l * width).collect()),
-            (d, _) => d.clone(),
+            (Some(d), DashUnit::Px) => Some(d.iter().map(|&l| ctx.px32(l)).collect()),
+            (None, _) => None,
         };
         let mut canvas = make_canvas(ctx)?;
 
@@ -296,21 +301,21 @@ impl Node for StrokeNode {
                 };
                 let width = match &self.width_expr {
                     Some(expr) => match maplibre_expr::evaluate(expr, &ectx) {
-                        Ok(maplibre_expr::Value::Number(n)) => (n as f32).max(0.0),
+                        Ok(maplibre_expr::Value::Number(n)) => ctx.px32((n as f32).max(0.0)),
                         _ => const_width,
                     },
                     None => const_width,
                 };
                 let gap = match &self.gap_width_expr {
                     Some(expr) => match maplibre_expr::evaluate(expr, &ectx) {
-                        Ok(maplibre_expr::Value::Number(n)) => (n as f32).max(0.0),
+                        Ok(maplibre_expr::Value::Number(n)) => ctx.px32((n as f32).max(0.0)),
                         _ => const_gap,
                     },
                     None => const_gap,
                 };
                 let offset = match &self.offset_expr {
                     Some(expr) => match maplibre_expr::evaluate(expr, &ectx) {
-                        Ok(maplibre_expr::Value::Number(n)) => n,
+                        Ok(maplibre_expr::Value::Number(n)) => ctx.px(n),
                         _ => const_offset,
                     },
                     None => const_offset,

@@ -62,6 +62,11 @@ pub struct LineStrokeStyle {
     /// through it (faster hand). Useful with dynamics-driven brushes
     /// that react to stroke speed.
     pub dtime_stroke_curve: Option<Vec<(f32, f32)>>,
+    /// Canvas pixels per style pixel. The brush is expected to be scaled
+    /// to it already; the stroke itself only needs it to measure a line in
+    /// style pixels, so a stroke curve runs over the same stretch of line
+    /// at any density.
+    pub pixel_ratio: f32,
 }
 
 impl Default for LineStrokeStyle {
@@ -75,6 +80,7 @@ impl Default for LineStrokeStyle {
             opacity_stroke_curve: None,
             hardness_stroke_curve: None,
             dtime_stroke_curve: None,
+            pixel_ratio: 1.0,
         }
     }
 }
@@ -493,6 +499,14 @@ fn apply_stroke_curves(brush: &mut Brush, line_len_px: f32, style: &LineStrokeSt
     // libmypaint advances stroke_state by `step_dist * exp(-dur_log)`
     // each dab, where step_dist is in radius-units. Setting dur_log =
     // ln(line_len_px) makes the total advance ~1.0 over the polyline.
+    // The length is taken in style px: on a denser canvas the line is
+    // longer in canvas px, but so is the radius it is measured in, so the
+    // advance per dab is what it is at a ratio of 1.
+    let line_len_px = if style.pixel_ratio == 1.0 {
+        line_len_px
+    } else {
+        line_len_px / style.pixel_ratio
+    };
     brush
         .get_mut(BrushSetting::StrokeDurationLogarithmic)
         .base_value = libm::logf(line_len_px.max(1.0));
@@ -655,6 +669,56 @@ mod parallel_tests {
         // No hard threshold yet — until halo + merge_premul_over land,
         // we measure but don't gate. The day hokusai grows the
         // primitive, drop the diff loop and `assert_eq!` the buffers.
+    }
+}
+
+#[cfg(test)]
+mod pixel_ratio_tests {
+    use super::*;
+    use ezu_core::TileId;
+
+    /// A vertex's pressure jitter is seeded by where it is in the world, so
+    /// a canvas of twice the density, with twice the pad, seeds every
+    /// vertex of a line as the 1x canvas does.
+    #[test]
+    fn a_denser_canvas_seeds_each_vertex_with_the_same_world_position() {
+        let tile = TileId::new(13, 7276, 3225);
+        let one = StrokeGeom::from_canvas(
+            &Canvas::new_padded(256, 256, 12).expect("non-zero canvas dims"),
+            4096,
+            tile,
+        );
+        let two = StrokeGeom::from_canvas(
+            &Canvas::new_padded(512, 512, 24).expect("non-zero canvas dims"),
+            4096,
+            tile,
+        );
+        for (x, y) in [(0, 0), (37, 4011), (2048, 2048), (-300, 4500), (4095, 1)] {
+            let seed = |g: &StrokeGeom| {
+                let px = x as f32 * g.sx + g.pad;
+                let py = y as f32 * g.sy + g.pad;
+                world_seed(g.world_at(px, py), LINE_STROKE_SALT)
+            };
+            assert_eq!(seed(&one), seed(&two), "vertex ({x}, {y})");
+        }
+    }
+
+    /// A stroke curve runs over the line's length in style px, so it
+    /// spans the same stretch of line whatever the density.
+    #[test]
+    fn a_stroke_curve_spans_the_line_in_style_pixels() {
+        let curve = Some(vec![(0.0, 0.0), (1.0, 1.0)]);
+        let duration = |len: f32, ratio: f32| {
+            let mut b = Brush::default();
+            let style = LineStrokeStyle {
+                radius_stroke_curve: curve.clone(),
+                pixel_ratio: ratio,
+                ..LineStrokeStyle::default()
+            };
+            apply_stroke_curves(&mut b, len, &style);
+            b.get(BrushSetting::StrokeDurationLogarithmic).base_value
+        };
+        assert_eq!(duration(300.0, 1.0), duration(600.0, 2.0));
     }
 }
 

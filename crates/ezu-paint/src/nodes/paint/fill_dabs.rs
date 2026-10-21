@@ -80,13 +80,21 @@ impl Node for FillDabsNode {
         let srgb = self.color.get(ctx, inputs)?;
         let color = srgb_to_linear_rgba(srgb);
         let mut canvas = make_canvas(ctx)?;
+        // Radius and spacing are style px, drawn in device px. The lattice
+        // is indexed by global device pixel over spacing, and both scale by
+        // the ratio, so a denser canvas puts the same cells, with the same
+        // seeds, at the same world positions. The spacing's floor is taken
+        // in style px for that reason, before the conversion; the jitters
+        // are fractions of the spacing and the radius, so they follow.
         let style = DabFillStyle {
             color: RgbaF32::new(color[0], color[1], color[2], 1.0),
             opacity: self.opacity.get(ctx, inputs)? as f32,
-            radius_px: self.radius_px.get(ctx, inputs)? as f32,
+            radius_px: ctx.px32(self.radius_px.get(ctx, inputs)? as f32),
             hardness: self.hardness.get(ctx, inputs)? as f32,
             paint: self.paint.get(ctx, inputs)? as f32,
-            spacing_px: self.spacing_px.get(ctx, inputs)? as f32,
+            spacing_px: ctx.px32(
+                (self.spacing_px.get(ctx, inputs)? as f32).max(crate::fill_dabs::MIN_SPACING_PX),
+            ),
             position_jitter: self.position_jitter.get(ctx, inputs)? as f32,
             size_jitter: self.size_jitter.get(ctx, inputs)? as f32,
             opacity_jitter: self.opacity_jitter.get(ctx, inputs)? as f32,

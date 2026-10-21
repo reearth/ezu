@@ -28,7 +28,7 @@ use serde_json::Value;
 use tiny_skia::{PixmapPaint, Transform};
 use xxhash_rust::xxh3::Xxh3;
 
-use super::stamp::{eval_icon_name, eval_number, parse_expr_field, read_icon_name_expr};
+use super::stamp::{eval_icon_name, eval_number, eval_px, parse_expr_field, read_icon_name_expr};
 use crate::nodes::common::{
     canvas_into_raster, downcast_features, empty_raster, make_canvas, unwrap_raster_or_sprite,
     FramedImage, ACCEPTS_RASTER_OR_SPRITE,
@@ -70,6 +70,9 @@ struct Walk {
     sy: f32,
     spacing_in: f32,
     base_scale: f32,
+    /// The scale a sprite is drawn at when no width fits it: its pixels are
+    /// style px, so one device px per style px.
+    native: f32,
 }
 
 impl Walk {
@@ -85,7 +88,11 @@ impl Walk {
     ) {
         let (iw, ih) = img.size();
         // `width-px` fits the image height to the stroke width.
-        let fit = if width_px > 0.0 { width_px / ih } else { 1.0 };
+        let fit = if width_px > 0.0 {
+            width_px / ih
+        } else {
+            self.native
+        };
         let scale = self.base_scale * fit;
         if scale <= 0.0 {
             return;
@@ -188,8 +195,11 @@ impl Node for LineStampNode {
 
         // Constants, resolved once. Data-driven exprs (if present) override
         // these per feature group; whichever expr is absent uses the constant.
-        let const_width_px = self.width_px.get(ctx, inputs)? as f32;
-        let spacing_in = self.spacing_px.get(ctx, inputs)? as f32;
+        // Width and spacing are style px, drawn in device px; a sprite's
+        // pixels are style px too, so at its native size it is scaled by
+        // the ratio.
+        let const_width_px = ctx.px32(self.width_px.get(ctx, inputs)? as f32);
+        let spacing_in = ctx.px32(self.spacing_px.get(ctx, inputs)? as f32);
         let base_scale = (self.scale.get(ctx, inputs)? as f32).max(0.0);
         let const_opacity = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
 
@@ -201,6 +211,7 @@ impl Node for LineStampNode {
             sy: canvas.tile_height() as f32 / extent,
             spacing_in,
             base_scale,
+            native: ctx.px32(1.0),
         };
         let z = ctx.tile.z;
         let has_paint_expr = self.width_expr.is_some() || self.opacity_expr.is_some();
@@ -247,7 +258,7 @@ impl Node for LineStampNode {
                         continue;
                     }
                     let ectx = crate::render::group_expr_context(group, z);
-                    let width_px = eval_number(&self.width_expr, &ectx, const_width_px);
+                    let width_px = eval_px(&self.width_expr, &ectx, const_width_px, ctx);
                     let opacity =
                         eval_number(&self.opacity_expr, &ectx, const_opacity).clamp(0.0, 1.0);
                     walk.stamp_lines(&mut pm, &group.lines, &img, width_px, opacity);

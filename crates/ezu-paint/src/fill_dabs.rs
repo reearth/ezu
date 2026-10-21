@@ -64,6 +64,10 @@ impl Default for DabFillStyle {
     }
 }
 
+/// The closest the dab lattice's cells are allowed to be, in pixels: a
+/// tighter `spacing_px` is raised to this.
+pub const MIN_SPACING_PX: f32 = 0.5;
+
 /// Salt for the lattice seed used by dab scatter; lets other consumers
 /// (e.g. paper noise, edge stroking) derive uncorrelated sequences.
 pub const DAB_SCATTER_SALT: u32 = 0xE2_70_DA_B5;
@@ -153,7 +157,7 @@ fn scatter(
     let pad = canvas.pad();
     let mut surface = MemSurface::new();
 
-    let spacing = style.spacing_px.max(0.5) as f64;
+    let spacing = style.spacing_px.max(MIN_SPACING_PX) as f64;
     let tile_h = canvas.tile_height();
     // The tile's top-left corner on the global pixel grid at this zoom. Cell
     // indices are taken there, so they name the same cell from whichever tile

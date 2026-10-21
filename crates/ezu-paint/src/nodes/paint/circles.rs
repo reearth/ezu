@@ -22,6 +22,7 @@ use tiny_skia::{
 };
 use xxhash_rust::xxh3::Xxh3;
 
+use super::stamp::eval_px;
 use crate::nodes::common::{
     canvas_into_raster, color_f32_to_u8, downcast_features, empty_raster, make_canvas,
     tint_alpha_color,
@@ -243,10 +244,12 @@ impl Node for CirclesNode {
 
         // Constants, resolved once. Data-driven exprs (if present) override
         // these per feature group; whichever expr is absent uses the constant.
-        let const_radius = (self.radius.get(ctx, inputs)? as f32).max(0.0);
+        // Radius and ring width are style px, drawn in device px; `blur` is a
+        // fraction of the radius, so it follows the radius without scaling.
+        let const_radius = ctx.px32((self.radius.get(ctx, inputs)? as f32).max(0.0));
         let const_color = color_f32_to_u8(self.color.get(ctx, inputs)?);
         let const_opacity = self.opacity.get(ctx, inputs)? as f32;
-        let const_stroke_width = (self.stroke_width.get(ctx, inputs)? as f32).max(0.0);
+        let const_stroke_width = ctx.px32((self.stroke_width.get(ctx, inputs)? as f32).max(0.0));
         let const_stroke_color = color_f32_to_u8(self.stroke_color.get(ctx, inputs)?);
         let const_stroke_opacity = match &self.stroke_opacity {
             Some(o) => Some(o.get(ctx, inputs)? as f32),
@@ -267,14 +270,14 @@ impl Node for CirclesNode {
         let paint_group = |canvas: &mut crate::Canvas,
                            group: &crate::nodes::common::FeatureGroup| {
             let ectx = crate::render::group_expr_context(group, z);
-            let radius = eval_number(&self.radius_expr, &ectx, const_radius).max(0.0);
+            let radius = eval_px(&self.radius_expr, &ectx, const_radius, ctx).max(0.0);
             if radius <= 0.0 {
                 return;
             }
             let opacity = eval_number(&self.opacity_expr, &ectx, const_opacity);
             let fill_rgba = eval_color(&self.color_expr, &ectx, const_color);
             let fill_color = tint_alpha_color(fill_rgba, opacity);
-            let stroke_width = eval_number(&self.stroke_width_expr, &ectx, const_stroke_width);
+            let stroke_width = eval_px(&self.stroke_width_expr, &ectx, const_stroke_width, ctx);
             let stroke_rgba = eval_color(&self.stroke_color_expr, &ectx, const_stroke_color);
             // Without a `stroke-opacity` of its own the ring takes `opacity`.
             let stroke_opacity = match (&self.stroke_opacity_expr, const_stroke_opacity) {

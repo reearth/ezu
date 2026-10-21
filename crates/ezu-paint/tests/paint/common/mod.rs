@@ -387,6 +387,44 @@ pub fn render_with_features_and_images(
     }
 }
 
+/// Render with feature layers and images at `ratio` device px per style px,
+/// the way a host renders a retina tile: `tile_size` and `pad` are the style
+/// sizes, and the canvas is `ratio` times them.
+#[allow(dead_code)]
+pub fn render_at_ratio(
+    json: &str,
+    tile_size: u32,
+    pad: u32,
+    ratio: f32,
+    tile: TileId,
+    features: &[(&str, ezu_features::FeatureLayer)],
+    images: &[(&str, RasterBuf)],
+) -> std::sync::Arc<ezu_graph::RasterBuf> {
+    use ezu_paint::host::TileLoader;
+    let doc = Document::from_json(json).expect("parse");
+    let registry = default_registry();
+    let graph = build_graph(&doc, &registry).expect("build");
+    let cache = Cache::new();
+    let mut bank = BrushBankLoader::new();
+    for (name, img) in images {
+        bank.insert_image(name.to_string(), img.clone());
+    }
+    let mut loader = TileLoader::new(&bank, tile);
+    for (name, layer) in features {
+        loader.bind_features(name.to_string(), layer.clone());
+    }
+    let ev = Evaluator::new(&graph, &cache, &loader);
+    let device = |v: u32| (v as f32 * ratio).round() as u32;
+    let canvas = CanvasInfo::square(device(tile_size), device(pad)).with_pixel_ratio(ratio);
+    let out = ev
+        .render(tile, canvas, &ParamValues::new(), 0)
+        .expect("render");
+    match out {
+        PortValue::Raster(r) => r,
+        other => panic!("expected raster output, got {:?}", other.kind()),
+    }
+}
+
 /// Render with tile-scoped feature layers and a bound sprite sheet, the
 /// combination a data-driven `icon-image` (`features` → `stamp` with a
 /// `name-expr` cropping a per-feature icon from `sheet`) needs. `sprite_key`

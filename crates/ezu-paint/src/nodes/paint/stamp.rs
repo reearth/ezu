@@ -80,6 +80,24 @@ pub(super) fn eval_number(
     }
 }
 
+/// [`eval_number`] for a length in style px: a number the expression
+/// resolves to is converted to device px, while `fallback` is taken to be
+/// in device px already.
+pub(super) fn eval_px(
+    expr: &Option<maplibre_expr::Expr>,
+    ectx: &maplibre_expr::EvaluationContext,
+    fallback: f32,
+    ctx: &EvalCtx<'_>,
+) -> f32 {
+    match expr {
+        Some(e) => match maplibre_expr::evaluate(e, ectx) {
+            Ok(maplibre_expr::Value::Number(n)) => ctx.px32(n as f32),
+            _ => fallback,
+        },
+        None => fallback,
+    }
+}
+
 /// Evaluate a `Color` expression for a group into straight RGBA in `0..=1`,
 /// falling back to `fallback` when the expression is absent or doesn't
 /// resolve to a color. maplibre-expr `Color` stores straight channels in
@@ -116,7 +134,7 @@ struct StampNode {
     rotation_deg: In<f64>,
     rotation_jitter_deg: In<f64>,
     scale_jitter: In<f64>,
-    /// Maximum per-point offset in canvas pixels, drawn independently per
+    /// Maximum per-point offset in style pixels, drawn independently per
     /// axis. A plain `In<f64>` rather than a `PaddingIn`: this node already
     /// leaves the sprite's own half-extent — usually far larger than a jitter
     /// of a few pixels — to the document's `pad`, so bounding the jitter alone
@@ -226,7 +244,10 @@ impl Node for StampNode {
         let const_rotation_deg = self.rotation_deg.get(ctx, inputs)? as f32;
         let rotation_jitter_deg = self.rotation_jitter_deg.get(ctx, inputs)? as f32;
         let scale_jitter = self.scale_jitter.get(ctx, inputs)? as f32;
-        let position_jitter_px = self.position_jitter_px.get(ctx, inputs)? as f32;
+        // A sprite's pixels, its offset and the jitter are style px, drawn in
+        // device px: the jitter converts here, the sprite and its offset
+        // through the scale it is drawn at.
+        let position_jitter_px = ctx.px32(self.position_jitter_px.get(ctx, inputs)? as f32);
         let const_opacity = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
         let const_anchor = self.anchor.get(ctx)?;
 
@@ -296,6 +317,7 @@ impl Node for StampNode {
                 }
                 // The image turns and scales about the point, and the offset
                 // with it, as MapLibre turns an icon about its anchor.
+                let s = ctx.px32(s);
                 let t = Transform::from_translate(px + dx, py + dy)
                     .pre_rotate(rotation_deg + rot_off)
                     .pre_scale(s, s)

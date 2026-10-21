@@ -96,8 +96,10 @@ impl Node for FillSolidNode {
         };
         let edge_alpha = self.edge_alpha.get(ctx, inputs)? as f32;
         let edge_color = edge.map(|e| tint_alpha_color(e, edge_alpha));
-        let edge_width = self.edge_width.get(ctx, inputs)? as f32;
-        let blur_sigma = self.blur_sigma.get(ctx, inputs)? as f32;
+        // The outline width and the blur are style px, drawn in device px.
+        // The blur's pad stays in style px: the evaluator scales pads itself.
+        let edge_width = ctx.px32(self.edge_width.get(ctx, inputs)? as f32);
+        let blur_sigma = ctx.px32(self.blur_sigma.get(ctx, inputs)? as f32);
         let mut canvas = make_canvas(ctx)?;
 
         if self.fill_expr.is_some()
