@@ -3,8 +3,8 @@
 use crate::common::render;
 
 #[test]
-fn switch_default_picks_a() {
-    // No `select` field → defaults to `a`. Red vs. blue solids:
+fn switch_without_a_case_that_holds_takes_default() {
+    // The only case is false → `default`. Red vs. blue solids:
     // confirm we see red.
     let json = r##"{
       "name": "demo",
@@ -12,7 +12,8 @@ fn switch_default_picks_a() {
       "nodes": {
         "red":  { "op": "solid", "color": "#ff0000" },
         "blue": { "op": "solid", "color": "#0000ff" },
-        "out":  { "op": "switch", "a": "@red", "b": "@blue" }
+        "out":  { "op": "switch", "cases": [ { "when": false, "then": "@blue" } ],
+                  "default": "@red" }
       },
       "output": "@out"
     }"##;
@@ -21,14 +22,15 @@ fn switch_default_picks_a() {
 }
 
 #[test]
-fn switch_select_b_picks_b() {
+fn switch_takes_the_case_that_holds() {
     let json = r##"{
       "name": "demo",
       "tile-size": 8,
       "nodes": {
         "red":  { "op": "solid", "color": "#ff0000" },
         "blue": { "op": "solid", "color": "#0000ff" },
-        "out":  { "op": "switch", "a": "@red", "b": "@blue", "select": "b" }
+        "out":  { "op": "switch", "cases": [ { "when": true, "then": "@blue" } ],
+                  "default": "@red" }
       },
       "output": "@out"
     }"##;

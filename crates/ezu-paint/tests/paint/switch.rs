@@ -198,18 +198,32 @@ fn literal_cases_let_branches_differ_in_kind() {
 #[test]
 fn a_branch_not_picked_is_not_rendered() {
     // Sanity: picking it does fail.
-    let picked = doc("", r#""a": "@boom", "b": "@red""#);
+    let picked = doc(
+        "",
+        r#""cases": [ { "when": false, "then": "@red" } ], "default": "@boom""#,
+    );
     assert!(render_error(&picked, &[]).contains("non-finite"));
 
+    let flag = doc(
+        r#""flip": { "type": "bool", "default": false }"#,
+        r#""cases": [ { "when": "$flip", "then": "@boom" } ], "default": "@red""#,
+    );
+    assert_eq!(render(&flag, 8, 0).pixel(4, 4), RED);
+    assert!(render_error(&flag, &[("flip", ScalarValue::Bool(true))]).contains("non-finite"));
+
+    let literal = doc(
+        "",
+        r#""cases": [ { "when": true, "then": "@red" } ], "default": "@boom""#,
+    );
+    assert_eq!(render(&literal, 8, 0).pixel(4, 4), RED);
+
+    // The deprecated two-way form skips the same way.
     let two_way = doc(
         r#""flip": { "type": "bool", "default": false }"#,
         r#""a": "@red", "b": "@boom", "select": "$flip""#,
     );
     assert_eq!(render(&two_way, 8, 0).pixel(4, 4), RED);
     assert!(render_error(&two_way, &[("flip", ScalarValue::Bool(true))]).contains("non-finite"));
-
-    let literal = doc("", r#""a": "@boom", "b": "@red", "select": "b""#);
-    assert_eq!(render(&literal, 8, 0).pixel(4, 4), RED);
 
     let by_name = doc(
         THEME,
@@ -228,15 +242,85 @@ fn a_branch_not_picked_is_not_rendered() {
     assert_eq!(r.pixel(4, 4), GREEN);
 }
 
+fn warnings(json: &str) -> Vec<String> {
+    let doc = Document::from_json(json).expect("parse");
+    build_graph(&doc, &default_registry())
+        .expect("build")
+        .warnings()
+        .to_vec()
+}
+
+/// The replacement a two-way switch's warning spells out, spliced in as
+/// the switch's fields.
+fn replacement(json: &str) -> String {
+    let w = warnings(json);
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(w[0].contains("`a` / `b` are deprecated"), "{}", w[0]);
+    let fix = w[0]
+        .split_once("write ")
+        .map(|(_, r)| r)
+        .unwrap_or_else(|| panic!("no replacement in {}", w[0]));
+    fix.strip_suffix(" instead")
+        .or_else(|| fix.strip_suffix(" to keep a toggle"))
+        .unwrap_or_else(|| panic!("no replacement in {}", w[0]))
+        .to_string()
+}
+
+/// The deprecated two-way form still picks as it did, and its warning
+/// names a form that picks the same and builds without one.
 #[test]
-fn a_string_param_names_a_or_b() {
-    let json = doc(
-        r#""side": { "type": "string", "enum": ["a", "b"], "default": "b" }"#,
-        r#""a": "@red", "b": "@blue", "select": "$side""#,
-    );
-    assert_eq!(render(&json, 8, 0).pixel(4, 4), BLUE);
-    let r = render_with_params(&json, 8, 0, Z0, &[("side", string("a"))]);
-    assert_eq!(r.pixel(4, 4), RED);
+fn the_two_way_form_still_works_and_warns() {
+    let side = r#""side": { "type": "string", "enum": ["a", "b"], "default": "b" }"#;
+    let flip = r#""flip": { "type": "bool", "default": false }"#;
+    let cases = [
+        // (params, fields, the param set to try, the colour then)
+        ("", r#""a": "@red", "b": "@blue""#, None, RED),
+        (
+            "",
+            r#""a": "@red", "b": "@blue", "select": "b""#,
+            None,
+            BLUE,
+        ),
+        ("", r#""a": "@red", "b": "@blue", "select": "a""#, None, RED),
+        (
+            flip,
+            r#""a": "@red", "b": "@blue", "select": "$flip""#,
+            Some(("flip", ScalarValue::Bool(true))),
+            BLUE,
+        ),
+        (
+            side,
+            r#""a": "@red", "b": "@blue", "select": "$side""#,
+            Some(("side", string("a"))),
+            RED,
+        ),
+    ];
+    let at = |json: &str, pv: &[(&str, ScalarValue)], tile: TileId| {
+        render_with_params(json, 8, 0, tile, pv).pixel(4, 4)
+    };
+    for (params, fields, set, want) in cases {
+        let old = doc(params, fields);
+        let new = doc(params, &replacement(&old));
+        assert!(warnings(&new).is_empty(), "{new}");
+        let pv: Vec<_> = set.into_iter().collect();
+        assert_eq!(at(&old, &pv, Z0), want, "{old}");
+        assert_eq!(at(&new, &pv, Z0), want, "{new}");
+        // Unset, each param keeps its default, and picks alike.
+        assert_eq!(at(&new, &[], Z0), at(&old, &[], Z0), "{new}");
+    }
+    // A `string` param picks by its default before anything sets it.
+    let json = doc(side, r#""a": "@red", "b": "@blue", "select": "$side""#);
+    assert_eq!(at(&json, &[], Z0), BLUE);
+
+    // A `@node` select is read per render.
+    let deep = r#""deep": { "op": "expr", "type": "bool", "expr": ["step", ["zoom"], false, 10, true] }, "out":"#;
+    let old = doc("", r#""a": "@red", "b": "@blue", "select": "@deep""#).replace(r#""out":"#, deep);
+    let new = doc("", &replacement(&old)).replace(r#""out":"#, deep);
+    let z12 = TileId { z: 12, x: 0, y: 0 };
+    for json in [&old, &new] {
+        assert_eq!(at(json, &[], Z0), RED, "{json}");
+        assert_eq!(at(json, &[], z12), BLUE, "{json}");
+    }
 }
 
 #[test]

@@ -475,6 +475,12 @@ mean is spelled out in
   `clip: true` did. It still works, with a warning naming the replacement;
   when both are set, `composite` is used. `ezu translate` writes
   `composite` for a `fill-pattern`.
+- The two-way form of `switch`, `a` / `b` picked by `select`. Write
+  `cases` instead — `"cases": [{ "when": "$fancy", "then": "@fancy" }],
+  "default": "@plain"` takes `@fancy` when `$fancy` is true, as `"b"` did
+  — or `branches` named `a` and `b` for a `string` param. The old form
+  still picks as before, and the build warns with the replacement written
+  out for that switch's own inputs.
 - `place`'s `top-center`, `center-left`, `center-right` and
   `bottom-center` anchors, for MapLibre's `top`, `left`, `right` and
   `bottom`, the names `text` and `stamp` take. They place the image as

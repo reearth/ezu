@@ -24,14 +24,14 @@ Extract a single channel of an RGBA raster as a [0, 1] ScalarField. RGB channels
 
 ### `switch`
 
-Pass one of its inputs through. Two-way: `a` / `b` picked by `select` (default `a`). By name, as MapLibre's `match`: `branches` maps names to nodes and `select` names one, with `default` for a name no branch has. By condition, as MapLibre's `case`: the first of `cases` whose `when` holds, else `default`. Inputs accept any port kind. A choice fixed by literals is made when the graph is built, and the output mirrors the chosen input's kind — so branches may be different kinds. A `$param` or `@node` choice is made per render instead, which requires every branch to be the same kind. Only the chosen branch is rendered; a `@node` `when` is known only once evaluated, so every branch from the first one on is rendered with it.
+Pass one of its inputs through. By condition, as MapLibre's `case`: the first of `cases` whose `when` holds, else `default`. By name, as MapLibre's `match`: `branches` maps names to nodes and `select` names one, with `default` for a name no branch has. The two-way form, `a` / `b` picked by `select`, is deprecated: it still works, and the build warns with the `cases` (or, for a `string` param, `branches`) form that does the same. Inputs accept any port kind. A choice fixed by literals is made when the graph is built, and the output mirrors the chosen input's kind — so branches may be different kinds. A `$param` or `@node` choice is made per render instead, which requires every branch to be the same kind. Only the chosen branch is rendered; a `@node` `when` is known only once evaluated, so every branch from the first one on is rendered with it.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `a` | `@node` | no | Reference to another node (`@name`). |
-| `b` | `@node` | no | Reference to another node (`@name`). |
+| `a` | `@node` | no | Deprecated: use `cases`, with this as `default`. The branch taken when `select` is false or absent. |
+| `b` | `@node` | no | Deprecated: use `cases`, with this as the `then` of a case whose `when` is `select`. The branch taken when `select` is true. |
 | `branches` | object | no | Name → node; `select` names the one to take. A `$param` `select` must be a `string` param, and each value its `enum` allows must name a branch unless there is a `default`. |
 | `cases` | array of object | no | Tried in order; the first whose `when` holds is taken. Needs `default`. |
 | `default` | `@node` | no | Reference to another node (`@name`). |
-| `select` | `a` \| `b` \| boolean \| integer (0…1) \| `$param` \| `@node` \| string | no | With `branches`: the name of the branch to take. |
+| `select` | string | no | With `branches`: the name of the branch to take, or a `string` `$param` naming it, read per render. With the deprecated `a` / `b`: `"a"` (the default) or `"b"`, a bool `$param` or `@node` port (true picks `b`), or a `string` `$param` naming `a` or `b` — write a bool choice as `cases`, and a `string` param as `branches` named `a` and `b`. |
 

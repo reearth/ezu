@@ -1,16 +1,20 @@
 //! `switch` — pass one of its upstream nodes through.
 //!
-//! Three ways to say which:
+//! Two ways to say which:
 //!
-//! - **Two-way**, `a` / `b` with `select`: `"a"` / `"b"`, a bool or `0`/`1`
-//!   (true picks `b`), or a `$param` / `@node` giving one.
-//! - **By name**, `branches` with `select`: `branches` maps names to
-//!   nodes, and `select` names one — a literal, or a `string` `$param`.
-//!   MapLibre's `match`. `default` is taken for a name no branch has.
 //! - **By condition**, `cases` with `default`: each case is
 //!   `{ "when": <bool>, "then": "@node" }`, and the first whose `when`
 //!   holds is taken, else `default`. MapLibre's `case`. A `when` is a
 //!   literal, a `$param`, or an `@node` — an `expr` node, say.
+//! - **By name**, `branches` with `select`: `branches` maps names to
+//!   nodes, and `select` names one — a literal, or a `string` `$param`.
+//!   MapLibre's `match`. `default` is taken for a name no branch has.
+//!
+//! A third, two-way form is deprecated: `a` / `b` with `select` — `"a"` /
+//! `"b"`, or a `$param` / `@node` giving one (true picks `b`). It is a
+//! one-case `cases` (or, for a `string` param, `branches` named `a` and
+//! `b`) under other names, so it still builds, with a warning that spells
+//! out that replacement.
 //!
 //! The choice is made when the graph is built if nothing in it can change
 //! per render — a literal `select`, or `when`s that are literal up to the
@@ -28,8 +32,8 @@
 //! could lead to is rendered.
 //!
 //! Use cases:
-//! - Toggle a layer from the outside: `select: "$labels"` over two raster
-//!   branches, flipped by a CLI flag, a query string, or a slider.
+//! - Toggle a layer from the outside: a case `when: "$labels"` over two
+//!   raster branches, flipped by a CLI flag, a query string, or a slider.
 //! - Pick one of several themes by a `string` param with an `enum`.
 //! - A/B compare two style variants from the same document, by editing
 //!   one literal.
@@ -369,26 +373,23 @@ impl NodeFactory for SwitchFactory {
     fn schema(&self) -> Value {
         let node = schema_frag::node_ref();
         serde_json::json!({
-            "description": "Pass one of its inputs through. Two-way: `a` / `b` picked by `select` (default `a`). By name, as MapLibre's `match`: `branches` maps names to nodes and `select` names one, with `default` for a name no branch has. By condition, as MapLibre's `case`: the first of `cases` whose `when` holds, else `default`. Inputs accept any port kind. A choice fixed by literals is made when the graph is built, and the output mirrors the chosen input's kind — so branches may be different kinds. A `$param` or `@node` choice is made per render instead, which requires every branch to be the same kind. Only the chosen branch is rendered; a `@node` `when` is known only once evaluated, so every branch from the first one on is rendered with it.",
+            "description": "Pass one of its inputs through. By condition, as MapLibre's `case`: the first of `cases` whose `when` holds, else `default`. By name, as MapLibre's `match`: `branches` maps names to nodes and `select` names one, with `default` for a name no branch has. The two-way form, `a` / `b` picked by `select`, is deprecated: it still works, and the build warns with the `cases` (or, for a `string` param, `branches`) form that does the same. Inputs accept any port kind. A choice fixed by literals is made when the graph is built, and the output mirrors the chosen input's kind — so branches may be different kinds. A `$param` or `@node` choice is made per render instead, which requires every branch to be the same kind. Only the chosen branch is rendered; a `@node` `when` is known only once evaluated, so every branch from the first one on is rendered with it.",
             "properties": {
-                "a": node.clone(),
-                "b": node.clone(),
+                "a": {
+                    "type": "string",
+                    "pattern": "^@?[A-Za-z_][A-Za-z0-9_-]*$",
+                    "deprecated": true,
+                    "description": "Deprecated: use `cases`, with this as `default`. The branch taken when `select` is false or absent.",
+                },
+                "b": {
+                    "type": "string",
+                    "pattern": "^@?[A-Za-z_][A-Za-z0-9_-]*$",
+                    "deprecated": true,
+                    "description": "Deprecated: use `cases`, with this as the `then` of a case whose `when` is `select`. The branch taken when `select` is true.",
+                },
                 "select": {
-                    "oneOf": [
-                        { "type": "string", "enum": ["a", "b"] },
-                        { "type": "boolean" },
-                        { "type": "integer", "minimum": 0, "maximum": 1 },
-                        {
-                            "type": "string",
-                            "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
-                            "description": "`$param` reference or `@node` scalar port, read per render. With `a` / `b`, a bool param or port: `true` / non-zero picks `b`; or a `string` param naming `a` or `b`. With `branches`, a `string` param naming a branch.",
-                        },
-                        {
-                            "type": "string",
-                            "description": "With `branches`: the name of the branch to take.",
-                        },
-                    ],
-                    "default": "a",
+                    "type": "string",
+                    "description": "With `branches`: the name of the branch to take, or a `string` `$param` naming it, read per render. With the deprecated `a` / `b`: `\"a\"` (the default) or `\"b\"`, a bool `$param` or `@node` port (true picks `b`), or a `string` `$param` naming `a` or `b` — write a bool choice as `cases`, and a `string` param as `branches` named `a` and `b`.",
                 },
                 "branches": {
                     "type": "object",
@@ -430,7 +431,7 @@ impl NodeFactory for SwitchFactory {
     }
 }
 
-/// `a` / `b` with `select`.
+/// `a` / `b` with `select`, the deprecated two-way form.
 fn build_two_way(
     fields: &serde_json::Map<String, Value>,
     ctx: &FactoryCtx<'_>,
@@ -456,6 +457,7 @@ fn build_two_way(
         }
         _ => Choice::Static(literal_select(fields)?),
     };
+    ctx.warn(two_way_replacement(&choice, select, &a, &b));
     let parts = r.finish();
     let mut param_refs = parts.param_refs;
     if let Choice::Name { param, .. } = &choice {
@@ -487,6 +489,32 @@ fn build_two_way(
         }),
         connections,
     })
+}
+
+/// The deprecation warning for the two-way form, spelling out the form
+/// that does the same with this node's own inputs, so it can be pasted in.
+/// A bool choice is a one-case `cases` (true picks `b`, as it did); a
+/// `string` param naming `a` or `b` is `branches` with those names; a
+/// literal choice is fixed, so the switch can go and the chosen node be
+/// used in its place, or stay as a `cases` toggle flipped by editing `when`.
+fn two_way_replacement(choice: &Choice, select: Option<&str>, a: &str, b: &str) -> String {
+    let fix = match choice {
+        Choice::Bool(_) => format!(
+            r#"write "cases": [{{ "when": "{}", "then": "@{b}" }}], "default": "@{a}" instead"#,
+            select.unwrap_or_default()
+        ),
+        Choice::Name { param, .. } => format!(
+            r#"write "branches": {{ "a": "@{a}", "b": "@{b}" }}, "select": "${param}" instead"#
+        ),
+        Choice::Static(ix) => {
+            let (chosen, on) = if *ix == 0 { (a, false) } else { (b, true) };
+            format!(
+                r#"use `@{chosen}` in place of this switch, or write "cases": [{{ "when": {on}, "then": "@{b}" }}], "default": "@{a}" to keep a toggle"#
+            )
+        }
+        Choice::Cases(_) => unreachable!("the two-way form never chooses by cases"),
+    };
+    format!("`a` / `b` are deprecated: {fix}")
 }
 
 /// A `string` param choosing among `names`, checked against them: its
