@@ -49,7 +49,7 @@ const DASH_UNITS: EnumTable<DashUnit> = &[("px", DashUnit::Px), ("width", DashUn
 /// How far past the offset a corner of an offset line may reach, as a
 /// multiple of the offset, before the corner is bevelled instead, when the
 /// node sets no `miter-limit`: MapLibre's default `line-miter-limit`.
-const OFFSET_MITER_LIMIT: f64 = 2.0;
+pub(super) const OFFSET_MITER_LIMIT: f64 = 2.0;
 
 /// tiny-skia's own miter limit, which `stroke` joins used before the node
 /// had a `miter-limit` and still use by default, so existing styles draw
@@ -62,7 +62,7 @@ const DEFAULT_MITER_LIMIT: f64 = 4.0;
 ///
 /// The shift is worked out in canvas pixels, since `px_per_unit` may differ
 /// between the axes, and stored back in feature units.
-fn offset_lines(
+pub(super) fn offset_lines(
     lines: &[Vec<(i32, i32)>],
     offset: f64,
     miter_limit: f64,

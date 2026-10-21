@@ -9,13 +9,15 @@
 //! width (pattern height → line width, the MapLibre convention); spacing
 //! then defaults to the scaled image width so the pattern tiles seamlessly.
 //!
-//! Width, opacity and the pattern itself can each be data-driven, resolved
-//! per feature group the way `stroke` and `stamp` resolve theirs.
+//! Width, opacity, the offset to the side of the line and the pattern
+//! itself can each be data-driven, resolved per feature group the way
+//! `stroke` and `stamp` resolve theirs.
 //!
 //! Points and polygons in the features input are ignored. The walk carries
 //! its leftover distance across segment joins, so spacing is continuous
 //! along the whole polyline (independent per tile).
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -29,6 +31,7 @@ use tiny_skia::{PixmapPaint, Transform};
 use xxhash_rust::xxh3::Xxh3;
 
 use super::stamp::{eval_icon_name, eval_number, eval_px, parse_expr_field, read_icon_name_expr};
+use super::stroke::{offset_lines, OFFSET_MITER_LIMIT};
 use crate::nodes::common::{
     canvas_into_raster, downcast_features, empty_raster, make_canvas, unwrap_raster_or_sprite,
     FramedImage, ACCEPTS_RASTER_OR_SPRITE,
@@ -43,14 +46,22 @@ struct LineStampNode {
     spacing_px: In<f64>,
     scale: In<f64>,
     opacity: In<f64>,
-    /// Optional data-driven width / opacity: MapLibre number expressions
-    /// evaluated per feature group. When set, each overrides its constant
-    /// counterpart for the group's lines.
+    /// MapLibre `line-offset`: how far the pattern runs to the right of
+    /// its line's direction of travel, in px (negative: to the left).
+    offset_px: In<f64>,
+    /// Whether `offset-px` was written, so styles without it keep their
+    /// cache keys.
+    offset_set: bool,
+    /// Optional data-driven width / opacity / offset: MapLibre number
+    /// expressions evaluated per feature group. When set, each overrides
+    /// its constant counterpart for the group's lines.
     width_expr: Option<maplibre_expr::Expr>,
     opacity_expr: Option<maplibre_expr::Expr>,
+    offset_expr: Option<maplibre_expr::Expr>,
     /// Raw `*-expr` JSON text, for a stable hash.
     width_expr_src: Option<String>,
     opacity_expr_src: Option<String>,
+    offset_expr_src: Option<String>,
     /// Data-driven pattern: instead of the `image` port, the sprite atlas key
     /// plus a MapLibre expression naming each feature's pattern icon, cropped
     /// per group from the bound sheet. Absent → the node repeats its single
@@ -76,6 +87,18 @@ struct Walk {
 }
 
 impl Walk {
+    /// `lines` moved `offset` device px to the right of travel, the way
+    /// `stroke` moves an offset line, corners bevelled past MapLibre's
+    /// default miter limit; `lines` themselves for no offset.
+    fn shifted<'a>(&self, lines: &'a [Vec<(i32, i32)>], offset: f32) -> Cow<'a, [Vec<(i32, i32)>]> {
+        offset_lines(
+            lines,
+            offset as f64,
+            OFFSET_MITER_LIMIT,
+            (self.sx as f64, self.sy as f64),
+        )
+    }
+
     /// Stamp `img` along every polyline in `lines`, its height fit to
     /// `width_px` (native when 0) and drawn at `opacity`.
     fn stamp_lines(
@@ -202,6 +225,7 @@ impl Node for LineStampNode {
         let spacing_in = ctx.px32(self.spacing_px.get(ctx, inputs)? as f32);
         let base_scale = (self.scale.get(ctx, inputs)? as f32).max(0.0);
         let const_opacity = (self.opacity.get(ctx, inputs)? as f32).clamp(0.0, 1.0);
+        let const_offset = ctx.px32(self.offset_px.get(ctx, inputs)? as f32);
 
         let mut canvas = make_canvas(ctx)?;
         let extent = feats.extent.max(1) as f32;
@@ -214,7 +238,8 @@ impl Node for LineStampNode {
             native: ctx.px32(1.0),
         };
         let z = ctx.tile.z;
-        let has_paint_expr = self.width_expr.is_some() || self.opacity_expr.is_some();
+        let has_paint_expr =
+            self.width_expr.is_some() || self.opacity_expr.is_some() || self.offset_expr.is_some();
         let mut pm = canvas.pixmap_mut().as_mut();
 
         if let Some(name_expr) = &self.pattern_name_expr {
@@ -245,7 +270,9 @@ impl Node for LineStampNode {
                 };
                 let width_px = eval_number(&self.width_expr, &ectx, const_width_px);
                 let opacity = eval_number(&self.opacity_expr, &ectx, const_opacity).clamp(0.0, 1.0);
-                walk.stamp_lines(&mut pm, &group.lines, img, width_px, opacity);
+                let offset = eval_px(&self.offset_expr, &ectx, const_offset, ctx);
+                let lines = walk.shifted(&group.lines, offset);
+                walk.stamp_lines(&mut pm, &lines, img, width_px, opacity);
             }
         } else {
             let image = image.expect("an image is wired when no pattern is named");
@@ -261,13 +288,16 @@ impl Node for LineStampNode {
                     let width_px = eval_px(&self.width_expr, &ectx, const_width_px, ctx);
                     let opacity =
                         eval_number(&self.opacity_expr, &ectx, const_opacity).clamp(0.0, 1.0);
-                    walk.stamp_lines(&mut pm, &group.lines, &img, width_px, opacity);
+                    let offset = eval_px(&self.offset_expr, &ectx, const_offset, ctx);
+                    let lines = walk.shifted(&group.lines, offset);
+                    walk.stamp_lines(&mut pm, &lines, &img, width_px, opacity);
                 }
             } else {
                 // Every group stamps the same way, so walk them in order
                 // without building an expression context for each.
                 for group in &feats.groups {
-                    walk.stamp_lines(&mut pm, &group.lines, &img, const_width_px, const_opacity);
+                    let lines = walk.shifted(&group.lines, const_offset);
+                    walk.stamp_lines(&mut pm, &lines, &img, const_width_px, const_opacity);
                 }
             }
         }
@@ -285,9 +315,14 @@ impl Node for LineStampNode {
         self.spacing_px.param_hash(h);
         self.scale.param_hash(h);
         self.opacity.param_hash(h);
+        if self.offset_set {
+            h.update(b"offset");
+            self.offset_px.param_hash(h);
+        }
         for (tag, src) in [
             (b"widthexpr".as_slice(), &self.width_expr_src),
             (b"opacityexpr".as_slice(), &self.opacity_expr_src),
+            (b"offsetexpr".as_slice(), &self.offset_expr_src),
             (b"nameexpr".as_slice(), &self.pattern_name_expr_src),
         ] {
             if let Some(s) = src {
@@ -328,12 +363,16 @@ impl NodeFactory for LineStampFactory {
         let spacing_px = r.number_or("spacing-px", 0.0)?;
         let scale = r.number_or("scale", 1.0)?;
         let opacity = r.number_or("opacity", 1.0)?;
+        let offset_set = fields.contains_key("offset-px");
+        let offset_px = r.number_or("offset-px", 0.0)?;
         let parts = r.finish();
 
         let (width_expr, width_expr_src) =
             parse_expr_field(fields, "width-expr", &maplibre_expr::Type::Number)?;
         let (opacity_expr, opacity_expr_src) =
             parse_expr_field(fields, "opacity-expr", &maplibre_expr::Type::Number)?;
+        let (offset_expr, offset_expr_src) =
+            parse_expr_field(fields, "offset-expr", &maplibre_expr::Type::Number)?;
 
         let mut ports = vec![PortSpec {
             name: "features",
@@ -364,10 +403,14 @@ impl NodeFactory for LineStampFactory {
                 spacing_px,
                 scale,
                 opacity,
+                offset_px,
+                offset_set,
                 width_expr,
                 opacity_expr,
+                offset_expr,
                 width_expr_src,
                 opacity_expr_src,
+                offset_expr_src,
                 pattern_sprite,
                 pattern_name_expr,
                 pattern_name_expr_src,
@@ -399,6 +442,14 @@ impl NodeFactory for LineStampFactory {
                 "opacity": schema_frag::unit_number(),
                 "opacity-expr": {
                     "description": "A MapLibre number expression giving opacity, evaluated per feature group; overrides the constant `opacity`. A group whose expression doesn't resolve to a number falls back to `opacity`.",
+                },
+                "offset-px": schema_frag::in_number(serde_json::json!({
+                    "type": "number",
+                    "default": 0,
+                    "description": "MapLibre `line-offset`: run the pattern this many pixels to the right of the line's direction of travel, or to the left when negative, the line moved as `stroke`'s `offset-px` moves it, with a corner that would reach more than twice the offset out bevelled. `0` stamps along the line itself.",
+                })),
+                "offset-expr": {
+                    "description": "A MapLibre number expression (px) giving the offset, evaluated per feature group; overrides the constant `offset-px`. A group whose expression doesn't resolve to a number falls back to `offset-px`.",
                 },
             },
             "required": ["features"],

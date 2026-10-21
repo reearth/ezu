@@ -409,6 +409,10 @@ mean is spelled out in
   to 4, the limit `stroke` has always drawn with, and may be a `$param` or
   an `@node`. Once written it also bounds the corners of an `offset-px`
   line, which otherwise keep MapLibre's default of 2.
+- `line-stamp` takes `offset-px` and `offset-expr` (MapLibre `line-offset`),
+  as `stroke` does: the pattern runs that many pixels to the right of the
+  line's direction of travel, or to the left when negative, the line moved
+  the way `stroke` moves it.
 
 ### Changed
 
@@ -654,6 +658,11 @@ mean is spelled out in
   edge blends into the fill, as MapLibre mixes the two. A translucent or
   blurred ring keeps the fill at the radius, so no extra fill shows
   through it, and `center` and `inside` rings draw as before.
+- `ezu translate` drew a `line-pattern` layer unshifted, with a warning,
+  when it had a `line-offset` or a `line-translate`. A `line-offset`, a
+  zoom curve included, now becomes the `line-stamp`'s `offset-px` /
+  `offset-expr`, and a constant `line-translate` a `transform` node in
+  front of it, as on a plain line.
 
 ## 0.12.0 — 2026-10-12
 

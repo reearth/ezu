@@ -181,3 +181,54 @@ fn name_expr_repeats_each_groups_own_pattern() {
         );
     }
 }
+
+/// Mean position of the pixels a render paints.
+fn ink_centre(pixels: &[u8]) -> (f32, f32) {
+    let (mut sx, mut sy, mut n) = (0.0, 0.0, 0.0);
+    for (i, px) in pixels.as_chunks::<4>().0.iter().enumerate() {
+        if px[3] > 127 {
+            sx += (i % 64) as f32;
+            sy += (i / 64) as f32;
+            n += 1.0;
+        }
+    }
+    assert!(n > 0.0, "the line should paint");
+    (sx / n, sy / n)
+}
+
+#[test]
+fn offset_runs_the_pattern_beside_the_line() {
+    // The line heads down and to the right, so to the right of travel is
+    // down and to the left: (-0.6, 0.8) per px, about.
+    let plain = r#""image": "@pat", "width-px": 4"#;
+    assert_eq!(
+        render("a", plain),
+        render("a", &format!(r#"{plain}, "offset-px": 0"#)),
+        "no offset stamps along the line itself"
+    );
+    let (x0, y0) = ink_centre(&render("a", plain));
+    let (x1, y1) = ink_centre(&render("a", &format!(r#"{plain}, "offset-px": 6"#)));
+    let (dx, dy) = (x1 - x0, y1 - y0);
+    assert!(
+        (-4.6..=-2.6).contains(&dx) && (3.8..=5.8).contains(&dy),
+        "moved ({dx}, {dy})"
+    );
+}
+
+#[test]
+fn offset_expr_renders_as_each_groups_literal_offset() {
+    assert_matches_literals(
+        r#""image": "@pat", "width-px": 4,
+           "offset-expr": ["match", ["get","kind"], "left", -5, 5]"#,
+        &[
+            (
+                "left",
+                r#""image": "@pat", "width-px": 4, "offset-px": -5"#.to_string(),
+            ),
+            (
+                "right",
+                r#""image": "@pat", "width-px": 4, "offset-px": 5"#.to_string(),
+            ),
+        ],
+    );
+}

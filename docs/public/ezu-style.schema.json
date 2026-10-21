@@ -4140,6 +4140,23 @@
               "name-expr": {
                 "description": "A MapLibre expression giving each feature's pattern icon name (MapLibre data-driven `line-pattern`), cropped per group from the `sprite` atlas. Used instead of an `image` input; a group whose name doesn't resolve to an icon in the sheet is not drawn."
               },
+              "offset-expr": {
+                "description": "A MapLibre number expression (px) giving the offset, evaluated per feature group; overrides the constant `offset-px`. A group whose expression doesn't resolve to a number falls back to `offset-px`."
+              },
+              "offset-px": {
+                "oneOf": [
+                  {
+                    "default": 0,
+                    "description": "MapLibre `line-offset`: run the pattern this many pixels to the right of the line's direction of travel, or to the left when negative, the line moved as `stroke`'s `offset-px` moves it, with a corner that would reach more than twice the offset out bevelled. `0` stamps along the line itself.",
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
               "op": {
                 "const": "line-stamp",
                 "description": "Selects the `line-stamp` operation."

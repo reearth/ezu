@@ -84,7 +84,7 @@ once the style is migrated (`--migrate`, see below).
 | MapLibre | ezu |
 | --- | --- |
 | `fill-pattern` (constant) | `icon` → `tiling`, clipped to the fill shape via `blend { composite: "source-atop" }` |
-| `line-pattern` (constant) | `icon` → `line-stamp` (over `boundary`, so polygon rings too), repeated along the line and fitted to `line-width`. An expression `line-width` or `line-opacity` becomes `width-expr` / `opacity-expr`; `line-gap-width` is not drawn and warns |
+| `line-pattern` (constant) | `icon` → `line-stamp` (over `boundary`, so polygon rings too), repeated along the line and fitted to `line-width`. An expression `line-width`, `line-opacity` or `line-offset` becomes `width-expr` / `opacity-expr` / `offset-expr`, and a constant `line-translate` shifts the lines first; `line-gap-width` is not drawn and warns |
 | `line-pattern` (data-driven) | `line-stamp` with the style's sprite sheet and the pattern expression as `name-expr`, cropping each feature's icon |
 | top-level `sprite` (single URL or `[{id, url}]`) | one `sprite` source per sheet — atlas `<url>.png` plus index `<url>.json`, or an inline index. `sheet:icon` names supported |
 
@@ -92,8 +92,8 @@ once the style is migrated (`--migrate`, see below).
 
 | MapLibre | ezu |
 | --- | --- |
-| `circle-translate`, `fill-translate`, `line-translate`, `fill-extrusion-translate` (constant `[x, y]`) | a `transform` node with `translate-px` between the features and the paint node. The `*-translate-anchor` beside it needs nothing: a tile is never rotated |
-| `line-offset` (constant or expression) | the `stroke`'s `offset-px` / `offset-expr`: the line drawn beside itself, to the right of travel, corners mitred as MapLibre extrudes them |
+| `circle-translate`, `fill-translate`, `line-translate`, `fill-extrusion-translate` (constant `[x, y]`) | a `transform` node with `translate-px` between the features and the paint node, a `line-pattern` layer's `line-stamp` included. The `*-translate-anchor` beside it needs nothing: a tile is never rotated |
+| `line-offset` (constant or expression) | the `stroke`'s, or on a `line-pattern` layer the `line-stamp`'s, `offset-px` / `offset-expr`: the line drawn beside itself, to the right of travel, corners mitred as MapLibre extrudes them |
 
 ## Data, filters and functions
 

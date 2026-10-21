@@ -45,19 +45,15 @@ pub(crate) fn convert_line(
                 "layer `{id}`: `line-gap-width` is not supported with `line-pattern` — the pattern is drawn along the centreline"
             ));
         }
-        for prop in ["line-translate", "line-offset"] {
-            if paint.get(prop).is_some() {
-                report.warn(format!(
-                    "layer `{id}`: `{prop}` is not supported with `line-pattern` — drawn unshifted"
-                ));
-            }
-        }
         let (opacity, opacity_expr) = resolve_number(paint.get("line-opacity"));
-        let paint = PatternPaint {
+        let (offset, offset_expr) = resolve_number(paint.get("line-offset"));
+        let pattern_paint = PatternPaint {
             width,
             width_expr,
             opacity,
             opacity_expr,
+            offset,
+            offset_expr,
         };
         convert_line_pattern(
             id,
@@ -67,6 +63,7 @@ pub(crate) fn convert_line(
             base_filter_expr,
             zoom_range,
             paint,
+            pattern_paint,
             sources,
             nodes,
             outputs,
@@ -245,18 +242,21 @@ fn line_features(
 
 /// The paint a `line-pattern` layer carries over to `line-stamp`: the
 /// constant width (the fallback the node needs), and each of `line-width` /
-/// `line-opacity` as a constant or a raw expression.
+/// `line-opacity` / `line-offset` as a constant or a raw expression.
 pub(crate) struct PatternPaint {
     pub(crate) width: f64,
     pub(crate) width_expr: Option<Value>,
     pub(crate) opacity: Option<f64>,
     pub(crate) opacity_expr: Option<Value>,
+    pub(crate) offset: Option<f64>,
+    pub(crate) offset_expr: Option<Value>,
 }
 
 /// `line-pattern` → repeat the named sprite icon along each line, fit to the
 /// stroke width: `features` → `icon` → `line-stamp`. A data-driven pattern
 /// names each feature's icon instead, through `line-stamp`'s `name-expr` over
-/// the style's sprite sheet.
+/// the style's sprite sheet. A constant `line-translate` shifts the lines
+/// first, as for a plain line.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn convert_line_pattern(
     id: &str,
@@ -265,6 +265,7 @@ pub(crate) fn convert_line_pattern(
     source_layer: &str,
     base_filter_expr: Option<Value>,
     zoom_range: ZoomRange,
+    layer_paint: &Map<String, Value>,
     paint: PatternPaint,
     sources: &Sources,
     nodes: &mut Map<String, Value>,
@@ -305,9 +306,17 @@ pub(crate) fn convert_line_pattern(
         zoom_range,
         nodes,
     );
+    let features = translated(
+        id,
+        "line-translate",
+        layer_paint,
+        format!("@{lines_id}"),
+        nodes,
+        report,
+    );
     let out_id = format!("{id}__linepat");
     let mut spec = serde_json::json!({
-        "op": "line-stamp", "features": format!("@{lines_id}"),
+        "op": "line-stamp", "features": features,
     });
     match constant {
         Some((_, icon_name)) => {
@@ -332,6 +341,14 @@ pub(crate) fn convert_line_pattern(
     }
     if let Some(expr) = paint.opacity_expr {
         spec["opacity-expr"] = expr;
+    }
+    // `line-offset` → `offset-px` / `offset-expr`: the pattern runs beside
+    // the line, to the right of its direction of travel.
+    if let Some(o) = paint.offset.filter(|o| *o != 0.0) {
+        spec["offset-px"] = Value::from(o);
+    }
+    if let Some(expr) = paint.offset_expr {
+        spec["offset-expr"] = expr;
     }
     nodes.insert(out_id.clone(), spec);
     outputs.push(out_id);

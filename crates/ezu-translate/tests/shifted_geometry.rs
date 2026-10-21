@@ -117,3 +117,39 @@ fn line_offset_draws_the_line_beside_itself() {
     assert_eq!(nodes["l__stroke"]["offset-expr"], offset);
     assert!(nodes["l__stroke"].get("offset-px").is_none());
 }
+
+#[test]
+fn a_pattern_line_is_shifted_and_offset_too() {
+    // On a `line-pattern` layer the shift and the offset reach the
+    // `line-stamp` as they reach a plain line's `stroke`.
+    let style = json!({
+        "version": 8,
+        "name": "shifted-pattern",
+        "sprite": "https://example.com/sprites/basemap",
+        "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+        "layers": [
+            { "id": "l", "type": "line", "source": "s", "source-layer": "x",
+              "paint": { "line-pattern": "rail-8", "line-width": 4,
+                         "line-translate": [3, -2], "line-offset": 5 } },
+            { "id": "m", "type": "line", "source": "s", "source-layer": "x",
+              "paint": { "line-pattern": "rail-8", "line-width": 4,
+                         "line-offset": ["interpolate", ["linear"], ["zoom"], 12, 1, 16, 4] } }
+        ]
+    });
+    let (recipe, report) = convert(&style, &ConvertOptions::default()).unwrap();
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    let text = serde_json::to_string(&recipe).unwrap();
+    ezu_style::Document::from_json(&text).expect("recipe parses as ezu Document");
+    let nodes = recipe["nodes"].as_object().unwrap();
+
+    let shift = upstream(nodes, "l__linepat");
+    assert_eq!(shift["op"], "transform");
+    assert_eq!(shift["translate-px"], json!([3.0, -2.0]));
+    assert_eq!(nodes["l__linepat"]["offset-px"], 5.0);
+
+    assert_eq!(
+        nodes["m__linepat"]["offset-expr"],
+        style["layers"][1]["paint"]["line-offset"]
+    );
+    assert!(nodes["m__linepat"].get("offset-px").is_none());
+}
