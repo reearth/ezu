@@ -387,10 +387,9 @@ impl NodeFactory for SwitchFactory {
                     "deprecated": true,
                     "description": "Deprecated: use `cases`, with this as the `then` of a case whose `when` is `select`. The branch taken when `select` is true.",
                 },
-                "select": {
-                    "type": "string",
+                "select": schema_frag::in_string(serde_json::json!({
                     "description": "With `branches`: the name of the branch to take, or a `string` `$param` naming it, read per render. With the deprecated `a` / `b`: `\"a\"` (the default) or `\"b\"`, a bool `$param` or `@node` port (true picks `b`), or a `string` `$param` naming `a` or `b` — write a bool choice as `cases`, and a `string` param as `branches` named `a` and `b`.",
-                },
+                })),
                 "branches": {
                     "type": "object",
                     "minProperties": 1,
@@ -745,26 +744,16 @@ fn build_cases(
     })
 }
 
-/// Resolve a literal `select` — `"a"` / `"b"`, a bool, or `0` / `1` — to
+/// Resolve a literal `select` — `"a"` or `"b"`, `"a"` when absent — to
 /// its port.
 fn literal_select(fields: &serde_json::Map<String, Value>) -> Result<usize, FactoryError> {
-    let bad = |got: String| FactoryError::BadField {
-        field: "select".into(),
-        msg: format!("expected `a`/`b`, a bool, 0/1, or a `$param` / `@node` ref, got `{got}`"),
-    };
     match read_optional_string(fields, "select")?.as_deref() {
         None | Some("a") => Ok(0),
         Some("b") => Ok(1),
-        Some(other) => {
-            let raw = fields.get("select").ok_or_else(|| bad(other.to_string()))?;
-            if let Some(v) = raw.as_bool() {
-                Ok(usize::from(v))
-            } else if let Some(n) = raw.as_u64() {
-                Ok(usize::from(n != 0))
-            } else {
-                Err(bad(other.to_string()))
-            }
-        }
+        Some(other) => Err(FactoryError::BadField {
+            field: "select".into(),
+            msg: format!("expected `a`/`b`, or a `$param` / `@node` ref, got `{other}`"),
+        }),
     }
 }
 

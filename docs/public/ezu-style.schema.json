@@ -6227,8 +6227,18 @@
                 "description": "Selects the `switch` operation."
               },
               "select": {
-                "description": "With `branches`: the name of the branch to take, or a `string` `$param` naming it, read per render. With the deprecated `a` / `b`: `\"a\"` (the default) or `\"b\"`, a bool `$param` or `@node` port (true picks `b`), or a `string` `$param` naming `a` or `b` — write a bool choice as `cases`, and a `string` param as `branches` named `a` and `b`.",
-                "type": "string"
+                "oneOf": [
+                  {
+                    "description": "With `branches`: the name of the branch to take, or a `string` `$param` naming it, read per render. With the deprecated `a` / `b`: `\"a\"` (the default) or `\"b\"`, a bool `$param` or `@node` port (true picks `b`), or a `string` `$param` naming `a` or `b` — write a bool choice as `cases`, and a `string` param as `branches` named `a` and `b`.",
+                    "pattern": "^[^$@]",
+                    "type": "string"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
               }
             },
             "required": [

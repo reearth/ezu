@@ -658,6 +658,24 @@ pub mod schema_frag {
     /// `@node` reference strings (an [`In<f64>`](crate::input::In)
     /// field).
     pub fn in_number(literal: Value) -> Value {
+        in_ref(literal)
+    }
+
+    /// Wrap a free-form string schema — a name, say — so the field also
+    /// accepts `$param` / `@node` reference strings. The literal is kept
+    /// from starting with `$` or `@`, so a reference matches only the
+    /// reference branch of the `oneOf`.
+    pub fn in_string(literal: Value) -> Value {
+        let mut literal = literal;
+        if let Some(obj) = literal.as_object_mut() {
+            obj.insert("type".into(), json!("string"));
+            obj.insert("pattern".into(), json!("^[^$@]"));
+        }
+        in_ref(literal)
+    }
+
+    /// `literal`, or a `$param` / `@node` reference string.
+    fn in_ref(literal: Value) -> Value {
         json!({
             "oneOf": [
                 literal,
