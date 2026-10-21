@@ -432,6 +432,122 @@ fn include_all_adds_the_candidates_that_lost_unplaced() {
 }
 
 #[test]
+fn include_all_reports_a_label_culled_for_its_size() {
+    // A 16 px label reaches well past a 4 px `max-extent-px`.
+    let feats = || vec![point("HH", 2048, 2048)];
+    let culled = r#", "max-extent-px": 4"#;
+    let (placed, raster) = run(
+        &recipe(culled, ""),
+        TileId { z: 0, x: 0, y: 0 },
+        &[("src.pts", layer(feats()))],
+    );
+    assert!(placed.groups.is_empty(), "nothing places");
+    assert!(
+        pixel_bounds(&raster, |p| p[1] > 0).is_none(),
+        "nothing is drawn"
+    );
+
+    let all = boxes(&run_centre(
+        &recipe(culled, r#", "include": "all""#),
+        feats(),
+    ));
+    let mut parts: Vec<&str> = all.iter().map(Box::part).collect();
+    parts.sort();
+    assert_eq!(parts, ["collision", "text"], "boxes at its first position");
+    assert_eq!(
+        outcomes(&all),
+        [("HH".to_string(), None, None, Some("culled".to_string()))]
+    );
+    // Measured as it would have been placed: the same boxes and the same id
+    // as the label has when nothing culls it.
+    let kept = boxes(&run_centre(&recipe("", ""), feats()));
+    for part in ["text", "collision"] {
+        let (c, k) = (of_part(&all, part), of_part(&kept, part));
+        assert!(close(c[0].bounds(), k[0].bounds()), "{part}");
+        assert_eq!(c[0].label_id(), k[0].label_id(), "{part}");
+    }
+}
+
+#[test]
+fn a_culled_label_takes_no_space() {
+    // Two layers on one point, the first given priority: once its label is
+    // culled, the second's places where it would otherwise have collided.
+    let recipe = |first_extra: &str| {
+        format!(
+            r##"{{
+          "name": "label-boxes-culled",
+          "tile-size": {TILE},
+          "sources": {{
+            "src":  {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
+            "body": {{ "type": "font", "url": "{font}" }}
+          }},
+          "nodes": {{
+            "feats":  {{ "op": "features", "source": "src", "layer": "pts" }},
+            "first":  {{ "op": "text-labels", "features": "@feats", "source": "src", "layer": "pts",
+                         "font": ["body"], "text": "WWW", "size": 16 {first_extra} }},
+            "second": {{ "op": "text-labels", "features": "@feats", "source": "src", "layer": "pts",
+                         "font": ["body"], "text": ["get", "name"], "size": 16 }},
+            "placed": {{ "op": "label-placement", "labels": ["@first", "@second"] }},
+            "boxes":  {{ "op": "label-boxes", "placement": "@placed", "include": "all",
+                         "parts": ["collision"] }},
+            "fill":   {{ "op": "fill-solid", "features": "@boxes", "fill": "#0000ff" }}
+          }},
+          "output": "@fill"
+        }}"##,
+            font = font_url(),
+        )
+    };
+    let fates = |extra: &str| {
+        let mut v: Vec<(bool, Option<String>)> =
+            boxes(&run_centre(&recipe(extra), vec![point("HH", 2048, 2048)]))
+                .iter()
+                .map(|b| {
+                    let reason = match b.props.get("drop-reason") {
+                        Some(maplibre_expr::Value::String(s)) => Some(s.clone()),
+                        _ => None,
+                    };
+                    (b.placed(), reason)
+                })
+                .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(
+        fates(""),
+        [(false, Some("collision".into())), (true, None)],
+        "the first label blocks the second"
+    );
+    assert_eq!(
+        fates(r#", "max-extent-px": 4"#),
+        [(false, Some("culled".into())), (true, None)],
+        "the culled label blocks nothing"
+    );
+}
+
+#[test]
+fn a_culled_label_copied_into_several_tiles_keeps_one_id() {
+    // As for a placed label: each tile's window holds two copies, and each
+    // tile reports the label once, under the same id.
+    let at = |x: i32| layer(vec![point("HHH", x, 2048)]);
+    let rc = recipe(r#", "max-extent-px": 4"#, r#", "include": "all""#);
+    let (left, _) = run(
+        &rc,
+        TileId { z: 4, x: 5, y: 7 },
+        &[("src.pts@-1,0", at(3800 + 4096)), ("src.pts", at(3800))],
+    );
+    let (right, _) = run(
+        &rc,
+        TileId { z: 4, x: 6, y: 7 },
+        &[("src.pts@-1,0", at(3800)), ("src.pts", at(3800 - 4096))],
+    );
+    let (left, right) = (boxes(&left), boxes(&right));
+    let (l, r) = (of_part(&left, "text"), of_part(&right, "text"));
+    assert_eq!((l.len(), r.len()), (1, 1));
+    assert!(!l[0].placed() && !r[0].placed());
+    assert_eq!(l[0].label_id(), r[0].label_id());
+}
+
+#[test]
 fn a_line_label_gives_a_rotated_quad_and_a_collision_box_per_glyph() {
     // A diagonal through the tile; "MMMM" lays four glyphs along it.
     let all = boxes(&run_centre(

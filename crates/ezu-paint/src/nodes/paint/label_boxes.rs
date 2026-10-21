@@ -19,7 +19,7 @@
 //! text blocks of labels that moved off their first position, to draw a
 //! leader line to each with `segment-to`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use ezu_graph::{
@@ -130,9 +130,10 @@ impl Emitter<'_> {
                 properties.insert("placed".into(), maplibre_expr::Value::Bool(true));
                 properties.insert("overlapped".into(), maplibre_expr::Value::Bool(overlapped));
             }
-            Outcome::Collided | Outcome::Deduped => {
+            Outcome::Collided | Outcome::Deduped | Outcome::Culled => {
                 let reason = match props.outcome {
                     Outcome::Deduped => "dedupe",
+                    Outcome::Culled => "culled",
                     _ => "collision",
                 };
                 properties.insert("placed".into(), maplibre_expr::Value::Bool(false));
@@ -228,6 +229,9 @@ enum Outcome {
     /// Dropped because a label with the same dedupe key had already placed
     /// nearby (`dedupe-key-expr`).
     Deduped,
+    /// Never reached placement: its box reaches past the text node's
+    /// `max-extent-px`.
+    Culled,
 }
 
 /// A label's identity, the same on every tile that sees it: its layer's
@@ -258,7 +262,7 @@ impl LabelBoxesNode {
 
     /// Emit the boxes of candidate `cand` of `set` at collision variant
     /// `variant`.
-    fn emit_label(
+    fn emit_candidate(
         &self,
         out: &mut Emitter,
         layer: usize,
@@ -267,16 +271,29 @@ impl LabelBoxesNode {
         variant: usize,
         outcome: Outcome,
     ) {
-        let (Some(c), Some(draw)) = (set.candidates.get(cand), set.draws.get(cand)) else {
-            return;
-        };
+        if let (Some(c), Some(draw)) = (set.candidates.get(cand), set.draws.get(cand)) {
+            self.emit_label(out, label_id(layer, c), c, draw, variant, outcome);
+        }
+    }
+
+    /// Emit the boxes of label `c` (drawn by `draw`) at collision variant
+    /// `variant`.
+    fn emit_label(
+        &self,
+        out: &mut Emitter,
+        label_id: f64,
+        c: &LabelCandidate,
+        draw: &LabelDraw,
+        variant: usize,
+        outcome: Outcome,
+    ) {
         let source = match draw {
             LabelDraw::Point { properties, .. } | LabelDraw::Line { properties, .. } => properties,
         };
         // A point label lays its text out once per position, and the block a
         // variant draws is that position's; a line label has the one.
         let variant_index = match (outcome, draw) {
-            (Outcome::Collided | Outcome::Deduped, _) => None,
+            (Outcome::Collided | Outcome::Deduped | Outcome::Culled, _) => None,
             (_, LabelDraw::Point { variants, .. }) => variants.get(variant).and_then(|v| v.block),
             (_, LabelDraw::Line { .. }) => Some(0),
         };
@@ -284,7 +301,7 @@ impl LabelBoxesNode {
             source,
             outcome,
             variant_index,
-            label_id: label_id(layer, c),
+            label_id,
         };
         match draw {
             LabelDraw::Point {
@@ -425,15 +442,26 @@ impl Node for LabelBoxesNode {
                 let outcome = Outcome::Placed {
                     overlapped: p.overlapped,
                 };
-                self.emit_label(&mut out, layer, set, p.cand, p.variant, outcome);
+                self.emit_candidate(&mut out, layer, set, p.cand, p.variant, outcome);
             }
             if include_rejected {
                 // A losing candidate is shown as it first tried to place.
                 for &cand in &placed.outcome.rejected {
-                    self.emit_label(&mut out, layer, set, cand, 0, Outcome::Collided);
+                    self.emit_candidate(&mut out, layer, set, cand, 0, Outcome::Collided);
                 }
                 for &cand in &placed.outcome.deduped {
-                    self.emit_label(&mut out, layer, set, cand, 0, Outcome::Deduped);
+                    self.emit_candidate(&mut out, layer, set, cand, 0, Outcome::Deduped);
+                }
+                // A culled label, like a losing one, at its first position.
+                // Placement never saw it, so nothing folded the copies a
+                // source repeats across the tile window: the shared id does.
+                let mut seen = HashSet::new();
+                for culled in &set.culled {
+                    let id = label_id(layer, &culled.candidate);
+                    if seen.insert(id.to_bits()) {
+                        let (c, draw) = (&culled.candidate, &culled.draw);
+                        self.emit_label(&mut out, id, c, draw, 0, Outcome::Culled);
+                    }
                 }
             }
         }
@@ -543,7 +571,7 @@ impl NodeFactory for LabelBoxesFactory {
                 .into(),
         );
         serde_json::json!({
-            "description": "The boxes a `label-placement` node measured its labels by, as polygons — one per box — so any geometry and paint op can draw them: a bordered or rounded badge (`buffer` → `stroke`), an offset shadow (`transform`), or a debug overlay of placement. Reads the decisions already made, so nothing is placed twice and the boxes match what `text-draw` draws; labels placed from a neighbour tile's candidates are included, so boxes continue across tile edges. Each polygon carries the labelled feature's properties plus `part` (`text`, `icon`, `background`, `glyph` or `collision`), `placed` (false for a candidate that did not place, with `include: all`) and `label-id` (shared by every box of one label, the same on every tile). A placed label also carries `overlapped` (true when it overlaps a label placed before it, which only `overlap: always` or `fallback` permits) and `variant-index`: where the position it took sits in the list it was tried from (`anchor-offsets`, or the anchors of the deprecated `anchor-variants`), 0 for the first position, for a lone one and for a line label, and absent when the variant shown draws no text. A label that did not place carries `drop-reason` instead: `collision` when it lost its collision test, `dedupe` when its layer's `dedupe-key-expr` dropped it because a label with the same key had already placed within `dedupe-distance-px`. A point label gives its `text` block (no padding), `icon` (rotated by `icon-rotate`), `background` box (with `background-padding` or `background-color`) and the `collision` box or boxes it was tested with, padding included. A label turned by `rotate-deg` gives its `text` and `background` as quads turned about its anchor, and its `collision` box as their axis-aligned bounds. A line label gives one `glyph` quad per glyph, rotated along the path, and the axis-aligned `collision` box placement tested for each glyph.",
+            "description": "The boxes a `label-placement` node measured its labels by, as polygons — one per box — so any geometry and paint op can draw them: a bordered or rounded badge (`buffer` → `stroke`), an offset shadow (`transform`), or a debug overlay of placement. Reads the decisions already made, so nothing is placed twice and the boxes match what `text-draw` draws; labels placed from a neighbour tile's candidates are included, so boxes continue across tile edges. Each polygon carries the labelled feature's properties plus `part` (`text`, `icon`, `background`, `glyph` or `collision`), `placed` (false for a candidate that did not place, with `include: all`) and `label-id` (shared by every box of one label, the same on every tile). A placed label also carries `overlapped` (true when it overlaps a label placed before it, which only `overlap: always` or `fallback` permits) and `variant-index`: where the position it took sits in the list it was tried from (`anchor-offsets`, or the anchors of the deprecated `anchor-variants`), 0 for the first position, for a lone one and for a line label, and absent when the variant shown draws no text. A label that did not place carries `drop-reason` instead: `collision` when it lost its collision test, `dedupe` when its layer's `dedupe-key-expr` dropped it because a label with the same key had already placed within `dedupe-distance-px`, `culled` when its box reaches past its layer's `max-extent-px`, so it never reached placement (it takes no space and is not drawn). A point label gives its `text` block (no padding), `icon` (rotated by `icon-rotate`), `background` box (with `background-padding` or `background-color`) and the `collision` box or boxes it was tested with, padding included. A label turned by `rotate-deg` gives its `text` and `background` as quads turned about its anchor, and its `collision` box as their axis-aligned bounds. A line label gives one `glyph` quad per glyph, rotated along the path, and the axis-aligned `collision` box placement tested for each glyph.",
             "properties": {
                 "placement": schema_frag::node_ref(),
                 "labels": labels,
@@ -556,7 +584,7 @@ impl NodeFactory for LabelBoxesFactory {
                     "type": "string",
                     "enum": ["placed", "all"],
                     "default": "placed",
-                    "description": "`placed` emits the labels that placed; `all` adds the candidates that lost their collision test or were dropped by `dedupe-key-expr`, with `placed: false`, at their first anchor. Duplicate copies of one label are never emitted."
+                    "description": "`placed` emits the labels that placed; `all` adds the candidates that lost their collision test or were dropped by `dedupe-key-expr`, and the point labels culled by `max-extent-px`, with `placed: false`, at their first anchor. Duplicate copies of one label are never emitted."
                 })),
                 "filter-expr": {
                     "description": "A MapLibre filter expression (JSON array, e.g. [\">\", [\"coalesce\", [\"get\", \"variant-index\"], 0], 0]), evaluated per box against every property the box carries, `part` included, with `geometry-type` `Polygon`. A box is emitted only when the expression is truthy; one whose expression errors is dropped. Picks out, say, the labels that moved off their first position, to draw a leader line to their feature."

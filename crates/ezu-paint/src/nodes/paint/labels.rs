@@ -81,6 +81,19 @@ pub(super) struct LabelSet {
     pub collide: bool,
     /// Render outline glyphs through the SDF path.
     pub outline_sdf: bool,
+    /// Point labels dropped before placement because their box reaches
+    /// past `max-extent-px`. They never compete for space and never draw;
+    /// they are kept only so `label-boxes` can report them, since a host
+    /// listing every label's fate would otherwise lose them silently.
+    pub culled: Vec<CulledLabel>,
+}
+
+/// A label culled for its size, measured as it would have been placed: a
+/// candidate (for its identity and collision boxes) and the draw payload
+/// its boxes are read from. Neither half reaches placement or drawing.
+pub(super) struct CulledLabel {
+    pub candidate: LabelCandidate,
+    pub draw: LabelDraw,
 }
 
 /// One label's draw payload. `blocks` / `placements` are in the local

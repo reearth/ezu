@@ -13,6 +13,12 @@ mean is spelled out in
 
 ### Added
 
+- `label-boxes` with `include: "all"` reports the point labels a `text` or
+  `text-labels` node culled because their box reaches past `max-extent-px`,
+  with `placed: false` and `drop-reason: "culled"`, at their first position
+  and under the `label-id` they would otherwise have had. A host writing
+  every label's fate, with `ezu frame --features` say, no longer loses them.
+  They still take no space and draw nothing, and the warning stays.
 - Each release ships a static musl build of the CLI, for Alpine and any Linux
   without glibc: `ezu-<tag>-x86_64-unknown-linux-musl.tar.gz` and
   `ezu-<tag>-aarch64-unknown-linux-musl.tar.gz`. They allocate through

@@ -234,6 +234,11 @@ mod tests {
 
     /// Black labels on white, with every `label-boxes` box exported.
     fn label_style(pts: &str) -> String {
+        label_style_with(pts, "")
+    }
+
+    /// [`label_style`] with `text_extra` added to the label layer's fields.
+    fn label_style_with(pts: &str, text_extra: &str) -> String {
         format!(
             r##"{{
               "name": "frame-labels",
@@ -247,7 +252,7 @@ mod tests {
                 "feats":  {{ "op": "features", "source": "pts", "layer": "pts" }},
                 "labels": {{ "op": "text-labels", "features": "@feats", "source": "pts", "layer": "pts",
                              "font": ["body"], "text": ["get", "name"], "size": 16,
-                             "color": "#000000" }},
+                             "color": "#000000" {text_extra} }},
                 "placed": {{ "op": "label-placement", "labels": ["@labels"] }},
                 "boxes":  {{ "op": "label-boxes", "placement": "@placed", "include": "all" }},
                 "text":   {{ "op": "text-draw", "labels": "@labels", "placement": "@placed" }},
@@ -345,6 +350,44 @@ mod tests {
             }
             assert!(ink > 20, "{name}: drawn");
         }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A label culled for its size is still listed, once, as dropped, even
+    /// where it straddles a tile edge, and nothing of it is drawn.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_culled_label_is_listed_once_as_dropped() {
+        let dir = scratch("frame-culled");
+        let fr = Frame::compute(&request()).unwrap();
+        let (edge, _) = fr.tile_offset(fr.tiles_x.start + 1, fr.tiles_y.start);
+        let (lon, lat) = lonlat_at(&fr, edge as f64 - 3.0, 100.0);
+        let style = label_style_with(&points(&[("Gamma", lon, lat)]), r#", "max-extent-px": 4"#);
+
+        let out = dir.join("boxes.json");
+        let key = Some("boxes=label-id,part");
+        frame(&style, &dir, &[("boxes", &out)], key, FeatureCoords::Px)
+            .await
+            .unwrap();
+        let doc = read(&out);
+        let mut parts: Vec<&str> = features(&doc)
+            .iter()
+            .map(|f| {
+                let p = &f["properties"];
+                assert_eq!(p["name"], "Gamma");
+                assert_eq!(p["placed"], false);
+                assert_eq!(p["drop-reason"], "culled");
+                assert!(p.get("variant-index").is_none() && p.get("overlapped").is_none());
+                p["part"].as_str().unwrap()
+            })
+            .collect();
+        parts.sort();
+        assert_eq!(parts, ["collision", "text"]);
+
+        let image = tiny_skia::Pixmap::load_png(dir.join("page.png")).unwrap();
+        assert!(
+            image.pixels().iter().all(|p| p.red() >= 128),
+            "nothing is drawn"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

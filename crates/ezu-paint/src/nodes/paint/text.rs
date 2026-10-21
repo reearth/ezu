@@ -80,8 +80,8 @@ use ezu_core::text::{
 
 use super::icon_fit::{fitted_content_box, stretch_image, IconTextFit, NineSlice};
 use super::labels::{
-    draw_labels, label_frame, label_rect, rotated_bounds, set_id, BackgroundDraw, FaceCache,
-    IconDraw, LabelDraw, LabelSet, PointVariant,
+    draw_labels, label_frame, label_rect, rotated_bounds, set_id, BackgroundDraw, CulledLabel,
+    FaceCache, IconDraw, LabelDraw, LabelSet, PointVariant,
 };
 
 // Each of these fields follows a `string` `$param` per render: the node keeps
@@ -2407,6 +2407,7 @@ impl TextNode {
 
         let mut cands: Vec<LabelCandidate> = Vec::new();
         let mut draws: Vec<LabelDraw> = Vec::new();
+        let mut culled_labels: Vec<CulledLabel> = Vec::new();
 
         // Evaluate every own and neighbour group once, up front — label sections
         // and per-group paint scalars, never the shaping — tracking the widest
@@ -2602,6 +2603,9 @@ impl TextNode {
                     })
                     .collect()
             };
+            // The text blocks of a label culled for its size, kept so the
+            // label can still be reported (see `LabelSet::culled`).
+            let mut culled_blocks: Option<Vec<Arc<TextBlock>>> = None;
             if let Some(primary) = text_blocks.first() {
                 // The primary anchor drives the warning counts and the cull
                 // test; every variant shares the same glyphs, so it is
@@ -2626,7 +2630,7 @@ impl TextNode {
                     if dx == 0 && dy == 0 {
                         culled += anchors.len();
                     }
-                    text_blocks.clear();
+                    culled_blocks = Some(std::mem::take(&mut text_blocks));
                 } else if primary.is_empty() {
                     text_blocks.clear();
                 }
@@ -2669,7 +2673,10 @@ impl TextNode {
                     }
                 }
             }
-            if text_blocks.is_empty() && icons.is_empty() {
+            // A culled label whose icon still places is that icon's symbol,
+            // not a dropped label; only one left with nothing is reported.
+            let culled_blocks = culled_blocks.filter(|_| icons.is_empty());
+            if text_blocks.is_empty() && icons.is_empty() && culled_blocks.is_none() {
                 continue;
             }
             // Two symbols differing only in their icon are distinct labels, so
@@ -2757,11 +2764,14 @@ impl TextNode {
                 // identical collision decisions.
                 let lpx = (world_ax - tx * extent_i) as f32 * sx;
                 let lpy = (world_ay - ty * extent_i) as f32 * sy;
+                // A culled label is measured exactly as it would have been
+                // placed, so its boxes and identity match what it would
+                // otherwise have been.
+                let blocks = culled_blocks.as_ref().unwrap_or(&text_blocks);
                 // One box per anchor candidate, in declaration order, joined
                 // with the icon's into the symbol's variants: the symbol takes
                 // the first variant whose every box is free.
-                let text_boxes: Vec<Aabb> =
-                    text_blocks.iter().map(|v| box_at(v, lpx, lpy)).collect();
+                let text_boxes: Vec<Aabb> = blocks.iter().map(|v| box_at(v, lpx, lpy)).collect();
                 let icon_boxes: Vec<Aabb> = icons
                     .iter()
                     .map(|(_, rel)| Aabb {
@@ -2777,7 +2787,7 @@ impl TextNode {
                     self.text_optional,
                     self.icon.as_ref().is_some_and(|c| c.optional),
                 );
-                cands.push(LabelCandidate {
+                let candidate = LabelCandidate {
                     sort_key,
                     rank: PlaceRank {
                         tile: (tx + dx, ty + dy),
@@ -2797,9 +2807,9 @@ impl TextNode {
                     dedupe: prep.dedupe_key.clone().zip(self.dedupe_distance_px),
                     overlap,
                     ignore_placement,
-                });
-                draws.push(LabelDraw::Point {
-                    blocks: text_blocks.clone(),
+                };
+                let draw = LabelDraw::Point {
+                    blocks: blocks.clone(),
                     variants: point_variants,
                     anchor: (lpx, lpy),
                     paint,
@@ -2809,7 +2819,13 @@ impl TextNode {
                     background,
                     rotation_deg: rotate_deg,
                     properties: prep.group.properties.clone(),
-                });
+                };
+                if culled_blocks.is_some() {
+                    culled_labels.push(CulledLabel { candidate, draw });
+                } else {
+                    cands.push(candidate);
+                    draws.push(draw);
+                }
             }
         }
 
@@ -2840,7 +2856,9 @@ impl TextNode {
             );
         }
 
-        Ok(self.label_set(cands, draws))
+        let mut set = self.label_set(cands, draws);
+        set.culled = culled_labels;
+        Ok(set)
     }
 
     /// The label set for one eval: the zoom gate and the "nothing to place"
@@ -2905,6 +2923,7 @@ impl TextNode {
             padding_px: self.padding_px,
             collide: self.collide,
             outline_sdf: self.outline_sdf,
+            culled: Vec::new(),
         }
     }
 }
@@ -4054,7 +4073,7 @@ fn text_schema(stage: Stage) -> Value {
                     "description": "A MapLibre number expression (degrees clockwise, data-driven MapLibre `text-rotate`), evaluated per feature group with the tile's zoom; overrides `rotate-deg` for that group.",
                 },
                 "max-extent-px": { "type": "number", "minimum": 0.0,
-                                   "description": "Canvas pad this node requests; labels whose bbox half-extent exceeds it are culled with a warning. Default 128." },
+                                   "description": "Canvas pad this node requests; labels whose bbox half-extent exceeds it are culled with a warning (`label-boxes` with `include: all` still reports them, with `drop-reason: culled`). Default 128." },
                 "outline-sdf": { "type": "boolean",
                                  "description": "Render outline-font glyphs through the SDF field-sampling path (maplibre-gl-js style, which draws every glyph from an SDF) instead of a per-glyph vector fill / stroke. The halo then comes from a distance threshold rather than a stroke, matching MapLibre's halo shape and cost. SDF glyph (`glyphs`) stacks are unaffected. Default true." },
                 "collide": { "type": "boolean",
