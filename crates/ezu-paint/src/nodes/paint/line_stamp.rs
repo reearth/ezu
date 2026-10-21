@@ -268,7 +268,7 @@ impl Node for LineStampNode {
                 else {
                     continue;
                 };
-                let width_px = eval_number(&self.width_expr, &ectx, const_width_px);
+                let width_px = eval_px(&self.width_expr, &ectx, const_width_px, ctx);
                 let opacity = eval_number(&self.opacity_expr, &ectx, const_opacity).clamp(0.0, 1.0);
                 let offset = eval_px(&self.offset_expr, &ectx, const_offset, ctx);
                 let lines = walk.shifted(&group.lines, offset);

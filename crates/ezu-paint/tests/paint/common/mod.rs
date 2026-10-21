@@ -471,6 +471,41 @@ pub fn render_with_features_and_sprite(
     )
 }
 
+/// [`render_with_features_and_sprite`] on a canvas of `ratio` device pixels
+/// per style pixel, with no margin.
+#[allow(dead_code)]
+pub fn render_with_features_and_sprite_at_ratio(
+    json: &str,
+    tile_size: u32,
+    ratio: f32,
+    tile: TileId,
+    features: &[(&str, ezu_features::FeatureLayer)],
+    sprite_key: &str,
+    sheet: SpriteSheet,
+) -> std::sync::Arc<ezu_graph::RasterBuf> {
+    use ezu_paint::host::TileLoader;
+    let doc = Document::from_json(json).expect("parse");
+    let registry = default_registry();
+    let graph = build_graph(&doc, &registry).expect("build");
+    let cache = Cache::new();
+    let mut bank = BrushBankLoader::new();
+    bank.insert_sprite(sprite_key.to_string(), sheet);
+    let mut loader = TileLoader::new(&bank, tile);
+    for (name, layer) in features {
+        loader.bind_features(name.to_string(), layer.clone());
+    }
+    let ev = Evaluator::new(&graph, &cache, &loader);
+    let size = (tile_size as f32 * ratio).round() as u32;
+    let canvas = CanvasInfo::square(size, 0).with_pixel_ratio(ratio);
+    let out = ev
+        .render(tile, canvas, &ParamValues::new(), 0)
+        .expect("render");
+    match out {
+        PortValue::Raster(r) => r,
+        other => panic!("expected raster output, got {:?}", other.kind()),
+    }
+}
+
 /// [`render_with_features_and_sprite`] with runtime parameter values.
 #[allow(dead_code, clippy::too_many_arguments)]
 pub fn render_with_features_sprite_and_params(

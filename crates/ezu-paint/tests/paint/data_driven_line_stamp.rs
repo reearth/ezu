@@ -3,7 +3,7 @@
 //! group. A feature drawn through an expression must come out exactly as the
 //! same feature drawn with the literal value its group resolves to.
 
-use crate::common::render_with_features_and_sprite;
+use crate::common::render_with_features_and_sprite_at_ratio;
 use ezu_features::{Feature, FeatureLayer, Geometry, Value};
 use ezu_graph::{RasterBuf, SpriteRect, SpriteSheet, TileId};
 use std::collections::HashMap;
@@ -64,6 +64,11 @@ fn render(k: &str, stamp_fields: &str) -> Vec<u8> {
 
 /// [`render`] with the `pat` node cropping `pat_icon`.
 fn render_with_pat(k: &str, pat_icon: &str, stamp_fields: &str) -> Vec<u8> {
+    render_at(k, pat_icon, stamp_fields, 1.0)
+}
+
+/// [`render_with_pat`] at `ratio` device pixels per style pixel.
+fn render_at(k: &str, pat_icon: &str, stamp_fields: &str, ratio: f32) -> Vec<u8> {
     let json = format!(
         r##"{{
       "name": "dd-line-stamp",
@@ -87,10 +92,10 @@ fn render_with_pat(k: &str, pat_icon: &str, stamp_fields: &str) -> Vec<u8> {
         extent: 4096,
         features: vec![line_feature(k)],
     };
-    render_with_features_and_sprite(
+    render_with_features_and_sprite_at_ratio(
         &json,
         64,
-        0,
+        ratio,
         TileId { z: 0, x: 0, y: 0 },
         &[("src.roads", layer)],
         "atlas",
@@ -231,4 +236,25 @@ fn offset_expr_renders_as_each_groups_literal_offset() {
             ),
         ],
     );
+}
+
+#[test]
+fn a_named_pattern_fits_its_width_in_style_pixels_at_ratio_two() {
+    // A width a `width-expr` gives is in style pixels whether the pattern is
+    // wired in or named per feature, so at pixel ratio 2 both stamp the same
+    // 12 device px wide band.
+    let wired = render_at(
+        "red",
+        "red",
+        r#""image": "@pat", "width-expr": ["+", 3, 3]"#,
+        2.0,
+    );
+    assert!(wired.iter().any(|&b| b != 0), "the wired pattern paints");
+    let named = render_at(
+        "red",
+        "red",
+        r#""sprite": "@sheet", "name-expr": ["get","kind"], "width-expr": ["+", 3, 3]"#,
+        2.0,
+    );
+    assert_eq!(named, wired);
 }

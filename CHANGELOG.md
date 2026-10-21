@@ -673,6 +673,10 @@ mean is spelled out in
   draws none. A colour that is neither a colour nor an expression warns
   on `line-color`, `circle-color`, `circle-stroke-color`, `text-color` and
   `text-halo-color` too, as it did on fills.
+- A `line-stamp` that names its pattern per feature (`sprite` +
+  `name-expr`) took a `width-expr` result as device pixels, so at pixel
+  ratio 2 its pattern came out half as wide as a wired-in pattern's. It is
+  now taken as style pixels, like every other width.
 
 ## 0.12.0 — 2026-10-12
 
