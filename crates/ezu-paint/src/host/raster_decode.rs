@@ -56,50 +56,178 @@ pub fn stitch_padded_raster(
     // pixel sits at stays correct on a canvas that is not square.
     let tile_px_x = canvas.tile_w as f32;
     let tile_px_y = canvas.tile_h as f32;
-    // Nearest sampling picks the tile pixel under each canvas pixel's
-    // centre, as a GPU's nearest filter does; linear keeps sampling at
-    // the pixel's corner, where a canvas the tile's size reads each tile
-    // pixel exactly.
-    let at = match resampling {
-        Resampling::Linear => 0.0,
-        Resampling::Nearest => 0.5,
-    };
 
     let mut out = RasterBuf::new(pw, ph);
-    for py in 0..ph {
-        let ty = (py as f32 + at - pad) / tile_px_y;
-        let (dy_off, ty_local) = split_fraction(ty);
-        for px in 0..pw {
-            let tx = (px as f32 + at - pad) / tile_px_x;
-            let (dx_off, tx_local) = split_fraction(tx);
-            let sample_tile = tiles
-                .get(&(dx_off, dy_off))
-                .copied()
-                .or_else(|| {
-                    tiles
-                        .get(&(dx_off.clamp(-1, 1), dy_off.clamp(-1, 1)))
-                        .copied()
-                })
-                .unwrap_or(centre);
-            let size = sample_tile.size as f32;
-            let rgba = match resampling {
-                Resampling::Linear => {
-                    let sx = (tx_local * size).clamp(0.0, size - 1.0001);
-                    let sy = (ty_local * size).clamp(0.0, size - 1.0001);
-                    bilinear_rgba(&sample_tile.pixels, sample_tile.size, sx, sy)
+    match resampling {
+        // Nearest sampling picks the tile pixel under each canvas pixel's
+        // centre, as a GPU's nearest filter does.
+        Resampling::Nearest => {
+            for py in 0..ph {
+                let ty = (py as f32 + 0.5 - pad) / tile_px_y;
+                let (dy_off, ty_local) = split_fraction(ty);
+                for px in 0..pw {
+                    let tx = (px as f32 + 0.5 - pad) / tile_px_x;
+                    let (dx_off, tx_local) = split_fraction(tx);
+                    let sample_tile = tiles.get(&(dx_off, dy_off)).copied().unwrap_or(centre);
+                    let size = sample_tile.size as f32;
+                    let rgba = nearest_rgba(
+                        &sample_tile.pixels,
+                        sample_tile.size,
+                        tx_local * size,
+                        ty_local * size,
+                    );
+                    let i = ((py * pw + px) * 4) as usize;
+                    out.pixels[i..i + 4].copy_from_slice(&rgba);
                 }
-                Resampling::Nearest => nearest_rgba(
-                    &sample_tile.pixels,
-                    sample_tile.size,
-                    tx_local * size,
-                    ty_local * size,
-                ),
-            };
-            let i = ((py * pw + px) * 4) as usize;
-            out.pixels[i..i + 4].copy_from_slice(&rgba);
+            }
+        }
+        // Linear sampling blends the four tile pixels whose centres
+        // surround the canvas pixel's centre, as a GPU's linear filter
+        // does, reaching into the neighbouring tile across a seam. A
+        // canvas the tile's size lands every canvas centre on a tile
+        // pixel's centre and reads it unblended.
+        Resampling::Linear => {
+            let size = centre.size as f32;
+            let present = |k: (i32, i32)| tiles.contains_key(&k);
+            for py in 0..ph {
+                let sy = mosaic_coord(py, pad, tile_px_y, size);
+                for px in 0..pw {
+                    let sx = mosaic_coord(px, pad, tile_px_x, size);
+                    let cell = MosaicCell::at(sx, sy, centre.size, present);
+                    let fetch = |t: MosaicTexel| {
+                        let tile = tiles.get(&t.tile).copied().unwrap_or(centre);
+                        let (x, y) = t.within(centre.size, tile.size);
+                        let i = ((y * tile.size + x) * 4) as usize;
+                        [
+                            tile.pixels[i],
+                            tile.pixels[i + 1],
+                            tile.pixels[i + 2],
+                            tile.pixels[i + 3],
+                        ]
+                    };
+                    let rgba = blend4(cell.corners.map(fetch), cell.fx, cell.fy);
+                    let i = ((py * pw + px) * 4) as usize;
+                    out.pixels[i..i + 4].copy_from_slice(&rgba);
+                }
+            }
         }
     }
     Some(out)
+}
+
+/// Where canvas pixel `p`'s centre falls in the 3×3 mosaic along one axis,
+/// in tile pixels from the centre tile's corner and measured between tile
+/// pixel centres, so a whole number lands on one. Multiplying before
+/// dividing keeps a canvas the tile's size exact.
+#[inline]
+pub(super) fn mosaic_coord(p: u32, pad: f32, tile_px: f32, size: f32) -> f32 {
+    (p as f32 - pad + 0.5) * size / tile_px - 0.5
+}
+
+/// One pixel of the 3×3 mosaic: the tile holding it, keyed as the stitch
+/// functions key their tiles, and its column and row inside that tile, in
+/// the centre tile's pixels.
+#[derive(Clone, Copy)]
+pub(super) struct MosaicTexel {
+    pub tile: (i32, i32),
+    x: u32,
+    y: u32,
+}
+
+impl MosaicTexel {
+    /// The mosaic pixel `(gx, gy)`, counted from the centre tile's corner
+    /// in tiles `size` pixels wide. Past the mosaic the outermost pixel is
+    /// repeated.
+    fn at(gx: i64, gy: i64, size: u32) -> Self {
+        let axis = |g: i64| {
+            let size = size as i64;
+            match g.div_euclid(size) {
+                ..=-2 => (-1, 0),
+                2.. => (1, (size - 1) as u32),
+                n => (n as i32, g.rem_euclid(size) as u32),
+            }
+        };
+        let ((dx, x), (dy, y)) = (axis(gx), axis(gy));
+        Self {
+            tile: (dx, dy),
+            x,
+            y,
+        }
+    }
+
+    /// Column and row inside a tile `tile_size` pixels wide: a neighbour
+    /// of another size than the centre's reads the same fraction of
+    /// itself.
+    pub fn within(self, centre_size: u32, tile_size: u32) -> (u32, u32) {
+        if tile_size == centre_size {
+            return (self.x, self.y);
+        }
+        let at = |l: u32| (l as u64 * tile_size as u64 / centre_size as u64) as u32;
+        (at(self.x), at(self.y))
+    }
+}
+
+/// The four mosaic pixels a linear sample at `(sx, sy)` (from
+/// [`mosaic_coord`]) blends, `[top-left, top-right, bottom-left,
+/// bottom-right]`, and the fractions across the cell between them.
+pub(super) struct MosaicCell {
+    pub corners: [MosaicTexel; 4],
+    pub fx: f32,
+    pub fy: f32,
+}
+
+impl MosaicCell {
+    /// A corner whose tile is missing (`present` says which are bound)
+    /// takes the value of its partner across the cell where that partner's
+    /// tile is there, so a missing neighbour stretches the edge it borders
+    /// rather than blending in another tile's pixels. A sample that lands
+    /// on a missing tile's pixel without blending reads the centre tile in
+    /// that tile's place, as nearest sampling does.
+    pub fn at(sx: f32, sy: f32, size: u32, present: impl Fn((i32, i32)) -> bool) -> Self {
+        let (x0, y0) = (sx.floor(), sy.floor());
+        let (fx, fy) = (sx - x0, sy - y0);
+        let (x0, y0) = (x0 as i64, y0 as i64);
+        let corner = |cx: i64, cy: i64| {
+            let t = MosaicTexel::at(cx, cy, size);
+            if present(t.tile) {
+                return t;
+            }
+            // Partners only along an axis the sample actually blends.
+            let ox = if fx > 0.0 { 2 * x0 + 1 - cx } else { cx };
+            let oy = if fy > 0.0 { 2 * y0 + 1 - cy } else { cy };
+            [(ox, cy), (cx, oy), (ox, oy)]
+                .into_iter()
+                .filter(|&p| p != (cx, cy))
+                .map(|(px, py)| MosaicTexel::at(px, py, size))
+                .find(|p| present(p.tile))
+                .unwrap_or(t)
+        };
+        Self {
+            corners: [
+                corner(x0, y0),
+                corner(x0 + 1, y0),
+                corner(x0, y0 + 1),
+                corner(x0 + 1, y0 + 1),
+            ],
+            fx,
+            fy,
+        }
+    }
+}
+
+/// Bilinear blend of premultiplied RGBA8 texels `[top-left, top-right,
+/// bottom-left, bottom-right]` at fractions `(fx, fy)` across the cell.
+/// Blending premultiplied values channel-wise is the correct path (no
+/// halos at transparent edges).
+#[inline]
+fn blend4(t: [[u8; 4]; 4], fx: f32, fy: f32) -> [u8; 4] {
+    let mut out = [0u8; 4];
+    for c in 0..4 {
+        let a = t[0][c] as f32 * (1.0 - fx) + t[1][c] as f32 * fx;
+        let b = t[2][c] as f32 * (1.0 - fx) + t[3][c] as f32 * fx;
+        out[c] = (a * (1.0 - fy) + b * fy).round().clamp(0.0, 255.0) as u8;
+    }
+    out
 }
 
 /// Upsample the sub-rectangle of `ancestor` covered by tile `(x, y)` at
@@ -159,25 +287,22 @@ fn nearest_rgba(pixels: &[u8], size: u32, x: f32, y: f32) -> [u8; 4] {
 }
 
 /// Bilinear sample of premultiplied RGBA8 at fractional pixel
-/// coordinates. Blending premultiplied values channel-wise is the
-/// correct path (no halos at transparent edges).
+/// coordinates, measured between pixel centres.
 #[inline]
 fn bilinear_rgba(pixels: &[u8], size: u32, x: f32, y: f32) -> [u8; 4] {
     let x0 = x.floor() as u32;
     let y0 = y.floor() as u32;
     let x1 = (x0 + 1).min(size - 1);
     let y1 = (y0 + 1).min(size - 1);
-    let fx = x - x0 as f32;
-    let fy = y - y0 as f32;
-    let idx = |xx: u32, yy: u32| ((yy * size + xx) * 4) as usize;
-    let (i00, i10, i01, i11) = (idx(x0, y0), idx(x1, y0), idx(x0, y1), idx(x1, y1));
-    let mut out = [0u8; 4];
-    for c in 0..4 {
-        let a = pixels[i00 + c] as f32 * (1.0 - fx) + pixels[i10 + c] as f32 * fx;
-        let b = pixels[i01 + c] as f32 * (1.0 - fx) + pixels[i11 + c] as f32 * fx;
-        out[c] = (a * (1.0 - fy) + b * fy).round().clamp(0.0, 255.0) as u8;
-    }
-    out
+    let at = |xx: u32, yy: u32| {
+        let i = ((yy * size + xx) * 4) as usize;
+        [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+    };
+    blend4(
+        [at(x0, y0), at(x1, y0), at(x0, y1), at(x1, y1)],
+        x - x0 as f32,
+        y - y0 as f32,
+    )
 }
 
 /// Split a tile-fractional coordinate `t` into a neighbour offset
@@ -320,5 +445,48 @@ mod tests {
             let out = stitch_padded_raster(&tiles, canvas, r).unwrap();
             assert_eq!(out.pixels, tile.pixels, "{r:?}");
         }
+    }
+
+    /// Red channel of each pixel in row `y`.
+    fn red_row(out: &RasterBuf, y: u32) -> Vec<u8> {
+        (0..out.width)
+            .map(|x| out.pixels[((y * out.width + x) * 4) as usize])
+            .collect()
+    }
+
+    #[test]
+    fn linear_magnification_samples_pixel_centres() {
+        // A 2 px tile, red 0 then 200, on a 4 px canvas: canvas centres sit
+        // at -0.25, 0.25, 0.75 and 1.25 tile pixels from the first tile
+        // pixel's centre, so the row is symmetric, with the outer pixels
+        // holding the edge colour rather than one end reading a corner.
+        let canvas = CanvasInfo::square(4, 0);
+        let tile = RasterTile {
+            size: 2,
+            pixels: [[0u8, 0, 0, 255], [200, 0, 0, 255]].concat().repeat(2),
+        };
+        let tiles: HashMap<(i32, i32), &RasterTile> = HashMap::from([((0, 0), &tile)]);
+        let out = stitch_padded_raster(&tiles, canvas, Resampling::Linear).unwrap();
+        assert_eq!(red_row(&out, 0), [0, 50, 150, 200]);
+    }
+
+    #[test]
+    fn linear_magnification_blends_across_a_tile_seam() {
+        // Red 0 in the centre tile, 200 in its right neighbour: the last
+        // canvas pixel's centre sits a quarter of a tile pixel past the
+        // centre tile's edge pixel, so it takes a quarter of the
+        // neighbour's, as the first pixel of the right pad takes a quarter
+        // of the centre's from the other side.
+        let canvas = CanvasInfo::square(4, 2);
+        let centre = solid_tile(2, [0, 0, 0, 255]);
+        let right = solid_tile(2, [200, 0, 0, 255]);
+        let tiles: HashMap<(i32, i32), &RasterTile> =
+            HashMap::from([((0, 0), &centre), ((1, 0), &right)]);
+        let out = stitch_padded_raster(&tiles, canvas, Resampling::Linear).unwrap();
+        let row = red_row(&out, 4);
+        assert_eq!(&row[2..8], [0, 0, 0, 50, 150, 200]);
+        // With no left neighbour bound, the left pad stretches the centre's
+        // edge instead of blending in the far side of the tile.
+        assert_eq!(&row[..2], [0, 0]);
     }
 }

@@ -11,6 +11,8 @@ use ezu_core::coord::metres_per_world_unit;
 use ezu_graph::{CanvasInfo, GeoScale, ScalarField, TileId};
 use ezu_style::DemDecoding;
 
+use super::raster_decode::{mosaic_coord, MosaicCell, MosaicTexel};
+
 /// One decoded DEM tile at the source's native pixel size.
 pub struct DemTile {
     pub size: u32,
@@ -82,27 +84,27 @@ pub fn stitch_padded_field(
     let tile_px_y = canvas.tile_h as f32;
     let dem_size = centre.size as f32;
 
+    // Each canvas pixel blends the four DEM samples whose centres surround
+    // its own centre, as MapLibre's hillshade reads its DEM texture,
+    // reaching into the neighbouring tile across a seam (see
+    // `MosaicCell::at` for a missing neighbour). A canvas the DEM's size
+    // lands every canvas centre on a sample and reads it unblended.
+    let present = |k: (i32, i32)| tiles.contains_key(&k);
+    let fetch = |t: MosaicTexel| {
+        let tile = tiles.get(&t.tile).copied().unwrap_or(centre);
+        let (x, y) = t.within(centre.size, tile.size);
+        tile.elev[(y * tile.size + x) as usize]
+    };
     let mut elev = vec![0f32; (pw * ph) as usize];
     for py in 0..ph {
-        let ty = (py as f32 - pad) / tile_px_y;
-        let (dy_off, ty_local) = split_fraction(ty);
+        let sy = mosaic_coord(py, pad, tile_px_y, dem_size);
         for px in 0..pw {
-            let tx = (px as f32 - pad) / tile_px_x;
-            let (dx_off, tx_local) = split_fraction(tx);
-            let sample_tile = tiles
-                .get(&(dx_off, dy_off))
-                .copied()
-                .or_else(|| {
-                    tiles
-                        .get(&(dx_off.clamp(-1, 1), dy_off.clamp(-1, 1)))
-                        .copied()
-                })
-                .unwrap_or(centre);
-            // Edge-clamp inside the tile so missing neighbours
-            // degrade gracefully (centre extends to fill the gap).
-            let sx = (tx_local * dem_size).clamp(0.0, dem_size - 1.0001);
-            let sy = (ty_local * dem_size).clamp(0.0, dem_size - 1.0001);
-            let v = bilinear(&sample_tile.elev, sample_tile.size, sx, sy);
+            let sx = mosaic_coord(px, pad, tile_px_x, dem_size);
+            let MosaicCell { corners, fx, fy } = MosaicCell::at(sx, sy, centre.size, present);
+            let [tl, tr, bl, br] = corners.map(fetch);
+            let a = tl * (1.0 - fx) + tr * fx;
+            let b = bl * (1.0 - fx) + br * fx;
+            let v = a * (1.0 - fy) + b * fy;
             elev[(py * pw + px) as usize] = v - elevation_offset;
         }
     }
@@ -193,16 +195,6 @@ fn bilinear(elev: &[f32], size: u32, x: f32, y: f32) -> f32 {
     a * (1.0 - fy) + b * fy
 }
 
-/// Split a tile-fractional coordinate `t` (in tile units from the centre
-/// tile's origin) into a neighbour offset `n ∈ {-1, 0, 1}` and a
-/// position inside that neighbour `∈ [0, 1)`.
-#[inline]
-fn split_fraction(t: f32) -> (i32, f32) {
-    let n = t.floor() as i32;
-    let local = t - n as f32;
-    (n.clamp(-1, 1), local.clamp(0.0, 0.999_999))
-}
-
 /// Latitude (radians) of a Web Mercator tile's vertical centre.
 fn tile_centre_world_y(tile: TileId) -> f64 {
     (tile.y as f64 + 0.5) / (1u64 << tile.z) as f64
@@ -268,5 +260,37 @@ mod tests {
         };
         let t = decode_dem_tile(&png, DemDecoding::Custom(f), 0, 0, 0).unwrap();
         assert_eq!(t.elev, vec![300.0; 4]);
+    }
+
+    #[test]
+    fn stitching_samples_dem_pixel_centres_across_seams() {
+        // A 2-sample DEM row of 0 m beside a neighbour at 200 m, magnified
+        // onto a 4 px canvas with a 2 px pad: canvas centres fall between
+        // sample centres, so the row is symmetric about the seam and the
+        // pixels next to it blend both tiles. The missing left neighbour
+        // stretches the centre's edge.
+        let centre = DemTile {
+            size: 2,
+            elev: vec![0.0; 4],
+        };
+        let right = DemTile {
+            size: 2,
+            elev: vec![200.0; 4],
+        };
+        let tiles: HashMap<(i32, i32), &DemTile> =
+            HashMap::from([((0, 0), &centre), ((1, 0), &right)]);
+        let tile = TileId { z: 1, x: 0, y: 0 };
+        let f = stitch_padded_field(&tiles, 0.0, tile, CanvasInfo::square(4, 2)).unwrap();
+        let row: Vec<f32> = (0..8).map(|x| f.values[(4 * 8 + x) as usize]).collect();
+        assert_eq!(row, [0.0, 0.0, 0.0, 0.0, 0.0, 50.0, 150.0, 200.0]);
+
+        // At one canvas pixel per sample every pixel reads its own sample.
+        let ramp = DemTile {
+            size: 4,
+            elev: (0..16).map(|i| i as f32).collect(),
+        };
+        let tiles: HashMap<(i32, i32), &DemTile> = HashMap::from([((0, 0), &ramp)]);
+        let f = stitch_padded_field(&tiles, 0.0, tile, CanvasInfo::square(4, 0)).unwrap();
+        assert_eq!(&*f.values, &ramp.elev[..]);
     }
 }

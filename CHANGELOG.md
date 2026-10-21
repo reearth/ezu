@@ -614,6 +614,18 @@ mean is spelled out in
   anchor point, the envelope MapLibre takes and the one a turned label
   already used, and `label-boxes` reports that box as its `collision` part.
   Placement changes only for symbols whose icon is turned.
+- A `raster` source with `resampling: linear`, and every `dem` source,
+  sampled its tiles at each canvas pixel's corner rather than its centre
+  when a tile's pixels did not land one to one on the canvas, as with a
+  512 px tile on a 256 px canvas or at another pixel ratio: the image sat
+  half a tile pixel off, and the last pixel before each tile seam repeated
+  instead of blending into the neighbour. They now blend the four tile
+  pixels around the canvas pixel's centre, as a GPU's linear filter and
+  MapLibre's hillshade do, across tile seams too; next to a missing
+  neighbour the tile's edge pixel is held rather than blended with the far
+  side of the tile. Rasters drawn one to one are unchanged; a DEM drawn one to one
+  can differ in the last bits of a tile's last row and column, which were
+  read as a near-but-not-exact blend.
 
 ## 0.12.0 — 2026-10-12
 
