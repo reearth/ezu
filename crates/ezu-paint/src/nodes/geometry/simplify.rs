@@ -41,7 +41,7 @@ impl Node for SimplifyNode {
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
         let px = feats.extent as f64 / ctx.canvas.tile_w.max(1) as f64;
-        let epsilon = self.epsilon.get(ctx, inputs)? * px;
+        let epsilon = ctx.px(self.epsilon.get(ctx, inputs)?) * px;
         // Per group: simplify each feature's lines and polygon rings (points
         // pass through), carrying properties.
         let mut out_groups = Vec::with_capacity(feats.groups.len());

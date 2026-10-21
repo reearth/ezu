@@ -124,10 +124,11 @@ impl Node for DotDensityNode {
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
         let extent = feats.extent.max(1) as f64;
-        // Screen pixels to feature-extent units, as the other px-sized
-        // geometry nodes do.
+        // Style pixels to feature-extent units, as the other px-sized
+        // geometry nodes do. The lattice pitch in extent units is the same
+        // at every pixel ratio, so a retina tile scatters the same dots.
         let px = extent / ctx.canvas.tile_w.max(1) as f64;
-        let spacing = self.spacing_px.get(ctx, inputs)? * px;
+        let spacing = ctx.px(self.spacing_px.get(ctx, inputs)?) * px;
         let jitter = self.jitter.get(ctx, inputs)?;
         let dot_value = self.dot_value.get(ctx, inputs)?;
         let const_density = self.density.get(ctx, inputs)?;

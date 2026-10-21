@@ -3,8 +3,9 @@
 //! `phase-px` pattern. Polygons and points pass through untouched.
 //!
 //! Walking is performed in tile-pixel space (consistent with other
-//! `*-px` parameters in the codebase): pixel lengths are converted to
-//! feature-extent units using `extent / tile-size` at eval time.
+//! `*-px` parameters in the codebase): style-pixel lengths are taken to
+//! device pixels by the pixel ratio, then to feature-extent units using
+//! `extent / tile-size` at eval time.
 
 use ezu_graph::{
     schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
@@ -47,9 +48,9 @@ impl Node for DashNode {
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
         let scale = feats.extent as f64 / ctx.canvas.tile_w.max(1) as f64;
-        let dash = self.dash_px.get(ctx, inputs)? * scale;
-        let gap = self.gap_px.get(ctx, inputs)? * scale;
-        let phase = self.phase_px.get(ctx, inputs)? * scale;
+        let dash = ctx.px(self.dash_px.get(ctx, inputs)?) * scale;
+        let gap = ctx.px(self.gap_px.get(ctx, inputs)?) * scale;
+        let phase = ctx.px(self.phase_px.get(ctx, inputs)?) * scale;
 
         // Per group: cut each feature's polylines into dashes (polygons and
         // points pass through), carrying properties.
@@ -234,3 +235,31 @@ impl NodeFactory for DashFactory {
 }
 
 ezu_graph::submit_node!(DashFactory);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::nodes::geometry::ratio_test::{build, eval, geometry, input, plain, retina};
+
+    #[test]
+    fn dash_lengths_double_in_device_pixels_on_a_retina_tile() {
+        let node = build(
+            &DashFactory,
+            serde_json::json!({ "features": "@f", "dash-px": 8, "gap-px": 4, "phase-px": 2 }),
+        );
+        let f = input(FeatureGroup::synthetic(
+            vec![],
+            vec![vec![(0, 100), (4096, 100)]],
+            vec![],
+        ));
+        let one = eval(node.as_ref(), plain(), std::slice::from_ref(&f));
+        let two = eval(node.as_ref(), retina(), std::slice::from_ref(&f));
+        assert_eq!(geometry(&one), geometry(&two));
+        // The second dash is a whole one, 128 extent units long: 8 device
+        // px on the 256 px tile, 16 on the 512 px one.
+        let dash = two.lines().nth(1).expect("dashes");
+        let len = f64::from(dash[dash.len() - 1].0 - dash[0].0);
+        assert_eq!(len * 256.0 / 4096.0, 8.0);
+        assert_eq!(len * 512.0 / 4096.0, 16.0);
+    }
+}

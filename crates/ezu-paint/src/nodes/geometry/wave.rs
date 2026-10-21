@@ -87,12 +87,16 @@ impl Node for WaveNode {
         } else {
             wavelength_px.max(1.0)
         };
+        // Style pixels to device pixels to extent units. The extent-unit
+        // lengths come out the same at every pixel ratio, so the noise,
+        // sampled in world extent units, jitters a retina tile's line
+        // exactly as it does the plain one's.
         let scale = feats.extent as f64 / ctx.canvas.tile_w.max(1) as f64;
-        let amp = amplitude_px * scale;
-        let wavelen = wavelength_px * scale;
-        let phase = phase_px * scale;
-        let noise_amp = noise_amp_px * scale;
-        let noise_scale = noise_scale_px * scale;
+        let amp = ctx.px(amplitude_px) * scale;
+        let wavelen = ctx.px(wavelength_px) * scale;
+        let phase = ctx.px(phase_px) * scale;
+        let noise_amp = ctx.px(noise_amp_px) * scale;
+        let noise_scale = ctx.px(noise_scale_px) * scale;
         // Use a constant default seed so the world-anchored noise is
         // deterministic across tiles. Per-tile rng_seed would make the
         // noise pattern shift at every tile border.
@@ -406,3 +410,32 @@ impl NodeFactory for WaveFactory {
 }
 
 ezu_graph::submit_node!(WaveFactory);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::nodes::geometry::ratio_test::{build, eval, geometry, input, plain, retina};
+
+    #[test]
+    fn a_wave_bends_a_line_the_same_way_at_every_pixel_ratio() {
+        let node = build(
+            &WaveFactory,
+            serde_json::json!({
+                "features": "@f", "amplitude-px": 3, "wavelength-px": 20,
+                "phase-px": 5, "noise-amp-px": 2, "noise-scale-px": 12,
+            }),
+        );
+        let f = input(FeatureGroup::synthetic(
+            vec![],
+            vec![vec![(0, 2000), (1500, 2600), (4096, 2100)]],
+            vec![],
+        ));
+        let one = eval(node.as_ref(), plain(), std::slice::from_ref(&f));
+        let two = eval(node.as_ref(), retina(), std::slice::from_ref(&f));
+        let line = one.lines().next().expect("a wavy line");
+        assert!(line.len() > 100, "densified along its length");
+        // 3 + 2 style px of reach is 80 extent units at 16 units per px.
+        assert!((line[0].1 - 2000).abs() <= 80, "{:?}", line[0]);
+        assert_eq!(geometry(&one), geometry(&two));
+    }
+}

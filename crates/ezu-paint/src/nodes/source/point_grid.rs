@@ -205,3 +205,22 @@ impl NodeFactory for PointGridFactory {
 }
 
 ezu_graph::submit_node!(PointGridFactory);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::nodes::geometry::ratio_test::{build, eval, plain, retina};
+
+    #[test]
+    fn a_world_grid_lands_on_the_same_points_at_every_pixel_ratio() {
+        let node = build(
+            &PointGridFactory,
+            serde_json::json!({ "spacing": 300, "offset-x": 17, "stagger": 0.5, "anchor": "world" }),
+        );
+        let one = eval(node.as_ref(), plain(), &[]);
+        let two = eval(node.as_ref(), retina(), &[]);
+        let pts: Vec<_> = one.points().collect();
+        assert!(pts.len() > 100, "a lattice covers the tile");
+        assert_eq!(pts, two.points().collect::<Vec<_>>());
+    }
+}

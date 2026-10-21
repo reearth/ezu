@@ -67,7 +67,7 @@ impl Node for JunctionsNode {
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
         let scale = feats.extent as f64 / ctx.canvas.tile_w.max(1) as f64;
-        let snap = self.snap_px.get(ctx, inputs)? * scale;
+        let snap = ctx.px(self.snap_px.get(ctx, inputs)?) * scale;
         let found = junctions(
             feats
                 .groups
@@ -167,3 +167,44 @@ impl NodeFactory for JunctionsFactory {
 }
 
 ezu_graph::submit_node!(JunctionsFactory);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::nodes::common::FilteredFeatures;
+    use crate::nodes::geometry::ratio_test::{build, eval, input, plain, retina};
+
+    #[test]
+    fn the_snap_distance_is_in_style_pixels() {
+        let node = build(
+            &JunctionsFactory,
+            serde_json::json!({ "features": "@f", "snap-px": 2 }),
+        );
+        // Two ends 24 extent units apart: 1.5 style px at either ratio,
+        // inside the 2 px snap, though 3 device px on the retina tile.
+        let f = input(FeatureGroup::synthetic(
+            vec![],
+            vec![
+                vec![(1000, 2000), (2000, 2000)],
+                vec![(2024, 2000), (3000, 2600)],
+            ],
+            vec![],
+        ));
+        let one = eval(node.as_ref(), plain(), std::slice::from_ref(&f));
+        let two = eval(node.as_ref(), retina(), std::slice::from_ref(&f));
+        let two_armed = |f: &FilteredFeatures| {
+            f.groups
+                .iter()
+                .filter(|g| {
+                    g.properties.get(ARMS_PROPERTY) == Some(&maplibre_expr::Value::Number(2.0))
+                })
+                .count()
+        };
+        assert_eq!(two_armed(&one), 1);
+        assert_eq!(two_armed(&two), 1);
+        assert_eq!(
+            one.points().collect::<Vec<_>>(),
+            two.points().collect::<Vec<_>>()
+        );
+    }
+}

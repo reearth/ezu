@@ -50,8 +50,8 @@ impl Node for MedialAxisNode {
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
         let px = feats.extent as f64 / ctx.canvas.tile_w.max(1) as f64;
-        let densify = self.densify_px.get(ctx, inputs)? * px;
-        let min_branch = self.min_branch_px.get(ctx, inputs)? * px;
+        let densify = ctx.px(self.densify_px.get(ctx, inputs)?) * px;
+        let min_branch = ctx.px(self.min_branch_px.get(ctx, inputs)?) * px;
         // Per group: skeletonise each feature's polygons into polylines,
         // carrying properties.
         let mut out_groups = Vec::with_capacity(feats.groups.len());

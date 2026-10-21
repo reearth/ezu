@@ -49,6 +49,7 @@ impl Resolved {
 }
 
 impl Mode {
+    /// Resolve the lengths, from style pixels into device pixels.
     fn resolve(
         &self,
         ctx: &EvalCtx<'_>,
@@ -59,10 +60,10 @@ impl Mode {
                 iterations: *iterations,
             },
             Mode::Densify { target_px } => Resolved::Densify {
-                target_px: target_px.get(ctx, inputs)?,
+                target_px: ctx.px(target_px.get(ctx, inputs)?),
             },
             Mode::Resample { spacing_px } => Resolved::Resample {
-                spacing_px: spacing_px.get(ctx, inputs)?,
+                spacing_px: ctx.px(spacing_px.get(ctx, inputs)?),
             },
         })
     }
@@ -295,3 +296,28 @@ impl NodeFactory for ResampleFactory {
 ezu_graph::submit_node!(SmoothFactory);
 ezu_graph::submit_node!(DensifyFactory);
 ezu_graph::submit_node!(ResampleFactory);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::nodes::geometry::ratio_test::{build, eval, geometry, input, plain, retina};
+
+    #[test]
+    fn resample_spacing_is_in_style_pixels() {
+        let node = build(
+            &ResampleFactory,
+            serde_json::json!({ "features": "@f", "spacing-px": 4 }),
+        );
+        let f = input(FeatureGroup::synthetic(
+            vec![],
+            vec![vec![(0, 0), (1024, 0), (1024, 640)]],
+            vec![],
+        ));
+        let one = eval(node.as_ref(), plain(), std::slice::from_ref(&f));
+        let two = eval(node.as_ref(), retina(), std::slice::from_ref(&f));
+        // 4 style px is 64 extent units on either tile.
+        let line = one.lines().next().expect("a line");
+        assert_eq!((line[0], line[1]), ((0, 0), (64, 0)));
+        assert_eq!(geometry(&one), geometry(&two));
+    }
+}

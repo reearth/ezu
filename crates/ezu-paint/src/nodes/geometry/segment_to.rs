@@ -82,7 +82,7 @@ impl Node for SegmentToNode {
         )?;
         let scale = f64::from(feats.extent) / f64::from(ctx.canvas.tile_w.max(1));
         // `max` also turns a NaN from a port into no gap.
-        let gap = self.gap_px.get(ctx, inputs)?.max(0.0) * scale;
+        let gap = ctx.px(self.gap_px.get(ctx, inputs)?.max(0.0)) * scale;
         let mut out_groups = Vec::new();
         for g in &feats.groups {
             let Some(target) = target_of(g, &self.lng_field, &self.lat_field)

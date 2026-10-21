@@ -48,10 +48,13 @@ impl Node for HatchNode {
         // agree at the seam.
         let extent = feats.extent as f64;
         let origin = (ctx.tile.x as f64 * extent, ctx.tile.y as f64 * extent);
+        // `spacing` is in style pixels: in device pixels first, then in
+        // extent units, which come out the same at every pixel ratio so a
+        // retina tile hatches the very same world lines.
         let px = extent / ctx.canvas.tile_w.max(1) as f64;
         let opts = HatchOpts {
             angle_deg: self.angle_deg.get(ctx, inputs)?,
-            spacing: self.spacing.get(ctx, inputs)? * px,
+            spacing: ctx.px(self.spacing.get(ctx, inputs)?) * px,
             phase: self.phase.get(ctx, inputs)?,
             origin,
         };
@@ -138,3 +141,30 @@ impl NodeFactory for HatchFactory {
 }
 
 ezu_graph::submit_node!(HatchFactory);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::nodes::geometry::ratio_test::{build, eval, geometry, input, plain, retina};
+    use ezu_features::Polygon;
+
+    #[test]
+    fn hatch_spacing_is_in_style_pixels() {
+        let node = build(
+            &HatchFactory,
+            serde_json::json!({ "features": "@f", "spacing": 8, "angle-deg": 0 }),
+        );
+        let square = Polygon {
+            exterior: vec![(0, 0), (4096, 0), (4096, 4096), (0, 4096)],
+            holes: vec![],
+        };
+        let f = input(FeatureGroup::synthetic(vec![square], vec![], vec![]));
+        let one = eval(node.as_ref(), plain(), std::slice::from_ref(&f));
+        let two = eval(node.as_ref(), retina(), std::slice::from_ref(&f));
+        // 8 style px is 8 device px on a 256 px tile and 16 on a 512 px
+        // one: 128 extent units either way, so the very same lines.
+        let n = one.lines().count();
+        assert!((31..=33).contains(&n), "{n} lines 128 units apart");
+        assert_eq!(geometry(&one), geometry(&two));
+    }
+}

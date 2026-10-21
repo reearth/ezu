@@ -85,7 +85,7 @@ impl Node for BufferNode {
         )?;
         let px = feats.extent as f64 / ctx.canvas.tile_w.max(1) as f64;
         let opts = BufferOpts {
-            distance: self.distance.get(ctx, inputs)? * px,
+            distance: ctx.px(self.distance.get(ctx, inputs)?) * px,
             join: self.join.get(ctx)?.buffer_join(),
         };
         // Per group: buffer each feature's geometry into polygons, carrying

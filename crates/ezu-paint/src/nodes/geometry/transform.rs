@@ -72,14 +72,17 @@ impl Node for TransformNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
-        // Pixels to feature units: one tile spans `extent` units across
-        // `tile_w` px (and down `tile_h`).
+        // Style pixels to feature units: into device pixels by the pixel
+        // ratio, then one tile spans `extent` units across `tile_w` device
+        // px (and down `tile_h`).
         let extent = feats.extent as f64;
         let translate = (
             self.translate_x.get(ctx, inputs)?
-                + self.translate_x_px.get(ctx, inputs)? * extent / ctx.canvas.tile_w.max(1) as f64,
+                + ctx.px(self.translate_x_px.get(ctx, inputs)?) * extent
+                    / ctx.canvas.tile_w.max(1) as f64,
             self.translate_y.get(ctx, inputs)?
-                + self.translate_y_px.get(ctx, inputs)? * extent / ctx.canvas.tile_h.max(1) as f64,
+                + ctx.px(self.translate_y_px.get(ctx, inputs)?) * extent
+                    / ctx.canvas.tile_h.max(1) as f64,
         );
         let rotation_rad = self.rotation_deg.get(ctx, inputs)?.to_radians();
         let uniform = self.scale.get(ctx, inputs)?;
@@ -216,3 +219,25 @@ impl NodeFactory for TransformFactory {
 }
 
 ezu_graph::submit_node!(TransformFactory);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::nodes::geometry::ratio_test::{build, eval, input, plain, retina};
+
+    #[test]
+    fn a_pixel_translate_moves_the_same_distance_on_the_map_at_every_ratio() {
+        let node = build(
+            &TransformFactory,
+            serde_json::json!({ "features": "@f", "translate-px": [10, -5], "translate": [3, 0] }),
+        );
+        let f = input(FeatureGroup::synthetic(vec![], vec![], vec![(100, 200)]));
+        let one = eval(node.as_ref(), plain(), std::slice::from_ref(&f));
+        let two = eval(node.as_ref(), retina(), std::slice::from_ref(&f));
+        // 10 style px is 160 extent units on either tile: 10 device px of
+        // 16 units on the 256 px tile, 20 device px of 8 units on the
+        // 512 px one. The extent-unit `translate` is not a pixel length.
+        assert_eq!(one.points().collect::<Vec<_>>(), [(263, 120)]);
+        assert_eq!(two.points().collect::<Vec<_>>(), [(263, 120)]);
+    }
+}
