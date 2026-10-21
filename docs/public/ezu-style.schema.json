@@ -6077,6 +6077,21 @@
                   }
                 ]
               },
+              "miter-limit": {
+                "oneOf": [
+                  {
+                    "default": 4,
+                    "description": "MapLibre `line-miter-limit`: how far a `miter` join may reach from the line, in half-widths, before it is bevelled instead, so sharp corners do not spike. MapLibre's default is 2, which `ezu translate` writes; ezu's default of 4 keeps longer points. Values of 1 or less bevel every join. When set, it also bounds the corners of an `offset-px` line.",
+                    "minimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "description": "`$param` reference or `@node` scalar port.",
+                    "pattern": "^[$@][A-Za-z_][A-Za-z0-9_-]*$",
+                    "type": "string"
+                  }
+                ]
+              },
               "offset-expr": {
                 "description": "A MapLibre number expression (JSON array) giving the offset in pixels, evaluated per feature group at paint time. When present it overrides the constant `offset-px`; a group whose expression doesn't resolve to a number falls back to `offset-px`."
               },
@@ -6084,7 +6099,7 @@
                 "oneOf": [
                   {
                     "default": 0,
-                    "description": "MapLibre `line-offset`: draw the line this many pixels to the right of its direction of travel, or to the left when negative. Each vertex moves along the bisector of the segments meeting there, far enough to keep both segments the offset away; a corner sharper than that allows within twice the offset (MapLibre's default `line-miter-limit`) is bevelled. A casing's gap is centred on the offset line. `0` strokes the line where it is.",
+                    "description": "MapLibre `line-offset`: draw the line this many pixels to the right of its direction of travel, or to the left when negative. Each vertex moves along the bisector of the segments meeting there, far enough to keep both segments the offset away; a corner sharper than that allows within `miter-limit` offsets, or twice the offset (MapLibre's default `line-miter-limit`) when `miter-limit` is not set, is bevelled. A casing's gap is centred on the offset line. `0` strokes the line where it is.",
                     "type": "number"
                   },
                   {

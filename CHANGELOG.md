@@ -404,8 +404,16 @@ mean is spelled out in
   `raster-resampling` over to the source. They used to be dropped with a
   warning. When layers over one source want different resampling, the
   later one reads a copy of the source carrying its own.
+- `stroke` takes `miter-limit` (MapLibre `line-miter-limit`): how many
+  half-widths a `miter` join may reach before it is bevelled. It defaults
+  to 4, the limit `stroke` has always drawn with, and may be a `$param` or
+  an `@node`. Once written it also bounds the corners of an `offset-px`
+  line, which otherwise keep MapLibre's default of 2.
 
 ### Changed
+
+- `ezu_paint::StrokeStyle` has a `miter_limit` field; set it to 4.0 to
+  draw as before.
 
 - A `switch` branch that is not taken is no longer rendered, nor anything
   only it reads. With a literal or `$param` choice the evaluator leaves it
@@ -626,6 +634,12 @@ mean is spelled out in
   side of the tile. Rasters drawn one to one are unchanged; a DEM drawn one to one
   can differ in the last bits of a tile's last row and column, which were
   read as a near-but-not-exact blend.
+- `ezu translate` ignored `line-miter-limit` with a warning, and its
+  `stroke` bevelled miter joins only past 4 half-widths where MapLibre's
+  default is 2, so sharp corners came out more pointed. A miter-joined line
+  now carries the layer's `line-miter-limit`, or 2 when it sets none, as
+  the `stroke`'s `miter-limit`; a zoom curve goes through an `expr` node.
+  `line-round-limit` still warns.
 
 ## 0.12.0 — 2026-10-12
 

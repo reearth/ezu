@@ -68,6 +68,7 @@ fn read_properties(ty: &str) -> &'static [&'static str] {
             "line-translate",
             "line-cap",
             "line-join",
+            "line-miter-limit",
         ],
         "circle" => &[
             "circle-radius",

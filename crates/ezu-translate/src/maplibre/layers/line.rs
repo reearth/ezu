@@ -7,7 +7,10 @@ use crate::maplibre::filter;
 use crate::maplibre::layers::fill::{resolve_number, resolve_paint_color};
 use crate::maplibre::layers::{paint_of, translated};
 use crate::maplibre::sources::{features_node, resolve_layer_source, Sources};
-use crate::maplibre::{Report, ZoomRange};
+use crate::maplibre::{const_number, is_expr, Report, ZoomRange};
+
+/// MapLibre's default `line-miter-limit`.
+const MAPLIBRE_MITER_LIMIT: f64 = 2.0;
 
 pub(crate) fn convert_line(
     id: &str,
@@ -124,6 +127,33 @@ pub(crate) fn convert_line(
     }
     if let Some(expr) = width_expr {
         spec["width-expr"] = expr;
+    }
+    // `layout.line-miter-limit` → `miter-limit`. MapLibre bevels a miter
+    // join past 2 half-widths unless told otherwise, where `stroke` keeps
+    // tiny-skia's 4, so a miter-joined line always carries the limit. A
+    // zoom curve becomes an `expr` node feeding the field; other joins
+    // never reach it.
+    if join == "miter" {
+        spec["miter-limit"] = match layout.and_then(|l| l.get("line-miter-limit")) {
+            Some(v) if is_expr(v) => {
+                let expr_id = format!("{id}__miter_limit");
+                nodes.insert(
+                    expr_id.clone(),
+                    serde_json::json!({ "op": "expr", "type": "number", "expr": v }),
+                );
+                Value::from(format!("@{expr_id}"))
+            }
+            Some(v) => match const_number(v) {
+                Some(n) => Value::from(n),
+                None => {
+                    report.warn(format!(
+                        "layer `{id}`: `line-miter-limit` could not be read as a number — using MapLibre's default 2"
+                    ));
+                    Value::from(MAPLIBRE_MITER_LIMIT)
+                }
+            },
+            None => Value::from(MAPLIBRE_MITER_LIMIT),
+        };
     }
     if let Some(g) = gap_const {
         spec["gap-width-px"] = Value::from(g);

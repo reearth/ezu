@@ -32,11 +32,11 @@ fn names_unsupported(warnings: &[String], prop: &str) -> bool {
 fn a_property_nothing_reads_warns() {
     let w = warnings_for(json!({
         "id": "l", "type": "line", "source": "s", "source-layer": "x",
-        "layout": { "line-miter-limit": 3, "line-sort-key": ["get", "rank"] },
+        "layout": { "line-round-limit": 1.5, "line-sort-key": ["get", "rank"] },
         "paint": { "line-blur": 1, "line-gradient": ["interpolate", ["linear"], ["line-progress"], 0, "red", 1, "blue"] }
     }));
     for prop in [
-        "line-miter-limit",
+        "line-round-limit",
         "line-sort-key",
         "line-blur",
         "line-gradient",

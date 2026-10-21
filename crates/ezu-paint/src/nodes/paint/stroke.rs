@@ -47,19 +47,25 @@ enum DashUnit {
 const DASH_UNITS: EnumTable<DashUnit> = &[("px", DashUnit::Px), ("width", DashUnit::Width)];
 
 /// How far past the offset a corner of an offset line may reach, as a
-/// multiple of the offset, before the corner is bevelled instead: MapLibre's
-/// default `line-miter-limit`.
+/// multiple of the offset, before the corner is bevelled instead, when the
+/// node sets no `miter-limit`: MapLibre's default `line-miter-limit`.
 const OFFSET_MITER_LIMIT: f64 = 2.0;
+
+/// tiny-skia's own miter limit, which `stroke` joins used before the node
+/// had a `miter-limit` and still use by default, so existing styles draw
+/// as they did.
+const DEFAULT_MITER_LIMIT: f64 = 4.0;
 
 /// `lines` drawn `offset` px to the right of their direction of travel
 /// (MapLibre `line-offset`; negative goes left), or `lines` as they are
-/// for no offset.
+/// for no offset. Corners reaching past `miter_limit` offsets are bevelled.
 ///
 /// The shift is worked out in canvas pixels, since `px_per_unit` may differ
 /// between the axes, and stored back in feature units.
 fn offset_lines(
     lines: &[Vec<(i32, i32)>],
     offset: f64,
+    miter_limit: f64,
     px_per_unit: (f64, f64),
 ) -> Cow<'_, [Vec<(i32, i32)>]> {
     if offset == 0.0 || !offset.is_finite() {
@@ -68,7 +74,7 @@ fn offset_lines(
     Cow::Owned(
         lines
             .iter()
-            .map(|line| offset_line(line, offset, px_per_unit))
+            .map(|line| offset_line(line, offset, miter_limit, px_per_unit))
             .collect(),
     )
 }
@@ -77,9 +83,14 @@ fn offset_lines(
 /// bisector of the normals of the segments meeting there, far enough that
 /// both segments end up `offset` from where they were, as MapLibre extrudes
 /// a join. A corner so sharp that this would carry it more than
-/// [`OFFSET_MITER_LIMIT`] offsets away gets one vertex per segment instead,
-/// a bevel. A closed ring stays closed.
-fn offset_line(line: &[(i32, i32)], offset: f64, (kx, ky): (f64, f64)) -> Vec<(i32, i32)> {
+/// `miter_limit` offsets away gets one vertex per segment instead, a bevel.
+/// A closed ring stays closed.
+fn offset_line(
+    line: &[(i32, i32)],
+    offset: f64,
+    miter_limit: f64,
+    (kx, ky): (f64, f64),
+) -> Vec<(i32, i32)> {
     let mut pts: Vec<(f64, f64)> = Vec::with_capacity(line.len());
     for &(x, y) in line {
         let p = (x as f64 * kx, y as f64 * ky);
@@ -123,7 +134,7 @@ fn offset_line(line: &[(i32, i32)], offset: f64, (kx, ky): (f64, f64)) -> Vec<(i
                 let len = libm::hypot(mx, my);
                 // How much further than the offset the bisector reaches.
                 let stretch = if len > 1e-9 { 2.0 / len } else { f64::INFINITY };
-                if stretch <= OFFSET_MITER_LIMIT {
+                if stretch <= miter_limit {
                     out.push(shift((mx / len, my / len), offset * stretch));
                 } else {
                     out.push(shift(a, offset));
@@ -153,6 +164,12 @@ struct StrokeNode {
     opacity: In<f64>,
     cap: InEnum<LineCap>,
     join: InEnum<LineJoin>,
+    /// MapLibre `line-miter-limit`: how many half-widths a miter join may
+    /// reach from the line before it is bevelled.
+    miter_limit: In<f64>,
+    /// Whether `miter-limit` was written. Only then does it also bound an
+    /// offset line's corners, which otherwise keep MapLibre's default.
+    miter_limit_set: bool,
     /// On/off dash pattern (`None` = solid), in `dash_unit`s. Each length
     /// may be a `$param`, so the pattern resolves once per eval.
     dash: Option<Vec<In<f64>>>,
@@ -198,17 +215,23 @@ impl Node for StrokeNode {
         {
             return InfluenceCtx::UNBOUNDED;
         }
-        let (Some(w), Some(gap), Some(offset)) = (
+        let (Some(w), Some(gap), Some(offset), Some(miter)) = (
             self.width_px.static_bound(),
             self.gap_width_px.static_bound(),
             self.offset_px.static_bound(),
+            self.miter_limit.static_bound(),
         ) else {
             return InfluenceCtx::UNBOUNDED;
         };
-        // The casing footprint, times tiny-skia's default miter limit
-        // of 4 over the naive half-width, moved out by the offset, which
-        // reaches up to its own miter limit further at a corner.
-        ctx.plus(2.0 * (gap.abs() + 2.0 * w.abs()) + OFFSET_MITER_LIMIT * offset.abs())
+        let miter = miter.max(1.0);
+        let offset_miter = match self.miter_limit_set {
+            true => miter,
+            false => OFFSET_MITER_LIMIT,
+        };
+        // Half the casing footprint, times the miter limit, moved out by
+        // the offset, which reaches up to its own miter limit further at a
+        // corner.
+        ctx.plus(0.5 * (gap.abs() + 2.0 * w.abs()) * miter + offset_miter * offset.abs())
     }
     fn inputs(&self) -> &[PortSpec] {
         &self.ports
@@ -246,6 +269,13 @@ impl Node for StrokeNode {
         );
         let cap = self.cap.get(ctx)?;
         let join = self.join.get(ctx)?;
+        // Below 1 a miter would end inside the line; tiny-skia bevels every
+        // join there anyway, so clamping changes nothing drawn.
+        let miter_limit = self.miter_limit.get(ctx, inputs)?.max(1.0);
+        let offset_miter = match self.miter_limit_set {
+            true => miter_limit,
+            false => OFFSET_MITER_LIMIT,
+        };
         // Resolved once here; every group's `StrokeStyle` clones it.
         let dash = match &self.dash {
             None => None,
@@ -325,10 +355,11 @@ impl Node for StrokeNode {
                     width,
                     cap,
                     join,
+                    miter_limit: miter_limit as f32,
                     dash: dash_px(width),
                     gap,
                 };
-                let lines = offset_lines(&group.lines, offset, px_per_unit);
+                let lines = offset_lines(&group.lines, offset, offset_miter, px_per_unit);
                 paint_strokes(&mut canvas, &lines, feats.extent, &style);
             }
             return Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))));
@@ -339,11 +370,12 @@ impl Node for StrokeNode {
             width: const_width,
             cap,
             join,
+            miter_limit: miter_limit as f32,
             dash: dash_px(const_width),
             gap: const_gap,
         };
         let lines: Vec<_> = feats.lines().cloned().collect();
-        let lines = offset_lines(&lines, const_offset, px_per_unit);
+        let lines = offset_lines(&lines, const_offset, offset_miter, px_per_unit);
         paint_strokes(&mut canvas, &lines, feats.extent, &style);
         Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))))
     }
@@ -365,6 +397,11 @@ impl Node for StrokeNode {
         }
         self.dash_unit.param_hash(h);
         self.offset_px.param_hash(h);
+        // Folded only when written, so recipes without it keep their keys.
+        if self.miter_limit_set {
+            h.update(b"miterlimit");
+            self.miter_limit.param_hash(h);
+        }
         if let Some(s) = &self.offset_expr_src {
             h.update(b"offsetexpr");
             h.update(s.as_bytes());
@@ -429,6 +466,8 @@ impl NodeFactory for StrokeFactory {
         let opacity = r.number_or("opacity", 1.0)?;
         let dash_unit = r.enum_or("dash-unit", DashUnit::Px, DASH_UNITS)?;
         let offset_px = r.number_or("offset-px", 0.0)?;
+        let miter_limit_set = fields.contains_key("miter-limit");
+        let miter_limit = r.number_or("miter-limit", DEFAULT_MITER_LIMIT)?;
         let parts = r.finish();
 
         // `color-expr`: a raw MapLibre color expression, compiled once and
@@ -532,6 +571,8 @@ impl NodeFactory for StrokeFactory {
                 opacity,
                 cap,
                 join,
+                miter_limit,
+                miter_limit_set,
                 dash,
                 dash_unit,
                 color_expr,
@@ -574,7 +615,7 @@ impl NodeFactory for StrokeFactory {
                 "offset-px": schema_frag::in_number(serde_json::json!({
                     "type": "number",
                     "default": 0,
-                    "description": "MapLibre `line-offset`: draw the line this many pixels to the right of its direction of travel, or to the left when negative. Each vertex moves along the bisector of the segments meeting there, far enough to keep both segments the offset away; a corner sharper than that allows within twice the offset (MapLibre's default `line-miter-limit`) is bevelled. A casing's gap is centred on the offset line. `0` strokes the line where it is.",
+                    "description": "MapLibre `line-offset`: draw the line this many pixels to the right of its direction of travel, or to the left when negative. Each vertex moves along the bisector of the segments meeting there, far enough to keep both segments the offset away; a corner sharper than that allows within `miter-limit` offsets, or twice the offset (MapLibre's default `line-miter-limit`) when `miter-limit` is not set, is bevelled. A casing's gap is centred on the offset line. `0` strokes the line where it is.",
                 })),
                 "offset-expr": {
                     "description": "A MapLibre number expression (JSON array) giving the offset in pixels, evaluated per feature group at paint time. When present it overrides the constant `offset-px`; a group whose expression doesn't resolve to a number falls back to `offset-px`.",
@@ -585,6 +626,12 @@ impl NodeFactory for StrokeFactory {
                 },
                 "cap": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": enum_names(CAPS), "default": "butt" })),
                 "join": schema_frag::in_enum(serde_json::json!({ "type": "string", "enum": enum_names(JOINS), "default": "miter" })),
+                "miter-limit": schema_frag::in_number(serde_json::json!({
+                    "type": "number",
+                    "minimum": 0.0,
+                    "default": 4,
+                    "description": "MapLibre `line-miter-limit`: how far a `miter` join may reach from the line, in half-widths, before it is bevelled instead, so sharp corners do not spike. MapLibre's default is 2, which `ezu translate` writes; ezu's default of 4 keeps longer points. Values of 1 or less bevel every join. When set, it also bounds the corners of an `offset-px` line.",
+                })),
                 "dasharray": { "type": "array",
                                "items": schema_frag::nested_number(serde_json::json!({ "type": "number", "minimum": 0.0 })),
                                "description": "On/off lengths, in pixels or, with `dash-unit: width`, in multiples of the stroke width; omit for solid. Each length may be a `$param`." },
@@ -606,12 +653,12 @@ mod tests {
     fn an_offset_goes_to_the_right_of_travel() {
         // East-bound, y down: right is south.
         assert_eq!(
-            offset_line(&[(0, 0), (100, 0)], 4.0, (1.0, 1.0)),
+            offset_line(&[(0, 0), (100, 0)], 4.0, 2.0, (1.0, 1.0)),
             vec![(0, 4), (100, 4)]
         );
         // West-bound, a negative offset is also south.
         assert_eq!(
-            offset_line(&[(100, 0), (0, 0)], -4.0, (1.0, 1.0)),
+            offset_line(&[(100, 0), (0, 0)], -4.0, 2.0, (1.0, 1.0)),
             vec![(100, 4), (0, 4)]
         );
     }
@@ -620,7 +667,7 @@ mod tests {
     fn a_right_angle_keeps_both_legs_the_offset_away() {
         // East then south: turning right, the inside of the corner is to the
         // right, so the corner moves in along the diagonal.
-        let out = offset_line(&[(0, 0), (100, 0), (100, 100)], 10.0, (1.0, 1.0));
+        let out = offset_line(&[(0, 0), (100, 0), (100, 100)], 10.0, 2.0, (1.0, 1.0));
         assert_eq!(out, vec![(0, 10), (90, 10), (90, 100)]);
     }
 
@@ -628,7 +675,7 @@ mod tests {
     fn a_hairpin_is_bevelled() {
         // Out and straight back: no bisector exists, so the turn gets one
         // vertex per leg.
-        let out = offset_line(&[(0, 0), (100, 0), (50, 0)], 10.0, (1.0, 1.0));
+        let out = offset_line(&[(0, 0), (100, 0), (50, 0)], 10.0, 2.0, (1.0, 1.0));
         assert_eq!(out, vec![(0, 10), (100, 10), (100, -10), (50, -10)]);
     }
 
@@ -638,7 +685,7 @@ mod tests {
         // a quarter on y: 2 px right of travel is inside it, 4 units on x
         // and 8 on y.
         let ring = [(0, 0), (100, 0), (100, 100), (0, 100), (0, 0)];
-        let out = offset_line(&ring, 2.0, (0.5, 0.25));
+        let out = offset_line(&ring, 2.0, 2.0, (0.5, 0.25));
         assert_eq!(out.first(), out.last());
         assert_eq!(out, vec![(4, 8), (96, 8), (96, 92), (4, 92), (4, 8)]);
     }

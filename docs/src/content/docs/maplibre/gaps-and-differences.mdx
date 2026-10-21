@@ -50,8 +50,9 @@ placement.
 
 Any other paint or layout property that translate does not convert is named in
 a warning, `` `name` is not supported — ignored ``. Among those a style is
-likely to carry: `line-blur`, `line-gradient`, `line-miter-limit`,
-`line-round-limit`, `fill-sort-key` / `line-sort-key` / `circle-sort-key`,
+likely to carry: `line-blur`, `line-gradient`, `line-round-limit` (a round
+join is always drawn round, where MapLibre mitres one that barely bends, a
+difference of a few hundredths of the half-width), `fill-sort-key` / `line-sort-key` / `circle-sort-key`,
 `fill-extrusion-height` / `-base` / `-pattern` / `-vertical-gradient`,
 `hillshade-accent-color`, `text-halo-blur`, `icon-color` / `icon-halo-*`,
 `text-translate` / `icon-translate`, `text-writing-mode` and
@@ -114,9 +115,6 @@ anti-aliases.
 
 - `hillshade` tone calibration. The shading is correct in structure; the exact
   tone curve does not match GL-JS.
-- Miter joins on `line` layers reach out to 4 half-widths before they are
-  bevelled, where MapLibre's default `line-miter-limit` bevels past 2, so a
-  sharp corner can come out more pointed.
 
 ## What is exact
 

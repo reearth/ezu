@@ -193,6 +193,61 @@ fn dashes_scale_with_an_expression_line_width() {
     assert_eq!(stroke["dasharray"], serde_json::json!([2.0, 1.0]));
 }
 
+/// The `stroke` and nodes a single line layer with `layout` converts to,
+/// and the conversion's warnings.
+fn line_with_layout(
+    layout: serde_json::Value,
+) -> (serde_json::Value, serde_json::Value, Vec<String>) {
+    let style = serde_json::json!({
+        "version": 8,
+        "name": "joins",
+        "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+        "layers": [
+            { "id": "path", "type": "line", "source": "s", "source-layer": "paths",
+              "layout": layout, "paint": { "line-width": 4 } }
+        ]
+    });
+    let (recipe, report) = convert(&style, &ConvertOptions::default()).unwrap();
+    let text = serde_json::to_string(&recipe).unwrap();
+    ezu_style::Document::from_json(&text).expect("recipe parses as ezu Document");
+    (
+        recipe["nodes"]["path__stroke"].clone(),
+        recipe["nodes"].clone(),
+        report.warnings,
+    )
+}
+
+#[test]
+fn line_miter_limit_carries_over_with_maplibres_default() {
+    // A miter join gets MapLibre's default limit of 2 when the layer names
+    // none, where the `stroke` node on its own would keep tiny-skia's 4.
+    let (stroke, _, warnings) = line_with_layout(serde_json::json!({}));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(stroke["join"], "miter");
+    assert_eq!(stroke["miter-limit"], 2.0);
+
+    let (stroke, _, warnings) = line_with_layout(serde_json::json!({ "line-miter-limit": 5 }));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(stroke["miter-limit"], 5.0);
+
+    // A zoom curve feeds the field through an `expr` node.
+    let curve = serde_json::json!(["interpolate", ["linear"], ["zoom"], 10, 1, 16, 4]);
+    let (stroke, nodes, warnings) =
+        line_with_layout(serde_json::json!({ "line-miter-limit": curve }));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let src = stroke["miter-limit"].as_str().expect("a node reference");
+    let expr = &nodes[src.trim_start_matches('@')];
+    assert_eq!(expr["op"], "expr");
+    assert_eq!(expr["expr"], curve);
+
+    // Other joins have no miter to limit.
+    let (stroke, _, warnings) = line_with_layout(serde_json::json!({
+        "line-join": "round", "line-miter-limit": 3
+    }));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(stroke.get("miter-limit").is_none());
+}
+
 #[test]
 fn an_expression_line_dasharray_warns_and_draws_solid() {
     let (stroke, warnings) = stroke_for(serde_json::json!({

@@ -227,6 +227,9 @@ pub struct StrokeStyle {
     pub width: f32,
     pub cap: LineCap,
     pub join: LineJoin,
+    /// How many half-widths a miter join may reach from the line before it
+    /// is bevelled (MapLibre `line-miter-limit`; tiny-skia's default is 4).
+    pub miter_limit: f32,
     /// On/off dash lengths in pixels (empty / `None` = solid).
     pub dash: Option<Vec<f32>>,
     /// MapLibre `line-gap-width` in pixels. `0` (the plain case) strokes the
@@ -285,6 +288,7 @@ pub fn paint_strokes(
         },
         line_cap: style.cap,
         line_join: style.join,
+        miter_limit: style.miter_limit,
         ..Stroke::default()
     };
     if let Some(pattern) = &style.dash {
@@ -343,6 +347,7 @@ pub fn paint_strokes(
         width: gap,
         line_cap: style.cap,
         line_join: style.join,
+        miter_limit: style.miter_limit,
         ..Stroke::default()
     };
     for path in &paths {
