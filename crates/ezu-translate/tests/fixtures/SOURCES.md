@@ -15,5 +15,10 @@ exercise `ezu-translate`; none is bundled into the library.
 - License: source code is released under **The Unlicense** (public domain);
   sprites/icons under **CC0-1.0**. Data © OpenStreetMap contributors.
 - A full OSM basemap style (324 layers) over the **Shortbread** schema, with
-  keyless vector tiles at `https://tiles.versatiles.org/tiles/osm/{z}/{x}/{y}`
-  — so it also renders end-to-end through `ezu-compare`.
+  keyless vector tiles at `https://tiles.versatiles.org/tiles/osm/{z}/{x}/{y}`.
+- The tests only convert it, offline; nothing they check reads its sprite.
+  The vendored copy names its sprite sheet
+  `https://tiles.versatiles.org/assets/sprites/basics/sprites`, which
+  upstream has since replaced with `…/assets/sprites/base`, so a render of
+  this copy fails to load the sheet. To render the style end to end
+  (`ezu-compare`, `ezu tile`), translate the live style URL above instead.
