@@ -695,7 +695,7 @@
               "width-px": {
                 "oneOf": [
                   {
-                    "description": "Stroke width in canvas pixels.",
+                    "description": "Stroke width in pixels.",
                     "minimum": 0.4,
                     "type": "number"
                   },
@@ -1406,7 +1406,7 @@
             "type": "object"
           },
           {
-            "description": "Cut polylines into dash/gap segments. Lengths are in canvas pixels (consistent with `*-px` brush parameters). Polygons and points pass through unchanged.",
+            "description": "Cut polylines into dash/gap segments. Lengths are in pixels (consistent with `*-px` brush parameters). Polygons and points pass through unchanged.",
             "properties": {
               "dash-px": {
                 "oneOf": [
@@ -4612,7 +4612,7 @@
               "block": {
                 "oneOf": [
                   {
-                    "description": "Block edge length in canvas pixels. With `anchor: world` the block size sets the canvas padding, which is fixed before anything renders — so this needs an upper bound the build can see: a literal, a `$param` with `max`, or `block-max` beside an `@node` port.",
+                    "description": "Block edge length in pixels. With `anchor: world` the block size sets the canvas padding, which is fixed before anything renders — so this needs an upper bound the build can see: a literal, a `$param` with `max`, or `block-max` beside an `@node` port.",
                     "minimum": 1,
                     "type": "integer"
                   },
@@ -4977,7 +4977,7 @@
                 ]
               },
               "position-px": {
-                "description": "fit=none: canvas pixel where the image's `anchor` point lands. Other fits: offset from canvas center.",
+                "description": "fit=none: point in pixels from the tile's top-left where the image's `anchor` point lands. Other fits: offset from canvas center.",
                 "items": {
                   "type": "number"
                 },
@@ -5889,7 +5889,7 @@
               "position-jitter-px": {
                 "oneOf": [
                   {
-                    "description": "Per-point random offset, ±value canvas pixels, drawn independently on x and y. Breaks up the regular lattice a `point-grid` leaves. Default 0 (no offset).",
+                    "description": "Per-point random offset, ±value pixels, drawn independently on x and y. Breaks up the regular lattice a `point-grid` leaves. Default 0 (no offset).",
                     "minimum": 0.0,
                     "type": "number"
                   },
@@ -7596,7 +7596,7 @@
                 "type": "string"
               },
               "offset-px": {
-                "description": "Pattern offset in canvas pixels [x, y].",
+                "description": "Pattern offset in pixels [x, y].",
                 "items": {
                   "type": "number"
                 },
@@ -7638,7 +7638,7 @@
               "scale-px": {
                 "oneOf": [
                   {
-                    "description": "Canvas pixels per one source repetition. Defaults to the source image's native width.",
+                    "description": "Pixels per one source repetition. Defaults to the source image's native width.",
                     "minimum": 0.5,
                     "type": "number"
                   },
@@ -7745,7 +7745,7 @@
                 "type": "array"
               },
               "translate-px": {
-                "description": "Literal [x, y] shift in canvas pixels, right and down, as MapLibre's `circle-translate` / `fill-translate` / `line-translate` give it; converted to feature units for the tile being drawn, so the shift looks the same at every tile size. Added after `translate`. `translate-x-px` / `translate-y-px` override it.",
+                "description": "Literal [x, y] shift in pixels, right and down, as MapLibre's `circle-translate` / `fill-translate` / `line-translate` give it; converted to feature units for the tile being drawn, so the shift looks the same at every tile size. Added after `translate`. `translate-x-px` / `translate-y-px` override it.",
                 "items": {
                   "type": "number"
                 },
@@ -8124,7 +8124,7 @@
             "type": "object"
           },
           {
-            "description": "Displace polylines laterally with a sine wave. Lengths in canvas pixels. Sharp corners may kink (no tangent smoothing). Polygons/points pass through.",
+            "description": "Displace polylines laterally with a sine wave. Lengths in pixels. Sharp corners may kink (no tangent smoothing). Polygons/points pass through.",
             "properties": {
               "amplitude-px": {
                 "oneOf": [

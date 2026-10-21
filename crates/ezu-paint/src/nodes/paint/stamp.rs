@@ -641,7 +641,7 @@ impl NodeFactory for StampFactory {
                 "scale-jitter": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0,
                                   "description": "Per-point random scale, ±value as a fraction of `scale` (0.2 = ±20%)." })),
                 "position-jitter-px": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0,
-                                        "description": "Per-point random offset, ±value canvas pixels, drawn independently on x and y. Breaks up the regular lattice a `point-grid` leaves. Default 0 (no offset)." })),
+                                        "description": "Per-point random offset, ±value pixels, drawn independently on x and y. Breaks up the regular lattice a `point-grid` leaves. Default 0 (no offset)." })),
                 "opacity": schema_frag::unit_number(),
                 "opacity-expr": {
                     "description": "A MapLibre number expression giving opacity, evaluated per feature group; overrides the constant `opacity`.",

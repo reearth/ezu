@@ -221,7 +221,7 @@ impl NodeFactory for DashFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Cut polylines into dash/gap segments. Lengths are in canvas pixels (consistent with `*-px` brush parameters). Polygons and points pass through unchanged.",
+            "description": "Cut polylines into dash/gap segments. Lengths are in pixels (consistent with `*-px` brush parameters). Polygons and points pass through unchanged.",
             "properties": {
                 "features": schema_frag::node_ref(),
                 "dash-px": schema_frag::px_number(),

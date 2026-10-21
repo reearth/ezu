@@ -387,7 +387,7 @@ impl NodeFactory for WaveFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Displace polylines laterally with a sine wave. Lengths in canvas pixels. Sharp corners may kink (no tangent smoothing). Polygons/points pass through.",
+            "description": "Displace polylines laterally with a sine wave. Lengths in pixels. Sharp corners may kink (no tangent smoothing). Polygons/points pass through.",
             "properties": {
                 "features": schema_frag::node_ref(),
                 "amplitude-px": schema_frag::in_number(serde_json::json!({ "type": "number",

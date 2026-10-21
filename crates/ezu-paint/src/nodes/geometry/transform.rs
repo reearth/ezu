@@ -203,7 +203,7 @@ impl NodeFactory for TransformFactory {
                 "translate": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "Literal [x, y] shift. `translate-x` / `translate-y` override it." },
                 "translate-x": schema_frag::number(),
                 "translate-y": schema_frag::number(),
-                "translate-px": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "Literal [x, y] shift in canvas pixels, right and down, as MapLibre's `circle-translate` / `fill-translate` / `line-translate` give it; converted to feature units for the tile being drawn, so the shift looks the same at every tile size. Added after `translate`. `translate-x-px` / `translate-y-px` override it." },
+                "translate-px": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "Literal [x, y] shift in pixels, right and down, as MapLibre's `circle-translate` / `fill-translate` / `line-translate` give it; converted to feature units for the tile being drawn, so the shift looks the same at every tile size. Added after `translate`. `translate-x-px` / `translate-y-px` override it." },
                 "translate-x-px": schema_frag::number(),
                 "translate-y-px": schema_frag::number(),
                 "rotation-deg": schema_frag::number(),

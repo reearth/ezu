@@ -108,7 +108,7 @@ Convex hull of every input vertex as a single polygon.
 
 ### `dash`
 
-Cut polylines into dash/gap segments. Lengths are in canvas pixels (consistent with `*-px` brush parameters). Polygons and points pass through unchanged.
+Cut polylines into dash/gap segments. Lengths are in pixels (consistent with `*-px` brush parameters). Polygons and points pass through unchanged.
 
 <figure class="op-demo">
   <div class="op-demo__images">
@@ -288,7 +288,7 @@ Translate / rotate / scale every input vertex. Rotation happens around `pivot` (
 | `scale-xy` | array of number | no | Literal per-axis scale. `scale-x` / `scale-y` override it; uniform `scale` multiplies it. |
 | `scale-y` | number \| `$param` \| `@node` | no | — |
 | `translate` | array of number | no | Literal [x, y] shift. `translate-x` / `translate-y` override it. |
-| `translate-px` | array of number | no | Literal [x, y] shift in canvas pixels, right and down, as MapLibre's `circle-translate` / `fill-translate` / `line-translate` give it; converted to feature units for the tile being drawn, so the shift looks the same at every tile size. Added after `translate`. `translate-x-px` / `translate-y-px` override it. |
+| `translate-px` | array of number | no | Literal [x, y] shift in pixels, right and down, as MapLibre's `circle-translate` / `fill-translate` / `line-translate` give it; converted to feature units for the tile being drawn, so the shift looks the same at every tile size. Added after `translate`. `translate-x-px` / `translate-y-px` override it. |
 | `translate-x` | number \| `$param` \| `@node` | no | — |
 | `translate-x-px` | number \| `$param` \| `@node` | no | — |
 | `translate-y` | number \| `$param` \| `@node` | no | — |
@@ -343,7 +343,7 @@ Fracture each polygon in `features` into Voronoi sub-cells using the points in `
 
 ### `wave`
 
-Displace polylines laterally with a sine wave. Lengths in canvas pixels. Sharp corners may kink (no tangent smoothing). Polygons/points pass through.
+Displace polylines laterally with a sine wave. Lengths in pixels. Sharp corners may kink (no tangent smoothing). Polygons/points pass through.
 
 <figure class="op-demo">
   <div class="op-demo__images">

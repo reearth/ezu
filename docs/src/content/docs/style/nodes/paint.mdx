@@ -178,7 +178,7 @@ Stamp a sprite at every input point. Lines and polygons are ignored. Rotation, s
 | `offset` | array of number | no | Shift [x, y] in px from the anchored position, right and down positive (MapLibre `icon-offset`). Like the sprite it is scaled by `scale` and turned by the rotation. Default [0, 0]. |
 | `opacity` | number (0…1) \| `$param` \| `@node` | no | — |
 | `opacity-expr` | — | no | A MapLibre number expression giving opacity, evaluated per feature group; overrides the constant `opacity`. |
-| `position-jitter-px` | number (0…∞) \| `$param` \| `@node` | no | Per-point random offset, ±value canvas pixels, drawn independently on x and y. Breaks up the regular lattice a `point-grid` leaves. Default 0 (no offset). |
+| `position-jitter-px` | number (0…∞) \| `$param` \| `@node` | no | Per-point random offset, ±value pixels, drawn independently on x and y. Breaks up the regular lattice a `point-grid` leaves. Default 0 (no offset). |
 | `rotation-deg` | number \| `$param` \| `@node` | no | Constant rotation around each point, in degrees clockwise. |
 | `rotation-deg-expr` | — | no | A MapLibre number expression (degrees clockwise), evaluated per feature group; overrides the constant `rotation-deg`. |
 | `rotation-jitter-deg` | number (0…∞) \| `$param` \| `@node` | no | Per-point random rotation, ±value degrees. |

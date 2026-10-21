@@ -496,7 +496,7 @@ Quantize a raster into uniform square blocks. `mode` selects how each block is s
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `anchor` | `tile` \| `world` \| `$param` | no | `world` (default) makes the block grid seamless across map tiles by growing the upstream pad. `tile` restarts the grid at every map tile's top-left and requires no extra padding. Read when the graph is built: a `$param` gives its default. |
-| `block` | integer (1…∞) \| `$param` \| `@node` | yes | Block edge length in canvas pixels. With `anchor: world` the block size sets the canvas padding, which is fixed before anything renders — so this needs an upper bound the build can see: a literal, a `$param` with `max`, or `block-max` beside an `@node` port. |
+| `block` | integer (1…∞) \| `$param` \| `@node` | yes | Block edge length in pixels. With `anchor: world` the block size sets the canvas padding, which is fixed before anything renders — so this needs an upper bound the build can see: a literal, a `$param` with `max`, or `block-max` beside an `@node` port. |
 | `block-max` | number (0…∞) | no | Upper bound on `block` for padding, required when `block` is an `@node` port. Values above it are clamped. |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
 | `mode` | `average` \| `nearest` \| `$param` | no | `average` (default) blends covered pixels into a mean colour. `nearest` samples the block's centre pixel verbatim — produces hard block edges without inter-colour averaging. Read when the graph is built: a `$param` gives its default. |
@@ -540,7 +540,7 @@ Draw the source raster onto the canvas exactly once. `fit:none` (default) uses p
 | `fit` | `none` \| `cover` \| `contain` \| `stretch` \| `$param` | no | — |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
 | `opacity` | number (0…1) \| `$param` \| `@node` | no | — |
-| `position-px` | array of number | no | fit=none: canvas pixel where the image's `anchor` point lands. Other fits: offset from canvas center. |
+| `position-px` | array of number | no | fit=none: point in pixels from the tile's top-left where the image's `anchor` point lands. Other fits: offset from canvas center. |
 | `rotation-deg` | number \| `$param` \| `@node` | no | Rotation (degrees clockwise) around the placement anchor / canvas center. |
 | `scale` | number (0…∞) \| `$param` \| `@node` | no | Uniform scale for fit=none. Ignored for other fits. |
 
@@ -678,10 +678,10 @@ Repeat a raster across the canvas with bilinear wrap-around sampling. Primary us
 | --- | --- | --- | --- |
 | `anchor` | `tile` \| `world` \| `$param` | no | `world` (default) makes the pattern seamless across map tiles; `tile` restarts the pattern at every map tile's top-left. |
 | `input` | `@node` | yes | Reference to another node (`@name`). |
-| `offset-px` | array of number | no | Pattern offset in canvas pixels [x, y]. |
+| `offset-px` | array of number | no | Pattern offset in pixels [x, y]. |
 | `opacity` | number (0…1) \| `$param` \| `@node` | no | — |
 | `rotation-deg` | number \| `$param` \| `@node` | no | Rotation of the pattern in degrees (clockwise). |
-| `scale-px` | number (0.5…∞) \| `$param` \| `@node` | no | Canvas pixels per one source repetition. Defaults to the source image's native width. |
+| `scale-px` | number (0.5…∞) \| `$param` \| `@node` | no | Pixels per one source repetition. Defaults to the source image's native width. |
 
 ### `vibrance`
 
