@@ -343,3 +343,87 @@ fn fill_opacity_fades_the_outline_too() {
     let fill = fill_for(json!({ "fill-color": "#eeeeee", "fill-opacity": 0.4 }));
     assert!(fill.get("edge-alpha").is_none());
 }
+
+/// The node a single-layer style converts `layer` to (the one with `op`),
+/// and the conversion's warnings.
+fn node_for(layer: serde_json::Value, op: &str) -> (serde_json::Value, Vec<String>) {
+    let mut style = style_with_layer(layer);
+    style["glyphs"] = json!("https://example.com/fonts/{fontstack}/{range}.pbf");
+    let (recipe, report) = convert(&style, &ConvertOptions::default()).expect("conversion");
+    let text = serde_json::to_string(&recipe).unwrap();
+    ezu_style::Document::from_json(&text).expect("recipe parses as ezu Document");
+    let node = recipe["nodes"]
+        .as_object()
+        .unwrap()
+        .values()
+        .find(|n| n["op"] == op)
+        .unwrap_or_else(|| panic!("a `{op}` node"))
+        .clone();
+    (node, report.warnings)
+}
+
+#[test]
+fn colours_fall_back_to_maplibres_black() {
+    // A feature a colour expression gives no colour draws the constant
+    // beside it, and an unset colour draws as the constant alone: both are
+    // MapLibre's default, black, for fills, extrusions and lines.
+    let expr = json!(["match", ["get", "class"], "a", "#ff0000", ["get", "colour"]]);
+    for (ty, prop, op) in [
+        ("fill", "fill-color", "fill-solid"),
+        ("fill-extrusion", "fill-extrusion-color", "fill-solid"),
+        ("line", "line-color", "stroke"),
+    ] {
+        let field = if op == "stroke" { "color" } else { "fill" };
+        let layer = |paint: serde_json::Value| json!({ "id": "l", "type": ty, "source": "src", "source-layer": "x", "paint": paint });
+        let (node, warnings) = node_for(layer(json!({ prop: expr.clone() })), op);
+        assert_eq!(node[field], "#000000", "{prop} behind an expression");
+        assert!(warnings.is_empty(), "{prop}: {warnings:?}");
+
+        let (node, warnings) = node_for(layer(json!({})), op);
+        assert_eq!(node[field], "#000000", "{prop} unset");
+        assert!(warnings.is_empty(), "{prop} unset: {warnings:?}");
+
+        let (node, warnings) = node_for(layer(json!({ prop: 12 })), op);
+        assert_eq!(node[field], "#000000", "{prop} unreadable");
+        assert!(
+            warnings.iter().any(|w| w.contains(prop)),
+            "{prop} unreadable: {warnings:?}"
+        );
+    }
+
+    // Circles and text leave the colour to the node, whose default is
+    // black too; an unreadable one says so.
+    let (_, warnings) = node_for(
+        json!({ "id": "c", "type": "circle", "source": "src", "source-layer": "x",
+                "paint": { "circle-color": 12, "circle-stroke-color": true } }),
+        "circles",
+    );
+    for prop in ["circle-color", "circle-stroke-color"] {
+        assert!(warnings.iter().any(|w| w.contains(prop)), "{warnings:?}");
+    }
+}
+
+#[test]
+fn a_halo_without_a_constant_colour_is_maplibres_transparent_one() {
+    let label = |paint: serde_json::Value| {
+        json!({ "id": "t", "type": "symbol", "source": "src", "source-layer": "x",
+                "layout": { "text-field": ["get", "name"] }, "paint": paint })
+    };
+    // A width with no colour draws no halo in MapLibre.
+    let (node, _) = node_for(label(json!({ "text-halo-width": 2 })), "text-labels");
+    assert_eq!(node["halo-color"], "#00000000");
+    // Behind an expression, a feature it gives no colour has no halo.
+    let expr = json!(["match", ["get", "class"], "a", "#ffffff", ["get", "halo"]]);
+    let (node, _) = node_for(
+        label(json!({ "text-halo-width": 2, "text-halo-color": expr })),
+        "text-labels",
+    );
+    assert_eq!(node["halo-color"], "#00000000");
+    assert_eq!(node["halo-color-expr"], expr);
+    // A constant colour carries over as it is.
+    let (node, _) = node_for(
+        label(json!({ "text-halo-width": 2, "text-halo-color": "#ffffff" })),
+        "text-labels",
+    );
+    assert_eq!(node["halo-color"], "#ffffff");
+}

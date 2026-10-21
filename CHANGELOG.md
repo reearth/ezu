@@ -663,6 +663,16 @@ mean is spelled out in
   zoom curve included, now becomes the `line-stamp`'s `offset-px` /
   `offset-expr`, and a constant `line-translate` a `transform` node in
   front of it, as on a plain line.
+- `ezu translate` drew a fill or `fill-extrusion` grey (`#808080`), with a
+  warning, when its colour was unset, and drew grey any feature a
+  `fill-color` or `fill-extrusion-color` expression gave no colour, where
+  MapLibre's default for both is black. Both now fall back to black, an
+  unset colour without a warning. A `text-halo-width` with no
+  `text-halo-color`, or with an expression that gives a feature no colour,
+  drew a white halo where MapLibre's default halo is transparent; it now
+  draws none. A colour that is neither a colour nor an expression warns
+  on `line-color`, `circle-color`, `circle-stroke-color`, `text-color` and
+  `text-halo-color` too, as it did on fills.
 
 ## 0.12.0 — 2026-10-12
 

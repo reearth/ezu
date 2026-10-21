@@ -5,7 +5,7 @@
 use serde_json::{Map, Value};
 
 use crate::maplibre::filter;
-use crate::maplibre::layers::fill::{resolve_number, resolve_paint_color};
+use crate::maplibre::layers::fill::{resolve_number, resolve_paint_color, warn_unreadable_color};
 use crate::maplibre::layers::{paint_of, translated};
 use crate::maplibre::sources::{features_node, resolve_layer_source, Sources};
 use crate::maplibre::{Report, ZoomRange};
@@ -57,8 +57,18 @@ pub(crate) fn convert_circle(
         spec["radius-expr"] = e;
     }
 
-    // `circle-color` → `color` (constant hex) or `color-expr`.
+    // `circle-color` → `color` (constant hex) or `color-expr`. Left unset,
+    // the node's black is MapLibre's default too, and backs an expression
+    // for a feature it gives no colour.
     let (color_hex, color_expr) = resolve_paint_color(paint.get("circle-color"));
+    warn_unreadable_color(
+        id,
+        "circle-color",
+        paint.get("circle-color"),
+        &color_hex,
+        &color_expr,
+        report,
+    );
     if let Some(hex) = color_hex {
         spec["color"] = Value::from(hex);
     }
@@ -87,6 +97,14 @@ pub(crate) fn convert_circle(
     // `circle-stroke-color` → `stroke-color` (constant hex) or
     // `stroke-color-expr`.
     let (sc_hex, sc_expr) = resolve_paint_color(paint.get("circle-stroke-color"));
+    warn_unreadable_color(
+        id,
+        "circle-stroke-color",
+        paint.get("circle-stroke-color"),
+        &sc_hex,
+        &sc_expr,
+        report,
+    );
     if let Some(hex) = sc_hex {
         spec["stroke-color"] = Value::from(hex);
     }

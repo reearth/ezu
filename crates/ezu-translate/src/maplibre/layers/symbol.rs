@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use serde_json::{Map, Value};
 
 use crate::maplibre::filter;
-use crate::maplibre::layers::fill::{resolve_number, resolve_paint_color};
+use crate::maplibre::layers::fill::{resolve_number, resolve_paint_color, warn_unreadable_color};
 use crate::maplibre::layers::paint_of;
 use crate::maplibre::sources::{features_node, resolve_layer_source, Sources};
 use crate::maplibre::{is_expr, Report, ZoomRange};
@@ -625,7 +625,17 @@ fn convert_text(
     if let Some(e) = size_expr {
         spec["size-expr"] = e;
     }
+    // Left unset, the node's black text is MapLibre's default too, and backs
+    // an expression for a feature it gives no colour.
     let (color, color_expr) = resolve_paint_color(paint.get("text-color"));
+    warn_unreadable_color(
+        id,
+        "text-color",
+        paint.get("text-color"),
+        &color,
+        &color_expr,
+        report,
+    );
     if let Some(c) = color {
         spec["color"] = Value::from(c);
     }
@@ -633,13 +643,26 @@ fn convert_text(
         spec["color-expr"] = e;
     }
     let (halo_color, halo_color_expr) = resolve_paint_color(paint.get("text-halo-color"));
-    if let Some(c) = halo_color {
-        spec["halo-color"] = Value::from(c);
+    let (halo_width, halo_width_expr) = resolve_number(paint.get("text-halo-width"));
+    if paint.get("text-halo-color").is_some() && halo_color.is_none() && halo_color_expr.is_none() {
+        report.warn(format!(
+            "layer `{id}`: `text-halo-color` could not be read — drawn without a halo"
+        ));
+    }
+    match halo_color {
+        Some(c) => spec["halo-color"] = Value::from(c),
+        // MapLibre's default halo is transparent, where the node's is
+        // white, so a layer with a halo width but no constant halo colour
+        // (none, or an expression that may give a feature none) carries
+        // MapLibre's default.
+        None if halo_width.is_some() || halo_width_expr.is_some() => {
+            spec["halo-color"] = Value::from("#00000000");
+        }
+        None => {}
     }
     if let Some(e) = halo_color_expr {
         spec["halo-color-expr"] = e;
     }
-    let (halo_width, halo_width_expr) = resolve_number(paint.get("text-halo-width"));
     if let Some(w) = halo_width {
         spec["halo-width"] = Value::from(w);
     }

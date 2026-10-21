@@ -4,7 +4,7 @@
 use serde_json::{Map, Value};
 
 use crate::maplibre::filter;
-use crate::maplibre::layers::fill::{resolve_number, resolve_paint_color};
+use crate::maplibre::layers::fill::{color_or_default, resolve_number, resolve_paint_color};
 use crate::maplibre::layers::{paint_of, translated};
 use crate::maplibre::sources::{features_node, resolve_layer_source, Sources};
 use crate::maplibre::{const_number, is_expr, Report, ZoomRange};
@@ -73,10 +73,17 @@ pub(crate) fn convert_line(
     }
 
     // `line-color` → constant `color` (literal) else a raw expression emitted
-    // as `color-expr` (with `#000000` as the constant fallback the `stroke`
-    // node always needs).
+    // as `color-expr`, with MapLibre's default as the constant fallback the
+    // `stroke` node always needs.
     let (color_hex, color_expr) = resolve_paint_color(paint.get("line-color"));
-    let hex = color_hex.unwrap_or_else(|| "#000000".to_string());
+    let hex = color_or_default(
+        id,
+        "line-color",
+        paint.get("line-color"),
+        color_hex,
+        &color_expr,
+        report,
+    );
     // `line-opacity` → constant `opacity` (literal) else a raw expression
     // emitted as `opacity-expr`.
     let (opacity, opacity_expr) = resolve_number(paint.get("line-opacity"));

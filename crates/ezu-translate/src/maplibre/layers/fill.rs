@@ -70,16 +70,10 @@ pub(crate) fn convert_fill(
     }
 
     // Resolve `fill-color` into either a constant hex (literal) or a raw
-    // expression emitted as `fill-expr`.
+    // expression emitted as `fill-expr`, with MapLibre's default as the
+    // constant the node always needs.
     let (hex, fill_expr) = resolve_paint_color(fill_color);
-    if fill_expr.is_none() && hex.is_none() {
-        report.warn(format!(
-            "layer `{id}`: fill-color is data-driven/unsupported — using grey fallback"
-        ));
-    }
-    // The node always needs a valid constant `fill` (a fallback color used
-    // when the expression doesn't resolve for a group).
-    let hex = hex.unwrap_or_else(|| "#808080".to_string());
+    let hex = color_or_default(id, "fill-color", fill_color, hex, &fill_expr, report);
 
     let feat_id = format!("{id}__feat");
     let fill_id = format!("{id}__fill");
@@ -126,6 +120,45 @@ pub(crate) fn convert_fill(
     }
     nodes.insert(fill_id.clone(), spec);
     outputs.push(fill_id);
+}
+
+/// The MapLibre style spec's default for `fill-color`, `fill-extrusion-color`,
+/// `line-color`, `circle-color`, `circle-stroke-color` and `text-color`:
+/// what MapLibre draws when the property is unset, and so the constant a
+/// node falls back to for a feature its colour expression gives no colour.
+pub(crate) const DEFAULT_PAINT_COLOR: &str = "#000000";
+
+/// The constant colour a paint node needs for `prop`: its literal `hex`,
+/// else MapLibre's default, which also backs an expression (`expr`) for
+/// features it does not resolve for. A value that is neither a colour nor
+/// an expression warns and draws the default.
+pub(crate) fn color_or_default(
+    id: &str,
+    prop: &str,
+    value: Option<&Value>,
+    hex: Option<String>,
+    expr: &Option<Value>,
+    report: &mut Report,
+) -> String {
+    warn_unreadable_color(id, prop, value, &hex, expr, report);
+    hex.unwrap_or_else(|| DEFAULT_PAINT_COLOR.to_string())
+}
+
+/// Warn when colour paint property `prop` is set but is neither a colour
+/// (`hex`) nor an expression (`expr`), so the node draws its default.
+pub(crate) fn warn_unreadable_color(
+    id: &str,
+    prop: &str,
+    value: Option<&Value>,
+    hex: &Option<String>,
+    expr: &Option<Value>,
+    report: &mut Report,
+) {
+    if value.is_some() && hex.is_none() && expr.is_none() {
+        report.warn(format!(
+            "layer `{id}`: `{prop}` could not be read — drawn black"
+        ));
+    }
 }
 
 /// Route a colour paint property into ezu paint. Returns
@@ -195,12 +228,7 @@ pub(crate) fn convert_fill_extrusion(
     // `fill-extrusion-color` → constant `fill` (literal) else a raw
     // expression emitted as `fill-expr`.
     let (hex, fill_expr) = resolve_paint_color(color);
-    if fill_expr.is_none() && hex.is_none() {
-        report.warn(format!(
-            "layer `{id}`: fill-extrusion-color is data-driven/unsupported — using grey fallback"
-        ));
-    }
-    let hex = hex.unwrap_or_else(|| "#808080".to_string());
+    let hex = color_or_default(id, "fill-extrusion-color", color, hex, &fill_expr, report);
 
     let feat_id = format!("{id}__ext_feat");
     let fill_id = format!("{id}__ext_fill");
