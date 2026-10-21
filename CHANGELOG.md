@@ -325,13 +325,19 @@ mean is spelled out in
   text field without one.
 - Every field that takes one of a fixed set of names — `blend`'s `mode`,
   `stroke`'s `cap`, `noise`'s `type`, a `boundary`, an `anchor` — takes a
-  `$param` of type `string`, which most of them follow per render. The build
+  `$param` of type `string`, which most of them follow per render. Among
+  them are all of `text`'s and `text-labels`' — `placement`, `anchor`,
+  `justify`, `transform`, `overlap`, `polygon-anchor`, `icon-anchor` and
+  `icon-text-fit` — so one style can switch its labels between point and
+  line placement per render, the point-only fields (icon, box, rotation,
+  dedupe, `anchor-expr`) applying whenever it places points. A field's
+  `*-expr` still takes its place for the features it names. The build
   fails when the param's default, or any value its `enum` allows, is not a
   name the field accepts. The few fields the graph needs before rendering
   (a generator's `kind`, `math`'s `fn`, `mosaic`'s `mode`, `features`'
-  `stitch`, `text`'s layout) take the param's default, with the build-time
-  warning other such fields give. The schema marks each of these fields as
-  taking a `$param`.
+  `stitch`) take the param's default, with the build-time warning other
+  such fields give. The schema marks each of these fields as taking a
+  `$param`.
 - `switch` picks among any number of branches, in two new forms beside
   `a` / `b`. `branches` maps names to nodes and `select` names one, a
   literal or a `string` param, with an optional `default`, as MapLibre's

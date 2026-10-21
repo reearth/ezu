@@ -260,6 +260,22 @@ pub fn features_of_node_on(
     std::sync::Arc<ezu_paint::nodes::FilteredFeatures>,
     std::sync::Arc<RasterBuf>,
 ) {
+    features_of_node_with_params(json, canvas, tile, features, node, &[])
+}
+
+/// [`features_of_node_on`] with runtime parameter values.
+#[allow(dead_code)]
+pub fn features_of_node_with_params(
+    json: &str,
+    canvas: CanvasInfo,
+    tile: TileId,
+    features: &[(&str, ezu_features::FeatureLayer)],
+    node: &str,
+    params: &[(&str, ezu_graph::ScalarValue)],
+) -> (
+    std::sync::Arc<ezu_paint::nodes::FilteredFeatures>,
+    std::sync::Arc<RasterBuf>,
+) {
     use ezu_graph::{NodeIx, NodeObserver};
     use ezu_paint::host::TileLoader;
     use ezu_paint::nodes::FilteredFeatures;
@@ -297,9 +313,13 @@ pub fn features_of_node_on(
     for (name, layer) in features {
         loader.bind_features(name.to_string(), layer.clone());
     }
+    let mut pv = ParamValues::new();
+    for (name, value) in params {
+        pv.set(name.to_string(), value.clone());
+    }
     let out = Evaluator::new(&graph, &cache, &loader)
         .with_observer(&catch)
-        .render(tile, canvas, &ParamValues::new(), 0)
+        .render(tile, canvas, &pv, 0)
         .expect("render");
     let raster = match out {
         PortValue::Raster(r) => r,

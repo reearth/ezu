@@ -58,9 +58,9 @@ use ezu_features::ops::centroid::polygon_area_centroid;
 use ezu_features::ops::contains::point_in_polygon;
 use ezu_features::ops::polylabel::pole_of_inaccessibility;
 use ezu_graph::{
-    enum_names, read_enum_baked, schema_frag, take_input_ref, Asset, BuiltNode, Connection,
-    CoordSpace, EnumTable, EvalCtx, EvalError, FactoryCtx, FactoryError, In, InReader, Node,
-    NodeFactory, PortKind, PortSpec, PortValue,
+    enum_names, schema_frag, take_input_ref, Asset, BuiltNode, Connection, CoordSpace, EnumTable,
+    EvalCtx, EvalError, FactoryCtx, FactoryError, In, InEnum, InReader, Node, NodeFactory,
+    PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
@@ -84,10 +84,9 @@ use super::labels::{
     IconDraw, LabelDraw, LabelSet, PointVariant,
 };
 
-// The label's layout is fixed when the graph is built — its sizes, offsets
-// and spacing are read then too, and the label pad and the anchor list
-// derive from them — so these fields are read at build time as well: a
-// `$param` in one bakes its default in, with a warning.
+// Each of these fields follows a `string` `$param` per render: the node keeps
+// them as `InEnum`s and resolves them into a `Choices` at the start of every
+// eval (see [`TextNode::choices`]).
 const PLACEMENTS: EnumTable<Placement> = &[
     ("point", Placement::Point),
     ("line", Placement::Line),
@@ -965,7 +964,8 @@ struct IconConfig {
     opacity_expr: Option<maplibre_expr::Expr>,
     opacity_expr_src: Option<String>,
     /// MapLibre `icon-anchor`: which part of the image sits on the point.
-    anchor: Anchor,
+    /// Resolved per eval into [`Choices::icon_anchor`].
+    anchor: InEnum<Anchor>,
     /// MapLibre `icon-offset` in px, itself scaled by `icon-size`.
     offset: [f32; 2],
     /// MapLibre `icon-padding`: collision-box inflation in px.
@@ -977,7 +977,8 @@ struct IconConfig {
     /// MapLibre `icon-optional`: the text may place without the icon.
     optional: bool,
     /// MapLibre `icon-text-fit`: which axes stretch to the placed label.
-    text_fit: IconTextFit,
+    /// Resolved per eval into [`Choices::icon_text_fit`].
+    text_fit: InEnum<IconTextFit>,
     /// MapLibre `icon-text-fit-padding`, `[top, right, bottom, left]` px.
     text_fit_padding: [f32; 4],
 }
@@ -987,12 +988,13 @@ struct IconConfig {
 /// occupies relative to the symbol anchor.
 fn plain_icon(
     cfg: &IconConfig,
+    c: &Choices<'_>,
     gi: &GroupIcon,
     image: Arc<ezu_graph::RasterBuf>,
     scale: f32,
 ) -> (Arc<IconDraw>, Aabb) {
     let (w, h) = (image.width as f32 * scale, image.height as f32 * scale);
-    let (fx, fy) = cfg.anchor.fraction();
+    let (fx, fy) = c.icon_anchor.fraction();
     let offset = (
         (0.5 - fx) * w + cfg.offset[0] * gi.size,
         (0.5 - fy) * h + cfg.offset[1] * gi.size,
@@ -1033,6 +1035,7 @@ fn plain_icon(
 #[allow(clippy::too_many_arguments)]
 fn fitted_icon(
     cfg: &IconConfig,
+    c: &Choices<'_>,
     gi: &GroupIcon,
     image: &Arc<ezu_graph::RasterBuf>,
     rect: Option<&ezu_graph::SpriteRect>,
@@ -1049,7 +1052,7 @@ fn fitted_icon(
     };
     let display = (image.width as f32 * scale, image.height as f32 * scale);
     let fitted = fitted_content_box(
-        cfg.text_fit,
+        c.icon_text_fit,
         text,
         display,
         cfg.text_fit_padding,
@@ -1062,7 +1065,7 @@ fn fitted_icon(
     };
     let target = (fitted.max_x - fitted.min_x, fitted.max_y - fitted.min_y);
     let Some((stretched, origin)) = stretch_image(image, &slice, target, scale) else {
-        return plain_icon(cfg, gi, image.clone(), scale);
+        return plain_icon(cfg, c, gi, image.clone(), scale);
     };
     let (w, h) = (stretched.width as f32, stretched.height as f32);
     // The drawn image's top-left sits `origin` from the fitted box's, so its
@@ -1212,6 +1215,29 @@ enum Stage {
 /// border un-clipped. Shared with `text-draw`, which requests the same pad.
 pub(super) const DEFAULT_MAX_EXTENT_PX: f32 = 128.0;
 
+/// The node's fixed-name fields resolved for one eval. Each may follow a
+/// `string` `$param`, so they are read here, once, rather than when the node
+/// is built; every tile of a render resolves the same params, so every tile
+/// sees the same values and cross-tile placement stays in agreement.
+struct Choices<'a> {
+    placement: Placement,
+    polygon_anchor: PolygonAnchor,
+    anchor: Anchor,
+    justify: Justify,
+    transform: TextTransform,
+    overlap: Overlap,
+    icon_anchor: Anchor,
+    icon_text_fit: IconTextFit,
+    /// The positions a point label tries, for this eval's `anchor`.
+    anchor_offsets: Cow<'a, [AnchorOffset]>,
+}
+
+impl Choices<'_> {
+    fn point(&self) -> bool {
+        self.placement == Placement::Point
+    }
+}
+
 struct TextNode {
     /// Whether this node draws its labels itself or hands its candidates to
     /// a shared `label-placement` node.
@@ -1280,9 +1306,15 @@ struct TextNode {
     text_optional: bool,
     /// MapLibre `symbol-placement`. Point placement uses each group's
     /// points; line / line-center placement walks its polylines.
-    placement: Placement,
+    ///
+    /// A literal line placement drops the point-only fields (icon, box,
+    /// rotation, dedupe, `anchor-expr`) when the node is built, with a
+    /// warning. A `$param` may pick either kind per render, so the node then
+    /// keeps them all and the eval leaves them out whenever the render
+    /// resolves to line placement.
+    placement: InEnum<Placement>,
     /// Where point placement labels a polygon. Point placement only.
-    polygon_anchor: PolygonAnchor,
+    polygon_anchor: InEnum<PolygonAnchor>,
     /// MapLibre `symbol-spacing`: gap (px) between successive line
     /// anchors. Line placement only.
     spacing_px: f32,
@@ -1292,11 +1324,13 @@ struct TextNode {
     /// MapLibre `text-keep-upright`: flip a right-to-left label so it
     /// reads upright. Line placement only.
     keep_upright: bool,
-    /// Build-time layout constants (em units except where noted).
-    anchor: Anchor,
+    /// Layout constants (em units except where noted).
+    anchor: InEnum<Anchor>,
     /// The positions a point label tries in order, the first free one
     /// placed: `anchor-offsets`, or the one-or-more positions the older
-    /// anchor fields resolve to. Never empty.
+    /// anchor fields resolve to for `anchor`'s fallback value (an eval that
+    /// resolves `anchor` to another value derives its own, see
+    /// [`TextNode::choices`]). Never empty.
     anchor_offsets: Vec<AnchorOffset>,
     /// Whether `anchor_offsets` came from the `anchor-offsets` field. Only
     /// then is the list folded into the param hash: the older fields hash as
@@ -1319,8 +1353,8 @@ struct TextNode {
     anchor_expr_warned: AtomicBool,
     /// The widest shift (em) any position applies, for [`Self::label_reach`].
     reach_offset_em: f32,
-    justify: Justify,
-    transform: TextTransform,
+    justify: InEnum<Justify>,
+    transform: InEnum<TextTransform>,
     offset_em: [f32; 2],
     max_width_em: f32,
     line_height: f32,
@@ -1353,7 +1387,7 @@ struct TextNode {
     /// `overlap` (MapLibre `text-allow-overlap` as `always`): whether a
     /// label may show over earlier ones, and whether it tries its other
     /// positions first.
-    overlap: Overlap,
+    overlap: InEnum<Overlap>,
     /// MapLibre `text-ignore-placement`: don't block later labels.
     ignore_placement: bool,
     /// MapLibre `text-padding`: collision box inflation in px.
@@ -1395,16 +1429,62 @@ struct TextNode {
 }
 
 impl TextNode {
+    /// Resolve the fixed-name fields for this eval. The point positions are
+    /// derived again only when `anchor` resolves away from the value they
+    /// were built for; `anchor-offsets` names its anchors itself, so it never
+    /// is.
+    fn choices(&self, ctx: &EvalCtx<'_>) -> Result<Choices<'_>, EvalError> {
+        let anchor = self.anchor.get(ctx)?;
+        let anchor_offsets = if self.explicit_anchor_offsets || anchor == self.anchor.fallback() {
+            Cow::Borrowed(self.anchor_offsets.as_slice())
+        } else {
+            Cow::Owned(legacy_anchor_offsets(
+                anchor,
+                self.offset_em,
+                &self.anchor_variants,
+                self.radial_offset_em,
+            ))
+        };
+        let (icon_anchor, icon_text_fit) = match &self.icon {
+            Some(cfg) => (cfg.anchor.get(ctx)?, cfg.text_fit.get(ctx)?),
+            None => (Anchor::Center, IconTextFit::None),
+        };
+        Ok(Choices {
+            placement: self.placement.get(ctx)?,
+            polygon_anchor: self.polygon_anchor.get(ctx)?,
+            anchor,
+            justify: self.justify.get(ctx)?,
+            transform: self.transform.get(ctx)?,
+            overlap: self.overlap.get(ctx)?,
+            icon_anchor,
+            icon_text_fit,
+            anchor_offsets,
+        })
+    }
+
+    /// `offset-em-expr` as this eval reads it: a point label whose positions
+    /// come from `anchor-offsets` takes its offsets from that list instead.
+    fn offset_expr(&self, c: &Choices<'_>) -> &Option<maplibre_expr::Expr> {
+        match self.explicit_anchor_offsets && c.point() {
+            true => &None,
+            false => &self.layout_exprs.offset.0,
+        }
+    }
+
     /// The layout knobs for one group: each constant, or its `*-expr`
     /// evaluated with the group's properties and the tile's zoom.
-    fn group_layout(&self, ectx: &maplibre_expr::EvaluationContext) -> GroupLayout {
+    fn group_layout(
+        &self,
+        c: &Choices<'_>,
+        ectx: &maplibre_expr::EvaluationContext,
+    ) -> GroupLayout {
         let x = &self.layout_exprs;
         GroupLayout {
             justify: eval_name(
                 &x.justify.0,
                 ectx,
                 Justify::parse,
-                self.justify,
+                c.justify,
                 "justify",
                 &self.justify_expr_warned,
             ),
@@ -1412,32 +1492,20 @@ impl TextNode {
                 &x.transform.0,
                 ectx,
                 TextTransform::parse,
-                self.transform,
+                c.transform,
                 "transform",
                 &self.transform_expr_warned,
             ),
-            offset_em: eval_xy(&x.offset.0, ectx, self.offset_em),
+            offset_em: eval_xy(self.offset_expr(c), ectx, self.offset_em),
             max_width_em: eval_number(&x.max_width.0, ectx, self.max_width_em),
             line_height: eval_number(&x.line_height.0, ectx, self.line_height),
             letter_spacing_em: eval_number(&x.letter_spacing.0, ectx, self.letter_spacing_em),
         }
     }
 
-    fn layout_params(&self, layout: &GroupLayout) -> LayoutParams {
-        LayoutParams {
-            max_width_em: layout.max_width_em,
-            line_height_em: layout.line_height,
-            letter_spacing_em: layout.letter_spacing_em,
-            anchor: self.anchor,
-            justify: layout.justify,
-            offset_em: layout.offset_em,
-            transform: layout.transform,
-        }
-    }
-
-    /// Layout params for one position: the block is re-anchored and shifted
-    /// by that position's offset, already resolved at build time (see
-    /// [`AnchorOffset`]).
+    /// Layout params for one position: the block is anchored and shifted by
+    /// that position's offset (see [`AnchorOffset`]), and otherwise laid out
+    /// with the group's knobs.
     ///
     /// With a background box the anchor positions the box, so the text moves
     /// inward by the padding on the anchored side: under `top-left` the box's
@@ -1460,9 +1528,13 @@ impl TextNode {
             offset_em[1] += ((1.0 - fy) * top - fy * bottom) / size;
         }
         LayoutParams {
+            max_width_em: layout.max_width_em,
+            line_height_em: layout.line_height,
+            letter_spacing_em: layout.letter_spacing_em,
             anchor,
+            justify: layout.justify,
             offset_em,
-            ..self.layout_params(layout)
+            transform: layout.transform,
         }
     }
 
@@ -1545,12 +1617,14 @@ impl TextNode {
 
     /// Evaluate a feature group once into a [`GroupPrep`] — its label sections
     /// and per-group paint/layout scalars, ready to shape — or `None` if it
-    /// produces no label. `cap` matches [`Self::label_reach`]. Evaluating here
-    /// (rather than in the shaping loop) lets the neighbour prefilter size its
-    /// band from the widest label without a second evaluation pass.
+    /// produces no label. Evaluating here (rather than in the shaping loop)
+    /// lets the neighbour prefilter size its band from the widest label
+    /// without a second evaluation pass. The point-only knobs (icon, box,
+    /// rotation, dedupe key, `anchor-expr`) stay unset on line placement.
     #[allow(clippy::too_many_arguments)]
     fn prep_group<'g>(
         &self,
+        c: &Choices<'_>,
         group: &'g FeatureGroup,
         feature: u32,
         dx: i64,
@@ -1563,8 +1637,8 @@ impl TextNode {
         const_halo_width: f32,
         const_opacity: f32,
         const_icon_opacity: f32,
-        cap: bool,
     ) -> Option<GroupPrep<'g>> {
+        let point = c.point();
         let ectx = crate::render::group_expr_context(group, z);
         let base_font_id = registry.resolve(self.group_stack_key(&ectx).as_deref()).0;
         let font_fallback = self.font_expr.is_some() && base_font_id == 0;
@@ -1575,6 +1649,7 @@ impl TextNode {
         let icon = self
             .icon
             .as_ref()
+            .filter(|_| point)
             .and_then(|c| c.eval_group(&ectx, const_icon_opacity));
         let mut sections = match size > 0.0 {
             true => self
@@ -1601,11 +1676,13 @@ impl TextNode {
         let dedupe_key = self
             .dedupe_key_expr
             .as_ref()
+            .filter(|_| point)
             .and_then(|e| maplibre_expr::evaluate(e, &ectx).ok())
             .and_then(dedupe_key);
         let anchor = self
             .anchor_expr
             .as_ref()
+            .filter(|_| point)
             .and_then(|e| self.eval_anchor(e, &ectx));
         let opacity = eval_number(&self.opacity_expr, &ectx, const_opacity).clamp(0.0, 1.0);
         let padding = eval_number(&self.padding_expr, &ectx, self.padding_px).max(0.0);
@@ -1627,14 +1704,23 @@ impl TextNode {
                 .unwrap_or((STRIKETHROUGH_WIDTH_EM * size).max(1.0)),
             false => 0.0,
         };
-        let layout = self.group_layout(&ectx);
-        let rotate_deg = eval_number(&self.rotate_expr.0, &ectx, self.rotate_deg);
+        let layout = self.group_layout(c, &ectx);
+        let rotate_deg = match point {
+            true => eval_number(&self.rotate_expr.0, &ectx, self.rotate_deg),
+            false => 0.0,
+        };
         // The icon's contribution to the neighbour band is added by the
         // caller, which knows the sprite sheet's dimensions.
-        let mut reach =
-            self.label_reach(&sections, size, padding, halo_width, cap, layout.offset_em);
+        let mut reach = self.label_reach(
+            &sections,
+            size,
+            padding,
+            halo_width,
+            point,
+            layout.offset_em,
+        );
         // A background box reaches its padding past the text on each side.
-        if self.background_box && !sections.is_empty() {
+        if point && self.background_box && !sections.is_empty() {
             reach += self
                 .background_padding
                 .iter()
@@ -1700,8 +1786,12 @@ impl TextNode {
     /// `radial-offset` shift it for the constant `anchor`. An `offset-em-expr`
     /// gives the group its own `offset-em`, so its positions are derived
     /// again from that, exactly as the constant derives the node's.
-    fn group_anchor_offsets(&self, prep: &GroupPrep<'_>) -> Cow<'_, [AnchorOffset]> {
-        match (prep.anchor, &self.layout_exprs.offset.0) {
+    fn group_anchor_offsets<'c>(
+        &self,
+        c: &'c Choices<'_>,
+        prep: &GroupPrep<'_>,
+    ) -> Cow<'c, [AnchorOffset]> {
+        match (prep.anchor, self.offset_expr(c)) {
             (Some(a), _) => Cow::Owned(legacy_anchor_offsets(
                 a,
                 prep.layout.offset_em,
@@ -1709,12 +1799,12 @@ impl TextNode {
                 self.radial_offset_em,
             )),
             (None, Some(_)) => Cow::Owned(legacy_anchor_offsets(
-                self.anchor,
+                c.anchor,
                 prep.layout.offset_em,
                 &self.anchor_variants,
                 self.radial_offset_em,
             )),
-            (None, None) => Cow::Borrowed(&self.anchor_offsets),
+            (None, None) => Cow::Borrowed(&c.anchor_offsets),
         }
     }
 
@@ -1838,13 +1928,14 @@ impl TextNode {
     /// feeding placement is derived from the shared world-pixel frame.
     fn line_labels(
         &self,
+        c: &Choices<'_>,
         ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
         feats: &crate::nodes::common::FilteredFeatures,
         registry: &FontRegistry,
         faces: &FaceCache<'_>,
     ) -> Result<LabelSet, EvalError> {
-        let mode = self.placement.line().expect("called on line placement");
+        let mode = c.placement.line().expect("called on line placement");
         let const_size = (self.size.get(ctx, inputs)? as f32).max(0.0);
         let const_color = self.color.get(ctx, inputs)?;
         let const_halo_color = self.halo_color.get(ctx, inputs)?;
@@ -1887,6 +1978,7 @@ impl TextNode {
                 continue;
             }
             if let Some(prep) = self.prep_group(
+                c,
                 group,
                 fi as u32,
                 0,
@@ -1899,7 +1991,6 @@ impl TextNode {
                 const_halo_width,
                 const_opacity,
                 const_icon_opacity,
-                false,
             ) {
                 reach_max = reach_max.max(prep.reach);
                 if prep.font_fallback {
@@ -1914,6 +2005,7 @@ impl TextNode {
                     continue;
                 }
                 if let Some(prep) = self.prep_group(
+                    c,
                     group,
                     fi as u32,
                     n.dx,
@@ -1926,7 +2018,6 @@ impl TextNode {
                     const_halo_width,
                     const_opacity,
                     const_icon_opacity,
-                    false,
                 ) {
                     reach_max = reach_max.max(prep.reach);
                     preps.push(prep);
@@ -2189,7 +2280,7 @@ impl TextNode {
                             // Same-value dedupe is a point-placement rule;
                             // line labels have the repeat distance.
                             dedupe: None,
-                            overlap: self.overlap,
+                            overlap: c.overlap,
                             ignore_placement: self.ignore_placement,
                         });
                         let placements: Vec<GlyphPlacement> = placed
@@ -2248,6 +2339,7 @@ impl TextNode {
     /// adjacent tiles agree.
     fn point_labels(
         &self,
+        c: &Choices<'_>,
         ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
         feats: &crate::nodes::common::FilteredFeatures,
@@ -2318,11 +2410,12 @@ impl TextNode {
         let mut preps: Vec<GroupPrep> = Vec::new();
         let mut reach_max = 0.0f32;
         for (fi, group) in feats.groups.iter().enumerate() {
-            let anchors = point_anchors(group, extent_i, feats.overzoom, self.polygon_anchor);
+            let anchors = point_anchors(group, extent_i, feats.overzoom, c.polygon_anchor);
             if anchors.is_empty() {
                 continue;
             }
             if let Some(prep) = self.prep_group(
+                c,
                 group,
                 fi as u32,
                 0,
@@ -2335,7 +2428,6 @@ impl TextNode {
                 const_halo_width,
                 const_opacity,
                 const_icon_opacity,
-                true,
             ) {
                 reach_max = reach_max.max(prep.reach);
                 if prep.font_fallback {
@@ -2346,11 +2438,12 @@ impl TextNode {
         }
         for n in &nbr_groups {
             for (fi, group) in n.groups.iter().enumerate() {
-                let anchors = point_anchors(group, extent_i, n.overzoom, self.polygon_anchor);
+                let anchors = point_anchors(group, extent_i, n.overzoom, c.polygon_anchor);
                 if anchors.is_empty() {
                     continue;
                 }
                 if let Some(prep) = self.prep_group(
+                    c,
                     group,
                     fi as u32,
                     n.dx,
@@ -2363,7 +2456,6 @@ impl TextNode {
                     const_halo_width,
                     const_opacity,
                     const_icon_opacity,
-                    true,
                 ) {
                     reach_max = reach_max.max(prep.reach);
                     preps.push(GroupPrep { anchors, ..prep });
@@ -2457,7 +2549,7 @@ impl TextNode {
             let mut text_blocks: Vec<Arc<TextBlock>> = if sections.is_empty() {
                 Vec::new()
             } else {
-                self.group_anchor_offsets(prep)
+                self.group_anchor_offsets(c, prep)
                     .iter()
                     .enumerate()
                     .map(|(ci, &cand)| {
@@ -2560,16 +2652,16 @@ impl TextNode {
                 // MapLibre displays a sprite at its authored size — atlas
                 // pixels over the sheet's pixel ratio — times `icon-size`.
                 let scale = gi.size / ratio;
-                let fit_blocks: &[Arc<TextBlock>] = match cfg.text_fit {
+                let fit_blocks: &[Arc<TextBlock>] = match c.icon_text_fit {
                     IconTextFit::None => &[],
                     _ => &text_blocks,
                 };
                 if fit_blocks.is_empty() {
-                    icons.push(plain_icon(cfg, gi, image.clone(), scale));
+                    icons.push(plain_icon(cfg, c, gi, image.clone(), scale));
                 } else {
                     let rect = sheet.icons.get(&gi.name);
                     for block in fit_blocks {
-                        icons.push(fitted_icon(cfg, gi, image, rect, scale, block, size));
+                        icons.push(fitted_icon(cfg, c, gi, image, rect, scale, block, size));
                     }
                 }
             }
@@ -2603,13 +2695,13 @@ impl TextNode {
                     (icon_overlap(cfg), cfg.ignore_placement)
                 }
                 (Some(cfg), true) => (
-                    match self.overlap {
+                    match c.overlap {
                         Overlap::Always => icon_overlap(cfg),
                         mode => mode,
                     },
                     self.ignore_placement && cfg.ignore_placement,
                 ),
-                _ => (self.overlap, self.ignore_placement),
+                _ => (c.overlap, self.ignore_placement),
             };
             let paint = TextPaint {
                 size_px: size,
@@ -2767,7 +2859,8 @@ impl TextNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
-        let line = self.placement.line().is_some();
+        let c = self.choices(ctx)?;
+        let line = c.placement.line().is_some();
         // With collision off and none of this layer's own geometry there is
         // nothing to place. With collision on, neighbour tiles may still spill
         // labels into this tile, so we proceed and decide from the gathered
@@ -2790,9 +2883,9 @@ impl TextNode {
         // reparsing the font file per call.
         let faces = FaceCache::from_stacks(registry.all_stacks());
         if line {
-            self.line_labels(ctx, inputs, &feats, &registry, &faces)
+            self.line_labels(&c, ctx, inputs, &feats, &registry, &faces)
         } else {
-            self.point_labels(ctx, inputs, &feats, &registry, &faces)
+            self.point_labels(&c, ctx, inputs, &feats, &registry, &faces)
         }
     }
 
@@ -2957,12 +3050,15 @@ impl Node for TextNode {
             h.update(b"dedupedistance");
             h.update(&px.to_le_bytes());
         }
+        // A fixed-name field hashes as its value's byte — a `$param` one as
+        // its declared default, its name folded in below — so a literal hashes
+        // as it did before the field could follow a param.
         h.update(&[
-            self.anchor as u8,
-            self.justify as u8,
-            self.transform as u8,
-            self.placement as u8,
-            self.polygon_anchor as u8,
+            self.anchor.fallback() as u8,
+            self.justify.fallback() as u8,
+            self.transform.fallback() as u8,
+            self.placement.fallback() as u8,
+            self.polygon_anchor.fallback() as u8,
             self.keep_upright as u8,
         ]);
         h.update(b"anchorvariants");
@@ -2996,7 +3092,7 @@ impl Node for TextNode {
         h.update(&[
             self.collide as u8,
             // `never` / `always` hash as the boolean they replace did.
-            self.overlap as u8,
+            self.overlap.fallback() as u8,
             self.ignore_placement as u8,
             self.text_optional as u8,
         ]);
@@ -3044,11 +3140,11 @@ impl Node for TextNode {
                 h.update(&v.to_le_bytes());
             }
             h.update(&[
-                cfg.anchor as u8,
+                cfg.anchor.fallback() as u8,
                 cfg.allow_overlap as u8,
                 cfg.ignore_placement as u8,
                 cfg.optional as u8,
-                cfg.text_fit as u8,
+                cfg.text_fit.fallback() as u8,
             ]);
             if !matches!(cfg.opacity, In::Const(_)) {
                 h.update(b"iconopacity");
@@ -3098,6 +3194,26 @@ impl Node for TextNode {
         if let Some(z) = self.max_zoom {
             h.update(b"maxz");
             h.update(&[z]);
+        }
+        // The `$param` each fixed-name field follows, if any. Its render-time
+        // value is keyed by the evaluator through `param_refs`.
+        let icon = self.icon.as_ref();
+        for (tag, name) in [
+            (b"placement".as_slice(), self.placement.param_name()),
+            (b"polygonanchor", self.polygon_anchor.param_name()),
+            (b"anchor", self.anchor.param_name()),
+            (b"justify", self.justify.param_name()),
+            (b"transform", self.transform.param_name()),
+            (b"overlap", self.overlap.param_name()),
+            (b"iconanchor", icon.and_then(|c| c.anchor.param_name())),
+            (b"icontextfit", icon.and_then(|c| c.text_fit.param_name())),
+        ] {
+            if let Some(name) = name {
+                h.update(b"enumparam");
+                h.update(tag);
+                h.update(name.as_bytes());
+                h.update(&[0]);
+            }
         }
     }
     fn param_refs(&self) -> Vec<String> {
@@ -3201,7 +3317,7 @@ fn build_icon_config(
         .ok_or_else(|| FactoryError::MissingField("icon-sprite".into()))?;
     let sprite = super::stamp::resolve_sprite_atlas(sprite, ctx)?;
 
-    let anchor = read_enum_baked(fields, ctx, "icon-anchor", Anchor::Center, TEXT_ANCHORS)?;
+    let anchor = r.enum_or("icon-anchor", Anchor::Center, TEXT_ANCHORS)?;
     let (size_expr, size_expr_src) =
         parse_expr_field(fields, "icon-size-expr", &maplibre_expr::Type::Number)?;
     let (rotate_expr, rotate_expr_src) =
@@ -3210,13 +3326,7 @@ fn build_icon_config(
         parse_expr_field(fields, "icon-opacity-expr", &maplibre_expr::Type::Number)?;
     let (padding_expr, padding_expr_src) =
         parse_expr_field(fields, "icon-padding-expr", &maplibre_expr::Type::Number)?;
-    let text_fit = read_enum_baked(
-        fields,
-        ctx,
-        "icon-text-fit",
-        IconTextFit::None,
-        ICON_TEXT_FITS,
-    )?;
+    let text_fit = r.enum_or("icon-text-fit", IconTextFit::None, ICON_TEXT_FITS)?;
     let text_fit_padding = read_box_padding(fields, "icon-text-fit-padding", ctx)?;
     Ok(Some(IconConfig {
         sprite,
@@ -3397,7 +3507,6 @@ fn build_text_node(
     let opacity = r.number_or("opacity", 1.0)?;
     let background_color = r.color_opt("background-color")?;
     let background_radius = r.number_or("background-radius-px", 0.0)?;
-    let parts = r.finish();
     let background_padding = read_box_padding(fields, "background-padding", ctx)?;
 
     let (size_expr, size_expr_src) =
@@ -3419,21 +3528,25 @@ fn build_text_node(
     };
 
     // Placement (point / line / line-center) and its line-only knobs.
-    let placement = read_enum_baked(fields, ctx, "placement", Placement::Point, PLACEMENTS)?;
-    let polygon_anchor = read_enum_baked(
-        fields,
-        ctx,
-        "polygon-anchor",
-        PolygonAnchor::Pole,
-        POLYGON_ANCHORS,
-    )?;
+    let placement = r.enum_or("placement", Placement::Point, PLACEMENTS)?;
+    // What the build knows of the placement: a literal fixes it, so the
+    // fields the other kind ignores are dropped here with a warning; a
+    // `$param` leaves both kinds open, so every field is kept and each eval
+    // reads the ones its placement uses.
+    let fixed_placement = match placement.param_name() {
+        None => Some(placement.fallback()),
+        Some(_) => None,
+    };
+    let only_point = fixed_placement == Some(Placement::Point);
+    let only_line = fixed_placement.is_some_and(|p| p != Placement::Point);
+    let polygon_anchor = r.enum_or("polygon-anchor", PolygonAnchor::Pole, POLYGON_ANCHORS)?;
     let spacing_px = read_number_or(fields, "spacing-px", ctx, 250.0)? as f32;
     let max_angle_deg = read_number_or(fields, "max-angle-deg", ctx, 45.0)? as f32;
     let keep_upright = read_bool_or(fields, "keep-upright", ctx, true)?;
 
     // Layout constants. Enumerated strings are validated here so a
     // typo fails the build instead of silently defaulting.
-    let anchor = read_enum_baked(fields, ctx, "anchor", Anchor::Center, TEXT_ANCHORS)?;
+    let anchor = r.enum_or("anchor", Anchor::Center, TEXT_ANCHORS)?;
     // `anchor-variants` (MapLibre `text-variable-anchor`): an ordered list
     // of anchors tried on collision. Absent → the fixed `anchor`. Deprecated
     // for `anchor-offsets`, resolved below.
@@ -3459,8 +3572,8 @@ fn build_text_node(
         None => Vec::new(),
     };
     let radial_offset_em = read_number_or(fields, "radial-offset", ctx, 0.0)? as f32;
-    let justify = read_enum_baked(fields, ctx, "justify", Justify::Auto, JUSTIFIES)?;
-    let transform = read_enum_baked(fields, ctx, "transform", TextTransform::None, TRANSFORMS)?;
+    let justify = r.enum_or("justify", Justify::Auto, JUSTIFIES)?;
+    let transform = r.enum_or("transform", TextTransform::None, TRANSFORMS)?;
     let offset_em = read_xy(fields, "offset-em", ctx, [0.0, 0.0])?;
     // The positions a point label tries. `anchor-offsets` lists them
     // outright and takes over from every older anchor field; without it they
@@ -3470,7 +3583,11 @@ fn build_text_node(
         match fields.get("anchor-offsets") {
             Some(v) => {
                 let cands = parse_anchor_offsets(v)?;
-                if placement == Placement::Point {
+                if only_line {
+                    ctx.warn("`anchor-offsets` applies to point placement only — ignored");
+                } else {
+                    // Line placement still reads `offset-em`, so only a fixed
+                    // point placement ignores it.
                     let ignored: Vec<String> = [
                         "anchor",
                         "anchor-expr",
@@ -3480,6 +3597,7 @@ fn build_text_node(
                         "radial-offset",
                     ]
                     .into_iter()
+                    .filter(|k| only_point || !k.starts_with("offset-em"))
                     .filter(|k| fields.contains_key(*k))
                     .map(|k| format!("`{k}`"))
                     .collect();
@@ -3489,14 +3607,16 @@ fn build_text_node(
                             ignored.join(", ")
                         ));
                     }
-                } else {
-                    ctx.warn("`anchor-offsets` applies to point placement only — ignored");
                 }
                 (cands, true, Vec::new(), 0.0)
             }
             None => {
-                let cands =
-                    legacy_anchor_offsets(anchor, offset_em, &anchor_variants, radial_offset_em);
+                let cands = legacy_anchor_offsets(
+                    anchor.fallback(),
+                    offset_em,
+                    &anchor_variants,
+                    radial_offset_em,
+                );
                 let deprecated: Vec<&str> = ["anchor-variants", "radial-offset"]
                     .into_iter()
                     .filter(|k| fields.contains_key(*k))
@@ -3526,7 +3646,7 @@ fn build_text_node(
     let (anchor_expr, anchor_expr_src) =
         parse_expr_field(fields, "anchor-expr", &maplibre_expr::Type::String)?;
     let (anchor_expr, anchor_expr_src) = match anchor_expr {
-        Some(_) if placement != Placement::Point => {
+        Some(_) if only_line => {
             ctx.warn("`anchor-expr` applies to point placement only — ignored");
             (None, None)
         }
@@ -3555,13 +3675,15 @@ fn build_text_node(
     let letter_spacing_em = read_number_or(fields, "letter-spacing-em", ctx, 0.0)? as f32;
     // The layout knobs' per-group `*-expr` siblings. `offset-em-expr` stands
     // in for `offset-em`, so a position list that overrides one overrides
-    // the other (warned above); line placement still reads it.
+    // the other (warned above); line placement still reads it, so under a
+    // `$param` placement it is kept and each eval decides (see
+    // [`TextNode::offset_expr`]).
     let mut offset_expr = parse_expr_field(
         fields,
         "offset-em-expr",
         &maplibre_expr::Type::Array(Box::new(maplibre_expr::Type::Number), Some(2)),
     )?;
-    if explicit_anchor_offsets && placement == Placement::Point {
+    if explicit_anchor_offsets && only_point {
         offset_expr = (None, None);
     }
     let layout_exprs = LayoutExprs {
@@ -3581,9 +3703,7 @@ fn build_text_node(
     let mut rotate_deg = read_number_or(fields, "rotate-deg", ctx, 0.0)? as f32;
     let mut rotate_expr =
         parse_expr_field(fields, "rotate-deg-expr", &maplibre_expr::Type::Number)?;
-    if placement != Placement::Point
-        && (fields.contains_key("rotate-deg") || rotate_expr.0.is_some())
-    {
+    if only_line && (fields.contains_key("rotate-deg") || rotate_expr.0.is_some()) {
         ctx.warn("`rotate-deg` / `rotate-deg-expr` apply to point placement only — ignored");
         rotate_deg = 0.0;
         rotate_expr = (None, None);
@@ -3601,7 +3721,7 @@ fn build_text_node(
     // `allow-overlap` maps onto two of them.
     let overlap = match fields.get("overlap") {
         Some(_) => {
-            let mode = read_enum_baked(fields, ctx, "overlap", Overlap::Never, OVERLAPS)?;
+            let mode = r.enum_or("overlap", Overlap::Never, OVERLAPS)?;
             if fields.contains_key("allow-overlap") {
                 ctx.warn("`allow-overlap` ignored: `overlap` sets how the label overlaps");
             }
@@ -3620,9 +3740,10 @@ fn build_text_node(
                     "`allow-overlap` is deprecated: write \"overlap\": \"{name}\" instead"
                 ));
             }
-            mode
+            InEnum::constant("overlap", OVERLAPS, mode)
         }
     };
+    let parts = r.finish();
     let ignore_placement = read_bool_or(fields, "ignore-placement", ctx, false)?;
     let padding_px = read_number_or(fields, "padding-px", ctx, 2.0)? as f32;
     let (padding_expr, padding_expr_src) =
@@ -3658,7 +3779,7 @@ fn build_text_node(
         }
         _ => {}
     }
-    if placement != Placement::Point && dedupe_key_expr.is_some() {
+    if only_line && dedupe_key_expr.is_some() {
         ctx.warn(
             "`dedupe-key-expr` applies to point placement only — ignored \
              (line labels use `spacing-px`)",
@@ -3692,22 +3813,22 @@ fn build_text_node(
 
     // A line-placed icon has no ezu equivalent (MapLibre repeats it along the
     // path); the line path draws the label only.
-    let icon = match (placement, icon) {
-        (Placement::Point, icon) => icon,
-        (_, Some(_)) => {
+    let icon = match (only_line, icon) {
+        (false, icon) => icon,
+        (true, Some(_)) => {
             tracing::warn!("text: `icon-name` on line placement is not supported — icon ignored");
             None
         }
-        (_, None) => None,
+        (true, None) => None,
     };
-    if placement != Placement::Point && (strikethrough || strikethrough_expr.is_some()) {
+    if only_line && (strikethrough || strikethrough_expr.is_some()) {
         tracing::warn!("text: `strikethrough` applies to point placement only — ignored");
     }
     // A box behind glyphs walked along a curve has no single rectangle to
     // fill; line-placed labels draw without one.
     let wants_box = background_color.is_some() || fields.contains_key("background-padding");
-    let background_box = placement == Placement::Point && wants_box;
-    if placement != Placement::Point && wants_box {
+    let background_box = !only_line && wants_box;
+    if only_line && wants_box {
         tracing::warn!(
             "text: `background-color` / `background-padding` apply to point placement only — box ignored"
         );

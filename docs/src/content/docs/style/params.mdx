@@ -133,9 +133,16 @@ override will not reach the field, and `--strict` refuses it.
 
 | Read per render | Read when the graph is built |
 | --- | --- |
-| `blend` `mode`, `composite`; `stroke` `cap`, `join`; `buffer` `join`; `noise` and `warp` `type`, `anchor`; `warp` and `displace` `boundary`; `color-ramp` `interpolation`, `space`; `gradient-*` `anchor`, `space`, `interpolation`; `mix` `space`; `quantize` and `dither` `space`, `dither` `method`; `tiling` `anchor`; `hillshade` `mode`; `flow-field` `direction`; `flow-smear` `sides`, `taper`; `channel-shuffle` `r`/`g`/`b`/`a`; `pick-channel` `channel`; `place` `fit`, `anchor`; `stamp` `anchor`; `point-grid` and `point-scatter` `anchor`; `tile-bounds` `cover`; `graticule` `axes`; `boundary` `clip-edges`; `feature-boolean` `mode`; `label-boxes` `include`; `switch` `select`, naming a branch | `kind` of `solid`, `circle`, `gradient-*` and `noise`; `math` and `field-math` `fn`; `expr` `type`; `mosaic` `anchor`, `mode`; `features` `stitch`; every enumerated field of `text` and `text-labels` (`placement`, `anchor`, `justify`, …), whose layout is fixed at build time along with its sizes and offsets |
+| `blend` `mode`, `composite`; `stroke` `cap`, `join`; `buffer` `join`; `noise` and `warp` `type`, `anchor`; `warp` and `displace` `boundary`; `color-ramp` `interpolation`, `space`; `gradient-*` `anchor`, `space`, `interpolation`; `mix` `space`; `quantize` and `dither` `space`, `dither` `method`; `tiling` `anchor`; `hillshade` `mode`; `flow-field` `direction`; `flow-smear` `sides`, `taper`; `channel-shuffle` `r`/`g`/`b`/`a`; `pick-channel` `channel`; `place` `fit`, `anchor`; `stamp` `anchor`; `point-grid` and `point-scatter` `anchor`; `tile-bounds` `cover`; `graticule` `axes`; `boundary` `clip-edges`; `feature-boolean` `mode`; `label-boxes` `include`; `text` and `text-labels` `placement`, `anchor`, `justify`, `transform`, `overlap`, `polygon-anchor`, `icon-anchor`, `icon-text-fit`; `switch` `select`, naming a branch | `kind` of `solid`, `circle`, `gradient-*` and `noise`; `math` and `field-math` `fn`; `expr` `type`; `mosaic` `anchor`, `mode`; `features` `stitch` |
 
 A name inside an array — one entry of `anchor-offsets`, of `parts` — is a literal.
+
+A label layer whose `placement` follows a param can place points on one render
+and lines on the next. Its point-only fields — the icon, the background box,
+`rotate-deg`, `dedupe-key-expr`, `anchor-expr` — apply on the renders that place
+points, and a literal `placement: "line"` still drops them with a warning when the
+graph is built. A `*-expr` field such as `justify-expr` still takes the place of
+its field for the features it names, whatever the param resolves the field to.
 
 ## Inside a table
 
