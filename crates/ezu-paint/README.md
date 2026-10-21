@@ -189,7 +189,7 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 |---|---|---|
 | `features` | `() → Features` | Samples a host-bound vector tile layer. `source` (optional, matches a `mvt`/`pmtiles` entry in the document's `sources` block; defaults to the single such entry) + `layer` (the MVT layer name). Looked up as `<source>.<layer>` on the AssetLoader |
 | `dem` | `() → ScalarField` | Samples a host-bound DEM mosaic. `source` (optional, matches a `dem` entry in `sources`; defaults to the single such entry) — looked up by bare source name. The host fetches + decodes raster-DEM tiles (terrarium / mapbox-rgb / custom) and binds the stitched scalar field (with `geo_scale` populated) per render |
-| `raster` | `() → Raster` | Samples a host-bound RGBA imagery mosaic (satellite photos, pre-rendered basemaps). `source` (optional, matches a `raster` entry in `sources`; defaults to the single such entry) — looked up by bare source name. The host fetches PNG/WebP/JPEG tiles (XYZ / TileJSON / PMTiles), stitches the 3×3 neighbourhood onto the padded canvas, and binds it per render; unbound tiles (`on-missing: empty`) emit transparent pixels |
+| `raster` | `() → Raster` | Samples a host-bound RGBA imagery mosaic (satellite photos, pre-rendered basemaps). `source` (optional, matches a `raster` entry in `sources`; defaults to the single such entry) — looked up by bare source name. The host fetches PNG/WebP/JPEG tiles (XYZ / TileJSON / PMTiles), stitches the 3×3 neighbourhood onto the padded canvas (sampled as the source's `resampling` says), and binds it per render; unbound tiles (`on-missing: empty`) emit transparent pixels. `opacity`, `hue-rotate-deg`, `saturation`, `contrast` and `brightness-min` / `-max` adjust the imagery with MapLibre's raster layer formulas |
 | `image` | `() → Sprite` | Load a PNG / WebP asset from the document's `sources` block at its native dimensions |
 | `icon` | `() → Sprite` | Crop one named icon out of a `sprite` atlas — the feed for `stamp` (symbol icons), `tiling` (`fill-pattern`) and `line-stamp` (`line-pattern`) |
 | `literal-geometry` | `() → Features` | Inline points / lines / polygons from style fields |
@@ -252,7 +252,7 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 
 | Op | Inputs → Output | Notes |
 |---|---|---|
-| `switch` | `(any, any) → mirrors selected` | Build-time pick between `a` and `b` via `select` (`"a"` / `"b"`, or bool / 0/1). Both inputs accept any port kind; output mirrors the selected input's kind. Use for A/B variants and param-driven branching |
+| `switch` | `(any…) → mirrors selected` | Pass one input through: by condition, the first of `cases` whose `when` holds, else `default` (MapLibre's `case`); or by name, the one of `branches` that `select` names (MapLibre's `match`). A literal choice is made at build time and the output mirrors the chosen input's kind; a `$param` or `@node` choice is made per render, with every branch the same kind. Only the chosen branch renders. The two-way `a` / `b` form is deprecated and warns |
 | `pick-channel` | `Raster → ScalarField` | Extract one of `r`/`g`/`b`/`a`/`luminance` as a `[0, 1]` ScalarField (non-premultiplied RGB; Rec. 601 luma). Bridges the raster pipeline into `map-range` / `threshold` / `color-ramp` |
 
 Each factory implements `NodeFactory::schema()` so editors picking up
@@ -453,10 +453,13 @@ edge-clamping in Y), resamples it bilinearly onto the padded canvas,
 reading the DEM between its sample centres as MapLibre's hillshade does,
 and binds the resulting `ScalarField` under the bare source name so
 the style's `dem` node (`source: "<name>"`) picks it up. Requests beyond the source's
-`max-zoom` upsample from the appropriate ancestor tile. Decoded tiles
-are cached unboundedly per source — well-suited to single-tile and
-modest-pyramid renders; swap in an LRU bound if working sets ever
-outgrow memory.
+`max-zoom` upsample from the appropriate ancestor tile. The registry
+keeps every tile it decodes, without a bound, for as long as it lives —
+fine for a single tile or a small pyramid, which is what `ezu-compare`
+uses it for. The CLI and the embedding renderer (`ezu::renderer`) do not
+go through it: the CLI fetches source tiles itself and keeps them within
+`EZU_TILE_CACHE_MB` (default 256 MB), and a host embedding
+the renderer keeps whatever tiles it chooses to bind.
 
 ## Features
 
@@ -466,9 +469,9 @@ outgrow memory.
 - `http` — enable `host::prefetch_doc_assets` (walks a parsed
   `Document`'s `assets` block, fetches every `http(s)://` `src` with
   `reqwest`, and stages the decoded brush / image into a
-  `BrushBankLoader`) and the `host::dem` module (raster-DEM tile
-  fetcher + 3×3 stitch + overzoom upsampling that feeds the
-  `ScalarField` port). Off by default so `wasm32` keeps its dep graph
+  `BrushBankLoader`) and the `host::dem` and `host::raster` modules
+  (raster-DEM and imagery tile fetchers + 3×3 stitch + overzoom
+  upsampling that feed the `dem` and `raster` nodes). Off by default so `wasm32` keeps its dep graph
   minimal (the JS host fetches assets directly there).
 
 ## License

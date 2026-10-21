@@ -43,7 +43,7 @@ let base     = ezu_paint::host::BrushBankLoader::default();
 // the same `AssetLoader` trait — like reading shader uniforms.
 let tile_id = ezu_graph::TileId { z: 13, x: 7276, y: 3225 };
 let mut tile_loader = ezu_paint::host::TileLoader::new(&base, tile_id);
-tile_loader.bind_mvt(ezu_features::mvt::decode(&bytes)?);
+tile_loader.bind_mvt("basemap", ezu_features::mvt::decode(&bytes)?);
 
 let ev = ezu_graph::Evaluator::new(&graph, &cache, &tile_loader);
 let out = ev.render_parallel(
@@ -53,6 +53,12 @@ let out = ev.render_parallel(
     /* rng_seed */ 0,
 )?;
 ```
+
+A style's px fields are style pixels. For a hi-DPI tile, give the
+canvas a pixel ratio (`CanvasInfo::square(1024, 48).with_pixel_ratio(2.0)`).
+The canvas's own size and pad are device pixels, so they are doubled by
+the caller; every px field and text size is multiplied by the ratio when
+drawn, so the same map comes out at twice the density.
 
 `build_graph` validates everything statically: every `@ref` resolves,
 ports type-check, no cycles, and every pad-determining field carries a

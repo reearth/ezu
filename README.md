@@ -101,7 +101,7 @@ reference: [CLI](https://reearth.github.io/ezu/reference/cli/).
 | [`ezu-graph`](https://github.com/reearth/ezu/tree/main/crates/ezu-graph) | [![](https://img.shields.io/crates/v/ezu-graph.svg)](https://crates.io/crates/ezu-graph) | Typed node-DAG evaluator (cache, pad propagation, Rayon) |
 | [`ezu-paint`](https://github.com/reearth/ezu/tree/main/crates/ezu-paint) | [![](https://img.shields.io/crates/v/ezu-paint.svg)](https://crates.io/crates/ezu-paint) | Painting primitives, the built-in ops, host glue |
 | [`ezu-translate`](https://github.com/reearth/ezu/tree/main/crates/ezu-translate) | [![](https://img.shields.io/crates/v/ezu-translate.svg)](https://crates.io/crates/ezu-translate) | Lower other engines' styles into ezu recipes — MapLibre GL is the first frontend |
-| [`ezu-cli`](https://github.com/reearth/ezu/tree/main/crates/ezu-cli) | [![](https://img.shields.io/crates/v/ezu-cli.svg)](https://crates.io/crates/ezu-cli) | The `ezu` binary — rendering, `translate`, `check`, `graph`, `schema`, `serve` |
+| [`ezu-cli`](https://github.com/reearth/ezu/tree/main/crates/ezu-cli) | [![](https://img.shields.io/crates/v/ezu-cli.svg)](https://crates.io/crates/ezu-cli) | The `ezu` binary — rendering, `translate`, `check`, `graph`, `legend`, `schema`, `serve` |
 | [`ezu-wasm`](https://github.com/reearth/ezu/tree/main/crates/ezu-wasm) | [npm](https://www.npmjs.com/package/@reearth/ezu) | WebAssembly bindings — scalar / SIMD / threads builds for in-browser rendering |
 
 The expression engine lives in its own repository,

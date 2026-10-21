@@ -21,25 +21,30 @@ for one-off swaps.
 
 | Command | What it does |
 |---|---|
-| `ezu tile` | Render a single `z/x/y` tile to PNG (or lossless WebP via `--out tile.webp` / `--format`) |
-| `ezu bbox` | Stitch the tiles covering a lon/lat box at one zoom into a single image |
-| `ezu frame` | Render a map at a print scale and paper size (`--scale 1000 --dpi 200 --size-mm 245x174`), cropped exactly to that frame |
+| `ezu tile` | Render a single `z/x/y` tile to PNG, lossless WebP or raw straight RGBA (by `--out`'s extension or `--format`) |
+| `ezu bbox` | Stitch the tiles covering a lon/lat box at one zoom into a single image, `--concurrency` tiles at a time |
+| `ezu frame` | Render a map at a print scale and paper size (`--scale 1000 --dpi 200 --size-mm 245x174`), cropped exactly to that frame; `--pages` renders a list of pages in one run |
 | `ezu tiles` | Bulk-render an XYZ pyramid into `<out>/<z>/<x>/<y>.png` over a zoom range, `--concurrency` tiles at a time |
 | `ezu check` | Validate a style — parse + build graph + resolve assets. Exits non-zero on error, so it drops into a pre-commit hook or CI step. `--no-fetch` stays offline (parse + graph only) |
 | `ezu translate` | Lower a MapLibre GL style into an ezu recipe via [`ezu-translate`](../ezu-translate). `--font "NAME=SOURCE"` maps a fontstack entry to a real font; skipped or approximated layers are reported on stderr |
-| `ezu graph` | Emit a Mermaid `graph LR` diagram of the style's node dependencies |
+| `ezu graph` | Emit a Mermaid `graph LR` diagram of the style's node dependencies — or, with `--tile`, an HTML page of the same graph with each node's own intermediate tile drawn on it |
+| `ezu legend` | Emit the style's declared legend as JSON, with `--swatch-dir` writing each entry's swatch image, for a host to lay out beside the map |
 | `ezu schema` | Print the Ezu Style JSON Schema, assembled from the registered ops (`--out FILE` to write it). Feed it to an editor's JSON language server, an `ajv` CI check, or a docs generator — [custom ops](../ezu-graph#custom-ops) are included |
 | `ezu serve` | Live editor + tile server (below) |
 
 Global flags: `--verbose` / `-v` turns on per-node debug logs from the
 evaluator (op name, cache hit/miss, output shape, eval duration).
 Render commands share `--style`, `--assets-dir`, `--pmtiles` / `--mvt`,
-`--overzoom-levels`, `--pad`, and repeatable `--param NAME=VALUE` overrides
+`--overzoom-levels`, `--pad`, `--strict` (refuse a style that raises build
+warnings), `--png-compression`, and repeatable `--param NAME=VALUE` overrides
 validated against the style's `params` declarations. `tile`, `bbox`,
 `tiles` and `serve` also take `--tile-size`, to render at another size than
 the style's `tile-size`, and `--pixel-ratio`, to render the same map at a
 higher density for hi-DPI screens; `serve` answers `{y}@2x.png` with the tile
-at pixel ratio 2.
+at pixel ratio 2. `tile`, `bbox` and `frame` take repeatable
+`--features NODE=PATH` to write a features node's contents as GeoJSON, in
+tile units, lon/lat or pixels (`--features-coords`). Source tiles a run
+fetches are kept within `EZU_TILE_CACHE_MB` (default 256 MB).
 
 ```sh
 # Single tile — the reference styles bundle their own `sources` block,
@@ -100,7 +105,8 @@ The editor (MapLibre GL based) supports:
   file via `Open…` / `URL…` detaches the server watch for that
   session.
 - **Params panel** — controls generated from the style's `params`
-  declarations (sliders for bounded numbers, color pickers, toggles).
+  declarations (sliders for bounded numbers, color pickers, toggles,
+  and for a `string` param a menu of its `enum` or a text field).
   Adjustments ride the tile requests as query-string overrides and
   re-render live without touching the style text; `reset` returns to
   the declared defaults. See

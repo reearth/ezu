@@ -80,12 +80,12 @@ Tile-scoped source kinds:
 - `dem` — raster-DEM tile pyramid (terrarium, mapbox-rgb, or custom
   channel factors).
   The host stitches the 3×3 neighbourhood into a per-tile
-  `ScalarField` (with `geo_scale` populated) and binds it under
-  `tile.<source-name>`, ready for the `dem` source node to pick up.
+  `ScalarField` (with `geo_scale` populated) and binds it under the
+  bare source name, ready for the `dem` source node to pick up.
 - `mvt` — XYZ MVT URL template (or a TileJSON document). The host
   fetches one tile per render, decodes every layer, and binds each
-  one under `tile.<layer-name>` — the same names existing
-  `features` nodes already reference.
+  one under `<source>.<layer-name>` — the `source` + `layer` a
+  `features` node names.
 - `pmtiles` — PMTiles archive (local path or `http(s)://` URL).
   Decoded layers bind the same way as `mvt`.
 - `raster` — RGBA imagery pyramid (satellite photos, pre-rendered
@@ -93,7 +93,11 @@ Tile-scoped source kinds:
   TileJSON document, or a PMTiles archive (`.pmtiles`). The host
   stitches the 3×3 neighbourhood onto the padded canvas and binds it
   under the source name for the `raster` node, which emits a
-  canvas-sized `Raster` ready for any downstream filter.
+  canvas-sized `Raster` ready for any downstream filter. `resampling`
+  says how tile pixels that do not land one to one on the canvas are
+  read: `linear` (default) blends the four around each canvas pixel's
+  centre, `nearest` repeats the one underneath (MapLibre's
+  `raster-resampling`).
 - `geojson` — inline (`data`) or remote (`url`) GeoJSON in WGS84
   lon/lat. The host projects it into each tile's local frame and
   binds it as one feature layer under `<source>.<source>`.
@@ -138,15 +142,18 @@ server's `GET /style/attribution` serves the fully merged result.
 }
 ```
 
-For `mvt` / `pmtiles`, the source key (`basemap` above) is a label —
-bindings still use the layer names from the decoded tile. Declare only
-one MVT-flavoured source per style; later entries are ignored.
+For `mvt` / `pmtiles`, the source key (`basemap` above) is the first
+half of each layer's binding name, so a style may declare several and
+each `features` node picks one with `source`.
 
 ## Params
 
 The `params` block declares typed, documented knobs (`color` /
-`number` / `bool`, with `default`, optional `min` / `max`, and
-`description`), referenced with `$name` anywhere a scalar field lives:
+`number` / `bool` / `string`, with `default`, optional `min` / `max`
+for numbers, an optional `enum` of allowed names for strings, and
+`description`), referenced with `$name` anywhere a scalar field lives —
+a `string` param also wherever a field takes a name, such as a blend
+mode or a `switch`'s `select`:
 
 ```jsonc
 {
