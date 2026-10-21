@@ -13,6 +13,10 @@ mean is spelled out in
 
 ### Added
 
+- `ezu frame --pages` takes `center`, `size-mm` and `size-px` as the strings
+  their flags take (`"139.7,35.66"`, `"245x174"`) as well as arrays, in
+  `defaults` and on each page, so a page can be copied from a command line.
+  A string the flag would reject is an error that names the page and field.
 - `label-boxes` boxes carry `label-layer`, the id of the `text-labels` node
   the label came from, so one output can tell apart two layers labelling the
   same features, such as a number and a name on the same points. Like `part`

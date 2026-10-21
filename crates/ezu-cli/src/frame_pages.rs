@@ -4,20 +4,21 @@
 //! per page, each page reads the style again, builds the graph again and
 //! fetches the background tiles it shares with its neighbours again. One run
 //! over a pages file does that work once. Each page here stands for what one
-//! `ezu frame` run's flags say, and renders to the same bytes.
+//! `ezu frame` run's flags say, and renders to the same bytes. `center`,
+//! `size-mm` and `size-px` take a JSON array or the string their flag takes.
 //!
 //! ```json
 //! { "defaults": { "dpi": 200, "size-mm": [245, 174] },
 //!   "pages": [
 //!     { "center": [139.70, 35.66], "scale": 1000, "out": "p1.png",
 //!       "features": { "boxes": { "out": "p1.geojson", "key": ["label-id", "part"] } } },
-//!     { "center": [139.71, 35.66], "scale": 2500, "out": "p2.png" } ] }
+//!     { "center": "139.71,35.66", "scale": 2500, "size-mm": "297x210", "out": "p2.png" } ] }
 //! ```
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 use crate::frame_features::FeatureCoords;
 use crate::OutputFormat;
@@ -51,10 +52,13 @@ struct PagesFile {
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 struct Fields {
+    #[serde(default, deserialize_with = "center")]
     center: Option<[f64; 2]>,
     scale: Option<f64>,
     dpi: Option<f64>,
+    #[serde(default, deserialize_with = "size_mm")]
     size_mm: Option<[f64; 2]>,
+    #[serde(default, deserialize_with = "size_px")]
     size_px: Option<[u32; 2]>,
     zoom: Option<u8>,
     out: Option<PathBuf>,
@@ -71,6 +75,42 @@ struct FeaturesOut {
     out: PathBuf,
     #[serde(default)]
     key: Option<Vec<String>>,
+}
+
+/// A pair written either as a JSON array or as the string its flag takes,
+/// read by that flag's own parser, so a page can be copied from a command
+/// line as it stands.
+fn pair_or_flag<'de, D, T>(
+    d: D,
+    field: &str,
+    parse: fn(&str) -> Result<(T, T), String>,
+) -> Result<Option<[T; 2]>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    use serde::de::Error;
+    match serde_json::Value::deserialize(d)? {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::String(s) => parse(&s)
+            .map(|(a, b)| Some([a, b]))
+            .map_err(|e| D::Error::custom(format!("`{field}`: {e}"))),
+        v => serde_json::from_value(v)
+            .map(Some)
+            .map_err(|e| D::Error::custom(format!("`{field}`: {e}"))),
+    }
+}
+
+fn center<'de, D: Deserializer<'de>>(d: D) -> Result<Option<[f64; 2]>, D::Error> {
+    pair_or_flag(d, "center", crate::parse_lnglat)
+}
+
+fn size_mm<'de, D: Deserializer<'de>>(d: D) -> Result<Option<[f64; 2]>, D::Error> {
+    pair_or_flag(d, "size-mm", crate::parse_size_mm)
+}
+
+fn size_px<'de, D: Deserializer<'de>>(d: D) -> Result<Option<[u32; 2]>, D::Error> {
+    pair_or_flag(d, "size-px", crate::parse_wxh)
 }
 
 impl Fields {
@@ -547,6 +587,67 @@ mod tests {
             vec![("boxes".into(), PathBuf::from("/job/d.geojson"))]
         );
         assert!(p2.features_key.is_empty());
+    }
+
+    #[test]
+    fn pairs_take_the_flag_strings_too() {
+        // Each pair as its flag writes it, in `defaults` and on the page,
+        // settles to what the array form does.
+        let arrays = pages(
+            r#"{ "defaults": { "center": [139.70, 35.66], "size-mm": [245, 174], "dpi": 200 },
+                 "pages": [
+                   { "scale": 1000, "out": "a.png" },
+                   { "center": [139.71, 35.67], "size-px": [300, 200], "scale": 1000,
+                     "out": "b.png" } ] }"#,
+        )
+        .unwrap();
+        let strings = pages(
+            r#"{ "defaults": { "center": "139.70,35.66", "size-mm": "245x174", "dpi": 200 },
+                 "pages": [
+                   { "scale": 1000, "out": "a.png" },
+                   { "center": "139.71, 35.67", "size-px": "300x200", "scale": 1000,
+                     "out": "b.png" } ] }"#,
+        )
+        .unwrap();
+        assert_eq!(strings, arrays);
+        assert_eq!(strings[0].center, (139.70, 35.66));
+        assert_eq!((strings[1].width, strings[1].height), (300, 200));
+        // A lone number is a square, as `--size-px 300` is.
+        let square = pages(
+            r#"{ "pages": [ { "center": "139.7,35.66", "scale": 1000, "dpi": 96,
+                               "size-px": "300", "out": "a.png" } ] }"#,
+        )
+        .unwrap();
+        assert_eq!((square[0].width, square[0].height), (300, 300));
+    }
+
+    #[test]
+    fn a_bad_flag_string_names_the_page_and_the_field() {
+        let err = |fields: &str| {
+            pages(&format!(
+                r#"{{ "pages": [ {{ "center": [139.7, 35.66], "scale": 1000, "dpi": 96,
+                                   "size-px": [10, 10], "out": "a.png" }},
+                                 {{ "scale": 1000, "dpi": 96, "out": "b.png", {fields} }} ] }}"#
+            ))
+            .unwrap_err()
+        };
+        let e = err(r#""center": "139.7", "size-px": [10, 10]"#);
+        assert_eq!(e, "page 2: `center`: expected `lng,lat`, got `139.7`");
+        let e = err(r#""center": "139.7,35.66", "size-mm": "245x0""#);
+        assert_eq!(
+            e,
+            "page 2: `size-mm`: `245x0`: `0` is not a positive number of millimetres"
+        );
+        let e = err(r#""center": "139.7,35.66", "size-px": "0x10""#);
+        assert_eq!(e, "page 2: `size-px`: `0x10`: zero");
+        // An array of the wrong shape is reported against the field too.
+        let e = err(r#""center": [139.7, 35.66, 0], "size-px": [10, 10]"#);
+        assert!(e.starts_with("page 2: `center`: "), "{e}");
+        let e = pages(r#"{ "defaults": { "size-mm": "A4" }, "pages": [ {} ] }"#).unwrap_err();
+        assert_eq!(
+            e,
+            "defaults: `size-mm`: `A4`: expected WIDTHxHEIGHT in millimetres"
+        );
     }
 
     #[test]

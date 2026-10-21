@@ -527,8 +527,11 @@ struct FrameCmd {
     /// flags below describe. Each page takes the fields `center`, `scale`,
     /// `dpi`, `size-mm` or `size-px`, `zoom`, `out`, `format`,
     /// `features-coords` and `features` (`{NODE: {"out": PATH, "key":
-    /// [PROP, ...]}}`), any of them but `out` from a `defaults` object. The
-    /// style is read once, and pages over the same tiles fetch them once.
+    /// [PROP, ...]}}`), any of them but `out` from a `defaults` object.
+    /// `center`, `size-mm` and `size-px` take an array (`[139.7, 35.66]`,
+    /// `[245, 174]`) or the string their flag takes (`"139.7,35.66"`,
+    /// `"245x174"`). The style is read once, and pages over the same tiles
+    /// fetch them once.
     #[arg(long, value_name = "PATH", conflicts_with_all = [
         "center", "scale", "dpi", "size_mm", "size_px", "zoom", "out", "format",
         "features", "features_key", "features_coords",

@@ -141,7 +141,8 @@ ezu frame --style labels.json --pages job.json
   "pages": [
     { "center": [139.70, 35.66], "scale": 1000, "out": "p1.png",
       "features": { "boxes": { "out": "p1-labels.geojson", "key": ["label-id", "part"] } } },
-    { "center": [139.71, 35.66], "scale": 2500, "zoom": 17, "out": "p2.png" }
+    { "center": "139.71,35.66", "scale": 2500, "size-mm": "297x210", "zoom": 17,
+      "out": "p2.png" }
   ]
 }
 ```
@@ -152,8 +153,10 @@ A page has a field for each flag of a single page: `center` (`[lng, lat]`),
 `out` and, if it has one, its `key`. Every field but `out` can be given once
 in `defaults` instead, and a page's own value wins. A page's paper size and
 its `features` replace the defaults' whole, so a page with `size-px` does not
-also take a default `size-mm`. Relative paths are read from the pages file's
-directory. Each page writes exactly what a single-page `ezu frame` with the
+also take a default `size-mm`. `center`, `size-mm` and `size-px` also take
+the string their flag takes, as the second page does (`"139.71,35.66"`,
+`"297x210"`), so a page can be copied from a command line as it stands.
+Relative paths are read from the pages file's directory. Each page writes exactly what a single-page `ezu frame` with the
 same values writes.
 
 The whole file is checked before the first page renders: an unknown field, a

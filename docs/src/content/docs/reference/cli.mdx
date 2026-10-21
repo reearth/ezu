@@ -162,7 +162,7 @@ Options:
       --pad <PAD>
           Margin rendered around each tile before it is cropped, in pixels, in place of the style's `pad` raised to what its filters reach. Narrower than that reach, a tile's edge is computed from clamped data and seams against its neighbour
       --pages <PATH>
-          Render every page a JSON file lists, in place of the one page the flags below describe. Each page takes the fields `center`, `scale`, `dpi`, `size-mm` or `size-px`, `zoom`, `out`, `format`, `features-coords` and `features` (`{NODE: {"out": PATH, "key": [PROP, ...]}}`), any of them but `out` from a `defaults` object. The style is read once, and pages over the same tiles fetch them once
+          Render every page a JSON file lists, in place of the one page the flags below describe. Each page takes the fields `center`, `scale`, `dpi`, `size-mm` or `size-px`, `zoom`, `out`, `format`, `features-coords` and `features` (`{NODE: {"out": PATH, "key": [PROP, ...]}}`), any of them but `out` from a `defaults` object. `center`, `size-mm` and `size-px` take an array (`[139.7, 35.66]`, `[245, 174]`) or the string their flag takes (`"139.7,35.66"`, `"245x174"`). The style is read once, and pages over the same tiles fetch them once
       --center <CENTER>
           Centre of the frame as `lng,lat` (WGS84). The scale is matched at this latitude
       --scale <SCALE>
