@@ -9,25 +9,127 @@ ezu is pre-1.0, so a minor bump may carry a breaking change. What the numbers
 mean is spelled out in
 [versioning](https://reearth.github.io/ezu/reference/changelog/).
 
-## Unreleased
+## 0.13.0 — 2026-10-21
+
+### Breaking
+
+- A `raster` source with `resampling: linear`, and every `dem` source,
+  sampled its tiles at each canvas pixel's corner rather than its centre
+  when a tile's pixels did not land one to one on the canvas, as with a
+  512 px tile on a 256 px canvas: the image sat half a tile pixel off, and
+  the last pixel before each tile seam repeated instead of blending into
+  the neighbour. They now blend the four tile pixels around the canvas
+  pixel's centre, as a GPU's linear filter and MapLibre's hillshade do,
+  across tile seams too; next to a missing neighbour the tile's edge pixel
+  is held rather than blended with the far side of the tile. **Magnified
+  or shrunk imagery and hillshades move by half a tile pixel and change
+  along tile seams.** Rasters drawn one to one are unchanged; a DEM drawn
+  one to one can differ in the last bits of a tile's last row and column.
+- `icon-rotate-deg` on `text` and `text-labels` turned the icon about its
+  own centre, so an icon with an `icon-anchor` other than `center`, or an
+  `icon-offset`, spun in place where MapLibre swings it round the anchor
+  point. It now turns about the anchor point, the offset with it, as `stamp`
+  already turned its image, and `label-boxes` reports the icon's quad
+  there. **Turned icons that are anchored off-centre or offset move**;
+  icons without rotation, and centred icons without an offset, draw as
+  before.
+- A turned icon on `text` and `text-labels` collided by its unturned box,
+  so an icon turned by `icon-rotate-deg` could overlap a neighbour where it
+  reached past that box, or be blocked by one it no longer covered. It now
+  collides by the axis-aligned bounds of its padded box turned about the
+  anchor point, the envelope MapLibre takes, and `label-boxes` reports that
+  box as its `collision` part. **Placement changes for symbols whose icon
+  is turned**, and only for them.
+- `label-boxes` gave one label a different `label-id` on each tile when its
+  source carried the feature in more than one tile, as a `geojson` source
+  does for every tile and an MVT tile's buffer does near its edge: each
+  tile kept a different copy of the label, and the id was taken from the
+  copy. It is now taken from what placement treats as the same label (its
+  layer, text, style and anchor), so it matches across tiles as documented.
+  **Every `label-id` differs from 0.12.0's**, so ids stored from an earlier
+  render do not match new ones.
+- `ezu translate` dropped the alpha of a constant `rgba()`, `hsla()` or
+  `#rrggbbaa` colour on `fill-color`, `fill-outline-color`,
+  `fill-extrusion-color`, `line-color`, `circle-color`,
+  `circle-stroke-color`, `text-color` and `text-halo-color`, so a
+  translucent colour drew opaque. It now carries over as `#rrggbbaa`, which
+  the node's opacity multiplies, as MapLibre's does. **Re-translated styles
+  draw those colours translucent.**
+- `ezu translate` drew a fill or `fill-extrusion` grey (`#808080`), with a
+  warning, when its colour was unset, and drew grey any feature a
+  `fill-color` or `fill-extrusion-color` expression gave no colour, where
+  MapLibre's default for both is black. Both now fall back to black, an
+  unset colour without a warning. A `text-halo-width` with no
+  `text-halo-color`, or with an expression that gives a feature no colour,
+  drew a white halo where MapLibre's default halo is transparent; it now
+  draws none. A colour that is neither a colour nor an expression warns
+  on `line-color`, `circle-color`, `circle-stroke-color`, `text-color` and
+  `text-halo-color` too, as it did on fills.
+- `ezu translate` ignored `line-miter-limit` with a warning, and its
+  `stroke` bevelled miter joins only past 4 half-widths where MapLibre's
+  default is 2, so sharp corners came out more pointed. A miter-joined line
+  now carries the layer's `line-miter-limit`, or 2 when it sets none, as
+  the `stroke`'s `miter-limit`; a zoom curve goes through an `expr` node.
+  **Re-translated lines bevel sharp corners sooner.** `line-round-limit`
+  still warns.
+- `ezu translate` scaled `line-dasharray` by a 1 px width when `line-width`
+  was an expression, usually a zoom curve, so the dashes came out as short
+  as a hairline's at every zoom, without a warning. The dash now carries
+  over in line widths with `dash-unit: width`, so it scales with the width
+  each feature is drawn at, as in MapLibre. A `line-dasharray` given as
+  `["literal", […]]` converts too, and one given as an expression, which
+  used to be dropped silently, warns and draws solid.
+- `ezu translate` draws a stroked circle as large as MapLibre does, its
+  ring outside `circle-radius` (`stroke-align: outside`), where it used to
+  straddle the radius. It no longer lets `circle-opacity` fade the ring,
+  which MapLibre leaves alone: a layer that sets `circle-opacity` under a
+  ring gets `stroke-opacity: 1`. It gives a fill's outline the layer's
+  `fill-opacity` through `edge-alpha`, so a faded fill's outline fades with
+  it, as in MapLibre.
+- `ezu translate` read a `raster-dem` source with `"encoding": "custom"`
+  wrongly. It recognised Terrain-RGB or Terrarium only when `baseShift` was
+  negated (`-10000`, `-32768`), though MapLibre subtracts `baseShift`, so
+  its own factors for those encodings have `10000` and `32768`; those are
+  now what match. Any other factors used to be decoded as Terrain-RGB with
+  a warning; they now become a `dem` source with `"encoding": "custom"` and
+  the same factors, so the heights come out right.
+- `ezu translate` writes the current forms of fields that are now
+  deprecated, so a translated style builds without deprecation warnings
+  and draws as before: `anchor-offsets` for `text-variable-anchor`,
+  `overlap: "always"` for `text-allow-overlap` / `text-overlap: always`,
+  `composite: "source-atop"` for a `fill-pattern`, and a one-case `cases`
+  `switch` for a background's zoom range and for a layer kept by
+  `--keep-hidden`. A tool that edits translated documents must follow:
+  a kept-hidden layer is now turned on by setting its case's `when` to
+  `true`.
+- `amount` on `dither` that is not a number, a `$param` or an `@node` now
+  fails the build instead of quietly becoming 0.5.
+- An `mvt` or `pmtiles` source whose local `{z}/{x}/{y}` template names a
+  directory that does not exist now fails to open, naming the directory,
+  instead of drawing every tile empty.
+- Public Rust API changes, so code that names these needs updating:
+  - `ezu_graph::ScalarValue` gains a `String` variant and is no longer
+    `Copy`, and `ScalarType::from_scalar` takes `&ScalarValue`.
+  - Struct fields were added, so a struct literal that names every field
+    needs updating: `ezu_style::spec::ParamDecl` (`choices`), `MvtSource`
+    and `PmtilesSource` (`on_missing`), `DemSource` (`custom`,
+    `min_zoom`), `RasterSource` (`min_zoom`, `resampling`);
+    `ezu_graph::CanvasInfo` (`pixel_ratio`); `ezu_paint::StrokeStyle`
+    (`miter_limit`; set it to 4.0 to draw as before) and
+    `ezu_paint::strokes::LineStrokeStyle` (`pixel_ratio`);
+    `ezu_core::text::LabelCandidate` (`dedupe`, `overlap`), `Placement`
+    (`overlapped`) and `LayerOutcome` (`deduped`).
+  - `ezu_paint::render::SharedLayer::layer` is an `Arc<FeatureLayer>`.
+  - `ezu_paint::host::stitch_padded_raster` and
+    `upsample_subregion_raster` take the source's `Resampling` as a last
+    argument; pass `Resampling::Linear` to sample as before.
+- The C ABI of the wasm module behind the Go package is at version 9 (2
+  in 0.12.0). The Go package refuses a module built for any other
+  version, so a host that ships its own build of `ezu_cabi.wasm` must
+  rebuild it from 0.13.0.
 
 ### Added
 
-- `ezu frame --pages` takes `center`, `size-mm` and `size-px` as the strings
-  their flags take (`"139.7,35.66"`, `"245x174"`) as well as arrays, in
-  `defaults` and on each page, so a page can be copied from a command line.
-  A string the flag would reject is an error that names the page and field.
-- `label-boxes` boxes carry `label-layer`, the id of the `text-labels` node
-  the label came from, so one output can tell apart two layers labelling the
-  same features, such as a number and a name on the same points. Like `part`
-  and the other added properties, it overwrites a feature property of the
-  same name.
-- `label-boxes` with `include: "all"` reports the point labels a `text` or
-  `text-labels` node culled because their box reaches past `max-extent-px`,
-  with `placed: false` and `drop-reason: "culled"`, at their first position
-  and under the `label-id` they would otherwise have had. A host writing
-  every label's fate, with `ezu frame --features` say, no longer loses them.
-  They still take no space and draw nothing, and the warning stays.
 - Each release ships a static musl build of the CLI, for Alpine and any Linux
   without glibc: `ezu-<tag>-x86_64-unknown-linux-musl.tar.gz` and
   `ezu-<tag>-aarch64-unknown-linux-musl.tar.gz`. They allocate through
@@ -64,8 +166,11 @@ mean is spelled out in
   tile-scoped. A tile loaded once can sit in the set of every tile it
   borders, so a block of tiles decodes each tile once instead of once per
   render it appears in, and in Rust renders on several threads can share
-  one renderer. `needed_codepoints_in` and `needed_glyph_ranges_in` answer
-  for a set, and `trim_glyphs` applies a glyph budget, which a render from a
+  one renderer. A loaded vector tile also prepares its features for
+  filtering once per zoom, however many sets hold it, so a style that
+  stitches layers across tile borders does not repeat that work for each of
+  a tile's neighbours. `needed_codepoints_in` and `needed_glyph_ranges_in`
+  answer for a set, and `trim_glyphs` applies a glyph budget, which a render from a
   set leaves to the host. In Go a `SourceData` belongs to the renderer that
   loaded it and is freed with `Release`; in JS with `free()`. `bind_source`
   and `render_tile` work as before, and a vector tile bound with
@@ -75,9 +180,13 @@ mean is spelled out in
   Rust, Go and JS: `render_tile_with_features` (`RenderTileWithFeatures`,
   `renderTileWithFeatures`) renders as `render_tile_with` does and returns,
   for each node id asked for, the node's features from that same evaluation
-  as a GeoJSON FeatureCollection in tile units, so a host can list the
-  labels on a tile and what placement did to them without rendering twice.
-  `render_frame_with_features` (`RenderFrameWithFeatures`,
+  as a GeoJSON FeatureCollection, so a host can list the labels on a tile
+  and what placement did to them without rendering twice. The positions are
+  in tile units by default, or in longitude and latitude or the rendered
+  tile's pixels (`NodeFeatures::to_geojson_in` with a `TileFeatureCoords`,
+  the `FeaturesIn` option in Go, `{ nodes, coords }` in JS), written as a
+  print page's are, so a tile's longitudes are the ones a page holding it
+  writes. `render_frame_with_features` (`RenderFrameWithFeatures`,
   `renderFrameWithFeatures`) does the same for a print page: each node's
   features gathered over the page's tiles, copies that neighbouring tiles
   both saw collapsed by an optional key, in lon/lat or page pixels, written
@@ -89,7 +198,7 @@ mean is spelled out in
   Rust, Go and JS: `warnings()` (`Warnings`, `warnings`), for a host that
   reports them or refuses a style with any, as `ezu check --strict` does. A
   Rust host can also read the built graph itself with `graph()` rather than
-  building the style a second time. The wasm module's ABI version is now 7.
+  building the style a second time.
 - The renderer's cache size can be set, in Rust, Go and JS:
   `set_cache_budget` (`SetCacheBudget` and `ClearCacheBudget`,
   `setCacheBudget` and `clearCacheBudget`) lets the render cache hold more
@@ -140,9 +249,16 @@ mean is spelled out in
   was tried from (`anchor-offsets`, or the anchors of `anchor-variants`; 0 for
   the first, for a lone anchor and for a line label), and `overlapped`, true
   when `overlap` showed it over a label placed before it. A label that lost,
-  with `include: all`, carries `drop-reason: "collision"`. A recipe can now
-  pick out the labels that moved off their first anchor, to draw a leader
-  line to their feature, say, or the ones left overlapping.
+  with `include: all`, carries `drop-reason: "collision"`, and a point label
+  culled because its box reaches past `max-extent-px` is reported with
+  `drop-reason: "culled"` at its first position, though it still takes no
+  space and draws nothing. Every box also carries `label-layer`, the id of
+  the label node it came from, so one output can tell apart two layers
+  labelling the same features. A recipe can now pick out the labels that
+  moved off their first anchor, to draw a leader line to their feature,
+  say, or the ones left overlapping, and a host writing every label's fate
+  loses none. Like `part`, these properties overwrite a feature property of
+  the same name.
 - `text` and `text-labels` take `anchor-offsets`, a list of positions a point
   label tries in order, each an `anchor` with its own shift: `offset-em`
   [x, y] as written, or `radial-em`, pushed away from the point in the
@@ -188,9 +304,12 @@ mean is spelled out in
   Each page has the fields of the single-page flags (`center`, `scale`,
   `dpi`, `size-mm` or `size-px`, `zoom`, `out`, `format`, `features-coords`,
   and `features` as `{NODE: {"out": PATH, "key": [PROP, …]}}`), and a
-  `defaults` object supplies any but `out`. The style is read and its sources
-  opened once, and vector tiles fetched for one page are kept in memory for
-  the next (256 MB, or `EZU_TILE_CACHE_MB`), so a job of neighbouring pages
+  `defaults` object supplies any but `out`. `center`, `size-mm` and
+  `size-px` take an array or the string their flag takes (`"139.7,35.66"`,
+  `"245x174"`), so a page can be copied from a command line. The style is
+  read and its sources opened once, and source tiles fetched for one page
+  are kept in memory for the next (256 MB, or `EZU_TILE_CACHE_MB`), so a
+  job of neighbouring pages
   fetches its shared background tiles once. Each page is byte-identical to a
   single-page run of it. The file is checked before anything renders, and a
   mistake names the page.
@@ -281,14 +400,6 @@ mean is spelled out in
   `interval-y-deg` (between parallels), as `point-grid` takes `spacing-x`
   and `spacing-y`. `interval-deg` fills whichever is unset, and an axis
   with neither still follows the zoom.
-- A tile's features can be written in longitude and latitude or in the
-  rendered tile's pixels, as well as in tile units, in Rust, Go and JS:
-  `NodeFeatures::to_geojson_in` with a `TileFeatureCoords`, the
-  `FeaturesIn` option to `RenderTileWithFeatures`, and
-  `renderTileWithFeatures(z, x, y, set, { nodes, coords })`. The positions
-  are written as a print page's are, so a tile's longitudes are the ones a
-  page holding it writes; tile units stay the default, byte for byte. The
-  wasm module's ABI version is now 8.
 - The JS and Go packages answer the same diagnostics and setters. JS gains
   `clearGlyphBudget()`, as Go's `ClearGlyphBudget` (`0xFFFFFFFF` to
   `setGlyphBudget` still lifts the cap too), and `opCount()` and
@@ -310,7 +421,9 @@ mean is spelled out in
   at twice the density, as MapLibre's retina tiles are: twice the tile
   size and margin, with every line width, text and icon size, halo, blur,
   dash, offset, spacing and noise scale the style gives in pixels doubled,
-  and the same labels placed in the same spots. `ezu serve` answers
+  and the same labels placed in the same spots; filters that read
+  neighbouring pixels, such as `edge-detect` and `sharpen`, reach as far on
+  the map at every ratio. `ezu serve` answers
   `/tiles/{z}/{x}/{y}@2x.png` (`@1x` to `@4x`, PNG or WebP) with the tile
   at that pixel ratio, the URL a MapLibre client asks a hi-DPI tile by.
   A print frame takes no ratio: its dpi is its density.
@@ -381,13 +494,12 @@ mean is spelled out in
   straddles `radius` with the ring, `outside` draws it from `radius` out to
   `radius + stroke-width`, as MapLibre draws `circle-stroke-width`, and
   `inside` keeps it within `radius`. The blur fades to the ring's outer
-  edge wherever it sits. `ezu translate` writes `outside` for a layer with a
-  stroke, so a stroked circle is as large as MapLibre draws it.
+  edge wherever it sits. Under an opaque, unblurred `outside` ring the fill
+  runs a pixel past the radius, so the ring's inner edge blends into the
+  fill, as MapLibre mixes the two, with no ground showing between them.
 - `fill-solid` takes `edge-alpha` and `edge-alpha-expr`, an opacity for the
   outline alone (default 1), since `fill-alpha` and `opacity-expr` fade the
-  fill and leave the outline as it is. `ezu translate` gives the outline the
-  layer's `fill-opacity` through them, so a faded fill's outline fades with
-  it, as in MapLibre.
+  fill and leave the outline as it is.
 - `stroke` takes `dash-unit`: `px` (the default, as before) measures
   `dasharray` in pixels, and `width` in multiples of the stroke's width, as
   MapLibre's `line-dasharray` is, scaled per feature group when the width
@@ -427,37 +539,21 @@ mean is spelled out in
 - `line-stamp` takes `offset-px` and `offset-expr` (MapLibre `line-offset`),
   as `stroke` does: the pattern runs that many pixels to the right of the
   line's direction of travel, or to the left when negative, the line moved
-  the way `stroke` moves it.
+  the way `stroke` moves it. `ezu translate` carries a `line-pattern`
+  layer's `line-offset`, a zoom curve included, over to them.
 
 ### Changed
-
-- `ezu_paint::StrokeStyle` has a `miter_limit` field; set it to 4.0 to
-  draw as before.
 
 - A `switch` branch that is not taken is no longer rendered, nor anything
   only it reads. With a literal or `$param` choice the evaluator leaves it
   out before rendering; with a `@node` choice, every branch that choice
   could lead to still renders. Nodes gain `Node::reads_input` to say which
   inputs a render will read.
-
-- `ezu_paint::host::stitch_padded_raster` and `upsample_subregion_raster`
-  take the source's `Resampling` as a last argument; pass
-  `Resampling::Linear` to sample as before.
-- `ezu translate` writes `anchor-offsets` for `text-variable-anchor` and
-  `overlap: "always"` for `text-allow-overlap` / `text-overlap: always`, in
-  place of the now-deprecated `anchor-variants`, `radial-offset` and
-  `allow-overlap`, so a translated style builds without deprecation
-  warnings. The labels land where they did before.
 - `ezu translate` carries a data-driven `text-anchor` on a point-placed
   layer, such as a `match` on a property or a `step` on zoom, as the `text`
   node's `anchor-expr`, so each label takes the anchor MapLibre gives it. It
   used to warn and fall back to `center`. `text-variable-anchor` still takes
   precedence, and a line-placed layer still warns and uses the default.
-- A vector tile loaded with `load_source` and bound into several source sets
-  prepares its features for filtering once per zoom, not once per render that
-  reads it, so a style that stitches layers across tile borders no longer
-  repeats that work for each of a tile's neighbours. A block of 4×4 stitched
-  tiles renders about 30% faster on four threads.
 - Every CLI command that draws — `tile`, `tiles`, `bbox`, `frame`, `graph
   --tile` and `serve` — renders through the same renderer as the Rust, Go
   and JS packages, and builds each style's graph once, in that renderer.
@@ -469,7 +565,7 @@ mean is spelled out in
   `dem` or `raster` source with `on-missing: upsample` could come out
   differently from run to run when tiles rendered in parallel, and now comes
   out the same every time.
-- `ezu serve` reads tiles from a local directory or archive again for every
+- `ezu serve` reads tiles from a local directory or archive on every
   request, so a tile rebuilt on disk is drawn on the next redraw; it used to
   keep the first bytes it read for as long as it ran. A tile whose bytes did
   not change is not decoded again, and tiles from a URL are still fetched
@@ -487,13 +583,7 @@ mean is spelled out in
 - `scale-px` on `tiling`, `steps` on `posterize` and `amount` on `dither`
   take a `$param` that follows the value a render passes, or an `@node`,
   like `scale` on `place` and `block` on `mosaic`. A `steps` that arrives
-  this way is rounded and held to [2, 256]. A `dither` `amount` that is not
-  a number, a `$param` or an `@node` now fails the build instead of quietly
-  becoming 0.5.
-- `ezu translate` turns a `raster-dem` source with `"encoding": "custom"`
-  into a `dem` source with `"encoding": "custom"` and the same factors. It
-  used to decode any factors other than Terrain-RGB's or Terrarium's as
-  Terrain-RGB, with a warning that the heights would be wrong.
+  this way is rounded and held to [2, 256].
 
 ### Deprecated
 
@@ -506,16 +596,13 @@ mean is spelled out in
   the replacement; when both are set, `overlap` is used.
 - `clip` on `blend`, for `"composite": "source-atop"`, which is what
   `clip: true` did. It still works, with a warning naming the replacement;
-  when both are set, `composite` is used. `ezu translate` writes
-  `composite` for a `fill-pattern`.
+  when both are set, `composite` is used.
 - The two-way form of `switch`, `a` / `b` picked by `select`. Write
   `cases` instead — `"cases": [{ "when": "$fancy", "then": "@fancy" }],
   "default": "@plain"` takes `@fancy` when `$fancy` is true, as `"b"` did
   — or `branches` named `a` and `b` for a `string` param. The old form
   still picks as before, and the build warns with the replacement written
-  out for that switch's own inputs. `ezu translate` writes `cases` for a
-  background's zoom range and for a layer kept by `--keep-hidden`, which
-  is now turned on by setting its case's `when` to `true`.
+  out for that switch's own inputs.
 - `place`'s `top-center`, `center-left`, `center-right` and
   `bottom-center` anchors, for MapLibre's `top`, `left`, `right` and
   `bottom`, the names `text` and `stamp` take. They place the image as
@@ -529,22 +616,13 @@ mean is spelled out in
   of the path, every tile came back missing, and the map drew empty without a
   warning. `file:` is now taken off and a relative path resolves against the
   style's directory, as for every other `file:` source; a bare path still
-  reads relative to the working directory. A local `{z}/{x}/{y}` template
-  whose directory does not exist now fails to open, naming the directory,
-  instead of drawing every tile empty.
+  reads relative to the working directory.
 - The CLI panicked at start-up on a machine with no root certificates
   installed, a bare Linux container say, even when every source was a local
   file: the `raster` and `dem` registries built their HTTP client up front,
   and building one loads the system's certificates. The client is now built
   on the first request, and a failure to build it fails that source's fetch
   with the reason instead of aborting.
-- `label-boxes` gave one label a different `label-id` on each tile when its
-  source carried the feature in more than one tile, as a `geojson` source
-  does for every tile and an MVT tile's buffer does near its edge: each
-  tile kept a different copy of the label, and the id was taken from the
-  copy. It is now taken from what placement treats as the same label (its
-  layer, text, style and anchor), so it matches across tiles as documented.
-  Ids differ from 0.12.0's.
 - `icon-opacity` on `text` and `text-labels` takes a `$param` or an `@node`
   as its schema always said. A `@node` was rejected at build time and a
   `$param` stayed at its declared default whatever the render passed.
@@ -566,10 +644,6 @@ mean is spelled out in
   `hillshade-highlight-color`. A constant colour now becomes the
   `hillshade` node's `shadow-color` / `highlight-color`; an expression
   warns and leaves the node's default.
-- `ezu translate` recognised a `custom` `raster-dem` encoding as Terrain-RGB
-  or Terrarium only when its `baseShift` was negated (`-10000`, `-32768`).
-  MapLibre subtracts `baseShift`, so its own factors for those encodings
-  have `10000` and `32768`, and those are now what match.
 - The schema lists `$param` and `@node` for `gap-width-px` on `stroke`, which
   has always accepted them; editors that validate against the schema
   flagged them as errors.
@@ -580,10 +654,8 @@ mean is spelled out in
   `opacity-expr` and `name-expr`. A `line-gap-width` on such a layer, which
   is not drawn, now warns.
 - `ezu translate` ignored `circle-stroke-opacity` and `circle-blur` without a
-  warning, and let `circle-opacity` fade the stroke ring, which MapLibre
-  leaves alone. They now become the `circles` node's `stroke-opacity` and
-  `blur` (or their `*-expr` forms), and a layer that sets `circle-opacity`
-  under a ring gets `stroke-opacity: 1`.
+  warning. They now become the `circles` node's `stroke-opacity` and `blur`
+  (or their `*-expr` forms).
 - `ezu translate` dropped `icon-anchor` and `icon-offset` from a
   line-placed icon, which it stamps, without a warning. They now become the
   `stamp`'s `anchor` (or `anchor-expr`) and `offset`; an expression
@@ -592,19 +664,12 @@ mean is spelled out in
 - `ezu translate` dropped an expression `fill-outline-color` without a
   warning. It now becomes the `fill-solid`'s `edge-expr`, with the 1 px
   outline a constant one gets, and a value it cannot read warns.
-- `ezu translate` scaled `line-dasharray` by a 1 px width when `line-width`
-  was an expression, usually a zoom curve, so the dashes came out as short
-  as a hairline's at every zoom, without a warning. The dash now carries
-  over in line widths with `dash-unit: width`, so it scales with the width
-  each feature is drawn at, as in MapLibre. A `line-dasharray` given as
-  `["literal", […]]` converts too, and one given as an expression, which
-  used to be dropped silently, warns and draws solid.
 - `ezu translate` ignored `circle-translate`, `fill-translate`,
   `line-translate` and `fill-extrusion-translate` without a warning. A
   constant shift now becomes a `transform` node with `translate-px` in
-  front of the paint node; an expression, or a shift on a `fill-pattern`
-  or `line-pattern` layer, warns and draws unshifted. The `*-anchor`
-  beside each needs nothing, since a tile is never rotated.
+  front of the paint node, `line-pattern` layers included; an expression,
+  or a shift on a `fill-pattern` layer, warns and draws unshifted. The
+  `*-anchor` beside each needs nothing, since a tile is never rotated.
 - `ezu translate` painted a `background` black when `background-color`
   was an expression, such as a zoom curve, opaque when the colour was
   translucent, and ignored `background-opacity` and `background-pattern`,
@@ -612,12 +677,6 @@ mean is spelled out in
   feeding the `solid`'s `color`, a constant `background-opacity` and the
   colour's own alpha are folded into the colour, and an expression
   opacity, an opacity beside an expression colour, or a pattern warns.
-- `ezu translate` dropped the alpha of a constant `rgba()`, `hsla()` or
-  `#rrggbbaa` colour on `fill-color`, `fill-outline-color`,
-  `fill-extrusion-color`, `line-color`, `circle-color`,
-  `circle-stroke-color`, `text-color` and `text-halo-color`, so a
-  translucent colour drew opaque. It now carries over as `#rrggbbaa`, which
-  the node's opacity multiplies, as MapLibre's does.
 - `ezu translate` ignored, without a warning, any paint or layout property
   its layer converter did not read: `line-blur`, `line-gradient`, the
   `raster-*` paint properties, `fill-extrusion-height`, `text-halo-blur`,
@@ -627,71 +686,6 @@ mean is spelled out in
   `*-translate-anchor` and pitch properties, `raster-fade-duration`,
   `symbol-avoid-edges`, and a symbol's `icon-*` properties without an icon
   or `text-*` ones without text — stay quiet.
-- `icon-rotate-deg` on `text` and `text-labels` turned the icon about its
-  own centre, so an icon with an `icon-anchor` other than `center`, or an
-  `icon-offset`, spun in place where MapLibre swings it round the anchor
-  point. It now turns about the anchor point, the offset with it, as `stamp`
-  already turned its image, and `label-boxes` reports the icon's quad
-  there. Icons without rotation, and centred icons without an offset, draw
-  as before.
-- A turned icon on `text` and `text-labels` collided by its unturned box,
-  so an icon turned by `icon-rotate-deg` could overlap a neighbour where it
-  reached past that box, or be blocked by one it no longer covered. It now
-  collides by the axis-aligned bounds of its padded box turned about the
-  anchor point, the envelope MapLibre takes and the one a turned label
-  already used, and `label-boxes` reports that box as its `collision` part.
-  Placement changes only for symbols whose icon is turned.
-- A `raster` source with `resampling: linear`, and every `dem` source,
-  sampled its tiles at each canvas pixel's corner rather than its centre
-  when a tile's pixels did not land one to one on the canvas, as with a
-  512 px tile on a 256 px canvas or at another pixel ratio: the image sat
-  half a tile pixel off, and the last pixel before each tile seam repeated
-  instead of blending into the neighbour. They now blend the four tile
-  pixels around the canvas pixel's centre, as a GPU's linear filter and
-  MapLibre's hillshade do, across tile seams too; next to a missing
-  neighbour the tile's edge pixel is held rather than blended with the far
-  side of the tile. Rasters drawn one to one are unchanged; a DEM drawn one to one
-  can differ in the last bits of a tile's last row and column, which were
-  read as a near-but-not-exact blend.
-- `ezu translate` ignored `line-miter-limit` with a warning, and its
-  `stroke` bevelled miter joins only past 4 half-widths where MapLibre's
-  default is 2, so sharp corners came out more pointed. A miter-joined line
-  now carries the layer's `line-miter-limit`, or 2 when it sets none, as
-  the `stroke`'s `miter-limit`; a zoom curve goes through an `expr` node.
-  `line-round-limit` still warns.
-- `edge-detect` and `sharpen` read the pixels one device pixel either side
-  of each pixel, so at pixel ratio 2 they drew edges and overshoot half as
-  wide on the map as at ratio 1. Their neighbours now sit one style pixel
-  away, read between pixels at a fractional ratio, and a ratio-2 render
-  matches the ratio-1 one. A sprite's pixels stay style pixels, and
-  renders at ratio 1 are unchanged.
-- A `circles` ring with `stroke-align: outside`, as `ezu translate` draws
-  `circle-stroke-width`, met its fill at the radius with two soft edges,
-  and a pixel the radius crossed was only partly covered by both: a faint
-  ring of the ground showed through between them. Under an opaque,
-  unblurred ring the fill now runs a pixel further, so the ring's inner
-  edge blends into the fill, as MapLibre mixes the two. A translucent or
-  blurred ring keeps the fill at the radius, so no extra fill shows
-  through it, and `center` and `inside` rings draw as before.
-- `ezu translate` drew a `line-pattern` layer unshifted, with a warning,
-  when it had a `line-offset` or a `line-translate`. A `line-offset`, a
-  zoom curve included, now becomes the `line-stamp`'s `offset-px` /
-  `offset-expr`, and a constant `line-translate` a `transform` node in
-  front of it, as on a plain line.
-- `ezu translate` drew a fill or `fill-extrusion` grey (`#808080`), with a
-  warning, when its colour was unset, and drew grey any feature a
-  `fill-color` or `fill-extrusion-color` expression gave no colour, where
-  MapLibre's default for both is black. Both now fall back to black, an
-  unset colour without a warning. A `text-halo-width` with no
-  `text-halo-color`, or with an expression that gives a feature no colour,
-  drew a white halo where MapLibre's default halo is transparent; it now
-  draws none. A colour that is neither a colour nor an expression warns
-  on `line-color`, `circle-color`, `circle-stroke-color`, `text-color` and
-  `text-halo-color` too, as it did on fills.
-- A `line-stamp` that names its pattern per feature (`sprite` +
-  `name-expr`) took a `width-expr` result as device pixels, so at pixel
-  ratio 2 its pattern came out half as wide as a wired-in pattern's. It is
-  now taken as style pixels, like every other width.
 
 ## 0.12.0 — 2026-10-12
 
