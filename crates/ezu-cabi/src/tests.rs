@@ -235,7 +235,7 @@ mod options {
     #[test]
     fn render_options_are_read_the_way_the_js_shell_reads_them() {
         let r = parse_render(
-            br#"{"format":"webp","tileSize":256,"pad":8,
+            br#"{"format":"webp","tileSize":256,"pad":8,"pixelRatio":1.5,
                  "png":{"compression":"best"},
                  "params":{"a":1.5,"b":true,"c":"x"}}"#,
         )
@@ -243,6 +243,7 @@ mod options {
         assert_eq!(r.format, OutputFormat::Webp);
         assert_eq!(r.tile_size, Some(256));
         assert_eq!(r.pad, Some(8));
+        assert_eq!(r.pixel_ratio, 1.5);
         assert_eq!(r.png_compression, PngCompression::Best);
         let mut params = r.params.clone();
         params.sort();
@@ -265,6 +266,7 @@ mod options {
             &br#"{"format":"jpeg"}"#[..],
             &br#"{"png":{"compression":"maximum"}}"#[..],
             &br#"{"tileSize":-4}"#[..],
+            &br#"{"pixelRatio":"2x"}"#[..],
             &br#"{not json"#[..],
             &br#"[1,2]"#[..],
         ] {

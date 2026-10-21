@@ -93,7 +93,7 @@ var wasmModule []byte
 // The ABI this package was written against. ezu_abi_version must agree or
 // the embedded module is stale — which is the cost of committing a built
 // artefact, and the check that keeps the cost cheap.
-const abiVersion = 8
+const abiVersion = 9
 
 // The host module the wasm side imports its out-of-memory report from. See
 // oomHandler and crates/ezu-cabi/src/oom.rs.
@@ -877,11 +877,18 @@ const (
 type Render struct {
 	// Format of the returned bytes. Empty means [FormatPNG].
 	Format Format
-	// TileSize and Pad override the style's canvas for this render — a
-	// hi-DPI tile, or a cheap preview. Zero keeps the renderer's own — the
-	// style's tile-size, or what [Renderer.SetTileSize] set — with pad
-	// floored by whatever the graph's filters reach for.
+	// TileSize and Pad override the style's canvas for this render, in
+	// style pixels — a cheap preview, or a larger tile drawn finer. Zero
+	// keeps the renderer's own — the style's tile-size, or what
+	// [Renderer.SetTileSize] set — with pad floored by whatever the
+	// graph's filters reach for.
 	TileSize, Pad uint32
+	// PixelRatio is device pixels per style pixel, from 1 to 4; fractions
+	// are allowed. 2 renders a retina tile: twice the tile size and pad,
+	// with every width, text size, blur and spacing the style gives in
+	// pixels doubled, so it is the same map at twice the density. Zero
+	// means 1.
+	PixelRatio float64
 	// PNGCompression is the encoder effort. Empty means
 	// [CompressionDefault].
 	PNGCompression Compression
@@ -902,6 +909,9 @@ func (o Render) json() ([]byte, error) {
 	}
 	if o.Pad != 0 {
 		payload["pad"] = o.Pad
+	}
+	if o.PixelRatio != 0 {
+		payload["pixelRatio"] = o.PixelRatio
 	}
 	if o.PNGCompression != "" {
 		payload["png"] = map[string]any{"compression": string(o.PNGCompression)}

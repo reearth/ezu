@@ -331,7 +331,7 @@ fn parse_source_zoom(value: Option<&Value>) -> Result<Option<u8>, Error> {
     Ok(Some(z as u8))
 }
 
-/// `{"format": …, "tileSize": …, "pad": …, "png": {"compression": …},
+/// `{"format": …, "tileSize": …, "pad": …, "pixelRatio": …, "png": {"compression": …},
 /// "params": {…}}`.
 pub fn parse_render(raw: &[u8]) -> Result<RenderOptions, Error> {
     let obj = object(raw, "the render options")?;
@@ -352,6 +352,15 @@ pub fn parse_render(raw: &[u8]) -> Result<RenderOptions, Error> {
     }
     out.tile_size = parse_u32(obj.get("tileSize"), "tileSize")?;
     out.pad = parse_u32(obj.get("pad"), "pad")?;
+    // The renderer checks the range, so every shell reports it alike.
+    if let Some(v) = obj.get("pixelRatio").filter(|v| !v.is_null()) {
+        out.pixel_ratio = v.as_f64().ok_or_else(|| {
+            err(
+                ErrorKind::InvalidStyle,
+                format!("pixelRatio must be a number, got {v}"),
+            )
+        })? as f32;
+    }
 
     if let Some(png) = obj.get("png").and_then(Value::as_object) {
         if let Some(v) = png.get("compression").filter(|v| !v.is_null()) {

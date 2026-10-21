@@ -72,7 +72,8 @@
 //! selected by `opts.format`: `"png"` (default), `"webp"` (lossless),
 //! or `"rgba"` (straight un-premultiplied 8-bit RGBA, feed directly
 //! into `ctx.putImageData`). `opts.tileSize` / `opts.pad` override the
-//! style's canvas size for hi-DPI previews.
+//! style's canvas size; `opts.pixelRatio` renders the same tile at a
+//! higher density for hi-DPI screens.
 //!
 //! ## Print frames
 //!
@@ -955,7 +956,11 @@ impl Renderer {
     /// `opts` (JS object, all fields optional):
     /// - `format`: `"png"` (default) / `"webp"` / `"rgba"`
     /// - `tileSize`, `pad`: override the style's canvas size for this
-    ///   call (hi-DPI / preview)
+    ///   call, in style pixels (a larger tile draws finer)
+    /// - `pixelRatio`: device pixels per style pixel, 1 to 4 (default 1).
+    ///   `2` renders a retina tile: twice the size, with every width, text
+    ///   size and blur doubled, the way `window.devicePixelRatio` scales
+    ///   a MapLibre map
     /// - `params`: `{ name: number | boolean | string }` — render-time
     ///   overrides for the style's declared `params`, validated the same
     ///   way the CLI's `--param` is. Omitted names keep their declared
@@ -1894,6 +1899,13 @@ fn parse_render_options(obj: Option<&js_sys::Object>) -> Result<RenderOptions, J
         .and_then(|v| v.as_f64())
     {
         out.pad = Some(n as u32);
+    }
+    // The renderer checks the range, so every shell reports it alike.
+    if let Some(n) = js_sys::Reflect::get(obj, &"pixelRatio".into())
+        .ok()
+        .and_then(|v| v.as_f64())
+    {
+        out.pixel_ratio = n as f32;
     }
     if let Some(b) = js_sys::Reflect::get(obj, &"parallel".into())
         .ok()

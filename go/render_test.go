@@ -194,6 +194,26 @@ func TestRenderOptionsReachTheRenderer(t *testing.T) {
 		t.Errorf("a tileSize override gave %d bytes, want %d", len(small), want)
 	}
 
+	// A retina tile of that size has twice its pixels on a side, and is not
+	// the plain tile of the doubled size: its widths double too.
+	retina, err := renderer.RenderTile(ctx, g.tile, Render{Format: FormatRGBA, TileSize: 64, Pad: 4, PixelRatio: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := 128 * 128 * 4; len(retina) != want {
+		t.Errorf("a pixelRatio of 2 gave %d bytes, want %d", len(retina), want)
+	}
+	finer, err := renderer.RenderTile(ctx, g.tile, Render{Format: FormatRGBA, TileSize: 128, Pad: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(retina, finer) {
+		t.Error("a pixelRatio of 2 drew what a doubled tileSize draws; the ratio did not take")
+	}
+	if _, err := renderer.RenderTile(ctx, g.tile, Render{PixelRatio: 8}); err == nil {
+		t.Error("a pixelRatio of 8 was accepted")
+	}
+
 	fast, err := renderer.RenderTile(ctx, g.tile, Render{PNGCompression: CompressionFast})
 	if err != nil {
 		t.Fatal(err)
