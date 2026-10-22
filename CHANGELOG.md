@@ -9,7 +9,7 @@ ezu is pre-1.0, so a minor bump may carry a breaking change. What the numbers
 mean is spelled out in
 [versioning](https://reearth.github.io/ezu/reference/changelog/).
 
-## Unreleased
+## 0.13.1 — 2026-10-22
 
 ### Fixed
 
