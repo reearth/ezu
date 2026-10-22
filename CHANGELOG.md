@@ -9,6 +9,18 @@ ezu is pre-1.0, so a minor bump may carry a breaking change. What the numbers
 mean is spelled out in
 [versioning](https://reearth.github.io/ezu/reference/changelog/).
 
+## Unreleased
+
+### Fixed
+
+- `needed_codepoints_in` / `needed_glyph_ranges_in` (`NeededCodepointsIn` /
+  `NeededGlyphRangesIn` in Go, `neededCodepointsIn` / `neededGlyphRangesIn`
+  in JS), and `needed_codepoints` / `needed_glyph_ranges` too, read only the
+  vector tiles they were given, so text that labels read from a `geojson`
+  source, loaded or inline as `data`, was left out. A host that bound only
+  the glyph ranges these listed drew those labels with characters missing,
+  without an error. They now read every GeoJSON document as well.
+
 ## 0.13.0 — 2026-10-21
 
 ### Breaking

@@ -1024,6 +1024,28 @@ impl Renderer {
                 })
             })
             .collect();
+        // Every GeoJSON document the labels can read: the ones bound in the
+        // set, and the ones the style carries inline as `data`. A geojson
+        // source binds a single layer named after itself.
+        let geojson: Vec<(&str, &serde_json::Value)> = set
+            .entries
+            .iter()
+            .flat_map(|(name, slots)| {
+                slots.values().filter_map(move |p| match &p.data.payload {
+                    Payload::GeoJson(doc) => Some((&**name, &**doc)),
+                    _ => None,
+                })
+            })
+            .chain(
+                self.doc
+                    .sources
+                    .iter()
+                    .filter_map(|(name, decl)| match decl {
+                        SourceDecl::GeoJson(s) => s.data.as_ref().map(|d| (name.as_str(), d)),
+                        _ => None,
+                    }),
+            )
+            .collect();
         for spec in self.doc.nodes.values() {
             let Some(stacks) = glyph_source_names(&self.doc, &spec.fields) else {
                 continue;
@@ -1058,6 +1080,20 @@ impl Renderer {
                             }
                         }
                     }
+                }
+                for &(bound_source, doc) in &geojson {
+                    if source.is_some_and(|s| s != bound_source)
+                        || layer.is_some_and(|want| want != bound_source)
+                    {
+                        continue;
+                    }
+                    for_each_geojson_properties(doc, &mut |properties| {
+                        for p in &props {
+                            if let Some(serde_json::Value::String(s)) = properties.get(*p) {
+                                collect_codepoints(s, &mut codepoints);
+                            }
+                        }
+                    });
                 }
             }
             for stack in stacks {
@@ -1675,6 +1711,33 @@ fn referenced_properties(expr: &serde_json::Value) -> Vec<&str> {
     out.sort_unstable();
     out.dedup();
     out
+}
+
+/// Call `visit` with the `properties` of every Feature in a GeoJSON
+/// document: a FeatureCollection's features, or a lone Feature. A bare
+/// geometry has no properties to label with.
+fn for_each_geojson_properties(
+    doc: &serde_json::Value,
+    visit: &mut dyn FnMut(&serde_json::Map<String, serde_json::Value>),
+) {
+    match doc.get("type").and_then(|t| t.as_str()) {
+        Some("FeatureCollection") => {
+            for f in doc
+                .get("features")
+                .and_then(|fs| fs.as_array())
+                .into_iter()
+                .flatten()
+            {
+                for_each_geojson_properties(f, visit);
+            }
+        }
+        Some("Feature") => {
+            if let Some(properties) = doc.get("properties").and_then(|p| p.as_object()) {
+                visit(properties);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Add the codepoint of every character in `s`. Codepoints outside

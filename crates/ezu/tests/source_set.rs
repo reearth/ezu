@@ -559,3 +559,55 @@ fn an_observed_render_shows_every_node_and_draws_the_same_tile() {
     // `f`, `fill` and `out`: every node, cached or not.
     assert_eq!(seen.0.lock().unwrap().len(), 3);
 }
+
+/// Labels on a geojson source, with the document either loaded into the
+/// set or carried inline as `data`.
+fn geojson_labels(data: Option<&str>) -> String {
+    let source = match data {
+        Some(doc) => format!(r#"{{ "type": "geojson", "data": {doc} }}"#),
+        None => r#"{ "type": "geojson", "url": "https://example.invalid/names.geojson" }"#.into(),
+    };
+    format!(
+        r##"{{
+        "name": "names", "tile-size": 64,
+        "sources": {{
+            "g": {{ "type": "glyphs", "url": "https://example.invalid/{{fontstack}}/{{range}}.pbf", "fontstack": "Sans" }},
+            "names": {source}
+        }},
+        "nodes": {{
+            "f": {{ "op": "features", "source": "names", "layer": "names" }},
+            "l": {{ "op": "text-labels", "features": "@f", "source": "names", "layer": "names",
+                    "font": ["g"], "text": ["get", "name"], "size": 16, "color": "#000000" }},
+            "p": {{ "op": "label-placement", "labels": ["@l"] }},
+            "out": {{ "op": "text-draw", "labels": "@l", "placement": "@p" }}
+        }},
+        "output": "@out"
+    }}"##
+    )
+}
+
+const NAMES_DOC: &str = r#"{ "type": "FeatureCollection", "features": [
+    { "type": "Feature", "properties": { "name": "重" },
+      "geometry": { "type": "Point", "coordinates": [139.77, 35.68] } } ] }"#;
+
+#[test]
+fn the_glyphs_a_set_needs_include_its_geojson_labels() {
+    let r = Renderer::new(&geojson_labels(None)).expect("builds");
+    let data = r.load_source("names", NAMES_DOC.as_bytes()).expect("loads");
+    let mut set = SourceSet::new();
+    set.bind(&data, &BindOptions::default()).expect("binds");
+
+    let codepoints = r.needed_codepoints_in(&set);
+    assert!(codepoints["g"].contains(&0x91CD), "{codepoints:?}");
+    let ranges = r.needed_glyph_ranges_in(&set);
+    assert!(ranges["g"].contains(&0x9100), "{ranges:?}");
+}
+
+#[test]
+fn the_glyphs_a_style_needs_include_its_inline_geojson_labels() {
+    let r = Renderer::new(&geojson_labels(Some(NAMES_DOC))).expect("builds");
+    let codepoints = r.needed_codepoints_in(&SourceSet::new());
+    assert!(codepoints["g"].contains(&0x91CD), "{codepoints:?}");
+    let bound = r.needed_codepoints().expect("lists");
+    assert!(bound["g"].contains(&0x91CD), "{bound:?}");
+}
