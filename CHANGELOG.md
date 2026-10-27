@@ -11,15 +11,30 @@ mean is spelled out in
 
 ## Unreleased
 
+### Breaking
+
+- `FactoryCtx` has a `nodes` field: every node of the document, functions
+  expanded, so a factory can read the node feeding one of its inputs. Code
+  that builds a `FactoryCtx` itself, as a custom op's unit test may, sets it
+  (an empty map will do).
+
 ### Fixed
 
-- A label on a polygon from a remote `geojson` source was cut at a tile seam
-  when its anchor sat in the neighbouring tile and the document was bound
-  only at the centre, as a frame's `sources` callback usually binds it: the
-  tile across the seam did not draw its part. Labels on points were
-  unaffected. The document bound at the centre now also serves the
-  neighbour tiles that cross-tile label placement reads, as inline `data`
-  always has; binding it at every offset still works and draws the same.
+- A label on a polygon was cut at a tile seam when its anchor sat in the
+  neighbouring tile: the tile across the seam did not draw its part. Labels
+  on points were unaffected. Two things kept the neighbour's label from the
+  tile, and both are fixed:
+  - A `text` or `text-labels` node read neighbour tiles only when it named
+    `source` and `layer` itself. Fed straight by a `features` node, it now
+    reads that node's layer from the neighbours, with its `filter-expr`,
+    `min-zoom-field` and zoom band. A node that names `source` and `layer`
+    draws as before. **Label nodes that named neither now collide across
+    tile borders, so labels near a seam can change.**
+  - A remote `geojson` document bound only at the centre, as a frame's
+    `sources` callback usually binds it, was not projected into the
+    neighbour tiles. The document bound at the centre now serves them too,
+    as inline `data` always has; binding it at every offset still works and
+    draws the same.
 
 ## 0.13.1 — 2026-10-22
 

@@ -58,6 +58,11 @@ impl Warnings {
 pub struct FactoryCtx<'a> {
     pub params: &'a indexmap::IndexMap<String, spec::ParamDecl>,
     pub sources: &'a indexmap::IndexMap<String, spec::SourceDecl>,
+    /// Every node of the document as written, functions expanded. A
+    /// factory reads another node's fields here when what it builds
+    /// depends on where its input comes from, as a label node gathering
+    /// neighbour tiles needs to know the layer its features are read from.
+    pub nodes: &'a indexmap::IndexMap<String, spec::NodeSpec>,
     /// Id of the node currently being built, for warning messages.
     pub node: &'a str,
     pub warnings: &'a Warnings,

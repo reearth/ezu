@@ -294,9 +294,10 @@ from vector features:
   **deterministic across tile boundaries**: candidates come from this
   tile plus its 8 neighbours (host-bound under `<source>.<layer>@dx,dy`),
   deduped and placed greedily by `symbol-sort-key`, so a label straddling
-  a tile edge is placed or dropped identically in both tiles. Set the
-  node's `source` / `layer` (the upstream feature source) to enable
-  neighbour gathering; without them collision is centre-tile-only.
+  a tile edge is placed or dropped identically in both tiles. The
+  neighbours are read from the layer of the `features` node feeding the
+  label; fed through another op, set the node's `source` / `layer` or
+  collision is centre-tile-only.
   `allow-overlap` / `ignore-placement` / `padding-px` mirror MapLibre.
 - **Shared cross-layer placement & icons** — label layers can split into
   `text-labels` (candidates) feeding one `label-placement` node, with a

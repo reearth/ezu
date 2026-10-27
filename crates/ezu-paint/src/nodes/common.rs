@@ -744,6 +744,62 @@ pub(super) fn resolve_source(
     }
 }
 
+/// What a `features` node reads and how it filters it, as a node fed by
+/// it needs to know to read the same layer from the neighbour tiles: the
+/// `<source>.<layer>` binding, the filter and per-feature zoom field, and
+/// the zoom band outside which it yields nothing.
+pub(super) struct FeatureOrigin {
+    pub base: String,
+    pub filter_expr: Option<Value>,
+    pub min_zoom_field: Option<String>,
+    pub min_zoom: Option<u8>,
+    pub max_zoom: Option<u8>,
+}
+
+/// The [`FeatureOrigin`] of node `id`, when it is a `features` node.
+///
+/// Only a `features` node itself answers. Any other op between it and the
+/// asker changes the geometry, and the neighbour tiles' copies of the layer
+/// are read as they are bound, so they would not match what the asker
+/// receives from its own tile. A `features` node that would fail to build
+/// answers nothing either: its own build reports why.
+pub(super) fn feature_origin(ctx: &FactoryCtx<'_>, id: &str) -> Option<FeatureOrigin> {
+    let spec = ctx.nodes.get(id)?;
+    if spec.op != "features" {
+        return None;
+    }
+    let fields = &spec.fields;
+    let layer = fields.get("layer")?.as_str()?;
+    let is_feature_source = |decl: &spec::SourceDecl| {
+        matches!(
+            decl,
+            spec::SourceDecl::Mvt(_) | spec::SourceDecl::Pmtiles(_) | spec::SourceDecl::GeoJson(_)
+        )
+    };
+    // The same answer `resolve_source` gives, without repeating the
+    // warning the `features` node gives for an unnamed source.
+    let source = match fields.get("source") {
+        Some(v) => {
+            let name = v.as_str()?;
+            is_feature_source(ctx.sources.get(name)?).then(|| name.to_string())?
+        }
+        None => {
+            let mut matches = ctx.sources.iter().filter(|(_, d)| is_feature_source(d));
+            match (matches.next(), matches.next()) {
+                (Some((name, _)), None) => name.clone(),
+                _ => return None,
+            }
+        }
+    };
+    Some(FeatureOrigin {
+        base: format!("{source}.{layer}"),
+        filter_expr: fields.get("filter-expr").cloned(),
+        min_zoom_field: read_optional_string(fields, "min-zoom-field").ok()?,
+        min_zoom: read_optional_zoom(fields, "min-zoom").ok()?,
+        max_zoom: read_optional_zoom(fields, "max-zoom").ok()?,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Neighbour tiles
 

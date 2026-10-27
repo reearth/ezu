@@ -717,3 +717,157 @@ fn an_overzoomed_polygon_label_on_a_seam_draws_the_same_on_both_tiles() {
     assert!(opaque_in(&west, pad, size + pad) > 0, "the west half draws");
     assert!(opaque_in(&east, pad, size + pad) > 0, "the east half draws");
 }
+
+/// A label layer over `src.pts` whose label node names no `source` or
+/// `layer`, either as one `text` node or through the shared placement.
+fn unnamed_label_recipe(shared: bool, anchor: &str) -> String {
+    let label = if shared {
+        format!(
+            r#""l": {{ "op": "text-labels", "features": "@feats", "font": ["body"],
+                      "text": "WW", "size": 16, "polygon-anchor": "{anchor}" }},
+               "p": {{ "op": "label-placement", "labels": ["@l"] }},
+               "out": {{ "op": "text-draw", "labels": "@l", "placement": "@p" }}"#
+        )
+    } else {
+        format!(
+            r#""out": {{ "op": "text", "features": "@feats", "font": ["body"],
+                        "text": "WW", "size": 16, "polygon-anchor": "{anchor}" }}"#
+        )
+    };
+    format!(
+        r##"{{
+      "name": "text-polygon-unnamed",
+      "tile-size": 64,
+      "sources": {{
+        "src":  {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
+        "body": {{ "type": "font", "url": "{font}" }}
+      }},
+      "nodes": {{
+        "feats": {{ "op": "features", "source": "src", "layer": "pts" }},
+        {label}
+      }},
+      "output": "@out"
+    }}"##,
+        font = font_url()
+    )
+}
+
+#[test]
+fn a_polygon_label_on_a_seam_draws_on_both_tiles_without_naming_its_layer() {
+    use ezu_features::ops::clip::{clip_polygon_to_rect, ClipRect, Span};
+    // A block a little west of the seam between z3 tiles 2 and 3, in the
+    // west tile's units. Each tile holds it as an encoder with a 256-unit
+    // buffer cuts it: the west tile whole, the east tile only the part
+    // past its buffer edge, whose own anchor falls outside it. The label
+    // is the west tile's, and the east tile draws its eastern half from the
+    // west tile's copy, which it reads because the `features` node feeding
+    // the label names the layer.
+    let block = ezu_features::Polygon {
+        exterior: vec![(3800, 1800), (4296, 1800), (4296, 2300), (3800, 2300)],
+        holes: vec![],
+    };
+    // The block as the tile `dx` east of the west tile holds it.
+    let piece = |dx: i32| -> FeatureLayer {
+        let shifted = ezu_features::Polygon {
+            exterior: block
+                .exterior
+                .iter()
+                .map(|&(x, y)| (x - dx * 4096, y))
+                .collect(),
+            holes: vec![],
+        };
+        let buffer = ClipRect {
+            x: Span::closed(-256, 4096 + 256),
+            y: Span::closed(-256, 4096 + 256),
+        };
+        let features = clip_polygon_to_rect(&shifted, &buffer)
+            .into_iter()
+            .map(|p| polygon_feature(&p.exterior))
+            .collect();
+        layer(features)
+    };
+    let (size, pad) = (64u32, 16u32);
+    for shared in [false, true] {
+        for anchor in ["pole", "centroid"] {
+            let recipe = unnamed_label_recipe(shared, anchor);
+            let render = |x: u32, own: i32| {
+                render_with_features_and_images(
+                    &recipe,
+                    size,
+                    pad,
+                    TileId { z: 3, x, y: 2 },
+                    &[
+                        ("src.pts", piece(own)),
+                        ("src.pts@-1,0", piece(own - 1)),
+                        ("src.pts@1,0", piece(own + 1)),
+                    ],
+                    &[],
+                )
+            };
+            let west = render(2, 0);
+            let east = render(3, 1);
+            let mut inked = 0;
+            for y in 0..west.height {
+                for i in 0..pad {
+                    let w = west.pixel(size + pad + i, y);
+                    let e = east.pixel(pad + i, y);
+                    assert_eq!(w, e, "{anchor}, shared {shared}: seam mismatch at {i}, {y}");
+                    if w[3] > 100 {
+                        inked += 1;
+                    }
+                }
+            }
+            assert!(
+                inked > 0,
+                "{anchor}, shared {shared}: the label straddles the seam"
+            );
+            assert!(
+                opaque_in(&east, pad, size + pad) > 0,
+                "{anchor}, shared {shared}: the east half draws"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_label_reads_the_neighbours_of_the_layer_its_features_node_reads() {
+    use ezu_graph::build_graph;
+    let asks = |nodes: &str| -> Vec<String> {
+        let doc = ezu_style::Document::from_json(&format!(
+            r##"{{
+          "name": "t", "tile-size": 64,
+          "sources": {{
+            "src":  {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
+            "body": {{ "type": "font", "url": "{font}" }}
+          }},
+          "nodes": {{ {nodes} }},
+          "output": "@out"
+        }}"##,
+            font = font_url()
+        ))
+        .expect("parse");
+        let graph = build_graph(&doc, &ezu_paint::nodes::default_registry()).expect("build");
+        graph
+            .asset_inputs()
+            .into_iter()
+            .filter(|n| n.starts_with("src.") && n.contains('@'))
+            .collect()
+    };
+    let label = r#""out": { "op": "text", "features": "@shown", "font": ["body"], "text": "W" }"#;
+    // Fed by a `features` node: that node's layer, at all eight offsets.
+    let direct = asks(&format!(
+        r#""shown": {{ "op": "features", "source": "src", "layer": "pts" }}, {label}"#
+    ));
+    assert_eq!(direct.len(), 8, "{direct:?}");
+    assert!(
+        direct.iter().all(|n| n.starts_with("src.pts@")),
+        "{direct:?}"
+    );
+    // Through an op that changes the geometry, the neighbours' copies would
+    // not be what the label receives, so none are read.
+    let derived = asks(&format!(
+        r#""feats": {{ "op": "features", "source": "src", "layer": "pts" }},
+           "shown": {{ "op": "centroid", "features": "@feats" }}, {label}"#
+    ));
+    assert!(derived.is_empty(), "{derived:?}");
+}

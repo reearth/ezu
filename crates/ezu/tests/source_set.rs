@@ -614,8 +614,15 @@ fn the_glyphs_a_style_needs_include_its_inline_geojson_labels() {
 }
 
 /// A label on a geojson source, with `label-boxes` beside it so the
-/// placement can be read back. `anchor` is the `polygon-anchor`.
-fn seam_labels(anchor: &str) -> String {
+/// placement can be read back. `anchor` is the `polygon-anchor`; `named`
+/// gives the label node its own `source`/`layer`, which otherwise come
+/// from the `features` node feeding it.
+fn seam_labels(anchor: &str, named: bool) -> String {
+    let layer = if named {
+        r#""source": "shapes", "layer": "shapes","#
+    } else {
+        ""
+    };
     format!(
         r##"{{
         "name": "seam", "tile-size": 64,
@@ -625,7 +632,7 @@ fn seam_labels(anchor: &str) -> String {
         }},
         "nodes": {{
             "f": {{ "op": "features", "source": "shapes", "layer": "shapes" }},
-            "l": {{ "op": "text-labels", "features": "@f", "source": "shapes", "layer": "shapes",
+            "l": {{ "op": "text-labels", "features": "@f", {layer}
                     "font": ["g"], "text": "Ab", "size": 16, "color": "#000000",
                     "polygon-anchor": "{anchor}" }},
             "p": {{ "op": "label-placement", "labels": ["@l"] }},
@@ -712,8 +719,14 @@ fn a_polygon_label_across_a_seam_draws_on_both_sides_from_one_bound_document() {
     ];
     let polygon = seam_doc("Polygon", &rect);
     let point = seam_doc("Point", &[(-128, 2048)]);
-    for anchor in ["pole", "centroid"] {
-        let style = seam_labels(anchor);
+    // The label node names the layer, or leaves it to its `features` node.
+    for (anchor, named) in [
+        ("pole", true),
+        ("centroid", true),
+        ("pole", false),
+        ("centroid", false),
+    ] {
+        let style = seam_labels(anchor, named);
         let want = render_across_the_seam(&style, &point, false);
         let east = &want[1].0;
         assert!(
@@ -725,7 +738,8 @@ fn a_polygon_label_across_a_seam_draws_on_both_sides_from_one_bound_document() {
             for (side, (g, w)) in ["western", "eastern"].iter().zip(got.iter().zip(&want)) {
                 assert!(
                     g.0 == w.0,
-                    "{anchor}, bound {}: the {side} tile draws other pixels than a point does",
+                    "{anchor}, named {named}, bound {}: the {side} tile draws other pixels \
+                     than a point does",
                     if nine {
                         "at every offset"
                     } else {
@@ -737,11 +751,11 @@ fn a_polygon_label_across_a_seam_draws_on_both_sides_from_one_bound_document() {
             let ids: Vec<f64> = got.iter().flat_map(|t| t.1.iter().copied()).collect();
             assert!(
                 got.iter().all(|t| !t.1.is_empty()),
-                "{anchor}: a tile reports no box"
+                "{anchor}, named {named}: a tile reports no box"
             );
             assert!(
                 ids.iter().all(|&id| id == ids[0]),
-                "{anchor}: the tiles disagree on the label-id: {ids:?}"
+                "{anchor}, named {named}: the tiles disagree on the label-id: {ids:?}"
             );
         }
     }

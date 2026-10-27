@@ -37,11 +37,14 @@ tile boundaries.
 `font` is an ordered fallback stack of `font` and/or `glyphs` source names — outline
 fonts and SDF stacks mix freely, and the first entry covering a character shapes it.
 
-**Set `source` and `layer`.** They are how the node names its neighbour-tile
-bindings, and without them collision is centre-tile-only, which shows up as labels
-duplicated or fighting across borders. Mirror `filter-expr`, `min-zoom`,
-`max-zoom`, and `min-zoom-field` from the upstream `features` node too, so
-neighbour candidates are filtered identically to this tile's own features.
+**Neighbour tiles.** Collision reads the neighbour tiles' copies of the layer
+the label's features come from. Fed straight by a `features` node, the label
+node takes that node's `source`, `layer`, `filter-expr`, `min-zoom-field` and
+zoom band, so nothing needs repeating. Fed through any other op, it cannot tell
+which layer that is: set `source` and `layer` (and mirror `filter-expr`,
+`min-zoom`, `max-zoom` and `min-zoom-field` from the `features` node) or
+collision is centre-tile-only, which shows up as labels duplicated, fighting or
+cut off across borders.
 
 ## Halos exist for a reason
 
@@ -406,7 +409,8 @@ when no `--font` mapping is given. In a wasm host you cannot fetch lazily, so as
 ## Debugging placement
 
 - Turn on the tile-grid overlay in `ezu serve` and check borders for duplicates —
-  the symptom of a missing `source`/`layer`.
+  the symptom of a label node that reads no neighbours (fed through another op
+  and naming no `source`/`layer`).
 - Draw the collision boxes, rejected candidates included, with `label-boxes`
   (see [drawing the label boxes yourself](#drawing-the-label-boxes-yourself)).
 - `max-extent-px` (default 128) is the padding the node requests; labels whose

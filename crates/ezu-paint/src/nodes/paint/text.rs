@@ -35,7 +35,8 @@
 //! jitter), so labels match across tile borders. Collision (default on)
 //! is likewise world-space deterministic: candidates are gathered from
 //! this tile plus its 8 neighbour tiles (host-bound under
-//! `<source>.<layer>@dx,dy`), deduped by `(layer, text, quantized world
+//! `<source>.<layer>@dx,dy`, the layer the feeding `features` node reads
+//! unless `source`/`layer` name one), deduped by `(layer, text, quantized world
 //! anchor)`, ordered by `(layer, sort-key, world anchor, text)`, and placed
 //! greedily against a grid — all from world-space quantities, so
 //! adjacent tiles agree on every straddling label (a line label
@@ -66,9 +67,9 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    downcast_features, neighbor_feature_groups, read_bool_or, read_number, read_number_or,
-    read_optional_string, read_optional_zoom, read_xy, FeatureGroup, NeighborGroups,
-    ANCHOR_NAMES as TEXT_ANCHORS,
+    downcast_features, feature_origin, neighbor_feature_groups, read_bool_or, read_number,
+    read_number_or, read_optional_string, read_optional_zoom, read_xy, FeatureGroup,
+    NeighborGroups, ANCHOR_NAMES as TEXT_ANCHORS,
 };
 use ezu_core::text::{
     clip_line,
@@ -1416,9 +1417,9 @@ struct TextNode {
     dedupe_key_expr_src: Option<String>,
     dedupe_distance_px: Option<f32>,
     /// The upstream `<source>.<layer>` asset name, used only to spell the
-    /// neighbour binding names in [`Node::asset_inputs`] (the translator
-    /// always sets `source`/`layer`; hand-written recipes may omit them →
-    /// centre-only collision). `None` disables neighbour gathering.
+    /// neighbour binding names in [`Node::asset_inputs`]: the node's own
+    /// `source`/`layer`, or else those of the `features` node feeding it.
+    /// `None` disables neighbour gathering.
     neighbor_base: Option<String>,
     /// The upstream feature filter, reproduced when gathering neighbour
     /// candidates so they are filtered identically to the tile's own
@@ -3824,15 +3825,25 @@ fn build_text_node(
     // Neighbour candidate gathering: the upstream `<source>.<layer>`
     // (used only to name the neighbour bindings in `asset_inputs`) plus
     // the upstream feature filter, so neighbours are filtered exactly
-    // like the tile's own features. All optional — absent → the node
-    // collides against its own tile's features only.
+    // like the tile's own features. A node that names neither `source`
+    // nor `layer` takes them, and the filter and zoom band, from the
+    // `features` node feeding it; fed by anything else, it collides
+    // against its own tile's features only.
     let source = read_optional_string(fields, "source")?;
     let layer = read_optional_string(fields, "layer")?;
-    let neighbor_base = match (source, layer) {
-        (Some(s), Some(l)) => Some(format!("{s}.{l}")),
+    let origin = match (&source, &layer) {
+        (None, None) => feature_origin(ctx, &features),
         _ => None,
     };
-    let (filter_expr, filter_expr_src) = match fields.get("filter-expr") {
+    let neighbor_base = match (source, layer, &origin) {
+        (Some(s), Some(l), _) => Some(format!("{s}.{l}")),
+        (_, _, Some(o)) => Some(o.base.clone()),
+        _ => None,
+    };
+    let filter = fields
+        .get("filter-expr")
+        .or_else(|| origin.as_ref().and_then(|o| o.filter_expr.as_ref()));
+    let (filter_expr, filter_expr_src) = match filter {
         Some(v) => {
             let expr = maplibre_expr::parse(v).map_err(|e| FactoryError::BadField {
                 field: "filter-expr".into(),
@@ -3842,9 +3853,22 @@ fn build_text_node(
         }
         None => (None, None),
     };
-    let min_zoom_field = read_optional_string(fields, "min-zoom-field")?;
-    let min_zoom = read_optional_zoom(fields, "min-zoom")?;
-    let max_zoom = read_optional_zoom(fields, "max-zoom")?;
+    let mut min_zoom_field = read_optional_string(fields, "min-zoom-field")?;
+    let mut min_zoom = read_optional_zoom(fields, "min-zoom")?;
+    let mut max_zoom = read_optional_zoom(fields, "max-zoom")?;
+    if let Some(o) = origin {
+        min_zoom_field = min_zoom_field.or(o.min_zoom_field);
+        // Outside the `features` node's band this tile has no features, so
+        // the neighbours' must not label it either.
+        min_zoom = match (min_zoom, o.min_zoom) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        };
+        max_zoom = match (max_zoom, o.max_zoom) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+    }
 
     // A line-placed icon has no ezu equivalent (MapLibre repeats it along the
     // path); the line path draws the label only.
@@ -3973,7 +3997,7 @@ fn build_text_node(
 /// shared `label-placement` node.
 fn text_schema(stage: Stage) -> Value {
     let mut schema = serde_json::json!({
-            "description": "Text labels (MapLibre `symbol-placement`): `placement: point` (default) labels each feature point, `line` / `line-center` walk each polyline with tangent-rotated glyphs. `font` is an ordered fallback stack of `font` and/or `glyphs` source names; `text` is a literal string or a MapLibre string expression evaluated per feature group. Paint properties and the layout knobs (in em) have optional `*-expr` siblings evaluated per feature group. Collision is on by default and is deterministic across tiles: candidates come from this tile plus the 8 neighbour tiles (host-bound under `<source>.<layer>@dx,dy`), so borders stay seamless. Set `source`/`layer` (the upstream feature source) to enable neighbour gathering; without them collision is centre-tile-only. `icon-name` / `icon-name-expr` add MapLibre's `icon-image` half: the icon is placed together with the text against the same index, so a symbol shows both or neither unless `icon-optional` / `text-optional` say otherwise. `font` and `text` are required unless the symbol is icon-only.",
+            "description": "Text labels (MapLibre `symbol-placement`): `placement: point` (default) labels each feature point, `line` / `line-center` walk each polyline with tangent-rotated glyphs. `font` is an ordered fallback stack of `font` and/or `glyphs` source names; `text` is a literal string or a MapLibre string expression evaluated per feature group. Paint properties and the layout knobs (in em) have optional `*-expr` siblings evaluated per feature group. Collision is on by default and is deterministic across tiles: candidates come from this tile plus the 8 neighbour tiles (host-bound under `<source>.<layer>@dx,dy`), so borders stay seamless. The neighbours are read from the layer the `features` node feeding `features` reads, with its filter and zoom band; `source`/`layer` name another layer instead. Fed by any other op and naming no layer, collision is centre-tile-only. `icon-name` / `icon-name-expr` add MapLibre's `icon-image` half: the icon is placed together with the text against the same index, so a symbol shows both or neither unless `icon-optional` / `text-optional` say otherwise. `font` and `text` are required unless the symbol is icon-only.",
             "properties": {
                 "features": schema_frag::node_ref(),
                 "font": { "type": "array", "items": { "type": "string" },
@@ -4111,18 +4135,18 @@ fn text_schema(stage: Stage) -> Value {
                 "dedupe-distance-px": { "type": "number", "exclusiveMinimum": 0.0,
                                         "description": "The distance in px, anchor to anchor, within which a placed label hides later labels with the same `dedupe-key-expr` key. Required with `dedupe-key-expr`; must be greater than 0." },
                 "source": { "type": "string",
-                            "description": "Upstream feature source name (matches the `features` node). Used only to name the neighbour tile bindings for cross-tile collision. Omit to collide within this tile only." },
+                            "description": "Upstream feature source name (matches the `features` node). Used only to name the neighbour tile bindings for cross-tile collision. Omit both `source` and `layer` to take them from the `features` node feeding `features`; fed by any other op, the node then collides within this tile only." },
                 "layer": { "type": "string",
                            "description": "Upstream feature layer name (with `source`). Used only to name neighbour bindings for cross-tile collision." },
                 "filter-expr": {
-                    "description": "The upstream `features` filter, reproduced when gathering neighbour candidates so they are filtered identically to this tile's own features. Set it to whatever the `features` node uses.",
+                    "description": "The upstream `features` filter, reproduced when gathering neighbour candidates so they are filtered identically to this tile's own features. Set it to whatever the `features` node uses. Without `source`/`layer` it defaults to the filter of the `features` node feeding `features`.",
                 },
                 "min-zoom-field": { "type": "string",
-                                    "description": "Per-feature `min_zoom` property name, reproduced for neighbour candidate filtering (mirrors the `features` node)." },
+                                    "description": "Per-feature `min_zoom` property name, reproduced for neighbour candidate filtering (mirrors the `features` node, and defaults to its field when `source`/`layer` are omitted)." },
                 "min-zoom": { "type": "integer", "minimum": 0, "maximum": 24,
-                              "description": "Style layer zoom gate: draw nothing below this zoom (mirrors the `features` node)." },
+                              "description": "Style layer zoom gate: draw nothing below this zoom (mirrors the `features` node; when `source`/`layer` are omitted, the feeding `features` node's `min-zoom` applies as well)." },
                 "max-zoom": { "type": "integer", "minimum": 0, "maximum": 24,
-                              "description": "Style layer zoom gate: draw nothing above this zoom (mirrors the `features` node)." },
+                              "description": "Style layer zoom gate: draw nothing above this zoom (mirrors the `features` node; when `source`/`layer` are omitted, the feeding `features` node's `max-zoom` applies as well)." },
                 "icon-sprite": schema_frag::asset_ref(),
                 "icon-name": { "type": "string",
                                "description": "Constant MapLibre `icon-image`: the sprite to draw at each point, cropped from `icon-sprite`. Needs `icon-sprite`." },

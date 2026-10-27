@@ -929,10 +929,12 @@ mod tests {
     ) -> Result<(InEnum<Cap>, Vec<String>), FactoryError> {
         let params = decls(params);
         let sources = indexmap::IndexMap::new();
+        let nodes = indexmap::IndexMap::new();
         let warnings = Warnings::new();
         let ctx = FactoryCtx {
             params: &params,
             sources: &sources,
+            nodes: &nodes,
             node: "n",
             warnings: &warnings,
         };

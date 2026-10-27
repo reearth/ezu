@@ -53,10 +53,12 @@ pub(crate) mod ratio_test {
     pub(crate) fn build(factory: &dyn NodeFactory, fields: serde_json::Value) -> Box<dyn Node> {
         let params = Default::default();
         let sources = Default::default();
+        let nodes = Default::default();
         let warnings = Warnings::new();
         let ctx = ezu_graph::FactoryCtx {
             params: &params,
             sources: &sources,
+            nodes: &nodes,
             node: "n",
             warnings: &warnings,
         };
