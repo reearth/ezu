@@ -10,7 +10,7 @@ import (
 // registry. The module must agree: a lower number means some of the
 // `inventory::submit!` constructors never ran, and every style would fail
 // with "unknown op".
-const nativeOpCount = 91
+const nativeOpCount = 93
 
 const (
 	stainedGlassStyle = "../crates/ezu/examples/styles/stained-glass.json"
