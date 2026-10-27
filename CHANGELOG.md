@@ -9,10 +9,17 @@ ezu is pre-1.0, so a minor bump may carry a breaking change. What the numbers
 mean is spelled out in
 [versioning](https://reearth.github.io/ezu/reference/changelog/).
 
-## Unreleased
+## 0.14.0 — 2026-10-28
 
 ### Breaking
 
+- A `text` or `text-labels` node that named no `source` and `layer` read no
+  neighbour tiles, so it collided within its tile only, and a polygon's
+  label whose anchor sat in the neighbouring tile was cut at the seam. It
+  now takes the neighbour tiles from its `features` input (see Changed
+  below). **Labels on such nodes, and labels fed through a geometry op such
+  as `centroid`, now collide across tile borders, so labels near a seam can
+  change.** Label nodes that name `source` and `layer` draw as before.
 - `EvalCtx` has a `neighbours` field: whether something downstream wants
   the node's output to carry the neighbour tiles' data. Code that builds an
   `EvalCtx` itself, as a custom op's unit test may, sets it (`false` will
@@ -51,8 +58,7 @@ mean is spelled out in
   (`centroid`, `buffer`, `simplify`, `boundary`, `medial-axis`, `resample`,
   `dash`, `transform`, `wave`, `hatch`, `dot-density`, `segment-to`, and
   `switch`) applies itself to them as the neighbour's own render would.
-  **Labels fed through such an op now collide across tile borders, so labels
-  near a seam can change.** An op that merges features or combines inputs
+  An op that merges features or combines inputs
   (`convex-hull`, `bbox`, `triangulate`, `voronoi`, `voronoi-fracture`,
   `junctions`, `feature-boolean`) passes none on, and the build warns that
   the label collides within its tile. A point that one tile's copy of a
@@ -104,19 +110,11 @@ mean is spelled out in
 
 ### Fixed
 
-- A label on a polygon was cut at a tile seam when its anchor sat in the
-  neighbouring tile: the tile across the seam did not draw its part. Labels
-  on points were unaffected. Two things kept the neighbour's label from the
-  tile, and both are fixed:
-  - A `text` or `text-labels` node that named no `source` and `layer` read
-    no neighbour tiles. It now takes them from its `features` input (see
-    Changed above). **Label nodes that named neither now collide across tile
-    borders, so labels near a seam can change.**
-  - A remote `geojson` document bound only at the centre, as a frame's
-    `sources` callback usually binds it, was not projected into the
-    neighbour tiles. The document bound at the centre now serves them too,
-    as inline `data` always has; binding it at every offset still works and
-    draws the same.
+- A remote `geojson` document bound only at the centre, as a frame's
+  `sources` callback usually binds it, was not projected into the neighbour
+  tiles, so a polygon's label whose anchor sat across a seam was cut there.
+  The document bound at the centre now serves them too, as inline `data`
+  always has; binding it at every offset still works and draws the same.
 
 ## 0.13.1 — 2026-10-22
 
