@@ -543,6 +543,7 @@ pub fn describe_value(v: &PortValue) -> String {
             f.metres_per_pixel_x(),
         ),
         PortValue::Features(_) => "features".to_string(),
+        PortValue::Fonts(_) => "fonts".to_string(),
         PortValue::Brush(_) => "brush".to_string(),
         PortValue::Labels(_) => "labels".to_string(),
         PortValue::Scalar(s) => format!("scalar {}({:?})", s.kind_name(), s),

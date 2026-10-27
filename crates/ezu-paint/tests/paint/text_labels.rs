@@ -855,7 +855,10 @@ fn neighbour_asks(nodes: &str) -> (Vec<String>, Vec<String>) {
         "src":  {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
         "body": {{ "type": "font", "url": "{font}" }}
       }},
-      "nodes": {{ {nodes} }},
+      "nodes": {{
+        "fonts": {{ "op": "fonts", "font-stacks": {{ "body": ["body"] }} }},
+        {nodes}
+      }},
       "output": "@out"
     }}"##,
         font = font_url()
@@ -872,7 +875,7 @@ fn neighbour_asks(nodes: &str) -> (Vec<String>, Vec<String>) {
 
 #[test]
 fn a_label_asks_for_its_neighbours_through_the_ops_feeding_it() {
-    let label = r#""out": { "op": "text", "features": "@shown", "font": ["body"], "text": "W" }"#;
+    let label = r#""out": { "op": "text", "features": "@shown", "fonts": "@fonts", "font": ["body"], "text": "W" }"#;
     let feats = r#""feats": { "op": "features", "source": "src", "layer": "pts" }"#;
     // Fed by a `features` node, or through an op that works feature by
     // feature: that node's layer, at all eight offsets.
@@ -900,7 +903,7 @@ fn a_label_asks_for_its_neighbours_through_the_ops_feeding_it() {
     // With collision off nothing is asked for.
     let (asks, warnings) = neighbour_asks(&format!(
         r#"{feats}, "shown": {{ "op": "convex-hull", "features": "@feats" }},
-           "out": {{ "op": "text", "features": "@shown", "font": ["body"], "text": "W",
+           "out": {{ "op": "text", "features": "@shown", "fonts": "@fonts", "font": ["body"], "text": "W",
                     "collide": false }}"#
     ));
     assert!(
@@ -914,7 +917,7 @@ fn naming_a_layer_on_the_label_still_reads_it_and_warns() {
     let (asks, warnings) = neighbour_asks(
         r#""feats": { "op": "features", "source": "src", "layer": "pts" },
            "shown": { "op": "centroid", "features": "@feats" },
-           "out": { "op": "text", "features": "@shown", "font": ["body"], "text": "W",
+           "out": { "op": "text", "features": "@shown", "fonts": "@fonts", "font": ["body"], "text": "W",
                     "source": "src", "layer": "other" }"#,
     );
     // The node reads the layer it names itself, and does not ask the
@@ -929,7 +932,7 @@ fn naming_a_layer_on_the_label_still_reads_it_and_warns() {
     // A field only the direct read used is ignored without it.
     let (asks, warnings) = neighbour_asks(
         r#""feats": { "op": "features", "source": "src", "layer": "pts" },
-           "out": { "op": "text", "features": "@feats", "font": ["body"], "text": "W",
+           "out": { "op": "text", "features": "@feats", "fonts": "@fonts", "font": ["body"], "text": "W",
                     "filter-expr": ["has", "name"] }"#,
     );
     assert_eq!(asks.len(), 8, "{asks:?}");

@@ -76,6 +76,7 @@ fn style(nodes: &str) -> String {
       "nodes": {{
         "feats": {{ "op": "features", "source": "src", "layer": "things" }},
         "sheet": {{ "op": "sprite", "sprite": "@icons" }},
+        "fonts": {{ "op": "fonts", "font-stacks": {{ "body": ["body"] }} }},
         {nodes}
       }},
       "output": "@out"
@@ -125,8 +126,8 @@ const STAMP_PORT: &str = r#""out": { "op": "stamp", "features": "@feats", "sheet
 const STAMP_FIELD: &str = r#""out": { "op": "stamp", "features": "@feats", "sprite": "@icons", "name-expr": ["get", "kind"] }"#;
 const LINE_PORT: &str = r#""out": { "op": "line-stamp", "features": "@feats", "sheet": "@sheet", "width-px": 6, "name-expr": ["get", "kind"] }"#;
 const LINE_FIELD: &str = r#""out": { "op": "line-stamp", "features": "@feats", "sprite": "@icons", "width-px": 6, "name-expr": ["get", "kind"] }"#;
-const TEXT_PORT: &str = r#""out": { "op": "text", "features": "@feats", "font": ["body"], "text": "Wa", "icon-sheet": "@sheet", "icon-name-expr": ["get", "kind"], "anchor": "left", "offset-em": [1, 0] }"#;
-const TEXT_FIELD: &str = r#""out": { "op": "text", "features": "@feats", "font": ["body"], "text": "Wa", "icon-sprite": "@icons", "icon-name-expr": ["get", "kind"], "anchor": "left", "offset-em": [1, 0] }"#;
+const TEXT_PORT: &str = r#""out": { "op": "text", "features": "@feats", "fonts": "@fonts", "font": ["body"], "text": "Wa", "icon-sheet": "@sheet", "icon-name-expr": ["get", "kind"], "anchor": "left", "offset-em": [1, 0] }"#;
+const TEXT_FIELD: &str = r#""out": { "op": "text", "features": "@feats", "fonts": "@fonts", "font": ["body"], "text": "Wa", "icon-sprite": "@icons", "icon-name-expr": ["get", "kind"], "anchor": "left", "offset-em": [1, 0] }"#;
 
 #[test]
 fn a_wired_sheet_draws_what_the_deprecated_field_drew() {

@@ -1,11 +1,11 @@
 ---
 title: Ports and types
-description: The eight port kinds every edge carries, and what static typing buys you.
+description: The nine port kinds every edge carries, and what static typing buys you.
 sidebar:
   order: 2
 ---
 
-Every edge in the graph carries exactly one of eight kinds. Types are checked
+Every edge in the graph carries exactly one of nine kinds. Types are checked
 when the graph is built, not when it renders.
 
 | Kind | Carries |
@@ -14,6 +14,7 @@ when the graph is built, not when it renders.
 | `Raster` | RGBA8 buffer, sRGB premultiplied, **padded canvas-sized**. The document's `output` must be this kind. |
 | `Sprite` | RGBA8 buffer at the **asset's native size**, not canvas-sized. The carrier for sprite and texture sources. |
 | `SpriteSheet` | A whole sprite sheet: the atlas plus its name → rect index, as the `sprite` node loads it. |
+| `Fonts` | Named font stacks, each a fallback chain of outline fonts and glyph stacks, as the `fonts` node loads them. |
 | `Brush` | A `hokusai` brush handle plus overrides. |
 | `Scalar` | A constant colour, number, or bool. |
 | `Labels` | Label placement candidates, or the decisions a shared placement stage reached over them. |

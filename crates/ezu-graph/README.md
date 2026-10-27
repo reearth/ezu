@@ -13,7 +13,7 @@ concrete node implementations.
 
 ## Port types
 
-The DAG is typed. Every edge carries one of eight `PortKind`s:
+The DAG is typed. Every edge carries one of nine `PortKind`s:
 
 | Kind | Carries |
 |---|---|
@@ -21,6 +21,7 @@ The DAG is typed. Every edge carries one of eight `PortKind`s:
 | `Raster` | RGBA8 buffer (sRGB premultiplied), **padded canvas-sized**. The document's `output` must be this kind. |
 | `Sprite` | RGBA8 buffer at the **asset's native dimensions**, not canvas-sized. Carrier for sprite / texture sources (`image`). Cannot be wired directly into the document `output`. Polymorphic filter ops (`blur`, `hsl`, `brightness-contrast`, `invert`, `color-to-alpha`, `displace`, `warp`, `blend`) accept `Raster` and `Sprite` interchangeably and pass the input kind through; placement ops (`place`, `tiling`, `stamp`) also accept either, sampling the input at its native dimensions and producing a `Raster`. |
 | `SpriteSheet` | A whole sprite sheet — the atlas plus its name → rect index — as the `sprite` source node loads it. The ops that name an icon per feature (`stamp`, `line-stamp`, `text`) crop from it themselves. |
+| `Fonts` | Named font stacks, each a fallback chain of faces, as the `fonts` source node loads them. Type-erased (the payload is `ezu-paint`'s font registry) so this crate gains no text dependency. `text` picks a stack per feature by name. |
 | `Brush` | hokusai brush handle plus overrides |
 | `Scalar` | constant Color / Number / Bool |
 | `Labels` | Label placement candidates, or the decisions a shared placement stage reached over them. Type-erased (the payloads are `ezu-paint`'s label-set / placement types) so this crate gains no text dependency. Placement is global: every label layer hands its candidates to one `label-placement` node, which decides them against one collision index and passes the decisions back to each layer's draw node. |

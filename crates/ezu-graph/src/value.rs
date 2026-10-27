@@ -13,6 +13,8 @@ pub enum PortValue {
     Sprite(Arc<RasterBuf>),
     /// A whole sprite sheet (see [`PortKind::SpriteSheet`]).
     SpriteSheet(Arc<SpriteSheet>),
+    /// Font stacks (see [`PortKind::Fonts`]).
+    Fonts(OpaqueValue),
     Brush(OpaqueValue),
     /// Label placement candidates or decisions (see [`PortKind::Labels`]).
     Labels(OpaqueValue),
@@ -27,6 +29,7 @@ impl PortValue {
             PortValue::Raster(_) => PortKind::Raster,
             PortValue::Sprite(_) => PortKind::Sprite,
             PortValue::SpriteSheet(_) => PortKind::SpriteSheet,
+            PortValue::Fonts(_) => PortKind::Fonts,
             PortValue::Brush(_) => PortKind::Brush,
             PortValue::Labels(_) => PortKind::Labels,
             PortValue::Scalar(_) => PortKind::Scalar,

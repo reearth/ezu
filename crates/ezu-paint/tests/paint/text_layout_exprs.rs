@@ -54,7 +54,8 @@ fn recipe_with(parts: &str, extra: &str) -> String {
       }},
       "nodes": {{
         "feats":  {{ "op": "features", "source": "src", "layer": "pts" }},
-        "labels": {{ "op": "text-labels", "features": "@feats",
+        "fonts":  {{ "op": "fonts", "font-stacks": {{ "body": ["body"] }} }},
+        "labels": {{ "op": "text-labels", "features": "@feats", "fonts": "@fonts",
                      "font": ["body"], "text": ["get", "name"], "size": 16,
                      "collide": false, "color": "#ffffff" {extra} }},
         "placed": {{ "op": "label-placement", "labels": ["@labels"] }},

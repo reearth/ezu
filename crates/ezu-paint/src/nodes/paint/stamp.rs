@@ -27,12 +27,13 @@ use ezu_core::{
     text::Anchor,
 };
 
+use crate::nodes::common::node_ref_schema;
 use crate::nodes::common::ANCHOR_NAMES as TEXT_ANCHORS;
 use crate::nodes::common::{
     canvas_into_raster, core_tile, downcast_features, empty_raster, make_canvas, read_xy,
     unwrap_raster_or_sprite, FramedImage, ACCEPTS_RASTER_OR_SPRITE,
 };
-use crate::nodes::source::sprite::{sheet_port, sheet_schema, IconCrops, SheetInput};
+use crate::nodes::source::sprite::{sheet_port, IconCrops, SheetInput};
 
 const STAMP_SALT: u32 = 0x5354_4d50; // 'STMP'
 /// Position jitter draws from its own salt, so moving a point around is
@@ -627,7 +628,7 @@ impl NodeFactory for StampFactory {
             "properties": {
                 "features": schema_frag::node_ref(),
                 "image": schema_frag::node_ref(),
-                "sheet": sheet_schema("A `sprite` node: the sheet `name-expr` names icons from."),
+                "sheet": node_ref_schema("A `sprite` node: the sheet `name-expr` names icons from."),
                 "sprite": { "type": "string",
                             "description": "Deprecated: load the sheet with a `sprite` node and wire it to `sheet`. An `@sprite-source` ref the node loads the sheet from itself; ignored when `sheet` is wired." },
                 "name-expr": {

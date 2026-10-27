@@ -58,6 +58,8 @@ mod fill_dabs_seam;
 mod flow_field;
 #[path = "paint/flow_smear.rs"]
 mod flow_smear;
+#[path = "paint/fonts_source.rs"]
+mod fonts_source;
 #[path = "paint/functions.rs"]
 mod functions;
 #[path = "paint/generator_kinds.rs"]

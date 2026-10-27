@@ -101,7 +101,8 @@ fn doc(params: &str, fields: &str) -> String {
       "nodes": {{
         "feats": {{ "op": "features", "source": "src", "layer": "pts" }},
         "icons": {{ "op": "sprite", "sprite": "@sheet" }},
-        "out":   {{ "op": "text", "features": "@feats",
+        "fonts": {{ "op": "fonts", "font-stacks": {{ "body": ["body"] }} }},
+        "out":   {{ "op": "text", "features": "@feats", "fonts": "@fonts",
                     "font": ["body"], "text": ["get", "name"], "size": 12,
                     "color": "#000000" {fields} }}
       }},
@@ -255,7 +256,8 @@ fn label_boxes_follow_a_param_driven_anchor() {
           }},
           "nodes": {{
             "feats":  {{ "op": "features", "source": "src", "layer": "pts" }},
-            "labels": {{ "op": "text-labels", "features": "@feats",
+            "fonts":  {{ "op": "fonts", "font-stacks": {{ "body": ["body"] }} }},
+            "labels": {{ "op": "text-labels", "features": "@feats", "fonts": "@fonts",
                          "font": ["body"], "text": ["get", "name"],
                          "size": 12, "anchor": {anchor} }},
             "placed": {{ "op": "label-placement", "labels": ["@labels"] }},

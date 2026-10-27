@@ -9,7 +9,7 @@ sidebar:
 
 Ops with no upstream input: features bound by the host, synthesized geometry, images, DEM and raster tiles.
 
-11 ops: `dem`, `features`, `graticule`, `icon`, `image`, `literal-geometry`, `point-grid`, `point-scatter`, `raster`, `sprite`, `tile-bounds`.
+12 ops: `dem`, `features`, `fonts`, `graticule`, `icon`, `image`, `literal-geometry`, `point-grid`, `point-scatter`, `raster`, `sprite`, `tile-bounds`.
 
 Ops with no demo image below produce no visible result on their own — they feed other nodes rather than paint.
 
@@ -43,6 +43,14 @@ Sample features from a host-bound feature layer. `source` names an `mvt`/`pmtile
 | `min-zoom-field` | string | no | Per-feature property name carrying its data-side `min_zoom`. Features with `<field> > z` are dropped. |
 | `source` | string | no | Name of an `mvt`, `pmtiles`, or `geojson` entry in the document's `sources`. Omitting it resolves to the only such source and warns at build time. |
 | `stitch` | `merge` \| `pieces` \| `$param` | no | Join the layer to its 8 neighbouring tiles, for effects that reach further than the tile's thin buffer: wide strokes along outlines, large buffers, closings. Each tile contributes only the area it owns, so nothing is drawn twice. `merge` unions polygons with identical properties so no edge remains where tiles meet; `pieces` keeps every piece as its tile cut it (cheaper, and identical when the layer is only filled). Costs fetching and decoding up to 8 more tiles for this layer only; a neighbour the host cannot provide falls back to this tile's own buffer data. Omit to read this tile alone. Read when the graph is built: a `$param` gives its default. |
+
+### `fonts`
+
+The style's fonts, as named font stacks for `text` and `text-labels` (wired to their `fonts`). Each stack is a fallback chain of `font` and `glyphs` sources: the first covering a character shapes it, and outline fonts and SDF glyph stacks mix freely. Glyph ranges are fetched as labels need them. A label node names the stack its labels use in `font` (or per feature in `font-expr`).
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `font-stacks` | object | yes | Stack name → ordered `font` / `glyphs` source names. A name of several fonts is written as MapLibre's `text-font` joins them, with `,` (spaces around it are ignored), so a `font-expr` result or a `format` section's `text-font` finds it. Declaration order fixes each stack's stable id, which the layout cache and the collision tie-break use. |
 
 ### `graticule`
 

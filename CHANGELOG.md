@@ -23,8 +23,9 @@ mean is spelled out in
   `#[non_exhaustive]`. Build one with `FilteredFeatures::new(extent,
   groups)`, adding `with_overzoom` and `with_neighbours` as needed. Code
   that reads `groups` sees only the tile's own features, as before.
-- `PortKind` and `PortValue` have a `SpriteSheet` variant, for the new
-  `sprite` node's output. Code matching on them exhaustively adds an arm.
+- `PortKind` and `PortValue` have `SpriteSheet` and `Fonts` variants, for
+  the new `sprite` and `fonts` nodes' outputs. Code matching on them
+  exhaustively adds arms.
 
 ### Added
 
@@ -32,6 +33,13 @@ mean is spelled out in
   ops that name an icon per feature take it on an input: `stamp` and
   `line-stamp` on `sheet` (with `name-expr`), `text` and `text-labels` on
   `icon-sheet` (with `icon-name` / `icon-name-expr`).
+- A `fonts` source node, which loads the style's `font` and `glyphs`
+  sources into named font stacks (`font-stacks`: stack name → fallback
+  chain, outline fonts and glyph stacks mixed). `text` and `text-labels`
+  take them on `fonts`, and `font` names the stack the labels use, as an
+  array of font names (MapLibre's `text-font`) or one string; `font-expr`
+  and `format` sections pick among the same stacks. Glyph ranges are still
+  fetched as labels need them.
 
 ### Changed
 
@@ -75,6 +83,13 @@ mean is spelled out in
   warning; with the sheet input wired as well, they are ignored. Load the
   sheet with a `sprite` node, `{ "op": "sprite", "sprite": "@icons" }`, and
   wire it to `sheet` (or `icon-sheet`) instead.
+- `font` naming `font` / `glyphs` sources, and `font-stacks`, on `text` and
+  `text-labels`. Without a `fonts` input wired they still load the fonts and
+  draw as before, with a build warning that spells out the `fonts` node to
+  wire instead; with one wired, `font` names a stack and `font-stacks` is
+  ignored. Moving a style over draws the same: give a `fonts` node the old
+  `font-stacks`, plus `font`'s sources under the name `font` already gives
+  them (`"sans": ["sans"]` for `"font": ["sans"]`), and wire it to `fonts`.
 
 ### Fixed
 

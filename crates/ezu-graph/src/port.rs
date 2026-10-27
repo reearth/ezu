@@ -28,6 +28,11 @@ pub enum PortKind {
     /// feature (`stamp`, `line-stamp`, `text`) crop from it themselves;
     /// `icon` crops one named icon into a [`PortKind::Sprite`].
     SpriteSheet,
+    /// The font stacks a `fonts` source node loaded: stack name → its
+    /// fallback chain of faces. Type-erased (by convention the payload is
+    /// `ezu-paint`'s font registry) so this crate gains no text
+    /// dependency. A label node picks a stack per feature by name.
+    Fonts,
     /// hokusai brush handle plus overrides.
     Brush,
     /// Constant value (color, number, bool). Cheap to fan out.
@@ -58,6 +63,7 @@ impl fmt::Display for PortKind {
             PortKind::Raster => "raster",
             PortKind::Sprite => "sprite",
             PortKind::SpriteSheet => "sprite-sheet",
+            PortKind::Fonts => "fonts",
             PortKind::Brush => "brush",
             PortKind::Labels => "labels",
             PortKind::Scalar => "scalar",

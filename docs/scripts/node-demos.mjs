@@ -535,6 +535,7 @@ export const NO_IMAGE = new Set([
   'image',
   'icon',
   'sprite',
+  'fonts',
   'literal-geometry',
   'resample',
 ]);

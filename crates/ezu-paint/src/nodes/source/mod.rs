@@ -4,6 +4,7 @@
 
 mod dem;
 mod features;
+pub(crate) mod fonts;
 mod graticule;
 mod icon;
 mod image;

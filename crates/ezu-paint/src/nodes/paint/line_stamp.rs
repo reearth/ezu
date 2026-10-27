@@ -33,11 +33,12 @@ use super::stamp::{
     eval_icon_name, eval_number, eval_px, image_ports, parse_expr_field, read_icon_name_expr,
 };
 use super::stroke::{offset_lines, OFFSET_MITER_LIMIT};
+use crate::nodes::common::node_ref_schema;
 use crate::nodes::common::{
     canvas_into_raster, downcast_features, empty_raster, make_canvas, unwrap_raster_or_sprite,
     FramedImage,
 };
-use crate::nodes::source::sprite::{sheet_schema, IconCrops, SheetInput};
+use crate::nodes::source::sprite::{IconCrops, SheetInput};
 
 struct LineStampNode {
     /// Stroke width in px. When > 0 the image is scaled so its height
@@ -414,7 +415,7 @@ impl NodeFactory for LineStampFactory {
             "properties": {
                 "features": schema_frag::node_ref(),
                 "image": schema_frag::node_ref(),
-                "sheet": sheet_schema("A `sprite` node: the sheet `name-expr` names patterns from."),
+                "sheet": node_ref_schema("A `sprite` node: the sheet `name-expr` names patterns from."),
                 "sprite": { "type": "string",
                             "description": "Deprecated: load the sheet with a `sprite` node and wire it to `sheet`. An `@sprite-source` ref the node loads the sheet from itself; ignored when `sheet` is wired." },
                 "name-expr": {

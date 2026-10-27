@@ -143,7 +143,7 @@ impl Collector {
                 });
                 None
             }
-            PortValue::Brush(_) | PortValue::Labels(_) => None,
+            PortValue::Brush(_) | PortValue::Labels(_) | PortValue::Fonts(_) => None,
         };
         Preview {
             summary: describe_value(value),
@@ -299,6 +299,7 @@ fn kind_name(kind: PortKind) -> &'static str {
         PortKind::Raster => "raster",
         PortKind::Sprite => "sprite",
         PortKind::SpriteSheet => "sprite-sheet",
+        PortKind::Fonts => "fonts",
         PortKind::Brush => "brush",
         PortKind::Labels => "labels",
         PortKind::Scalar => "scalar",

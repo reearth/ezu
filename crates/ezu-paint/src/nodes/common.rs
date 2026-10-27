@@ -16,6 +16,13 @@ use serde_json::Value;
 use crate::render::{collect_groups, SharedLayer};
 use crate::Canvas;
 
+/// The schema of a field wiring another node to an input port, described.
+pub(crate) fn node_ref_schema(description: &str) -> Value {
+    let mut v = ezu_graph::schema_frag::node_ref();
+    v["description"] = Value::from(description);
+    v
+}
+
 // ---------------------------------------------------------------------------
 // Concrete payload types for type-erased ports.
 

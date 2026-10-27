@@ -188,13 +188,6 @@ impl SheetInput {
     }
 }
 
-/// The schema of a field wiring a `sprite` node to a sheet input.
-pub(crate) fn sheet_schema(description: &str) -> Value {
-    let mut v = schema_frag::node_ref();
-    v["description"] = Value::from(description);
-    v
-}
-
 /// The input port a sheet arrives on.
 pub(crate) fn sheet_port(name: &'static str) -> PortSpec {
     PortSpec {

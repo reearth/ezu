@@ -26,8 +26,8 @@ Three things live here:
 
 An ezu style is a **typed node DAG**, not an ordered layer list. Every
 operation below is a node, and ports are statically type-checked across
-eight kinds — `Features`, `Raster`, `Sprite`, `SpriteSheet`, `Brush`,
-`Scalar`, `Labels`, `ScalarField` (see [`ezu-graph`](../ezu-graph#port-types) for what each
+nine kinds — `Features`, `Raster`, `Sprite`, `SpriteSheet`, `Fonts`,
+`Brush`, `Scalar`, `Labels`, `ScalarField` (see [`ezu-graph`](../ezu-graph#port-types) for what each
 carries). Ports list the kinds they accept, so polymorphic ops (e.g.
 `blur` over `Raster`/`Sprite`) pass the input kind straight through, and
 intermediate buffers are cached and reusable across tiles.
