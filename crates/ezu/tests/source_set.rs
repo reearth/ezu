@@ -11,6 +11,7 @@ use ezu::renderer::{
 const BASEMAP_Z13: &[u8] = include_bytes!("../../../go/testdata/basemap-13-7277-3227.mvt");
 const BASEMAP_Z14: &[u8] = include_bytes!("../../../go/testdata/basemap-14-14554-6454.mvt");
 const TERRAIN_Z10: &[u8] = include_bytes!("../../../go/testdata/terrain-10-909-402.webp");
+const GLYPHS: &[u8] = include_bytes!("../../ezu-core/tests/glyphs/0-255.pbf");
 const HILLSHADE: &str = include_str!("../examples/styles/hillshade.json");
 
 /// Land stitched across tile borders and blurred, so what is bound at the
@@ -610,4 +611,138 @@ fn the_glyphs_a_style_needs_include_its_inline_geojson_labels() {
     assert!(codepoints["g"].contains(&0x91CD), "{codepoints:?}");
     let bound = r.needed_codepoints().expect("lists");
     assert!(bound["g"].contains(&0x91CD), "{bound:?}");
+}
+
+/// A label on a geojson source, with `label-boxes` beside it so the
+/// placement can be read back. `anchor` is the `polygon-anchor`.
+fn seam_labels(anchor: &str) -> String {
+    format!(
+        r##"{{
+        "name": "seam", "tile-size": 64,
+        "sources": {{
+            "g": {{ "type": "glyphs", "url": "https://example.invalid/{{fontstack}}/{{range}}.pbf", "fontstack": "Sans" }},
+            "shapes": {{ "type": "geojson", "url": "https://example.invalid/shapes.geojson" }}
+        }},
+        "nodes": {{
+            "f": {{ "op": "features", "source": "shapes", "layer": "shapes" }},
+            "l": {{ "op": "text-labels", "features": "@f", "source": "shapes", "layer": "shapes",
+                    "font": ["g"], "text": "Ab", "size": 16, "color": "#000000",
+                    "polygon-anchor": "{anchor}" }},
+            "p": {{ "op": "label-placement", "labels": ["@l"] }},
+            "draw": {{ "op": "text-draw", "labels": "@l", "placement": "@p" }},
+            "b": {{ "op": "label-boxes", "placement": "@p", "parts": ["text"] }},
+            "hidden": {{ "op": "fill-solid", "features": "@b", "fill": "#00000000" }},
+            "out": {{ "op": "stack", "layers": ["@draw", "@hidden"] }}
+        }},
+        "output": "@out"
+    }}"##
+    )
+}
+
+/// A document of one `geometry` feature, its positions `pts` given in the
+/// 4096 units across of z10 tile 909/403, so x = 0 is its western seam.
+fn seam_doc(geometry: &str, pts: &[(i64, i64)]) -> String {
+    use ezu::core::coord::{world_x_to_lon, world_y_to_lat};
+    let lonlat = |&(x, y): &(i64, i64)| {
+        let wx = (909.0 + x as f64 / 4096.0) / 1024.0;
+        let wy = (403.0 + y as f64 / 4096.0) / 1024.0;
+        format!("[{}, {}]", world_x_to_lon(wx), world_y_to_lat(wy))
+    };
+    let coords: Vec<String> = pts.iter().map(lonlat).collect();
+    let coords = match geometry {
+        "Point" => coords[0].clone(),
+        _ => format!("[[{}]]", coords.join(", ")),
+    };
+    format!(
+        r#"{{ "type": "FeatureCollection", "features": [
+            {{ "type": "Feature", "properties": {{}},
+               "geometry": {{ "type": "{geometry}", "coordinates": {coords} }} }} ] }}"#
+    )
+}
+
+/// The two tiles either side of the seam at x = 0 of z10 tile 909/403,
+/// rendered with the document bound at every offset (`nine`) or at the
+/// centre only, as the pixels and the `label-id`s `label-boxes` reports.
+fn render_across_the_seam(style: &str, doc: &str, nine: bool) -> Vec<(Vec<u8>, Vec<f64>)> {
+    let mut r = Renderer::new(style).expect("builds");
+    r.bind_source("g", GLYPHS.to_vec(), &BindOptions::default())
+        .expect("binds the glyphs");
+    let data = r.load_source("shapes", doc.as_bytes()).expect("loads");
+    [908u32, 909]
+        .iter()
+        .map(|&x| {
+            let mut set = SourceSet::new();
+            let offsets: Vec<(i32, i32)> = if nine {
+                neighbourhood().collect()
+            } else {
+                vec![(0, 0)]
+            };
+            for c in offsets {
+                set.bind(&data, &at(c, None)).expect("binds");
+            }
+            let (image, features) = r
+                .render_tile_with_features(10, x, 403, &set, rgba(), &["b"])
+                .expect("renders");
+            let doc: serde_json::Value =
+                serde_json::from_str(&features[0].to_geojson()).expect("valid JSON");
+            let ids = doc["features"]
+                .as_array()
+                .expect("features")
+                .iter()
+                .map(|f| f["properties"]["label-id"].as_f64().expect("a label-id"))
+                .collect();
+            (image, ids)
+        })
+        .collect()
+}
+
+#[test]
+fn a_polygon_label_across_a_seam_draws_on_both_sides_from_one_bound_document() {
+    // A rectangle whose middle sits two pixels west of the seam, so its
+    // label is anchored in the western tile and reaches into the eastern
+    // one. A geojson document covers the world, so binding it at the
+    // centre alone must draw what binding it at every offset draws, and
+    // both must draw what a point at that middle draws.
+    let rect = [
+        (-1128, 1548),
+        (872, 1548),
+        (872, 2548),
+        (-1128, 2548),
+        (-1128, 1548),
+    ];
+    let polygon = seam_doc("Polygon", &rect);
+    let point = seam_doc("Point", &[(-128, 2048)]);
+    for anchor in ["pole", "centroid"] {
+        let style = seam_labels(anchor);
+        let want = render_across_the_seam(&style, &point, false);
+        let east = &want[1].0;
+        assert!(
+            (0..64).any(|y| (0..4).any(|x| east[(y * 64 + x) * 4 + 3] > 0)),
+            "the point's label reaches into the eastern tile"
+        );
+        for nine in [false, true] {
+            let got = render_across_the_seam(&style, &polygon, nine);
+            for (side, (g, w)) in ["western", "eastern"].iter().zip(got.iter().zip(&want)) {
+                assert!(
+                    g.0 == w.0,
+                    "{anchor}, bound {}: the {side} tile draws other pixels than a point does",
+                    if nine {
+                        "at every offset"
+                    } else {
+                        "at the centre"
+                    },
+                );
+            }
+            // Both tiles report the label, by the same id.
+            let ids: Vec<f64> = got.iter().flat_map(|t| t.1.iter().copied()).collect();
+            assert!(
+                got.iter().all(|t| !t.1.is_empty()),
+                "{anchor}: a tile reports no box"
+            );
+            assert!(
+                ids.iter().all(|&id| id == ids[0]),
+                "{anchor}: the tiles disagree on the label-id: {ids:?}"
+            );
+        }
+    }
 }

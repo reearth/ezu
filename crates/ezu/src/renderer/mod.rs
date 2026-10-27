@@ -686,7 +686,9 @@ impl Renderer {
     /// means the whole 3×3 — those bind as one stitched canvas, and a
     /// neighbour left unbound is not a missing collision candidate but a
     /// pad filled by clamping the tile's own edge, which shows up as a
-    /// seam in whatever samples it.
+    /// seam in whatever samples it. A `geojson` document covers every
+    /// tile, so the one bound at the centre also serves each offset listed
+    /// for it; binding it there as well changes nothing.
     ///
     /// Fails with [`ErrorKind::UnknownSource`] if `name` is not declared.
     pub fn requested_neighbor_offsets(&self, name: &str) -> Result<Vec<(i32, i32)>, Error> {
@@ -1426,6 +1428,30 @@ impl Renderer {
                             &ezu_graph::neighbor_binding(&format!("{name}.{name}"), dx, dy),
                             placed.data.content,
                         );
+                    }
+                    // A GeoJSON document covers the whole world, so the one
+                    // bound at the centre is every neighbour's document too.
+                    // Project it into each neighbour the graph reads and the
+                    // host left unbound. Without them a label anchored in a
+                    // neighbour has no candidate here, and the part of it
+                    // that reaches across the seam is not drawn.
+                    if let Some(centre) = slots.get(&(0, 0)) {
+                        let Payload::GeoJson(data) = &centre.data.payload else {
+                            return Err(mismatch());
+                        };
+                        for (dx, dy) in
+                            ezu_paint::host::requested_neighbor_offsets(&requested, name)
+                        {
+                            if slots.contains_key(&(dx, dy)) {
+                                continue;
+                            }
+                            ezu_paint::host::bind_geojson(&mut tile_loader, name, data, dx, dy)
+                                .map_err(|e| err(GeoJsonDecode, e))?;
+                            tile_loader.mix_content_hash(
+                                &ezu_graph::neighbor_binding(&format!("{name}.{name}"), dx, dy),
+                                centre.data.content,
+                            );
+                        }
                     }
                 }
                 _ => return Err(mismatch()),

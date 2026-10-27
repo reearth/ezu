@@ -551,7 +551,8 @@ impl Renderer {
     ///   offset. The centre tile is `coord: [0, 0]` (default). Decoding
     ///   and 3×3 stitching happen at render time once the tile id is known.
     /// - `geojson` (remote) → store raw bytes per `(dx, dy)` offset;
-    ///   projected per tile (and neighbour) at render time.
+    ///   projected per tile (and neighbour) at render time. The document
+    ///   bound at the centre also serves any neighbour left unbound.
     ///
     /// `opts` is a JS object: `{ coord?: [dx, dy], sourceZoom?: number }`.
     ///
@@ -818,7 +819,9 @@ impl Renderer {
     /// pad filled by clamping the tile's own edge, which shows up as a
     /// seam in whatever samples it. `neighbor-fetch: false` reports
     /// nothing whatever the graph asks for; so does a source no node in
-    /// the graph reads.
+    /// the graph reads. A `geojson` document covers every tile, so the one
+    /// bound at the centre also serves each offset listed for it; binding
+    /// it there as well changes nothing.
     ///
     /// Throws `UnknownSource` if `name` is not declared in the style.
     #[wasm_bindgen(js_name = requestedNeighborOffsets)]

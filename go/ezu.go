@@ -1336,7 +1336,9 @@ func (r *Renderer) SourceTile(ctx context.Context, name string, tile Tile) (Tile
 // defaults to on and means the whole 3×3 — those bind as one stitched
 // canvas, and a neighbour left unbound is not a missing collision candidate
 // but a pad filled by clamping the tile's own edge, which shows up as a
-// seam in whatever samples it.
+// seam in whatever samples it. A geojson document covers every tile, so the
+// one bound at the centre also serves each offset listed for it; binding it
+// there as well changes nothing.
 func (r *Renderer) RequestedNeighborOffsets(ctx context.Context, source string) ([]Offset, error) {
 	var pairs [][2]int32
 	_, payload, err := r.withSlots(ctx, func(slots uint32) (int64, error) {

@@ -9,6 +9,18 @@ ezu is pre-1.0, so a minor bump may carry a breaking change. What the numbers
 mean is spelled out in
 [versioning](https://reearth.github.io/ezu/reference/changelog/).
 
+## Unreleased
+
+### Fixed
+
+- A label on a polygon from a remote `geojson` source was cut at a tile seam
+  when its anchor sat in the neighbouring tile and the document was bound
+  only at the centre, as a frame's `sources` callback usually binds it: the
+  tile across the seam did not draw its part. Labels on points were
+  unaffected. The document bound at the centre now also serves the
+  neighbour tiles that cross-tile label placement reads, as inline `data`
+  always has; binding it at every offset still works and draws the same.
+
 ## 0.13.1 — 2026-10-22
 
 ### Fixed

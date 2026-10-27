@@ -6,8 +6,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"image"
+	"image/png"
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -636,5 +639,137 @@ func TestBlitTileCropsAtEveryEdge(t *testing.T) {
 	blitTile(dst, make([]byte, 4*4*4), 4, -4, 0)
 	if dst.Pix[0] != tile[(4+1)*4] {
 		t.Error("a tile outside the image wrote into it")
+	}
+}
+
+// A label on a polygon whose anchor sits just short of a seam between two
+// of a frame's tiles draws on both sides of it, as a label on a point at
+// the same spot does, though each tile's set binds the GeoJSON document at
+// its centre only.
+func TestRenderFrameDrawsAPolygonLabelAcrossASeam(t *testing.T) {
+	ctx := context.Background()
+	rt, err := NewRuntime(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { rt.Close(ctx) })
+
+	// The icon: an opaque black 31 px square.
+	icon := image.NewNRGBA(image.Rect(0, 0, 31, 31))
+	for i := 3; i < len(icon.Pix); i += 4 {
+		icon.Pix[i] = 255
+	}
+	var sheet bytes.Buffer
+	if err := png.Encode(&sheet, icon); err != nil {
+		t.Fatal(err)
+	}
+	const index = `{"mark": {"x": 0, "y": 0, "width": 31, "height": 31, "pixelRatio": 1}}`
+
+	style := func(anchor string) []byte {
+		return []byte(`{
+			"name": "seam", "tile-size": 512, "pad": 16,
+			"sources": {
+				"shapes": { "type": "geojson", "url": "https://example.invalid/shapes.geojson" },
+				"sprite": { "type": "sprite", "image": "https://example.invalid/sprite.png",
+				            "index": "https://example.invalid/sprite.json" }
+			},
+			"nodes": {
+				"bg": { "op": "solid", "color": "#ffffff" },
+				"f": { "op": "features", "source": "shapes", "layer": "shapes" },
+				"l": { "op": "text-labels", "features": "@f", "source": "shapes", "layer": "shapes",
+				       "icon-sprite": "@sprite", "icon-name": "mark",
+				       "overlap": "always", "icon-allow-overlap": true,
+				       "polygon-anchor": "` + anchor + `" },
+				"p": { "op": "label-placement", "labels": ["@l"] },
+				"draw": { "op": "text-draw", "labels": "@l", "placement": "@p" },
+				"out": { "op": "stack", "layers": ["@bg", "@draw"] }
+			},
+			"output": "@out"
+		}`)
+	}
+
+	render := func(anchor string, geometry func(f Frame, seam float64) string) (*image.NRGBA, int) {
+		renderer, err := rt.NewRenderer(ctx, style(anchor))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer renderer.Close(ctx)
+		if err := renderer.BindSource(ctx, "sprite", sheet.Bytes(), WithSpriteIndex(index)); err != nil {
+			t.Fatal(err)
+		}
+		f, err := renderer.ComputeFrame(ctx, FrameRequest{
+			CenterLon: 131.66, CenterLat: 32.58, Scale: 1000, DPI: 200, Width: 1200, Height: 600,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		dx, _ := f.TileOffset(Tile{Z: f.Zoom, X: f.TilesX.Start + 1, Y: f.TilesY.Start})
+		seam := float64(dx)
+		doc := `{"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {},
+			"geometry": ` + geometry(f, seam) + `}]}`
+		data, err := renderer.LoadSource(ctx, "shapes", []byte(doc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		img, err := renderer.RenderFrame(ctx, f, func(ctx context.Context, tile Tile, b *FrameBinder) (SourceSet, error) {
+			var set SourceSet
+			return set, set.Bind(data)
+		}, Render{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return img, int(seam)
+	}
+
+	// The anchor three pixels west of the seam, halfway down the frame.
+	lonlat := func(f Frame, px, py float64) string {
+		world := float64(f.TileSize) * math.Pow(2, float64(f.Zoom))
+		x := (float64(f.Left) + px) / world
+		y := (float64(f.Top) + py) / world
+		lat := math.Atan(math.Sinh(math.Pi*(1-2*y))) * 180 / math.Pi
+		return fmt.Sprintf("[%v, %v]", x*360-180, lat)
+	}
+	point := func(f Frame, seam float64) string {
+		return `{"type": "Point", "coordinates": ` + lonlat(f, seam-3, 300) + `}`
+	}
+	rect := func(f Frame, seam float64) string {
+		cx, cy := seam-3, 300.0
+		ring := []string{
+			lonlat(f, cx-300, cy-150), lonlat(f, cx+300, cy-150), lonlat(f, cx+300, cy+150),
+			lonlat(f, cx-300, cy+150), lonlat(f, cx-300, cy-150),
+		}
+		return `{"type": "Polygon", "coordinates": [[` + strings.Join(ring, ", ") + `]]}`
+	}
+
+	// Dark pixels within 30 px of the seam on each side.
+	sides := func(img *image.NRGBA, seam int) (west, east int) {
+		for x := seam - 30; x < seam+30; x++ {
+			for y := 270; y < 330; y++ {
+				c := img.NRGBAAt(x, y)
+				if int(c.R)+int(c.G)+int(c.B) < 500 {
+					if x < seam {
+						west++
+					} else {
+						east++
+					}
+				}
+			}
+		}
+		return west, east
+	}
+
+	want, seam := render("pole", point)
+	if west, east := sides(want, seam); west == 0 || east == 0 {
+		t.Fatalf("the point's label draws %d px west of the seam and %d east; it should straddle it", west, east)
+	}
+	for _, anchor := range []string{"pole", "centroid"} {
+		got, _ := render(anchor, rect)
+		west, east := sides(got, seam)
+		if east == 0 {
+			t.Errorf("%s: the label is cut at the seam (%d px west of it, none east)", anchor, west)
+		}
+		if !bytes.Equal(got.Pix, want.Pix) {
+			t.Errorf("%s: the polygon's label draws other pixels than the point's", anchor)
+		}
 	}
 }
