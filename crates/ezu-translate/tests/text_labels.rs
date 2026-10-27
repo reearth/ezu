@@ -15,6 +15,35 @@ fn opts_with_fonts(entries: &[(&str, &str)]) -> ConvertOptions {
     }
 }
 
+/// The stacks of the `fonts` node `label` is wired to.
+fn font_stacks<'a>(
+    recipe: &'a serde_json::Value,
+    label: &serde_json::Value,
+) -> &'a serde_json::Map<String, serde_json::Value> {
+    let id = label["fonts"]
+        .as_str()
+        .and_then(|s| s.strip_prefix('@'))
+        .unwrap_or_else(|| panic!("no fonts wired: {label}"));
+    let node = &recipe["nodes"][id];
+    assert_eq!(node["op"], "fonts", "{node}");
+    node["font-stacks"].as_object().expect("font-stacks")
+}
+
+/// The sources of the stack `label`'s `font` names.
+fn font_sources<'a>(
+    recipe: &'a serde_json::Value,
+    label: &serde_json::Value,
+) -> &'a serde_json::Value {
+    assert!(label.get("font-stacks").is_none(), "{label}");
+    let name: Vec<&str> = label["font"]
+        .as_array()
+        .expect("font names")
+        .iter()
+        .map(|v| v.as_str().expect("a font name"))
+        .collect();
+    &font_stacks(recipe, label)[&name.join(",")]
+}
+
 #[test]
 fn text_only_symbol_layer_converts_to_a_text_node() {
     const STYLE: &str = r##"{
@@ -59,7 +88,11 @@ fn text_only_symbol_layer_converts_to_a_text_node() {
         .values()
         .find(|n| n["op"] == "text-labels")
         .expect("a text node");
-    assert_eq!(text["font"], serde_json::json!(["noto-sans-regular"]));
+    assert_eq!(text["font"], serde_json::json!(["Noto Sans Regular"]));
+    assert_eq!(
+        font_sources(&recipe, text),
+        &serde_json::json!(["noto-sans-regular"])
+    );
     assert_eq!(text["text"], serde_json::json!(["get", "name"]));
     assert_eq!(text["size"], 14.0);
     assert_eq!(text["anchor"], "top");
@@ -278,7 +311,10 @@ fn unmapped_font_with_glyphs_endpoint_emits_a_glyphs_source() {
     // Both text nodes reference it; no skipped-text warning.
     let nodes = recipe["nodes"].as_object().unwrap();
     for layer in ["places__labels", "pois__labels"] {
-        assert_eq!(nodes[layer]["font"], serde_json::json!([id]));
+        assert_eq!(
+            font_sources(&recipe, &nodes[layer]),
+            &serde_json::json!([id])
+        );
     }
     assert!(
         !report.warnings.iter().any(|w| w.contains("text skipped")),
@@ -314,8 +350,8 @@ fn explicit_font_mapping_wins_over_the_glyphs_endpoint() {
         "a mapped stack must not fall back to the glyphs endpoint"
     );
     assert_eq!(
-        recipe["nodes"]["places__labels"]["font"],
-        serde_json::json!(["noto-sans-regular"])
+        font_sources(&recipe, &recipe["nodes"]["places__labels"]),
+        &serde_json::json!(["noto-sans-regular"])
     );
 }
 
@@ -347,7 +383,9 @@ fn icon_and_text_layer_share_one_label_node() {
     // The icon rides the label node, so the symbol's two halves are placed
     // together against the shared collision index.
     assert_eq!(labels["icon-name"], "airport-15");
-    assert_eq!(labels["icon-sprite"], "@default");
+    let sheet = labels["icon-sheet"].as_str().expect("a wired sheet");
+    assert_eq!(nodes[&sheet[1..]]["op"], "sprite");
+    assert_eq!(nodes[&sheet[1..]]["sprite"], "@default");
     assert!(
         !nodes.values().any(|n| n["op"] == "stamp"),
         "a point-placed icon no longer lowers to a stamp: {nodes:?}"
@@ -984,8 +1022,8 @@ fn legacy_stops_text_field_migrates_to_a_step_expression() {
 fn data_driven_text_font_emits_font_expr_and_registry() {
     // A `case` over two `["literal", [...]]` stacks (MapLibre data-driven
     // `text-font`). Both stacks map via `--font`, so the node emits `font-expr`
-    // (raw), a `font-stacks` registry keyed by the canonical `,`-joined names,
-    // and `font` = the first enumerated stack.
+    // (raw) and `font` = the first enumerated stack, and the `fonts` node it
+    // is wired to declares both, keyed by the canonical `,`-joined names.
     const STYLE: &str = r##"{
       "version": 8,
       "name": "ddf",
@@ -1020,7 +1058,11 @@ fn data_driven_text_font_emits_font_expr_and_registry() {
     // branch appears first in the `case`).
     assert_eq!(
         text["font"],
-        serde_json::json!(["noto-sans-devanagari-regular"])
+        serde_json::json!(["Noto Sans Devanagari Regular"])
+    );
+    assert_eq!(
+        font_sources(&recipe, text),
+        &serde_json::json!(["noto-sans-devanagari-regular"])
     );
     // `font-expr` is the raw MapLibre expression, passed through verbatim.
     assert_eq!(
@@ -1032,8 +1074,8 @@ fn data_driven_text_font_emits_font_expr_and_registry() {
             ["literal", ["Noto Sans Regular"]]
         ])
     );
-    // Registry keyed by canonical `,`-joined stack names.
-    let stacks = text["font-stacks"].as_object().expect("font-stacks object");
+    // The `fonts` node's stacks, keyed by canonical `,`-joined names.
+    let stacks = font_stacks(&recipe, text);
     assert_eq!(
         stacks["Noto Sans Devanagari Regular"],
         serde_json::json!(["noto-sans-devanagari-regular"])
@@ -1088,7 +1130,7 @@ fn data_driven_text_font_without_literals_falls_back_to_default() {
         "no font-expr for unenumerable text-font"
     );
     assert!(text.get("font-stacks").is_none());
-    assert!(text["font"].is_array());
+    assert!(font_sources(&recipe, text).is_array());
     assert!(
         report
             .warnings
@@ -1151,7 +1193,7 @@ fn all_string_array_expression_text_font_is_treated_as_dynamic() {
 fn format_text_field_passes_through_and_registers_section_fonts() {
     // A `format` label with a per-section `text-font` (and a `vertical-align`
     // to warn about). The expression passes through verbatim on `text`, and
-    // the section's stack is registered in `font-stacks`.
+    // the section's stack is declared on the `fonts` node.
     const STYLE: &str = r##"{
       "version": 8,
       "name": "fmt",
@@ -1187,7 +1229,7 @@ fn format_text_field_passes_through_and_registers_section_fonts() {
     assert_eq!(text["text"][0], "format");
     // The section's `text-font` is registered under its canonical key.
     assert_eq!(
-        text["font-stacks"]["Noto Sans Devanagari Regular"],
+        font_stacks(&recipe, text)["Noto Sans Devanagari Regular"],
         serde_json::json!(["noto-sans-devanagari-regular"])
     );
     // `vertical-align` is rendered natively now, so it no longer warns, and

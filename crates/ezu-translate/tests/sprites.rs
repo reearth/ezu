@@ -5,6 +5,18 @@
 
 use ezu_translate::maplibre::{convert, ConvertOptions};
 
+/// The sprite source a sheet input reads: `wire` names a `sprite` node in
+/// `recipe`, and that node names the source.
+fn sheet_of<'a>(recipe: &'a serde_json::Value, wire: &serde_json::Value) -> &'a serde_json::Value {
+    let id = wire
+        .as_str()
+        .and_then(|s| s.strip_prefix('@'))
+        .unwrap_or_else(|| panic!("not a node reference: {wire}"));
+    let node = &recipe["nodes"][id];
+    assert_eq!(node["op"], "sprite", "{node}");
+    &node["sprite"]
+}
+
 const STYLE: &str = r##"{
   "version": 8,
   "name": "sprites",
@@ -49,9 +61,13 @@ fn sprite_source_icons_and_pattern_convert() {
     let labels = by_op("text-labels");
     assert!(
         labels.iter().any(|n| n["icon-name"] == "airport-15"
-            && n["icon-sprite"] == "@default"
-            && n["icon-size"] == 1.5),
+            && n["icon-size"] == 1.5
+            && sheet_of(&recipe, &n["icon-sheet"]) == "@default"),
         "expected an icon-carrying label node: {labels:?}"
+    );
+    assert!(
+        labels.iter().all(|n| n.get("icon-sprite").is_none()),
+        "{labels:?}"
     );
     assert!(by_op("stamp").is_empty(), "no bare stamp for a point icon");
 
@@ -85,6 +101,44 @@ fn sprite_source_icons_and_pattern_convert() {
     // Valid ezu Document.
     let text = serde_json::to_string(&recipe).unwrap();
     ezu_style::Document::from_json(&text).expect("recipe parses as ezu Document");
+}
+
+/// Data-driven icons and patterns wire their sheet from one `sprite` node
+/// per sprite, and the label's fonts from one `fonts` node: the recipe uses
+/// none of the deprecated fields, so it builds without a warning.
+#[test]
+fn icons_and_fonts_come_from_source_nodes() {
+    let style = serde_json::json!({
+        "version": 8,
+        "name": "wired",
+        "sprite": "https://example.com/sprites/basemap",
+        "glyphs": "https://example.com/fonts/{fontstack}/{range}.pbf",
+        "sources": { "s": { "type": "vector", "url": "https://example.com/tiles.json" } },
+        "layers": [
+            { "id": "pois", "type": "symbol", "source": "s", "source-layer": "poi",
+              "layout": { "icon-image": ["get", "icon"], "text-field": ["get", "name"],
+                          "text-font": ["Noto Sans Regular"] } },
+            { "id": "shields", "type": "symbol", "source": "s", "source-layer": "roads",
+              "layout": { "symbol-placement": "line", "icon-image": ["get", "shield"] } },
+            { "id": "rail", "type": "line", "source": "s", "source-layer": "roads",
+              "paint": { "line-pattern": ["get", "pattern"], "line-width": 4 } }
+        ]
+    });
+    let (recipe, _) = convert(&style, &ConvertOptions::default()).unwrap();
+    let nodes = recipe["nodes"].as_object().unwrap();
+    let count = |op: &str| nodes.values().filter(|n| n["op"] == op).count();
+    assert_eq!(count("sprite"), 1, "{nodes:?}");
+    assert_eq!(count("fonts"), 1, "{nodes:?}");
+
+    let doc = ezu_style::Document::from_json(&serde_json::to_string(&recipe).unwrap())
+        .expect("recipe parses as ezu Document");
+    let graph =
+        ezu_graph::build_graph(&doc, &ezu_paint::nodes::default_registry()).expect("recipe builds");
+    assert!(
+        !graph.warnings().iter().any(|w| w.contains("deprecated")),
+        "{:?}",
+        graph.warnings()
+    );
 }
 
 #[test]
@@ -162,7 +216,8 @@ fn data_driven_icon_image_becomes_icon_name_expr() {
         labels["icon-name-expr"],
         serde_json::json!(["concat", ["get", "class"], "-15"])
     );
-    assert_eq!(labels["icon-sprite"], "@default");
+    assert_eq!(sheet_of(&recipe, &labels["icon-sheet"]), "@default");
+    assert!(labels.get("icon-sprite").is_none(), "{labels:?}");
     // No up-front `icon` node — cropping is per-feature at eval time.
     assert!(
         !nodes.values().any(|n| n["op"] == "icon"),
@@ -297,7 +352,8 @@ fn data_driven_line_pattern_names_each_features_icon() {
         .values()
         .find(|n| n["op"] == "line-stamp")
         .expect("a line-stamp node");
-    assert_eq!(stamp["sprite"], "@default");
+    assert_eq!(sheet_of(&recipe, &stamp["sheet"]), "@default");
+    assert!(stamp.get("sprite").is_none(), "{stamp:?}");
     assert_eq!(
         stamp["name-expr"],
         style["layers"][0]["paint"]["line-pattern"]

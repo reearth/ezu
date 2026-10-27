@@ -63,6 +63,11 @@ mean is spelled out in
   the asked `features` nodes read, as it listed the label nodes' own.
 - `ezu translate` no longer writes `source`, `layer` or `filter-expr` on the
   label nodes it emits; their `features` node carries them.
+- `ezu translate` declares the style's font stacks on one `fonts` node and
+  wires it to every label node, whose `font` now gives MapLibre's
+  `text-font` names; data-driven icons and line patterns take their sheet
+  from one `sprite` node per sprite. It no longer writes `font-stacks`,
+  `icon-sprite`, or `sprite` on `stamp` / `line-stamp`.
 - `Graph::asset_inputs` lists the assets `image`, `icon` and `brush-file`
   read, as it lists every other source's, and their hashes key those nodes'
   cache entries. Nothing draws differently.

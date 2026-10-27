@@ -93,7 +93,7 @@ pub(crate) fn convert_symbol(
     let placement = resolve_placement(layout, id, report);
     let icon_fields = icon_image
         .filter(|_| placement == "point")
-        .and_then(|v| icon_fields(id, v, layer, layout, sources, report));
+        .and_then(|v| icon_fields(id, v, layer, layout, nodes, sources, report));
     if let (Some(icon_image), None) = (icon_image, &icon_fields) {
         convert_icon_stamp(
             id,
@@ -163,12 +163,14 @@ fn resolve_placement(
 
 /// The `icon-*` fields a point-placed `icon-image` contributes to its
 /// layer's label node, or `None` when the style declares no sprite to crop
-/// from (warned).
+/// from (warned). The sheet comes from the recipe's `sprite` node for that
+/// sprite, added to `nodes` on first use.
 fn icon_fields(
     id: &str,
     icon_image: &Value,
     layer: &Map<String, Value>,
     layout: Option<&Map<String, Value>>,
+    nodes: &mut Map<String, Value>,
     sources: &Sources,
     report: &mut Report,
 ) -> Option<Map<String, Value>> {
@@ -185,7 +187,10 @@ fn icon_fields(
                 ));
                 None
             })?;
-            f.insert("icon-sprite".into(), Value::from(format!("@{sprite_src}")));
+            f.insert(
+                "icon-sheet".into(),
+                Value::from(sprite_node(nodes, sprite_src)),
+            );
             f.insert("icon-name".into(), Value::from(sprite_icon));
         }
         None => {
@@ -195,7 +200,10 @@ fn icon_fields(
                 ));
                 None
             })?;
-            f.insert("icon-sprite".into(), Value::from(format!("@{sprite_src}")));
+            f.insert(
+                "icon-sheet".into(),
+                Value::from(sprite_node(nodes, sprite_src)),
+            );
             f.insert("icon-name-expr".into(), icon_image.clone());
         }
     }
@@ -381,9 +389,10 @@ fn convert_icon_stamp(
                 ));
                 return;
             };
+            let sheet = sprite_node(nodes, sprite_src);
             serde_json::json!({
                 "op": "stamp", "features": feat_ref,
-                "sprite": format!("@{sprite_src}"), "name-expr": icon_image.clone()
+                "sheet": sheet, "name-expr": icon_image.clone()
             })
         }
     };
@@ -478,10 +487,11 @@ fn convert_text(
     // `text-font`: a static string array (or absent → default) lowers to a
     // single stack. A data-driven expression (A) is
     // enumerated for the literal stacks it can yield; each is lowered and
-    // registered under its canonical key in `font-stacks`, the raw expression
-    // is emitted as `font-expr`, and the first stack becomes the required
-    // default `font`. Unenumerable expressions fall back to the default stack
-    // (renders more of the map than the old "skip whole layer").
+    // registered under its canonical key on the shared `fonts` node, the raw
+    // expression is emitted as `font-expr`, and the first stack becomes the
+    // required default `font`. Unenumerable expressions fall back to the
+    // default stack (renders more of the map than the old "skip whole
+    // layer").
     let text_font = get("text-font");
     // A static stack is a literal font-name array; an expression (even one
     // that is syntactically an all-string array, e.g. `["get", "x"]`) is
@@ -495,7 +505,9 @@ fn convert_text(
     };
     let mut font_expr_value: Option<Value> = None;
     let mut font_stacks_obj = Map::new();
-    let font_refs: Vec<String> = if is_static_stack {
+    // The default stack: its font names, which `font` gives as the stack's
+    // name, and the sources they lower to.
+    let (default_stack, default_refs): (Vec<String>, Vec<String>) = if is_static_stack {
         let stack: Vec<String> = match text_font {
             Some(Value::Array(a)) => a
                 .iter()
@@ -505,7 +517,7 @@ fn convert_text(
             _ => DEFAULT_TEXT_FONT.iter().map(|s| s.to_string()).collect(),
         };
         match lower_stack(&stack, source_defs, fonts, glyphs_url, id, report) {
-            Some(refs) => refs,
+            Some(refs) => (stack, refs),
             None => return,
         }
     } else {
@@ -517,30 +529,29 @@ fn convert_text(
             ));
             let stack: Vec<String> = DEFAULT_TEXT_FONT.iter().map(|s| s.to_string()).collect();
             match lower_stack(&stack, source_defs, fonts, glyphs_url, id, report) {
-                Some(refs) => refs,
+                Some(refs) => (stack, refs),
                 None => return,
             }
         } else {
             // Lower every enumerated stack; the first that lowers is the
             // default `font`, all that lower populate the registry.
-            let mut default_refs: Option<Vec<String>> = None;
+            let mut default: Option<(Vec<String>, Vec<String>)> = None;
             for stack in &stacks {
                 let Some(refs) = lower_stack(stack, source_defs, fonts, glyphs_url, id, report)
                 else {
                     continue;
                 };
-                if default_refs.is_none() {
-                    default_refs = Some(refs.clone());
+                if default.is_none() {
+                    default = Some((stack.clone(), refs.clone()));
                 }
-                let key = stack.iter().map(|s| s.trim()).collect::<Vec<_>>().join(",");
-                font_stacks_obj.entry(key).or_insert_with(|| {
-                    Value::Array(refs.iter().cloned().map(Value::from).collect())
-                });
+                font_stacks_obj
+                    .entry(stack_name(stack))
+                    .or_insert_with(|| Value::from(refs));
             }
-            match default_refs {
-                Some(refs) => {
+            match default {
+                Some(default) => {
                     font_expr_value = Some(value.clone());
-                    refs
+                    default
                 }
                 // No stack lowered (no `--font` mapping and no `glyphs`
                 // endpoint) — `lower_stack` already warned per stack.
@@ -548,7 +559,6 @@ fn convert_text(
             }
         }
     };
-    let font_value = Value::Array(font_refs.into_iter().map(Value::from).collect());
 
     // `text-field`: a constant string is the label as is (a `{token}` string
     // is only an expression once the style is migrated); expressions pass
@@ -571,20 +581,22 @@ fn convert_text(
         _ => return,
     };
 
+    // Every stack this layer can draw with — enumerated `font-expr` stacks,
+    // `format` section `text-font`s, and the default — goes on the style's
+    // one `fonts` node; the label names its default stack by its fonts.
+    font_stacks_obj
+        .entry(stack_name(&default_stack))
+        .or_insert_with(|| Value::from(default_refs));
+    let fonts_ref = add_font_stacks(nodes, font_stacks_obj);
+
     let feat_ref = ensure_feat(nodes);
     let mut spec = serde_json::json!({
         "op": "text", "features": feat_ref,
-        "font": font_value, "text": text_value
+        "fonts": fonts_ref, "font": default_stack, "text": text_value
     });
-    // The raw data-driven `text-font` expression, if any …
+    // The raw data-driven `text-font` expression, if any.
     if let Some(expr) = font_expr_value {
         spec["font-expr"] = expr;
-    }
-    // … and the stack registry: enumerated `font-expr` stacks and/or `format`
-    // section `text-font`s. Emitted whenever non-empty (a `format` label can
-    // need it without a `font-expr`).
-    if !font_stacks_obj.is_empty() {
-        spec["font-stacks"] = Value::Object(font_stacks_obj);
     }
 
     // Paint / size: constant → plain field, expression → `*-expr`.
@@ -850,6 +862,56 @@ pub(crate) fn emit_label_placement(nodes: &mut Map<String, Value>, label_layers:
                 .collect::<Vec<_>>(),
         }),
     );
+}
+
+/// A font stack's name on the `fonts` node: its font names trimmed and
+/// joined with `,`, as the label node joins its `font` and a `font-expr`
+/// result to look one up.
+fn stack_name(stack: &[String]) -> String {
+    stack.iter().map(|s| s.trim()).collect::<Vec<_>>().join(",")
+}
+
+/// Declare `stacks` (stack name → source names) on the recipe's one `fonts`
+/// node, creating it on first use; a name already declared keeps its
+/// sources. Returns the `@` reference a label node wires to `fonts`.
+fn add_font_stacks(nodes: &mut Map<String, Value>, stacks: Map<String, Value>) -> String {
+    let existing = nodes
+        .iter()
+        .find(|(_, n)| n["op"] == "fonts")
+        .map(|(id, _)| id.clone());
+    let id = existing.unwrap_or_else(|| {
+        let id = crate::maplibre::unique_id(nodes, "fonts");
+        nodes.insert(
+            id.clone(),
+            serde_json::json!({ "op": "fonts", "font-stacks": {} }),
+        );
+        id
+    });
+    if let Some(declared) = nodes[&id]["font-stacks"].as_object_mut() {
+        for (name, sources) in stacks {
+            declared.entry(name).or_insert(sources);
+        }
+    }
+    format!("@{id}")
+}
+
+/// The recipe's `sprite` node over the sprite source `sprite_src`, created
+/// on first use. Returns the `@` reference an op wires to its sheet input.
+pub(crate) fn sprite_node(nodes: &mut Map<String, Value>, sprite_src: &str) -> String {
+    let src = format!("@{sprite_src}");
+    let existing = nodes
+        .iter()
+        .find(|(_, n)| n["op"] == "sprite" && n["sprite"] == src.as_str())
+        .map(|(id, _)| id.clone());
+    let id = existing.unwrap_or_else(|| {
+        let id = crate::maplibre::unique_id(nodes, &format!("{sprite_src}__sheet"));
+        nodes.insert(
+            id.clone(),
+            serde_json::json!({ "op": "sprite", "sprite": src }),
+        );
+        id
+    });
+    format!("@{id}")
 }
 
 /// Reuse (by URL) or declare a `font` source for one fontstack entry.

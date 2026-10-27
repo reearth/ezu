@@ -5,6 +5,7 @@ use serde_json::{Map, Value};
 
 use crate::maplibre::filter;
 use crate::maplibre::layers::fill::{color_or_default, resolve_number, resolve_paint_color};
+use crate::maplibre::layers::symbol::sprite_node;
 use crate::maplibre::layers::{paint_of, translated};
 use crate::maplibre::sources::{features_node, resolve_layer_source, Sources};
 use crate::maplibre::{const_number, is_expr, Report, ZoomRange};
@@ -262,7 +263,7 @@ pub(crate) struct PatternPaint {
 /// `line-pattern` → repeat the named sprite icon along each line, fit to the
 /// stroke width: `features` → `icon` → `line-stamp`. A data-driven pattern
 /// names each feature's icon instead, through `line-stamp`'s `name-expr` over
-/// the style's sprite sheet. A constant `line-translate` shifts the lines
+/// the style's sprite sheet, wired in from a `sprite` node. A constant `line-translate` shifts the lines
 /// first, as for a plain line.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn convert_line_pattern(
@@ -335,7 +336,7 @@ pub(crate) fn convert_line_pattern(
             spec["image"] = Value::from(format!("@{icon_id}"));
         }
         None => {
-            spec["sprite"] = Value::from(format!("@{sprite_src}"));
+            spec["sheet"] = Value::from(sprite_node(nodes, sprite_src));
             spec["name-expr"] = pattern.clone();
         }
     }
