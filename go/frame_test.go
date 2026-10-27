@@ -665,7 +665,13 @@ func TestRenderFrameDrawsAPolygonLabelAcrossASeam(t *testing.T) {
 	}
 	const index = `{"mark": {"x": 0, "y": 0, "width": 31, "height": 31, "pixelRatio": 1}}`
 
-	style := func(anchor string) []byte {
+	// named gives the label node its own source and layer, which otherwise
+	// come from the features node feeding it.
+	style := func(anchor string, named bool) []byte {
+		layer := ""
+		if named {
+			layer = `"source": "shapes", "layer": "shapes",`
+		}
 		return []byte(`{
 			"name": "seam", "tile-size": 512, "pad": 16,
 			"sources": {
@@ -676,7 +682,7 @@ func TestRenderFrameDrawsAPolygonLabelAcrossASeam(t *testing.T) {
 			"nodes": {
 				"bg": { "op": "solid", "color": "#ffffff" },
 				"f": { "op": "features", "source": "shapes", "layer": "shapes" },
-				"l": { "op": "text-labels", "features": "@f", "source": "shapes", "layer": "shapes",
+				"l": { "op": "text-labels", "features": "@f", ` + layer + `
 				       "icon-sprite": "@sprite", "icon-name": "mark",
 				       "overlap": "always", "icon-allow-overlap": true,
 				       "polygon-anchor": "` + anchor + `" },
@@ -688,8 +694,8 @@ func TestRenderFrameDrawsAPolygonLabelAcrossASeam(t *testing.T) {
 		}`)
 	}
 
-	render := func(anchor string, geometry func(f Frame, seam float64) string) (*image.NRGBA, int) {
-		renderer, err := rt.NewRenderer(ctx, style(anchor))
+	render := func(anchor string, named bool, geometry func(f Frame, seam float64) string) (*image.NRGBA, int) {
+		renderer, err := rt.NewRenderer(ctx, style(anchor, named))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -758,18 +764,20 @@ func TestRenderFrameDrawsAPolygonLabelAcrossASeam(t *testing.T) {
 		return west, east
 	}
 
-	want, seam := render("pole", point)
+	want, seam := render("pole", true, point)
 	if west, east := sides(want, seam); west == 0 || east == 0 {
 		t.Fatalf("the point's label draws %d px west of the seam and %d east; it should straddle it", west, east)
 	}
-	for _, anchor := range []string{"pole", "centroid"} {
-		got, _ := render(anchor, rect)
-		west, east := sides(got, seam)
-		if east == 0 {
-			t.Errorf("%s: the label is cut at the seam (%d px west of it, none east)", anchor, west)
-		}
-		if !bytes.Equal(got.Pix, want.Pix) {
-			t.Errorf("%s: the polygon's label draws other pixels than the point's", anchor)
+	for _, named := range []bool{true, false} {
+		for _, anchor := range []string{"pole", "centroid"} {
+			got, _ := render(anchor, named, rect)
+			west, east := sides(got, seam)
+			if east == 0 {
+				t.Errorf("%s, named %v: the label is cut at the seam (%d px west of it, none east)", anchor, named, west)
+			}
+			if !bytes.Equal(got.Pix, want.Pix) {
+				t.Errorf("%s, named %v: the polygon's label draws other pixels than the point's", anchor, named)
+			}
 		}
 	}
 }
