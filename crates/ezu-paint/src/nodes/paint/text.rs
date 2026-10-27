@@ -577,7 +577,7 @@ fn line_lower_bound_width_em(
 
 /// All of a `text` node's font stacks, loaded once per eval. `font_id` is a
 /// stable small integer — `0` = the default stack, `i + 1` = the i-th
-/// registry entry in recipe declaration order — so two tiles built from the
+/// registry entry, the stacks numbered by name — so two tiles built from the
 /// same recipe assign identical ids (used by the layout cache and the
 /// collision tie-break).
 struct FontRegistry {
@@ -1419,9 +1419,10 @@ struct TextNode {
     font_expr: Option<maplibre_expr::Expr>,
     font_expr_src: Option<String>,
     /// The deprecated `font-stacks`, build-resolved: `(canonical stack key,
-    /// asset keys)` in recipe declaration order. Entry index + 1 is the
-    /// stack's stable `font_id`. Empty when `fonts_port` is set: the stacks
-    /// then come in declaration order from the `fonts` node.
+    /// asset keys)` in the order the object yields them (by key). Entry
+    /// index + 1 is the stack's stable `font_id`. Empty when `fonts_port`
+    /// is set: the stacks then come, in the same order, from the `fonts`
+    /// node.
     font_stacks: Vec<(String, Vec<String>)>,
     size_expr: Option<maplibre_expr::Expr>,
     color_expr: Option<maplibre_expr::Expr>,
@@ -3766,10 +3767,9 @@ fn build_text_node(
     };
 
     // (A+B) The deprecated `font-stacks`: canonical stack key → ordered source
-    // names. Each entry resolves exactly like `font`. Insertion order
-    // (serde_json `preserve_order`, the workspace default) fixes each stack's
-    // `font_id`. With a `fonts` input the stacks are that node's, and this is
-    // ignored.
+    // names. Each entry resolves exactly like `font`. The order the object
+    // yields them in, by key, fixes each stack's `font_id`. With a `fonts`
+    // input the stacks are that node's, and this is ignored.
     let font_stacks: Vec<(String, Vec<String>)> = match (fields.get("font-stacks"), &fonts_port) {
         (None, _) => Vec::new(),
         (Some(_), Some(_)) => {
@@ -4294,7 +4294,7 @@ fn text_schema(stage: Stage) -> Value {
                 },
                 "font-stacks": { "type": "object",
                                  "additionalProperties": { "type": "array", "items": { "type": "string" } },
-                                 "description": "Deprecated: declare the stacks on a `fonts` node and wire it to `fonts`; ignored when `fonts` is wired. Named stacks the node loads itself: canonical stack key (font names joined with `,`) → ordered `font`/`glyphs` source names, consulted by `font-expr` and by `format` sections. Declaration order fixes each stack's stable id." },
+                                 "description": "Deprecated: declare the stacks on a `fonts` node and wire it to `fonts`; ignored when `fonts` is wired. Named stacks the node loads itself: canonical stack key (font names joined with `,`) → ordered `font`/`glyphs` source names, consulted by `font-expr` and by `format` sections. Stacks are numbered in key order, which fixes each one's stable id." },
                 "text": {
                     "description": "The label: a literal string, or a MapLibre string expression (evaluated per feature group; empty/failed → the group draws nothing).",
                 },

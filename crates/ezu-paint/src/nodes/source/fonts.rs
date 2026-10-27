@@ -81,16 +81,17 @@ pub(crate) fn load_stack(ctx: &EvalCtx<'_>, keys: &[String]) -> Result<Vec<Stack
 }
 
 /// The value on a `fonts` port: named font stacks, in the order the
-/// `fonts` node declares them. That order is each stack's stable index,
-/// which a label node turns into the id its layout cache and collision
-/// tie-break use, so every tile built from one style agrees on it.
+/// `fonts` node's `font-stacks` object yields them (by name). That order is
+/// each stack's stable index, which a label node turns into the id its
+/// layout cache and collision tie-break use, so every tile built from one
+/// style agrees on it.
 pub(crate) struct Fonts {
     stacks: Vec<(String, Vec<StackEntry>)>,
     by_name: HashMap<String, usize>,
 }
 
 impl Fonts {
-    /// Every stack with its name, in declaration order.
+    /// Every stack with its name, in index order.
     pub(crate) fn stacks(&self) -> impl Iterator<Item = (&str, &[StackEntry])> {
         self.stacks.iter().map(|(n, s)| (n.as_str(), s.as_slice()))
     }
@@ -101,9 +102,8 @@ impl Fonts {
     }
 }
 
-/// Read a `font-stacks` object: canonical stack name → the asset keys of
-/// its sources, in declaration order (serde_json `preserve_order`, the
-/// workspace default).
+/// Read a `font-stacks` object: stack name → the asset keys of its
+/// sources, in the order the object yields them, which is by name.
 pub(crate) fn read_font_stacks(
     ctx: &FactoryCtx<'_>,
     v: &Value,
@@ -134,7 +134,7 @@ pub(crate) fn read_font_stacks(
 }
 
 struct FontsNode {
-    /// Canonical stack name → asset keys, in declaration order.
+    /// Canonical stack name → asset keys, in index order.
     stacks: Vec<(String, Vec<String>)>,
 }
 
@@ -209,7 +209,7 @@ impl NodeFactory for FontsFactory {
             "properties": {
                 "font-stacks": { "type": "object",
                                  "additionalProperties": { "type": "array", "items": { "type": "string" } },
-                                 "description": "Stack name → ordered `font` / `glyphs` source names. A name of several fonts is written as MapLibre's `text-font` joins them, with `,` (spaces around it are ignored), so a `font-expr` result or a `format` section's `text-font` finds it. Declaration order fixes each stack's stable id, which the layout cache and the collision tie-break use." },
+                                 "description": "Stack name → ordered `font` / `glyphs` source names. A name of several fonts is written as MapLibre's `text-font` joins them, with `,` (spaces around it are ignored), so a `font-expr` result or a `format` section's `text-font` finds it. Stacks are numbered in name order, and the number is each stack's stable id, which the layout cache and the collision tie-break use." },
             },
             "required": ["font-stacks"],
         })

@@ -50,7 +50,7 @@ The style's fonts, as named font stacks for `text` and `text-labels` (wired to t
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `font-stacks` | object | yes | Stack name → ordered `font` / `glyphs` source names. A name of several fonts is written as MapLibre's `text-font` joins them, with `,` (spaces around it are ignored), so a `font-expr` result or a `format` section's `text-font` finds it. Declaration order fixes each stack's stable id, which the layout cache and the collision tie-break use. |
+| `font-stacks` | object | yes | Stack name → ordered `font` / `glyphs` source names. A name of several fonts is written as MapLibre's `text-font` joins them, with `,` (spaces around it are ignored), so a `font-expr` result or a `format` section's `text-font` finds it. Stacks are numbered in name order, and the number is each stack's stable id, which the layout cache and the collision tie-break use. |
 
 ### `graticule`
 
