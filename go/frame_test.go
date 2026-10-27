@@ -665,8 +665,9 @@ func TestRenderFrameDrawsAPolygonLabelAcrossASeam(t *testing.T) {
 	}
 	const index = `{"mark": {"x": 0, "y": 0, "width": 31, "height": 31, "pixelRatio": 1}}`
 
-	// named gives the label node its own source and layer, which otherwise
-	// come from the features node feeding it.
+	// named gives the label node the deprecated source and layer, with which
+	// it reads the neighbour tiles itself instead of taking them from its
+	// features input.
 	style := func(anchor string, named bool) []byte {
 		layer := ""
 		if named {

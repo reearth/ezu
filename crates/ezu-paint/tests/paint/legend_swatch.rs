@@ -340,9 +340,7 @@ fn composite_style(rep: [f64; 2]) -> String {
                     "dasharray": [2, 1] }},
         "dots":  {{ "op": "circles", "features": "@pts", "radius": 3, "color": "#ff0000" }},
         "num":   {{ "op": "text", "features": "@rep", "font": ["body"], "size": 14,
-                    "text": ["get", "no"], "color": "#0000ff", "anchor": "bottom",
-                    "source": "src", "layer": "addresses",
-                    "filter-expr": ["==", ["get", "part"], "rep"] }},
+                    "text": ["get", "no"], "color": "#0000ff", "anchor": "bottom" }},
         "addr":  {{ "op": "stack", "layers": ["@fill", "@line", "@dots", "@num"] }}
       }},
       "legend": {{ "entries": [{{ "label": "assigned house number", "from": "@addr",
@@ -527,9 +525,7 @@ fn connector_style() -> String {
         "line":  {{ "op": "stroke", "features": "@conn", "width-px": 2, "color": "#00a000" }},
         "dots":  {{ "op": "circles", "features": "@pts", "radius": 3, "color": "#ff0000" }},
         "num":   {{ "op": "text", "features": "@rep", "font": ["body"], "size": 14,
-                    "text": ["get", "no"], "color": "#0000ff", "anchor": "bottom",
-                    "source": "src", "layer": "addresses",
-                    "filter-expr": ["==", ["get", "part"], "rep"] }},
+                    "text": ["get", "no"], "color": "#0000ff", "anchor": "bottom" }},
         "addr":  {{ "op": "stack", "layers": ["@fill", "@line", "@dots", "@num"] }}
       }},
       "legend": {{ "entries": [{{ "label": "assigned house number", "from": "@addr",

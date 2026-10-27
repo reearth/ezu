@@ -64,7 +64,7 @@ fn recipe(text_extra: &str, box_extra: &str) -> String {
       }},
       "nodes": {{
         "feats":  {{ "op": "features", "source": "src", "layer": "pts" }},
-        "labels": {{ "op": "text-labels", "features": "@feats", "source": "src", "layer": "pts",
+        "labels": {{ "op": "text-labels", "features": "@feats",
                      "font": ["body"], "text": ["get", "name"], "size": 16,
                      "color": "#ffffff" {text_extra} }},
         "placed": {{ "op": "label-placement", "labels": ["@labels"] }},
@@ -483,9 +483,9 @@ fn a_culled_label_takes_no_space() {
           }},
           "nodes": {{
             "feats":  {{ "op": "features", "source": "src", "layer": "pts" }},
-            "first":  {{ "op": "text-labels", "features": "@feats", "source": "src", "layer": "pts",
+            "first":  {{ "op": "text-labels", "features": "@feats",
                          "font": ["body"], "text": "WWW", "size": 16 {first_extra} }},
-            "second": {{ "op": "text-labels", "features": "@feats", "source": "src", "layer": "pts",
+            "second": {{ "op": "text-labels", "features": "@feats",
                          "font": ["body"], "text": ["get", "name"], "size": 16 }},
             "placed": {{ "op": "label-placement", "labels": ["@first", "@second"] }},
             "boxes":  {{ "op": "label-boxes", "placement": "@placed", "include": "all",
@@ -531,7 +531,7 @@ fn each_box_names_the_label_layer_it_came_from() {
     // name is overwritten.
     let layer_node = |id: &str| {
         format!(
-            r#""{id}": {{ "op": "text-labels", "features": "@feats", "source": "src", "layer": "pts",
+            r#""{id}": {{ "op": "text-labels", "features": "@feats",
                          "font": ["body"], "text": ["get", "name"], "size": 16,
                          "overlap": "always" }}"#
         )

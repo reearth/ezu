@@ -50,8 +50,8 @@ use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
     cull_groups, culled_features, features_port, features_value, neighbor_feature_groups,
-    neighbour_tile, read_optional_string, read_optional_zoom, resolve_source, FeatureGroup,
-    FilteredFeatures, NeighbourLayer,
+    neighbour_tile, properties_key, read_optional_string, read_optional_zoom, resolve_source,
+    FeatureGroup, FilteredFeatures, NeighbourLayer,
 };
 use crate::render::{collect_groups, SharedLayer};
 
@@ -349,33 +349,6 @@ fn merge_groups(groups: Vec<FeatureGroup>) -> Vec<FeatureGroup> {
         }
     }
     out
-}
-
-/// A hash that equal property maps share (equality still decides).
-fn properties_key(props: &std::collections::BTreeMap<String, maplibre_expr::Value>) -> u64 {
-    use maplibre_expr::Value as V;
-    let mut h = Xxh3::new();
-    for (k, v) in props {
-        h.update(k.as_bytes());
-        match v {
-            V::Null => h.update(b"n"),
-            V::Bool(b) => h.update(&[b'b', *b as u8]),
-            // `0.0 == -0.0`, so both must hash alike.
-            V::Number(n) => h.update(
-                &(if *n == 0.0 { 0.0f64 } else { *n })
-                    .to_bits()
-                    .to_le_bytes(),
-            ),
-            V::String(s) => {
-                h.update(b"s");
-                h.update(s.as_bytes());
-            }
-            // Never decoded from a tile; left to the equality check.
-            _ => h.update(b"?"),
-        }
-        h.update(b"\0");
-    }
-    h.digest()
 }
 
 pub(super) struct FeaturesFactory;

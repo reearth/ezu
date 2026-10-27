@@ -191,14 +191,12 @@ fn a_poi_label_knocks_out_an_overlapping_line_label() {
 fn one_layer_recipe(shared: bool) -> String {
     let nodes = if shared {
         r#""labels": { "op": "text-labels", "features": "@feats", "font": ["body"],
-                       "text": ["get", "name"], "size": 12,
-                       "source": "src", "layer": "roads" },
+                       "text": ["get", "name"], "size": 12 },
            "placed": { "op": "label-placement", "labels": ["@labels"] },
            "out":    { "op": "text-draw", "labels": "@labels", "placement": "@placed" }"#
     } else {
         r#""out": { "op": "text", "features": "@feats", "font": ["body"],
-                    "text": ["get", "name"], "size": 12,
-                    "source": "src", "layer": "roads" }"#
+                    "text": ["get", "name"], "size": 12 }"#
     };
     format!(
         r##"{{
@@ -261,11 +259,7 @@ fn two_layer_seam_is_identical_across_adjacent_tiles() {
     // are decided by the same cross-layer index — so the shared border strip
     // must come out byte-for-byte identical. This is the seamlessness the
     // world-space design exists to guarantee, now across layers.
-    let recipe = two_layer_recipe(
-        r#", "source": "src", "layer": "roads""#,
-        r#", "source": "src", "layer": "pois""#,
-        "both",
-    );
+    let recipe = two_layer_recipe("", "", "both");
     let tile_size = 64u32;
     let pad = 8u32;
     // In A's frame the shared border is x = 4096; in B's frame it is x = 0.

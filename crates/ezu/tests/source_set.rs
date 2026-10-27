@@ -577,7 +577,7 @@ fn geojson_labels(data: Option<&str>) -> String {
         }},
         "nodes": {{
             "f": {{ "op": "features", "source": "names", "layer": "names" }},
-            "l": {{ "op": "text-labels", "features": "@f", "source": "names", "layer": "names",
+            "l": {{ "op": "text-labels", "features": "@f",
                     "font": ["g"], "text": ["get", "name"], "size": 16, "color": "#000000" }},
             "p": {{ "op": "label-placement", "labels": ["@l"] }},
             "out": {{ "op": "text-draw", "labels": "@l", "placement": "@p" }}
@@ -615,8 +615,9 @@ fn the_glyphs_a_style_needs_include_its_inline_geojson_labels() {
 
 /// A label on a geojson source, with `label-boxes` beside it so the
 /// placement can be read back. `anchor` is the `polygon-anchor`; `named`
-/// gives the label node its own `source`/`layer`, which otherwise come
-/// from the `features` node feeding it.
+/// gives the label node the deprecated `source`/`layer`, with which it reads
+/// the neighbour tiles itself instead of taking them from its `features`
+/// input.
 fn seam_labels(anchor: &str, named: bool) -> String {
     let layer = if named {
         r#""source": "shapes", "layer": "shapes","#
@@ -719,7 +720,8 @@ fn a_polygon_label_across_a_seam_draws_on_both_sides_from_one_bound_document() {
     ];
     let polygon = seam_doc("Polygon", &rect);
     let point = seam_doc("Point", &[(-128, 2048)]);
-    // The label node names the layer, or leaves it to its `features` node.
+    // The label node reads the neighbours itself, or takes them from its
+    // `features` input.
     for (anchor, named) in [
         ("pole", true),
         ("centroid", true),

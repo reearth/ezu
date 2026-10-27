@@ -143,12 +143,9 @@ fn padding_px_inflates_the_collision_box() {
 
 #[test]
 fn missing_neighbour_bindings_degrade_to_centre_only() {
-    // `source`/`layer` set (so the node requests neighbour bindings) but
-    // none are bound — must render the centre label without error.
-    let r = render1(
-        &recipe(r#", "source": "src", "layer": "pts""#),
-        vec![feat("HH", 0, 2048, 2048)],
-    );
+    // Collision asks for the neighbour bindings, but none are bound — must
+    // render the centre label without error.
+    let r = render1(&recipe(""), vec![feat("HH", 0, 2048, 2048)]);
     assert!(ink(&r) > 0, "centre label still draws with no neighbours");
 }
 
@@ -157,7 +154,7 @@ fn duplicate_feature_across_tiles_renders_once() {
     // The same feature present in both the tile's own layer and a bound
     // neighbour (at the identical world position) must render exactly like
     // binding it only in the centre — deduped, no double-strength halo.
-    let rc = recipe(r#", "source": "src", "layer": "pts", "halo-width": 2"#);
+    let rc = recipe(r#", "halo-width": 2"#);
     let here = feat("HH", 0, 2048, 2048);
 
     let centre_only = render_with_features_and_images(
@@ -198,7 +195,7 @@ fn seam_is_identical_across_adjacent_tiles() {
     // whole design exists to guarantee. (Mirrors noise_warp.rs's seam test.)
     let tile_size = 64u32;
     let pad = 8u32;
-    let rc = recipe(r#", "source": "src", "layer": "pts", "sort-key-expr": ["get", "rank"]"#);
+    let rc = recipe(r#", "sort-key-expr": ["get", "rank"]"#);
 
     // In A's frame the border is x = 4096; in B's frame it is x = 0.
     let layer_a = || layer(vec![feat("HH", 0, 4096, 2048), feat("WW", 1, 4096, 2048)]);
@@ -253,7 +250,7 @@ fn a_tile_without_the_layer_still_draws_a_neighbours_straddling_label() {
     // B must draw that half, matching what A draws in its east pad.
     let tile_size = 64u32;
     let pad = 8u32;
-    let rc = recipe(r#", "source": "src", "layer": "pts""#);
+    let rc = recipe("");
     let layer_a = || layer(vec![feat("HHHH", 0, 3900, 2048)]);
 
     let left = render_with_features_and_images(
@@ -299,9 +296,7 @@ fn a_struck_label_straddling_the_seam_draws_its_bar_on_both_tiles() {
     let pad = 8u32;
     let layer_a = || layer(vec![feat("HHHH", 0, 3900, 2048)]);
     let render_pair = |extra: &str| {
-        let rc = recipe(&format!(
-            r#", "source": "src", "layer": "pts", "halo-width": 2 {extra}"#
-        ));
+        let rc = recipe(&format!(r#", "halo-width": 2 {extra}"#));
         let left = render_with_features_and_images(
             &rc,
             tile_size,
@@ -349,7 +344,7 @@ fn a_boxed_label_straddling_the_seam_draws_its_box_on_both_tiles() {
     let pad = 8u32;
     let layer_a = || layer(vec![feat("HHH", 0, 3800, 2048)]);
     let rc = recipe(
-        r##", "source": "src", "layer": "pts", "background-color": "#2f6fe0",
+        r##", "background-color": "#2f6fe0",
            "background-padding": [3, 6, 3, 6], "background-radius-px": 4"##,
     );
     let left = render_with_features_and_images(

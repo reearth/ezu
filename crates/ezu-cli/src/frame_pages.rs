@@ -297,7 +297,7 @@ mod tests {
                 "fill":   {{ "op": "fill-solid", "features": "@feat", "fill": "#33669980" }},
                 "soft":   {{ "op": "blur", "input": "@fill", "sigma": 3 }},
                 "feats":  {{ "op": "features", "source": "pts", "layer": "pts" }},
-                "labels": {{ "op": "text-labels", "features": "@feats", "source": "pts", "layer": "pts",
+                "labels": {{ "op": "text-labels", "features": "@feats",
                              "font": ["body"], "text": ["get", "name"], "size": 16,
                              "color": "#000000" }},
                 "placed": {{ "op": "label-placement", "labels": ["@labels"] }},

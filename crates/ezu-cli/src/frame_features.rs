@@ -250,7 +250,7 @@ mod tests {
               "nodes": {{
                 "bg":     {{ "op": "solid", "color": "#ffffff" }},
                 "feats":  {{ "op": "features", "source": "pts", "layer": "pts" }},
-                "labels": {{ "op": "text-labels", "features": "@feats", "source": "pts", "layer": "pts",
+                "labels": {{ "op": "text-labels", "features": "@feats",
                              "font": ["body"], "text": ["get", "name"], "size": 16,
                              "color": "#000000" {text_extra} }},
                 "placed": {{ "op": "label-placement", "labels": ["@labels"] }},

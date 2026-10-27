@@ -294,10 +294,13 @@ from vector features:
   **deterministic across tile boundaries**: candidates come from this
   tile plus its 8 neighbours (host-bound under `<source>.<layer>@dx,dy`),
   deduped and placed greedily by `symbol-sort-key`, so a label straddling
-  a tile edge is placed or dropped identically in both tiles. The
-  neighbours are read from the layer of the `features` node feeding the
-  label; fed through another op, set the node's `source` / `layer` or
-  collision is centre-tile-only.
+  a tile edge is placed or dropped identically in both tiles. The label
+  asks its input for the neighbours: the `features` node reads them, and
+  every op on the way that works feature by feature (`centroid`, `buffer`,
+  `transform`, …) applies itself to them as the neighbour's own render
+  would. An op that merges features passes none on, and the build warns
+  that collision is then centre-tile-only. Label nodes no longer name a
+  `source` / `layer`; those fields are deprecated.
   `allow-overlap` / `ignore-placement` / `padding-px` mirror MapLibre.
 - **Shared cross-layer placement & icons** — label layers can split into
   `text-labels` (candidates) feeding one `label-placement` node, with a
@@ -342,7 +345,6 @@ reproducible recipe.
     "bg":        { "op": "solid", "color": "#f7f4ee" },
     "places":    { "op": "features", "source": "basemap", "layer": "places" },
     "place_lbl": { "op": "text", "features": "@places",
-                   "source": "basemap", "layer": "places",
                    "font": ["sans"],
                    "text": ["get", "name"],
                    "size": 14,

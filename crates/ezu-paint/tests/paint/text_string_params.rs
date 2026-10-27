@@ -100,7 +100,7 @@ fn doc(params: &str, fields: &str) -> String {
       }},
       "nodes": {{
         "feats": {{ "op": "features", "source": "src", "layer": "pts" }},
-        "out":   {{ "op": "text", "features": "@feats", "source": "src", "layer": "pts",
+        "out":   {{ "op": "text", "features": "@feats",
                     "font": ["body"], "text": ["get", "name"], "size": 12,
                     "color": "#000000" {fields} }}
       }},
@@ -254,8 +254,8 @@ fn label_boxes_follow_a_param_driven_anchor() {
           }},
           "nodes": {{
             "feats":  {{ "op": "features", "source": "src", "layer": "pts" }},
-            "labels": {{ "op": "text-labels", "features": "@feats", "source": "src",
-                         "layer": "pts", "font": ["body"], "text": ["get", "name"],
+            "labels": {{ "op": "text-labels", "features": "@feats",
+                         "font": ["body"], "text": ["get", "name"],
                          "size": 12, "anchor": {anchor} }},
             "placed": {{ "op": "label-placement", "labels": ["@labels"] }},
             "boxes":  {{ "op": "label-boxes", "placement": "@placed" }},

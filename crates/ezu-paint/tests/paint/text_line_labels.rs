@@ -167,7 +167,7 @@ fn duplicate_line_across_tiles_renders_once() {
     // for lines — MVT clips a line differently per tile, but a label whose
     // window lies inside the shared strip yields the same world anchor and
     // is deduped by (text, quantized anchor).
-    let rc = recipe(r#", "source": "src", "layer": "lines", "halo-width": 2"#);
+    let rc = recipe(r#", "halo-width": 2"#);
     // Midpoint at (2048, 2048) in tile (5, 7).
     let here = line_feature("HERE", 0, &[(1024, 2048), (3072, 2048)]);
 

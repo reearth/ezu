@@ -50,7 +50,7 @@ fn points_recipe() -> String {
       }},
       "nodes": {{
         "feats":  {{ "op": "features", "source": "src", "layer": "pts" }},
-        "labels": {{ "op": "text-labels", "features": "@feats", "source": "src", "layer": "pts",
+        "labels": {{ "op": "text-labels", "features": "@feats",
                      "font": ["body"], "text": ["get", "name"], "size": 11, "padding-px": 2,
                      "halo-width": 1.5, "halo-color": "#000000", "color": "#ffffff",
                      "background-padding": [1, 2, 1, 2], "background-radius-px": 2 }},
@@ -76,7 +76,7 @@ fn line_recipe() -> String {
       }},
       "nodes": {{
         "feats":  {{ "op": "features", "source": "src", "layer": "pts" }},
-        "labels": {{ "op": "text-labels", "features": "@feats", "source": "src", "layer": "pts",
+        "labels": {{ "op": "text-labels", "features": "@feats",
                      "placement": "line", "spacing-px": 40,
                      "font": ["body"], "text": ["get", "name"], "size": 9, "color": "#ffffff" }},
         "placed": {{ "op": "label-placement", "labels": ["@labels"] }},

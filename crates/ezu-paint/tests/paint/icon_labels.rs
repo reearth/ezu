@@ -110,10 +110,8 @@ fn recipe(order: &str, poi_fields: &str, output: &str) -> String {
         "road_feats": {{ "op": "features", "source": "src", "layer": "roads" }},
         "poi_feats":  {{ "op": "features", "source": "src", "layer": "pois" }},
         "road_labels": {{ "op": "text-labels", "features": "@road_feats", "font": ["body"],
-                          "text": ["get", "name"], "size": 12, "color": "#ff0000",
-                          "source": "src", "layer": "roads" }},
+                          "text": ["get", "name"], "size": 12, "color": "#ff0000" }},
         "poi_labels":  {{ "op": "text-labels", "features": "@poi_feats",
-                          "source": "src", "layer": "pois",
                           {poi_fields} }},
         "placed": {{ "op": "label-placement", "labels": [{order}] }},
         "roads": {{ "op": "text-draw", "labels": "@road_labels", "placement": "@placed" }},
@@ -413,7 +411,7 @@ fn icon_opacity_takes_a_param_or_a_node() {
       "nodes": {{
         %NODES%
         "feats": {{ "op": "features", "source": "src", "layer": "pois" }},
-        "out":   {{ "op": "text", "features": "@feats", "source": "src", "layer": "pois",
+        "out":   {{ "op": "text", "features": "@feats",
                    {ICON}, "icon-opacity": %V% }}
       }},
       "output": "@out"
@@ -537,7 +535,7 @@ fn a_turned_icon_collides_by_the_envelope_of_its_turned_box() {
       }},
       "nodes": {{
         "feats":  {{ "op": "features", "source": "src", "layer": "pois" }},
-        "labels": {{ "op": "text-labels", "features": "@feats", "source": "src", "layer": "pois",
+        "labels": {{ "op": "text-labels", "features": "@feats",
                      {ICON}, "icon-anchor": "left", "icon-rotate-deg": {rotate},
                      "icon-padding-px": 0 }},
         "placed": {{ "op": "label-placement", "labels": ["@labels"] }},

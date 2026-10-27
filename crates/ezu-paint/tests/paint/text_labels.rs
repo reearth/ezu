@@ -681,7 +681,7 @@ fn an_overzoomed_polygon_label_on_a_seam_draws_the_same_on_both_tiles() {
       }},
       "nodes": {{
         "feats": {{ "op": "features", "source": "src", "layer": "pts" }},
-        "out":   {{ "op": "text", "features": "@feats", "source": "src", "layer": "pts",
+        "out":   {{ "op": "text", "features": "@feats",
                     "font": ["body"], "text": "WW", "size": 16 }}
       }},
       "output": "@out"
@@ -718,19 +718,25 @@ fn an_overzoomed_polygon_label_on_a_seam_draws_the_same_on_both_tiles() {
     assert!(opaque_in(&east, pad, size + pad) > 0, "the east half draws");
 }
 
-/// A label layer over `src.pts` whose label node names no `source` or
-/// `layer`, either as one `text` node or through the shared placement.
-fn unnamed_label_recipe(shared: bool, anchor: &str) -> String {
+/// A label layer over `src.pts`, either as one `text` node or through the
+/// shared placement. `named` gives the label node the deprecated
+/// `source`/`layer`, with which it reads the neighbour tiles itself.
+fn seam_label_recipe(shared: bool, anchor: &str, named: bool) -> String {
+    let named = if named {
+        r#""source": "src", "layer": "pts","#
+    } else {
+        ""
+    };
     let label = if shared {
         format!(
-            r#""l": {{ "op": "text-labels", "features": "@feats", "font": ["body"],
+            r#""l": {{ "op": "text-labels", "features": "@feats", "font": ["body"], {named}
                       "text": "WW", "size": 16, "polygon-anchor": "{anchor}" }},
                "p": {{ "op": "label-placement", "labels": ["@l"] }},
                "out": {{ "op": "text-draw", "labels": "@l", "placement": "@p" }}"#
         )
     } else {
         format!(
-            r#""out": {{ "op": "text", "features": "@feats", "font": ["body"],
+            r#""out": {{ "op": "text", "features": "@feats", "font": ["body"], {named}
                         "text": "WW", "size": 16, "polygon-anchor": "{anchor}" }}"#
         )
     };
@@ -752,122 +758,296 @@ fn unnamed_label_recipe(shared: bool, anchor: &str) -> String {
     )
 }
 
-#[test]
-fn a_polygon_label_on_a_seam_draws_on_both_tiles_without_naming_its_layer() {
+/// A block a little west of the seam between z3 tiles 2 and 3, in the
+/// west tile's units, as the tile `dx` east of the west tile holds it: cut
+/// as an encoder with a 256-unit buffer cuts it. The west tile holds it
+/// whole, the east tile only the part past its buffer edge.
+fn seam_block(dx: i32) -> FeatureLayer {
     use ezu_features::ops::clip::{clip_polygon_to_rect, ClipRect, Span};
-    // A block a little west of the seam between z3 tiles 2 and 3, in the
-    // west tile's units. Each tile holds it as an encoder with a 256-unit
-    // buffer cuts it: the west tile whole, the east tile only the part
-    // past its buffer edge, whose own anchor falls outside it. The label
-    // is the west tile's, and the east tile draws its eastern half from the
-    // west tile's copy, which it reads because the `features` node feeding
-    // the label names the layer.
-    let block = ezu_features::Polygon {
-        exterior: vec![(3800, 1800), (4296, 1800), (4296, 2300), (3800, 2300)],
+    let shifted = ezu_features::Polygon {
+        exterior: [(3800, 1800), (4296, 1800), (4296, 2300), (3800, 2300)]
+            .iter()
+            .map(|&(x, y)| (x - dx * 4096, y))
+            .collect(),
         holes: vec![],
     };
-    // The block as the tile `dx` east of the west tile holds it.
-    let piece = |dx: i32| -> FeatureLayer {
-        let shifted = ezu_features::Polygon {
-            exterior: block
-                .exterior
-                .iter()
-                .map(|&(x, y)| (x - dx * 4096, y))
-                .collect(),
-            holes: vec![],
-        };
-        let buffer = ClipRect {
-            x: Span::closed(-256, 4096 + 256),
-            y: Span::closed(-256, 4096 + 256),
-        };
-        let features = clip_polygon_to_rect(&shifted, &buffer)
-            .into_iter()
-            .map(|p| polygon_feature(&p.exterior))
-            .collect();
-        layer(features)
+    let buffer = ClipRect {
+        x: Span::closed(-256, 4096 + 256),
+        y: Span::closed(-256, 4096 + 256),
     };
+    let features = clip_polygon_to_rect(&shifted, &buffer)
+        .into_iter()
+        .map(|p| polygon_feature(&p.exterior))
+        .collect();
+    layer(features)
+}
+
+/// Render z3 tile `(x, 2)` of `recipe`, holding [`seam_block`]`(own)` and
+/// its east and west neighbours' copies.
+fn render_seam_tile(recipe: &str, x: u32, own: i32) -> std::sync::Arc<ezu_graph::RasterBuf> {
+    render_with_features_and_images(
+        recipe,
+        64,
+        16,
+        TileId { z: 3, x, y: 2 },
+        &[
+            ("src.pts", seam_block(own)),
+            ("src.pts@-1,0", seam_block(own - 1)),
+            ("src.pts@1,0", seam_block(own + 1)),
+        ],
+        &[],
+    )
+}
+
+/// The west tile's east pad and the east tile's west interior show the
+/// same strip of the world: assert they match, and that something is drawn
+/// there.
+fn assert_seam_matches(west: &ezu_graph::RasterBuf, east: &ezu_graph::RasterBuf, what: &str) {
     let (size, pad) = (64u32, 16u32);
-    for shared in [false, true] {
-        for anchor in ["pole", "centroid"] {
-            let recipe = unnamed_label_recipe(shared, anchor);
-            let render = |x: u32, own: i32| {
-                render_with_features_and_images(
-                    &recipe,
-                    size,
-                    pad,
-                    TileId { z: 3, x, y: 2 },
-                    &[
-                        ("src.pts", piece(own)),
-                        ("src.pts@-1,0", piece(own - 1)),
-                        ("src.pts@1,0", piece(own + 1)),
-                    ],
-                    &[],
-                )
-            };
-            let west = render(2, 0);
-            let east = render(3, 1);
-            let mut inked = 0;
-            for y in 0..west.height {
-                for i in 0..pad {
-                    let w = west.pixel(size + pad + i, y);
-                    let e = east.pixel(pad + i, y);
-                    assert_eq!(w, e, "{anchor}, shared {shared}: seam mismatch at {i}, {y}");
-                    if w[3] > 100 {
-                        inked += 1;
-                    }
-                }
+    let mut inked = 0;
+    for y in 0..west.height {
+        for i in 0..pad {
+            let w = west.pixel(size + pad + i, y);
+            let e = east.pixel(pad + i, y);
+            assert_eq!(w, e, "{what}: seam mismatch at {i}, {y}");
+            if w[3] > 100 {
+                inked += 1;
             }
-            assert!(
-                inked > 0,
-                "{anchor}, shared {shared}: the label straddles the seam"
-            );
-            assert!(
-                opaque_in(&east, pad, size + pad) > 0,
-                "{anchor}, shared {shared}: the east half draws"
-            );
+        }
+    }
+    assert!(inked > 0, "{what}: the label straddles the seam");
+    assert!(
+        opaque_in(east, pad, size + pad) > 0,
+        "{what}: the east half draws"
+    );
+}
+
+#[test]
+fn a_polygon_label_on_a_seam_draws_on_both_tiles() {
+    // The anchor of the east tile's copy falls outside it, so the label is
+    // the west tile's, and the east tile draws its eastern half from the
+    // west tile's copy: carried on its `features` input, or read by the
+    // label node itself through its deprecated `source`/`layer`.
+    for named in [false, true] {
+        for shared in [false, true] {
+            for anchor in ["pole", "centroid"] {
+                let recipe = seam_label_recipe(shared, anchor, named);
+                let west = render_seam_tile(&recipe, 2, 0);
+                let east = render_seam_tile(&recipe, 3, 1);
+                assert_seam_matches(
+                    &west,
+                    &east,
+                    &format!("{anchor}, shared {shared}, named {named}"),
+                );
+            }
         }
     }
 }
 
-#[test]
-fn a_label_reads_the_neighbours_of_the_layer_its_features_node_reads() {
+/// Build `nodes` over `src` and a font, returning the neighbour bindings the
+/// graph reads and its warnings.
+fn neighbour_asks(nodes: &str) -> (Vec<String>, Vec<String>) {
     use ezu_graph::build_graph;
-    let asks = |nodes: &str| -> Vec<String> {
-        let doc = ezu_style::Document::from_json(&format!(
-            r##"{{
-          "name": "t", "tile-size": 64,
-          "sources": {{
-            "src":  {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
-            "body": {{ "type": "font", "url": "{font}" }}
-          }},
-          "nodes": {{ {nodes} }},
-          "output": "@out"
-        }}"##,
-            font = font_url()
-        ))
-        .expect("parse");
-        let graph = build_graph(&doc, &ezu_paint::nodes::default_registry()).expect("build");
-        graph
-            .asset_inputs()
-            .into_iter()
-            .filter(|n| n.starts_with("src.") && n.contains('@'))
-            .collect()
-    };
+    let doc = ezu_style::Document::from_json(&format!(
+        r##"{{
+      "name": "t", "tile-size": 64,
+      "sources": {{
+        "src":  {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
+        "body": {{ "type": "font", "url": "{font}" }}
+      }},
+      "nodes": {{ {nodes} }},
+      "output": "@out"
+    }}"##,
+        font = font_url()
+    ))
+    .expect("parse");
+    let graph = build_graph(&doc, &ezu_paint::nodes::default_registry()).expect("build");
+    let asks = graph
+        .asset_inputs()
+        .into_iter()
+        .filter(|n| n.starts_with("src.") && n.contains('@'))
+        .collect();
+    (asks, graph.warnings().to_vec())
+}
+
+#[test]
+fn a_label_asks_for_its_neighbours_through_the_ops_feeding_it() {
     let label = r#""out": { "op": "text", "features": "@shown", "font": ["body"], "text": "W" }"#;
-    // Fed by a `features` node: that node's layer, at all eight offsets.
-    let direct = asks(&format!(
-        r#""shown": {{ "op": "features", "source": "src", "layer": "pts" }}, {label}"#
+    let feats = r#""feats": { "op": "features", "source": "src", "layer": "pts" }"#;
+    // Fed by a `features` node, or through an op that works feature by
+    // feature: that node's layer, at all eight offsets.
+    for shown in [
+        r#""shown": { "op": "features", "source": "src", "layer": "pts" }"#,
+        r#""shown": { "op": "centroid", "features": "@feats" }"#,
+        r#""shown": { "op": "switch", "branches": { "a": "@feats" }, "select": "a" }"#,
+    ] {
+        let (asks, warnings) = neighbour_asks(&format!("{feats}, {shown}, {label}"));
+        assert_eq!(asks.len(), 8, "{shown}: {asks:?}");
+        assert!(asks.iter().all(|n| n.starts_with("src.pts@")), "{asks:?}");
+        assert!(warnings.is_empty(), "{shown}: {warnings:?}");
+    }
+    // An op merging features cannot pass them on: none are read, and the
+    // graph says why the label collides within its tile.
+    let (asks, warnings) = neighbour_asks(&format!(
+        r#"{feats}, "shown": {{ "op": "convex-hull", "features": "@feats" }}, {label}"#
     ));
-    assert_eq!(direct.len(), 8, "{direct:?}");
+    assert!(asks.is_empty(), "{asks:?}");
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
     assert!(
-        direct.iter().all(|n| n.starts_with("src.pts@")),
-        "{direct:?}"
+        warnings[0].contains("`out`") && warnings[0].contains("`shown` (`convex-hull`)"),
+        "{warnings:?}"
     );
-    // Through an op that changes the geometry, the neighbours' copies would
-    // not be what the label receives, so none are read.
-    let derived = asks(&format!(
-        r#""feats": {{ "op": "features", "source": "src", "layer": "pts" }},
-           "shown": {{ "op": "centroid", "features": "@feats" }}, {label}"#
+    // With collision off nothing is asked for.
+    let (asks, warnings) = neighbour_asks(&format!(
+        r#"{feats}, "shown": {{ "op": "convex-hull", "features": "@feats" }},
+           "out": {{ "op": "text", "features": "@shown", "font": ["body"], "text": "W",
+                    "collide": false }}"#
     ));
-    assert!(derived.is_empty(), "{derived:?}");
+    assert!(
+        asks.is_empty() && warnings.is_empty(),
+        "{asks:?} {warnings:?}"
+    );
+}
+
+#[test]
+fn naming_a_layer_on_the_label_still_reads_it_and_warns() {
+    let (asks, warnings) = neighbour_asks(
+        r#""feats": { "op": "features", "source": "src", "layer": "pts" },
+           "shown": { "op": "centroid", "features": "@feats" },
+           "out": { "op": "text", "features": "@shown", "font": ["body"], "text": "W",
+                    "source": "src", "layer": "other" }"#,
+    );
+    // The node reads the layer it names itself, and does not ask the
+    // `features` node for its own.
+    assert_eq!(asks.len(), 8, "{asks:?}");
+    assert!(asks.iter().all(|n| n.starts_with("src.other@")), "{asks:?}");
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].contains("`source` and `layer` are deprecated"),
+        "{warnings:?}"
+    );
+    // A field only the direct read used is ignored without it.
+    let (asks, warnings) = neighbour_asks(
+        r#""feats": { "op": "features", "source": "src", "layer": "pts" },
+           "out": { "op": "text", "features": "@feats", "font": ["body"], "text": "W",
+                    "filter-expr": ["has", "name"] }"#,
+    );
+    assert_eq!(asks.len(), 8, "{asks:?}");
+    assert!(asks.iter().all(|n| n.starts_with("src.pts@")), "{asks:?}");
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].contains("`filter-expr` is deprecated: it is ignored"),
+        "{warnings:?}"
+    );
+}
+
+/// Polygons turned into points before labelling: each tile's copy of a
+/// polygon cut at the seam gives its own centroid, so a polygon gets one
+/// point per tile holding it, at different places.
+fn centroid_label_recipe() -> String {
+    format!(
+        r##"{{
+      "name": "text-centroid-seam",
+      "tile-size": 64,
+      "sources": {{
+        "src":  {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
+        "body": {{ "type": "font", "url": "{font}" }}
+      }},
+      "nodes": {{
+        "feats": {{ "op": "features", "source": "src", "layer": "pts" }},
+        "dots":  {{ "op": "centroid", "features": "@feats" }},
+        "l":     {{ "op": "text-labels", "features": "@dots", "font": ["body"],
+                    "text": "WW", "size": 16 }},
+        "p":     {{ "op": "label-placement", "labels": ["@l"] }},
+        "boxes": {{ "op": "label-boxes", "placement": "@p", "include": "all" }},
+        "out":   {{ "op": "text-draw", "labels": "@l", "placement": "@p" }}
+      }},
+      "output": "@out"
+    }}"##,
+        font = font_url()
+    )
+}
+
+#[test]
+fn a_label_on_a_derived_point_is_one_label_on_both_sides_of_a_seam() {
+    use crate::common::features_of_node;
+    let recipe = centroid_label_recipe();
+    let tile = |x: u32, own: i32| {
+        features_of_node(
+            &recipe,
+            64,
+            16,
+            TileId { z: 3, x, y: 2 },
+            &[
+                ("src.pts", seam_block(own)),
+                ("src.pts@-1,0", seam_block(own - 1)),
+                ("src.pts@1,0", seam_block(own + 1)),
+            ],
+            "boxes",
+        )
+    };
+    let (west_boxes, west) = tile(2, 0);
+    let (east_boxes, east) = tile(3, 1);
+    assert_seam_matches(&west, &east, "centroid");
+    // Each tile's copy gives a centroid of its own, but only the one lying
+    // in the tile it came from is a candidate, on both tiles.
+    let ids = |boxes: &ezu_paint::nodes::FilteredFeatures| -> Vec<(String, bool)> {
+        let mut ids: Vec<(String, bool)> = boxes
+            .groups
+            .iter()
+            .map(|g| {
+                let id = format!("{:?}", g.properties.get("label-id"));
+                let placed = matches!(
+                    g.properties.get("placed"),
+                    Some(maplibre_expr::Value::Bool(true))
+                );
+                (id, placed)
+            })
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    };
+    let (w, e) = (ids(&west_boxes), ids(&east_boxes));
+    assert_eq!(w.len(), 1, "one label on the west tile: {w:?}");
+    assert_eq!(w, e, "the tiles agree on the label");
+    assert!(w[0].1, "and it is placed");
+}
+
+/// Ops that draw read only the tile's own features, even when the value
+/// carries the neighbours' for a label sharing the `features` node.
+#[test]
+fn a_paint_op_draws_only_its_own_tile_when_neighbours_are_carried() {
+    let recipe = format!(
+        r##"{{
+      "name": "fill-beside-labels",
+      "tile-size": 64,
+      "sources": {{
+        "src":  {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
+        "body": {{ "type": "font", "url": "{font}" }}
+      }},
+      "nodes": {{
+        "feats": {{ "op": "features", "source": "src", "layer": "pts" }},
+        "fill":  {{ "op": "fill-solid", "features": "@feats", "fill": "#ff0000" }},
+        "l":     {{ "op": "text", "features": "@feats", "font": ["body"], "text": "W",
+                    "size": 8 }}
+      }},
+      "output": "@fill"
+    }}"##,
+        font = font_url()
+    );
+    let render = |bound: &[(&str, FeatureLayer)]| {
+        render_with_features_and_images(&recipe, 64, 16, TileId { z: 3, x: 3, y: 2 }, bound, &[])
+    };
+    let alone = render(&[("src.pts", seam_block(1))]);
+    let beside = render(&[
+        ("src.pts", seam_block(1)),
+        ("src.pts@-1,0", seam_block(0)),
+        ("src.pts@1,0", seam_block(2)),
+    ]);
+    assert!(
+        opaque_in(&alone, 0, 96) > 0,
+        "the tile's own part is filled"
+    );
+    assert_eq!(alone.pixels, beside.pixels);
 }

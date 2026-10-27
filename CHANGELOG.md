@@ -13,10 +13,6 @@ mean is spelled out in
 
 ### Breaking
 
-- `FactoryCtx` has a `nodes` field: every node of the document, functions
-  expanded, so a factory can read the node feeding one of its inputs. Code
-  that builds a `FactoryCtx` itself, as a custom op's unit test may, sets it
-  (an empty map will do).
 - `EvalCtx` has a `neighbours` field: whether something downstream wants
   the node's output to carry the neighbour tiles' data. Code that builds an
   `EvalCtx` itself, as a custom op's unit test may, sets it (`false` will
@@ -28,18 +24,45 @@ mean is spelled out in
   groups)`, adding `with_overzoom` and `with_neighbours` as needed. Code
   that reads `groups` sees only the tile's own features, as before.
 
+### Changed
+
+- A `text` or `text-labels` node takes the neighbour tiles it collides
+  against from its `features` input. With collision on it asks for them, and
+  the request runs up the graph: the `features` node reads the neighbour
+  tiles' copies of its layer, with its own filter, per-feature zoom field
+  and zoom band, and every op on the way that works feature by feature
+  (`centroid`, `buffer`, `simplify`, `boundary`, `medial-axis`, `resample`,
+  `dash`, `transform`, `wave`, `hatch`, `dot-density`, `segment-to`, and
+  `switch`) applies itself to them as the neighbour's own render would.
+  **Labels fed through such an op now collide across tile borders, so labels
+  near a seam can change.** An op that merges features or combines inputs
+  (`convex-hull`, `bbox`, `triangulate`, `voronoi`, `voronoi-fracture`,
+  `junctions`, `feature-boolean`) passes none on, and the build warns that
+  the label collides within its tile. A point that one tile's copy of a
+  feature puts in another tile — the centroid of a polygon cut at the seam,
+  say — is left to the tile it lies in when that tile labels the same
+  feature itself, so the polygon gets one label rather than one per tile.
+- Hosts need no change: `Graph::asset_inputs` lists the neighbour bindings
+  the asked `features` nodes read, as it listed the label nodes' own.
+
+### Deprecated
+
+- `source`, `layer`, `filter-expr` and `min-zoom-field` on `text` and
+  `text-labels`. With `source` and `layer` both set the node still reads the
+  neighbour tiles' copies of that layer itself and draws as before, with a
+  build warning; otherwise they are ignored. Remove them: the neighbours come
+  from the `features` input.
+
 ### Fixed
 
 - A label on a polygon was cut at a tile seam when its anchor sat in the
   neighbouring tile: the tile across the seam did not draw its part. Labels
   on points were unaffected. Two things kept the neighbour's label from the
   tile, and both are fixed:
-  - A `text` or `text-labels` node read neighbour tiles only when it named
-    `source` and `layer` itself. Fed straight by a `features` node, it now
-    reads that node's layer from the neighbours, with its `filter-expr`,
-    `min-zoom-field` and zoom band. A node that names `source` and `layer`
-    draws as before. **Label nodes that named neither now collide across
-    tile borders, so labels near a seam can change.**
+  - A `text` or `text-labels` node that named no `source` and `layer` read
+    no neighbour tiles. It now takes them from its `features` input (see
+    Changed above). **Label nodes that named neither now collide across tile
+    borders, so labels near a seam can change.**
   - A remote `geojson` document bound only at the centre, as a frame's
     `sources` callback usually binds it, was not projected into the
     neighbour tiles. The document bound at the centre now serves them too,

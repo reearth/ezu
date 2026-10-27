@@ -110,7 +110,6 @@ pub fn build_graph(
         let ctx = FactoryCtx {
             params: &doc.params,
             sources: &doc.sources,
-            nodes: &doc.nodes,
             node: id,
             warnings: &warnings,
         };

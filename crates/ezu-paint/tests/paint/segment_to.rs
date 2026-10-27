@@ -245,7 +245,7 @@ fn a_leader_runs_from_the_feature_to_the_edge_of_its_moved_label() {
       }},
       "nodes": {{
         "feats":   {{ "op": "features", "source": "src", "layer": "pts" }},
-        "labels":  {{ "op": "text-labels", "features": "@feats", "source": "src", "layer": "pts",
+        "labels":  {{ "op": "text-labels", "features": "@feats",
                       "font": ["body"], "text": ["get", "name"], "size": 16, "color": "#000000",
                       "anchor-offsets": [
                         {{ "anchor": "bottom", "offset-em": [0, -0.5] }},

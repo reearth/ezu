@@ -38,6 +38,33 @@ pub struct FeatureGroup {
     pub points: Vec<(i32, i32)>,
 }
 
+/// A hash that equal property maps share (equality still decides).
+pub(super) fn properties_key(props: &BTreeMap<String, maplibre_expr::Value>) -> u64 {
+    use maplibre_expr::Value as V;
+    let mut h = xxhash_rust::xxh3::Xxh3::new();
+    for (k, v) in props {
+        h.update(k.as_bytes());
+        match v {
+            V::Null => h.update(b"n"),
+            V::Bool(b) => h.update(&[b'b', *b as u8]),
+            // `0.0 == -0.0`, so both must hash alike.
+            V::Number(n) => h.update(
+                &(if *n == 0.0 { 0.0f64 } else { *n })
+                    .to_bits()
+                    .to_le_bytes(),
+            ),
+            V::String(s) => {
+                h.update(b"s");
+                h.update(s.as_bytes());
+            }
+            // Never decoded from a tile; left to the equality check.
+            _ => h.update(b"?"),
+        }
+        h.update(b"\0");
+    }
+    h.digest()
+}
+
 impl FeatureGroup {
     /// A group with no per-feature properties, for synthetic geometry sources
     /// and geometry transforms that merge geometry across features.
@@ -816,62 +843,6 @@ pub(super) fn resolve_source(
             msg: format!("multiple {kinds} sources in document; pass `source` explicitly"),
         }),
     }
-}
-
-/// What a `features` node reads and how it filters it, as a node fed by
-/// it needs to know to read the same layer from the neighbour tiles: the
-/// `<source>.<layer>` binding, the filter and per-feature zoom field, and
-/// the zoom band outside which it yields nothing.
-pub(super) struct FeatureOrigin {
-    pub base: String,
-    pub filter_expr: Option<Value>,
-    pub min_zoom_field: Option<String>,
-    pub min_zoom: Option<u8>,
-    pub max_zoom: Option<u8>,
-}
-
-/// The [`FeatureOrigin`] of node `id`, when it is a `features` node.
-///
-/// Only a `features` node itself answers. Any other op between it and the
-/// asker changes the geometry, and the neighbour tiles' copies of the layer
-/// are read as they are bound, so they would not match what the asker
-/// receives from its own tile. A `features` node that would fail to build
-/// answers nothing either: its own build reports why.
-pub(super) fn feature_origin(ctx: &FactoryCtx<'_>, id: &str) -> Option<FeatureOrigin> {
-    let spec = ctx.nodes.get(id)?;
-    if spec.op != "features" {
-        return None;
-    }
-    let fields = &spec.fields;
-    let layer = fields.get("layer")?.as_str()?;
-    let is_feature_source = |decl: &spec::SourceDecl| {
-        matches!(
-            decl,
-            spec::SourceDecl::Mvt(_) | spec::SourceDecl::Pmtiles(_) | spec::SourceDecl::GeoJson(_)
-        )
-    };
-    // The same answer `resolve_source` gives, without repeating the
-    // warning the `features` node gives for an unnamed source.
-    let source = match fields.get("source") {
-        Some(v) => {
-            let name = v.as_str()?;
-            is_feature_source(ctx.sources.get(name)?).then(|| name.to_string())?
-        }
-        None => {
-            let mut matches = ctx.sources.iter().filter(|(_, d)| is_feature_source(d));
-            match (matches.next(), matches.next()) {
-                (Some((name, _)), None) => name.clone(),
-                _ => return None,
-            }
-        }
-    };
-    Some(FeatureOrigin {
-        base: format!("{source}.{layer}"),
-        filter_expr: fields.get("filter-expr").cloned(),
-        min_zoom_field: read_optional_string(fields, "min-zoom-field").ok()?,
-        min_zoom: read_optional_zoom(fields, "min-zoom").ok()?,
-        max_zoom: read_optional_zoom(fields, "max-zoom").ok()?,
-    })
 }
 
 // ---------------------------------------------------------------------------

@@ -27,8 +27,7 @@ tile boundaries.
     "size": 13,
     "color": "#333333",
     "halo-color": "#ffffffcc",
-    "halo-width": 1.5,
-    "source": "basemap", "layer": "places"
+    "halo-width": 1.5
   }
 }
 ```
@@ -37,14 +36,24 @@ tile boundaries.
 `font` is an ordered fallback stack of `font` and/or `glyphs` source names — outline
 fonts and SDF stacks mix freely, and the first entry covering a character shapes it.
 
-**Neighbour tiles.** Collision reads the neighbour tiles' copies of the layer
-the label's features come from. Fed straight by a `features` node, the label
-node takes that node's `source`, `layer`, `filter-expr`, `min-zoom-field` and
-zoom band, so nothing needs repeating. Fed through any other op, it cannot tell
-which layer that is: set `source` and `layer` (and mirror `filter-expr`,
-`min-zoom`, `max-zoom` and `min-zoom-field` from the `features` node) or
-collision is centre-tile-only, which shows up as labels duplicated, fighting or
-cut off across borders.
+**Neighbour tiles.** Collision also places the neighbour tiles' labels, so a
+label on a tile edge is decided the same way on both sides. The label node asks
+its `features` input to carry them: the `features` node reads the neighbour
+tiles' copies of its layer, with its own filter and zoom band, and an op on the
+way that works feature by feature — `centroid`, `buffer`, `simplify`,
+`transform`, `dash` and the like — applies itself to them as the neighbour's own
+render would. Nothing needs repeating on the label node.
+
+An op that merges features or combines several inputs (`convex-hull`,
+`voronoi`, `feature-boolean`, …) cannot say what a neighbour tile would make of
+them, so it passes none on. The build then warns, and collision is
+centre-tile-only, which shows up as labels duplicated, fighting or cut off
+across borders.
+
+Label nodes used to name `source` and `layer` (with `filter-expr` and
+`min-zoom-field`) to read the neighbours themselves. Those fields are
+deprecated: a style naming both still draws as it did, with a warning, and
+drops them to take the neighbours from its input instead.
 
 ## Halos exist for a reason
 
@@ -175,8 +184,7 @@ the shape (an L or a U).
 "block_number": {
   "op": "text", "features": "@blocks", "font": ["sans"],
   "text": ["get", "block_number"],
-  "polygon-anchor": "centroid",
-  "source": "city", "layer": "blocks"
+  "polygon-anchor": "centroid"
 }
 ```
 
@@ -409,8 +417,8 @@ when no `--font` mapping is given. In a wasm host you cannot fetch lazily, so as
 ## Debugging placement
 
 - Turn on the tile-grid overlay in `ezu serve` and check borders for duplicates —
-  the symptom of a label node that reads no neighbours (fed through another op
-  and naming no `source`/`layer`).
+  the symptom of a label node that gets no neighbours. `ezu check` names the op
+  that stops them.
 - Draw the collision boxes, rejected candidates included, with `label-boxes`
   (see [drawing the label boxes yourself](#drawing-the-label-boxes-yourself)).
 - `max-extent-px` (default 128) is the padding the node requests; labels whose

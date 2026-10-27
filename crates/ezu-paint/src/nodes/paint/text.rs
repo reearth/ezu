@@ -34,10 +34,10 @@
 //! is then what the anchor positions and what collides. Drawing is a pure function of world position (no
 //! jitter), so labels match across tile borders. Collision (default on)
 //! is likewise world-space deterministic: candidates are gathered from
-//! this tile plus its 8 neighbour tiles (host-bound under
-//! `<source>.<layer>@dx,dy`, the layer the feeding `features` node reads
-//! unless `source`/`layer` name one), deduped by `(layer, text, quantized world
-//! anchor)`, ordered by `(layer, sort-key, world anchor, text)`, and placed
+//! this tile plus its 8 neighbour tiles (carried on the `features` input,
+//! which the node asks for: see [`Node::wants_neighbours`]), deduped by
+//! `(layer, text, quantized world anchor)`, ordered by
+//! `(layer, sort-key, world anchor, text)`, and placed
 //! greedily against a grid — all from world-space quantities, so
 //! adjacent tiles agree on every straddling label (a line label
 //! collides per glyph, all-or-nothing). Missing neighbour bindings
@@ -67,9 +67,9 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    downcast_features, feature_origin, neighbor_feature_groups, read_bool_or, read_number,
-    read_number_or, read_optional_string, read_optional_zoom, read_xy, FeatureGroup,
-    NeighborGroups, ANCHOR_NAMES as TEXT_ANCHORS,
+    downcast_features, neighbor_feature_groups, read_bool_or, read_number, read_number_or,
+    read_optional_string, read_optional_zoom, read_xy, FeatureGroup, FilteredFeatures,
+    NeighborGroups, NeighbourLayer, ANCHOR_NAMES as TEXT_ANCHORS,
 };
 use ezu_core::text::{
     clip_line,
@@ -795,6 +795,140 @@ fn eval_name<T>(
     }
 }
 
+/// The neighbour tiles' feature groups a label node places candidates from
+/// — see [`TextNode::neighbor_groups`].
+enum Gathered<'f> {
+    None,
+    /// Carried by the `features` input, all in a frame this many units
+    /// across.
+    Upstream(u32, &'f [NeighbourLayer]),
+    /// Read by the node itself, through its deprecated `source`/`layer`.
+    Legacy(Vec<NeighborGroups>),
+}
+
+/// One neighbour tile's groups, `(dx, dy)` tiles from this one, in its own
+/// frame.
+struct NeighbourView<'a> {
+    groups: &'a [FeatureGroup],
+    dx: i64,
+    dy: i64,
+    overzoom: u8,
+}
+
+impl Gathered<'_> {
+    fn views(&self) -> Vec<NeighbourView<'_>> {
+        match self {
+            Gathered::None => Vec::new(),
+            Gathered::Upstream(frame, ns) => ns
+                .iter()
+                .filter(|n| n.extent == *frame)
+                .map(|n| NeighbourView {
+                    groups: &n.groups,
+                    dx: n.dx.into(),
+                    dy: n.dy.into(),
+                    overzoom: n.overzoom,
+                })
+                .collect(),
+            Gathered::Legacy(ns) => ns
+                .iter()
+                .map(|n| NeighbourView {
+                    groups: &n.groups,
+                    dx: n.dx,
+                    dy: n.dy,
+                    overzoom: n.overzoom,
+                })
+                .collect(),
+        }
+    }
+
+    /// Whether the neighbours came from the `features` input. Those the
+    /// node read itself keep the placement they always had.
+    fn is_upstream(&self) -> bool {
+        matches!(self, Gathered::Upstream(..))
+    }
+}
+
+/// Drop each point candidate lying outside the tile whose copy of the layer
+/// it came from, when the tile it lies in labels the same feature itself,
+/// elsewhere.
+///
+/// A tile's copy of a feature is cut at its buffer, so an op deriving a
+/// point from that geometry — a centroid, say — derives a different point
+/// from each tile's copy. The tile the point falls in derives its own, and
+/// is the one to label it there; the others' versions would be duplicates
+/// at slightly different places, which the dedup of identical copies cannot
+/// fold. The same feature is told by its properties. A tile that holds
+/// nothing of it, or is not bound at all, cannot label it, so the point
+/// stays. So does a real point feature copied unchanged into another
+/// tile's buffer: the tile it lies in holds it at the same spot, and the
+/// dedup folds the copies as before. Every tile seeing the candidate makes
+/// the same decision, as long as the same tiles are bound for each.
+fn drop_foreign_points(preps: &mut Vec<GroupPrep<'_>>, extent: i64, tile: (i64, i64)) {
+    use crate::nodes::common::properties_key;
+    use ezu_core::text::collide::DEDUP_QUANTUM;
+    use std::collections::HashSet;
+    let inside =
+        |x: i32, y: i32| (0..extent).contains(&(x as i64)) && (0..extent).contains(&(y as i64));
+    let cell = |dx: i64, dy: i64, x: i32, y: i32| {
+        (
+            ((tile.0 + dx) * extent + x as i64).div_euclid(DEDUP_QUANTUM),
+            ((tile.1 + dy) * extent + y as i64).div_euclid(DEDUP_QUANTUM),
+        )
+    };
+    // Every spot a tile labels inside itself, and per tile and property
+    // hash the features it labels there.
+    let mut held: HashSet<(i64, i64)> = HashSet::new();
+    let mut labels: HashMap<((i64, i64), u64), Vec<&FeatureGroup>> = HashMap::new();
+    for p in preps.iter() {
+        let mut any = false;
+        for &(x, y) in p.anchors.iter().filter(|&&(x, y)| inside(x, y)) {
+            held.insert(cell(p.dx, p.dy, x, y));
+            any = true;
+        }
+        if any {
+            labels
+                .entry(((p.dx, p.dy), properties_key(&p.group.properties)))
+                .or_default()
+                .push(p.group);
+        }
+    }
+    let labelled_in = |t: (i64, i64), g: &FeatureGroup| {
+        labels
+            .get(&(t, properties_key(&g.properties)))
+            .is_some_and(|gs| {
+                gs.iter().any(|o| {
+                    Arc::ptr_eq(&o.properties, &g.properties) || o.properties == g.properties
+                })
+            })
+    };
+    let mut drops: Vec<Vec<(i32, i32)>> = Vec::with_capacity(preps.len());
+    for p in preps.iter() {
+        let (dx, dy) = (p.dx, p.dy);
+        let kept = p
+            .anchors
+            .iter()
+            .copied()
+            .filter(|&(x, y)| {
+                if inside(x, y) || held.contains(&cell(dx, dy, x, y)) {
+                    return true;
+                }
+                let lies_in = (
+                    dx + (x as i64).div_euclid(extent),
+                    dy + (y as i64).div_euclid(extent),
+                );
+                !labelled_in(lies_in, p.group)
+            })
+            .collect();
+        drops.push(kept);
+    }
+    for (p, kept) in preps.iter_mut().zip(drops) {
+        if kept.len() != p.anchors.len() {
+            p.anchors = Cow::Owned(kept);
+        }
+    }
+    preps.retain(|p| !p.anchors.is_empty());
+}
+
 /// Where point placement puts a group's symbols: each of its points, then
 /// one anchor per polygon, chosen by `mode` (see [`PolygonAnchor`]).
 ///
@@ -1416,21 +1550,20 @@ struct TextNode {
     dedupe_key_expr: Option<maplibre_expr::Expr>,
     dedupe_key_expr_src: Option<String>,
     dedupe_distance_px: Option<f32>,
-    /// The upstream `<source>.<layer>` asset name, used only to spell the
-    /// neighbour binding names in [`Node::asset_inputs`]: the node's own
-    /// `source`/`layer`, or else those of the `features` node feeding it.
-    /// `None` disables neighbour gathering.
+    /// The deprecated direct read of the neighbour tiles: the
+    /// `<source>.<layer>` the node names itself, whose `@dx,dy` bindings it
+    /// loads, filtered by its own `filter-expr` and `min-zoom-field`.
+    /// `None` unless the node names both `source` and `layer`; the node
+    /// then asks its `features` input for the neighbours instead.
     neighbor_base: Option<String>,
-    /// The upstream feature filter, reproduced when gathering neighbour
-    /// candidates so they are filtered identically to the tile's own
-    /// features (the translator copies the `features` node's filter here).
     filter_expr: Option<maplibre_expr::Expr>,
     filter_expr_src: Option<String>,
     min_zoom_field: Option<String>,
-    /// The style layer's zoom band, mirroring the upstream `features` node.
-    /// Neighbour candidates are gathered from the source directly, so the
-    /// node has to honour the gate itself or a layer that is off at this
-    /// zoom would still spill its neighbours' labels across the seam.
+    /// Set once the node has said it reads its neighbours from its input
+    /// although it names a layer to read them from itself.
+    upstream_warned: AtomicBool,
+    /// The style layer's zoom band: outside it the node draws nothing,
+    /// neighbours' labels included.
     min_zoom: Option<u8>,
     max_zoom: Option<u8>,
     ports: Vec<PortSpec>,
@@ -1817,34 +1950,64 @@ impl TextNode {
         }
     }
 
-    /// Gather the 8 neighbour tiles' feature groups for cross-tile collision
-    /// (see [`neighbor_feature_groups`]), with the extent every candidate is
-    /// placed in: the tile's own layer's, or — when this tile has no copy of
-    /// the layer — the neighbours', so a label anchored next door still
-    /// draws its half here. No groups when collision is off, no upstream
-    /// source is set, or nothing is bound. Decoded once and reused by the
-    /// reach pre-scan and the build.
-    fn neighbor_groups(
+    /// The 8 neighbour tiles' feature groups for cross-tile collision, with
+    /// the extent every candidate is placed in: the tile's own layer's, or —
+    /// when this tile has no copy of the layer — the neighbours', so a label
+    /// anchored next door still draws its half here. None when collision is
+    /// off or nothing is bound. Gathered once and reused by the reach
+    /// pre-scan and the build.
+    ///
+    /// They come from the `features` input, which carries them because
+    /// the node asked for them ([`Node::wants_neighbours`]): the `features`
+    /// node read them, and every op between applied itself to them as it
+    /// did to this tile's own.
+    fn neighbor_groups<'f>(
         &self,
         ctx: &EvalCtx<'_>,
         z: u8,
-        feats: &crate::nodes::common::FilteredFeatures,
-    ) -> (i64, Vec<NeighborGroups>) {
+        feats: &'f FilteredFeatures,
+    ) -> (i64, Gathered<'f>) {
         let own = feats.extent.max(1) as i64;
         if !self.collide {
-            return (own, Vec::new());
+            return (own, Gathered::None);
         }
+        if !feats.neighbours.is_empty() {
+            if self.neighbor_base.is_some() && !self.upstream_warned.swap(true, Ordering::Relaxed) {
+                tracing::warn!(
+                    "text `{}`: its `features` input carries the neighbour tiles, so those \
+                     are used and its own `source`/`layer` are not",
+                    self.node_id
+                );
+            }
+            // Every neighbour shares one frame, the tile's own when it has
+            // a copy of the layer; one in other units cannot be placed.
+            let frame = match feats.extent {
+                0 => feats.neighbours[0].extent,
+                e => e,
+            };
+            return (
+                frame.max(1) as i64,
+                Gathered::Upstream(frame, &feats.neighbours),
+            );
+        }
+        // Deprecated: the node reads the neighbour tiles' copies of a layer
+        // it names itself. Only a source node should read a source — this
+        // repeats the `features` node's loading, filtering and zoom gate,
+        // and reads the layer raw, so it cannot see what any op between
+        // did to the tile's own features. Kept so that styles naming
+        // `source`/`layer` here draw exactly as they always have.
         let Some(base) = &self.neighbor_base else {
-            return (own, Vec::new());
+            return (own, Gathered::None);
         };
-        neighbor_feature_groups(
+        let (frame, groups) = neighbor_feature_groups(
             ctx,
             base,
             feats.extent,
             self.filter_expr.as_ref(),
             &self.min_zoom_field,
             z,
-        )
+        );
+        (frame, Gathered::Legacy(groups))
     }
 
     /// Layout params for line placement: a single un-wrapped line,
@@ -1957,7 +2120,8 @@ impl TextNode {
         let z = ctx.tile.z;
         // Gather the neighbour feature groups once (collision only), decoded
         // here and reused by the single evaluation pass below.
-        let (extent_i, nbr_groups) = self.neighbor_groups(ctx, z, feats);
+        let (extent_i, gathered) = self.neighbor_groups(ctx, z, feats);
+        let nbr_groups = gathered.views();
         let sx = tile_w / extent_i as f32;
         let sy = tile_h / extent_i as f32;
         let (tx, ty) = (ctx.tile.x as i64, ctx.tile.y as i64);
@@ -2384,7 +2548,8 @@ impl TextNode {
         let z = ctx.tile.z;
         // Gather the neighbour feature groups once (collision only): each bound
         // neighbour layer, filtered exactly like this tile's own features.
-        let (extent_i, nbr_groups) = self.neighbor_groups(ctx, z, feats);
+        let (extent_i, gathered) = self.neighbor_groups(ctx, z, feats);
+        let nbr_groups = gathered.views();
         let sx = tile_w / extent_i as f32;
         let sy = tile_h / extent_i as f32;
         let (tx, ty) = (ctx.tile.x as i64, ctx.tile.y as i64);
@@ -2471,6 +2636,12 @@ impl TextNode {
                     preps.push(GroupPrep { anchors, ..prep });
                 }
             }
+        }
+        // Points that one tile's copy puts in another tile are that tile's
+        // to label. Done after the reach is measured, so the band is what
+        // it would be without it.
+        if gathered.is_upstream() {
+            drop_foreign_points(&mut preps, extent_i, (tx, ty));
         }
 
         // The sprite sheet, loaded once per eval and only when some group
@@ -2974,15 +3145,22 @@ impl Node for TextNode {
         }
         keys.sort();
         keys.dedup();
-        // With collision on and a known upstream source, request the 8
-        // neighbour layers so a host that can fetch them binds them for
-        // cross-tile placement. Unbound neighbours degrade to centre-only.
+        // The deprecated direct read names its 8 neighbour layers itself,
+        // so a host that can fetch them binds them. Unbound neighbours
+        // degrade to centre-only.
         if self.collide {
             if let Some(base) = &self.neighbor_base {
                 keys.extend(ezu_graph::neighbor_bindings(base));
             }
         }
         keys
+    }
+    /// With collision on, the `features` input is asked to carry the
+    /// neighbour tiles, so labels straddling a tile edge are decided alike
+    /// on both sides — unless the node still names its own layer to read
+    /// them from.
+    fn wants_neighbours(&self, port: usize) -> bool {
+        port == 0 && self.collide && self.neighbor_base.is_none()
     }
     fn eval(
         &self,
@@ -3822,53 +4000,65 @@ fn build_text_node(
         );
         (dedupe_key_expr, dedupe_key_expr_src, dedupe_distance_px) = (None, None, None);
     }
-    // Neighbour candidate gathering: the upstream `<source>.<layer>`
-    // (used only to name the neighbour bindings in `asset_inputs`) plus
-    // the upstream feature filter, so neighbours are filtered exactly
-    // like the tile's own features. A node that names neither `source`
-    // nor `layer` takes them, and the filter and zoom band, from the
-    // `features` node feeding it; fed by anything else, it collides
-    // against its own tile's features only.
+    // Neighbour candidates come from the `features` input, which the node
+    // asks to carry them (see `wants_neighbours`). `source`/`layer` — with
+    // `filter-expr` and `min-zoom-field`, which exist only to filter what
+    // they read — are the deprecated way: the node reads the neighbour
+    // tiles' copies of that layer itself, raw. Both named keep that path,
+    // so old styles draw as they did; anything less is ignored.
     let source = read_optional_string(fields, "source")?;
     let layer = read_optional_string(fields, "layer")?;
-    let origin = match (&source, &layer) {
-        (None, None) => feature_origin(ctx, &features),
+    let named: Vec<String> = ["source", "layer", "filter-expr", "min-zoom-field"]
+        .into_iter()
+        .filter(|k| fields.contains_key(*k))
+        .map(|k| format!("`{k}`"))
+        .collect();
+    let neighbor_base = match (source, layer) {
+        (Some(s), Some(l)) => Some(format!("{s}.{l}")),
         _ => None,
     };
-    let neighbor_base = match (source, layer, &origin) {
-        (Some(s), Some(l), _) => Some(format!("{s}.{l}")),
-        (_, _, Some(o)) => Some(o.base.clone()),
-        _ => None,
-    };
-    let filter = fields
-        .get("filter-expr")
-        .or_else(|| origin.as_ref().and_then(|o| o.filter_expr.as_ref()));
-    let (filter_expr, filter_expr_src) = match filter {
-        Some(v) => {
-            let expr = maplibre_expr::parse(v).map_err(|e| FactoryError::BadField {
-                field: "filter-expr".into(),
-                msg: e.to_string(),
-            })?;
-            (Some(expr), Some(v.to_string()))
-        }
-        None => (None, None),
-    };
-    let mut min_zoom_field = read_optional_string(fields, "min-zoom-field")?;
-    let mut min_zoom = read_optional_zoom(fields, "min-zoom")?;
-    let mut max_zoom = read_optional_zoom(fields, "max-zoom")?;
-    if let Some(o) = origin {
-        min_zoom_field = min_zoom_field.or(o.min_zoom_field);
-        // Outside the `features` node's band this tile has no features, so
-        // the neighbours' must not label it either.
-        min_zoom = match (min_zoom, o.min_zoom) {
-            (Some(a), Some(b)) => Some(a.max(b)),
-            (a, b) => a.or(b),
+    if let Some((last, rest)) = named.split_last() {
+        let one = rest.is_empty();
+        let names = match one {
+            true => last.clone(),
+            false => format!("{} and {last}", rest.join(", ")),
         };
-        max_zoom = match (max_zoom, o.max_zoom) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
+        let effect = match (&neighbor_base, one) {
+            (Some(_), _) => "make the node read the neighbour tiles' copies of that layer itself",
+            (None, true) => "is ignored",
+            (None, false) => "are ignored",
         };
+        let (verb, pronoun, object) = match one {
+            true => ("is", "it", "it"),
+            false => ("are", "they", "them"),
+        };
+        ctx.warn(format_args!(
+            "{names} {verb} deprecated: {pronoun} {effect}. Remove {object}: the node takes \
+             the neighbour tiles from its `features` input instead"
+        ));
     }
+    let (filter_expr, filter_expr_src, min_zoom_field) = match &neighbor_base {
+        Some(_) => {
+            let (filter_expr, filter_expr_src) = match fields.get("filter-expr") {
+                Some(v) => {
+                    let expr = maplibre_expr::parse(v).map_err(|e| FactoryError::BadField {
+                        field: "filter-expr".into(),
+                        msg: e.to_string(),
+                    })?;
+                    (Some(expr), Some(v.to_string()))
+                }
+                None => (None, None),
+            };
+            (
+                filter_expr,
+                filter_expr_src,
+                read_optional_string(fields, "min-zoom-field")?,
+            )
+        }
+        None => (None, None, None),
+    };
+    let min_zoom = read_optional_zoom(fields, "min-zoom")?;
+    let max_zoom = read_optional_zoom(fields, "max-zoom")?;
 
     // A line-placed icon has no ezu equivalent (MapLibre repeats it along the
     // path); the line path draws the label only.
@@ -3983,6 +4173,7 @@ fn build_text_node(
             filter_expr,
             filter_expr_src,
             min_zoom_field,
+            upstream_warned: AtomicBool::new(false),
             min_zoom,
             max_zoom,
             ports,
@@ -3997,7 +4188,7 @@ fn build_text_node(
 /// shared `label-placement` node.
 fn text_schema(stage: Stage) -> Value {
     let mut schema = serde_json::json!({
-            "description": "Text labels (MapLibre `symbol-placement`): `placement: point` (default) labels each feature point, `line` / `line-center` walk each polyline with tangent-rotated glyphs. `font` is an ordered fallback stack of `font` and/or `glyphs` source names; `text` is a literal string or a MapLibre string expression evaluated per feature group. Paint properties and the layout knobs (in em) have optional `*-expr` siblings evaluated per feature group. Collision is on by default and is deterministic across tiles: candidates come from this tile plus the 8 neighbour tiles (host-bound under `<source>.<layer>@dx,dy`), so borders stay seamless. The neighbours are read from the layer the `features` node feeding `features` reads, with its filter and zoom band; `source`/`layer` name another layer instead. Fed by any other op and naming no layer, collision is centre-tile-only. `icon-name` / `icon-name-expr` add MapLibre's `icon-image` half: the icon is placed together with the text against the same index, so a symbol shows both or neither unless `icon-optional` / `text-optional` say otherwise. `font` and `text` are required unless the symbol is icon-only.",
+            "description": "Text labels (MapLibre `symbol-placement`): `placement: point` (default) labels each feature point, `line` / `line-center` walk each polyline with tangent-rotated glyphs. `font` is an ordered fallback stack of `font` and/or `glyphs` source names; `text` is a literal string or a MapLibre string expression evaluated per feature group. Paint properties and the layout knobs (in em) have optional `*-expr` siblings evaluated per feature group. Collision is on by default and is deterministic across tiles: candidates come from this tile plus the 8 neighbour tiles, so borders stay seamless. The node asks `features` to carry the neighbours: the `features` node reads them (host-bound under `<source>.<layer>@dx,dy`) with its own filter and zoom band, and each op between that works feature by feature applies itself to them too. An op that merges features passes none on, and the build warns that collision is then centre-tile-only. `icon-name` / `icon-name-expr` add MapLibre's `icon-image` half: the icon is placed together with the text against the same index, so a symbol shows both or neither unless `icon-optional` / `text-optional` say otherwise. `font` and `text` are required unless the symbol is icon-only.",
             "properties": {
                 "features": schema_frag::node_ref(),
                 "font": { "type": "array", "items": { "type": "string" },
@@ -4135,18 +4326,18 @@ fn text_schema(stage: Stage) -> Value {
                 "dedupe-distance-px": { "type": "number", "exclusiveMinimum": 0.0,
                                         "description": "The distance in px, anchor to anchor, within which a placed label hides later labels with the same `dedupe-key-expr` key. Required with `dedupe-key-expr`; must be greater than 0." },
                 "source": { "type": "string",
-                            "description": "Upstream feature source name (matches the `features` node). Used only to name the neighbour tile bindings for cross-tile collision. Omit both `source` and `layer` to take them from the `features` node feeding `features`; fed by any other op, the node then collides within this tile only." },
+                            "description": "Deprecated: remove it, with `layer`; the neighbour tiles come through `features`. With `layer`, makes the node read the neighbour tiles' copies of that layer itself, raw, instead of taking them from `features`." },
                 "layer": { "type": "string",
-                           "description": "Upstream feature layer name (with `source`). Used only to name neighbour bindings for cross-tile collision." },
+                           "description": "Deprecated: remove it, with `source`. The layer the node reads from the neighbour tiles itself." },
                 "filter-expr": {
-                    "description": "The upstream `features` filter, reproduced when gathering neighbour candidates so they are filtered identically to this tile's own features. Set it to whatever the `features` node uses. Without `source`/`layer` it defaults to the filter of the `features` node feeding `features`.",
+                    "description": "Deprecated: remove it. The filter for the neighbour tiles the node reads itself with `source`/`layer`; ignored without them.",
                 },
                 "min-zoom-field": { "type": "string",
-                                    "description": "Per-feature `min_zoom` property name, reproduced for neighbour candidate filtering (mirrors the `features` node, and defaults to its field when `source`/`layer` are omitted)." },
+                                    "description": "Deprecated: remove it. The per-feature `min_zoom` property for the neighbour tiles the node reads itself with `source`/`layer`; ignored without them." },
                 "min-zoom": { "type": "integer", "minimum": 0, "maximum": 24,
-                              "description": "Style layer zoom gate: draw nothing below this zoom (mirrors the `features` node; when `source`/`layer` are omitted, the feeding `features` node's `min-zoom` applies as well)." },
+                              "description": "Style layer zoom gate: draw nothing below this zoom, neighbour tiles' labels included." },
                 "max-zoom": { "type": "integer", "minimum": 0, "maximum": 24,
-                              "description": "Style layer zoom gate: draw nothing above this zoom (mirrors the `features` node; when `source`/`layer` are omitted, the feeding `features` node's `max-zoom` applies as well)." },
+                              "description": "Style layer zoom gate: draw nothing above this zoom, neighbour tiles' labels included." },
                 "icon-sprite": schema_frag::asset_ref(),
                 "icon-name": { "type": "string",
                                "description": "Constant MapLibre `icon-image`: the sprite to draw at each point, cropped from `icon-sprite`. Needs `icon-sprite`." },

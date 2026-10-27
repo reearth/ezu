@@ -135,7 +135,10 @@ is fetched with the tile. Two things need more than that:
   before evaluation.
 - **Label collision.** Candidates from the eight neighbouring tiles participate
   in placement, so both sides of a border agree — see
-  [tiles and determinism](/ezu/concepts/tiles-and-determinism/).
+  [tiles and determinism](/ezu/concepts/tiles-and-determinism/). A label node
+  asks its `features` input for them; the `features` node at the top of the
+  chain is what reads the neighbour tiles, and each feature-by-feature op on
+  the way applies itself to them as it does to the tile's own features.
 
 Nothing else reads neighbours. In a wasm host, ask rather than assume:
 

@@ -156,7 +156,7 @@ fn assert_exact_icons(r: &RasterBuf, icons: usize) {
 #[test]
 fn text_icon_draws_only_its_own_pixels() {
     let r = render(
-        r#""out": { "op": "text", "features": "@pts", "source": "src", "layer": "pts",
+        r#""out": { "op": "text", "features": "@pts",
                     "font": ["body"], "text": ["get", "name"], "size": 12,
                     "icon-sprite": "@sheet", "icon-name": "edges",
                     "allow-overlap": true, "icon-allow-overlap": true }"#,
