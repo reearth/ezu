@@ -46,6 +46,9 @@ mean is spelled out in
   the asked `features` nodes read, as it listed the label nodes' own.
 - `ezu translate` no longer writes `source`, `layer` or `filter-expr` on the
   label nodes it emits; their `features` node carries them.
+- `Graph::asset_inputs` lists the assets `image`, `icon` and `brush-file`
+  read, as it lists every other source's, and their hashes key those nodes'
+  cache entries. Nothing draws differently.
 
 ### Deprecated
 

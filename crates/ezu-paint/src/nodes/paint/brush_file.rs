@@ -47,6 +47,9 @@ impl Node for BrushFileNode {
         };
         Ok(PortValue::Brush(b))
     }
+    fn asset_inputs(&self) -> Vec<String> {
+        vec![self.src.clone()]
+    }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"brush-file");
         h.update(self.src.as_bytes());

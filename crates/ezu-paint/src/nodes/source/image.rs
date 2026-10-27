@@ -41,6 +41,9 @@ impl Node for ImageNode {
         };
         Ok(PortValue::Sprite(raster))
     }
+    fn asset_inputs(&self) -> Vec<String> {
+        vec![self.src.clone()]
+    }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"image");
         h.update(self.src.as_bytes());

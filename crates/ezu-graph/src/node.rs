@@ -196,6 +196,10 @@ pub trait Node: Send + Sync {
     /// so changes in bound data invalidate caches automatically. Like
     /// declaring uniforms in a shader.
     ///
+    /// Every node that calls `ctx.assets.load` lists what it loads here:
+    /// [`crate::Graph::asset_inputs`] is the union of these lists, and a
+    /// host that binds assets before rendering (wasm) binds from it.
+    ///
     /// Default: no bindings.
     fn asset_inputs(&self) -> Vec<String> {
         Vec::new()

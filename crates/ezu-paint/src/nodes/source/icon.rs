@@ -50,6 +50,9 @@ impl Node for IconNode {
             .unwrap_or_else(|| RasterBuf::new(1, 1));
         Ok(PortValue::Sprite(Arc::new(cropped)))
     }
+    fn asset_inputs(&self) -> Vec<String> {
+        vec![self.sprite.clone()]
+    }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"icon");
         h.update(self.sprite.as_bytes());
