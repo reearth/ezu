@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::buf::{OpaqueValue, RasterBuf, ScalarField};
+use crate::buf::{OpaqueValue, RasterBuf, ScalarField, SpriteSheet};
 use crate::port::PortKind;
 
 /// One value flowing along an edge. Cloning is cheap (Arc / Copy).
@@ -11,6 +11,8 @@ pub enum PortValue {
     Features(OpaqueValue),
     Raster(Arc<RasterBuf>),
     Sprite(Arc<RasterBuf>),
+    /// A whole sprite sheet (see [`PortKind::SpriteSheet`]).
+    SpriteSheet(Arc<SpriteSheet>),
     Brush(OpaqueValue),
     /// Label placement candidates or decisions (see [`PortKind::Labels`]).
     Labels(OpaqueValue),
@@ -24,6 +26,7 @@ impl PortValue {
             PortValue::Features(_) => PortKind::Features,
             PortValue::Raster(_) => PortKind::Raster,
             PortValue::Sprite(_) => PortKind::Sprite,
+            PortValue::SpriteSheet(_) => PortKind::SpriteSheet,
             PortValue::Brush(_) => PortKind::Brush,
             PortValue::Labels(_) => PortKind::Labels,
             PortValue::Scalar(_) => PortKind::Scalar,
@@ -55,6 +58,14 @@ impl PortValue {
         }
     }
 
+    pub fn as_sprite_sheet(&self) -> Option<&Arc<SpriteSheet>> {
+        if let PortValue::SpriteSheet(s) = self {
+            Some(s)
+        } else {
+            None
+        }
+    }
+
     /// Approximate heap bytes held by this value's payload.
     ///
     /// Exact for the pixel-carrying variants (raster, sprite, scalar
@@ -74,6 +85,7 @@ impl PortValue {
                     r.pixels.len()
                 }
             }
+            PortValue::SpriteSheet(s) => s.atlas.pixels.len(),
             PortValue::ScalarField(f) => f.values.len() * std::mem::size_of::<f32>(),
             _ => 0,
         }

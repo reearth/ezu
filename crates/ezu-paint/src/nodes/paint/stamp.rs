@@ -32,7 +32,7 @@ use crate::nodes::common::{
     canvas_into_raster, core_tile, downcast_features, empty_raster, make_canvas, read_xy,
     unwrap_raster_or_sprite, FramedImage, ACCEPTS_RASTER_OR_SPRITE,
 };
-use crate::nodes::source::sprite::{load_sheet, sprite_atlas_key, IconCrops};
+use crate::nodes::source::sprite::{sheet_port, sheet_schema, IconCrops, SheetInput};
 
 const STAMP_SALT: u32 = 0x5354_4d50; // 'STMP'
 /// Position jitter draws from its own salt, so moving a point around is
@@ -151,12 +151,12 @@ struct StampNode {
     scale_expr_src: Option<String>,
     rotation_deg_expr_src: Option<String>,
     opacity_expr_src: Option<String>,
-    /// Data-driven `icon-image`: instead of the `image` port, the sprite
-    /// atlas key plus a MapLibre expression giving each feature's icon name.
-    /// The sheet is cropped per group by the evaluated name (cropping any icon
-    /// the bound sheet contains), so no `image` input is wired. Absent → the
-    /// node stamps its single `image` input.
-    icon_sprite: Option<String>,
+    /// Data-driven `icon-image`: instead of the `image` port, a sprite sheet
+    /// plus a MapLibre expression giving each feature's icon name. The sheet
+    /// is cropped per group by the evaluated name (cropping any icon it
+    /// contains), so no `image` input is wired. Absent → the node stamps its
+    /// single `image` input.
+    icon_sheet: Option<SheetInput>,
     icon_name_expr: Option<maplibre_expr::Expr>,
     icon_name_expr_src: Option<String>,
     /// Crops the icons `icon_name_expr` names out of the sheet.
@@ -339,11 +339,11 @@ impl Node for StampNode {
             // sprite sheet per group. Crops are cached by name, and both the
             // paint (scale / rotation / opacity) and the icon are resolved per
             // group from the same feature context.
-            let key = self
-                .icon_sprite
-                .as_deref()
-                .ok_or_else(|| EvalError::Other("stamp: icon mode without a sprite".into()))?;
-            let sheet = load_sheet(ctx, key)?;
+            let sheet = self
+                .icon_sheet
+                .as_ref()
+                .ok_or_else(|| EvalError::Other("stamp: icon mode without a sheet".into()))?
+                .get(ctx, inputs, "sheet")?;
             let mut crops: HashMap<String, Option<FramedImage>> = HashMap::new();
             for group in &feats.groups {
                 let ectx = crate::render::group_expr_context(group, z);
@@ -429,8 +429,11 @@ impl Node for StampNode {
         Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))))
     }
     fn asset_inputs(&self) -> Vec<String> {
-        // In icon mode the sprite sheet is bound here (wasm hosts pre-bind).
-        self.icon_sprite.iter().cloned().collect()
+        // The deprecated `sprite` field loads the sheet here.
+        self.icon_sheet
+            .iter()
+            .filter_map(SheetInput::asset_inputs)
+            .collect()
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"stamp");
@@ -452,7 +455,7 @@ impl Node for StampNode {
                 h.update(s.as_bytes());
             }
         }
-        if let Some(sprite) = &self.icon_sprite {
+        if let Some(sprite) = self.icon_sheet.as_ref().and_then(SheetInput::field_key) {
             h.update(b"iconsprite");
             h.update(sprite.as_bytes());
         }
@@ -465,24 +468,31 @@ impl Node for StampNode {
     }
 }
 
+/// A data-driven icon, read by [`read_icon_name_expr`]: where the sheet
+/// comes from, the connection wiring its port (if it is one), and the
+/// compiled `name-expr` with its raw JSON text.
+pub(super) struct IconByName {
+    pub(super) sheet: SheetInput,
+    pub(super) connection: Option<Connection>,
+    pub(super) expr: maplibre_expr::Expr,
+    pub(super) expr_src: String,
+}
+
 /// Read a data-driven icon: a `name-expr` (the MapLibre expression naming
-/// each feature's icon) plus the `sprite` atlas it crops from. The two replace
-/// an `image` input — the sheet is bound once and any icon in it is cropped
-/// per feature group, so no `image` node is wired. Returns the atlas key, the
-/// compiled expression and its raw JSON text, all `None` without `name-expr`.
-#[allow(clippy::type_complexity)]
+/// each feature's icon) plus the sheet it crops from — a `sprite` node wired
+/// to `sheet`, or the deprecated `sprite` field naming the source. The two
+/// replace an `image` input: any icon in the sheet is cropped per feature
+/// group, so no `image` node is wired. The sheet's port, when wired, is input
+/// 1. `None` without `name-expr`.
 pub(super) fn read_icon_name_expr(
     fields: &serde_json::Map<String, Value>,
     ctx: &FactoryCtx<'_>,
-) -> Result<(Option<String>, Option<maplibre_expr::Expr>, Option<String>), FactoryError> {
+) -> Result<Option<IconByName>, FactoryError> {
     let Some(v) = fields.get("name-expr") else {
-        return Ok((None, None, None));
+        return Ok(None);
     };
-    let raw = fields
-        .get("sprite")
-        .and_then(Value::as_str)
-        .ok_or_else(|| FactoryError::MissingField("sprite".into()))?;
-    let atlas = sprite_atlas_key("sprite", raw, ctx)?;
+    let (sheet, connection) = SheetInput::read(fields, ctx, "sheet", "sprite", 1)?
+        .ok_or_else(|| FactoryError::MissingField("sheet".into()))?;
     let expr = maplibre_expr::parse(v).map_err(|e| FactoryError::BadField {
         field: "name-expr".into(),
         msg: e.to_string(),
@@ -495,7 +505,49 @@ pub(super) fn read_icon_name_expr(
             field: "name-expr".into(),
             msg: e.to_string(),
         })?;
-    Ok((Some(atlas), Some(expr), Some(v.to_string())))
+    Ok(Some(IconByName {
+        sheet,
+        connection,
+        expr,
+        expr_src: v.to_string(),
+    }))
+}
+
+/// The ports and connections a stamping op starts with: `features`, then
+/// the sheet when `icon` names icons from a wired one, or else `image`.
+pub(super) fn image_ports(
+    fields: &serde_json::Map<String, Value>,
+    icon: &mut Option<IconByName>,
+) -> Result<(Vec<PortSpec>, Vec<Connection>), FactoryError> {
+    let mut ports = vec![PortSpec {
+        name: "features",
+        accepts: &[PortKind::Features],
+        optional: false,
+    }];
+    let mut connections = vec![Connection {
+        port: "features".into(),
+        src: take_input_ref(fields, "features")?,
+    }];
+    match icon {
+        Some(icon) => {
+            if let Some(c) = icon.connection.take() {
+                ports.push(sheet_port("sheet"));
+                connections.push(c);
+            }
+        }
+        None => {
+            ports.push(PortSpec {
+                name: "image",
+                accepts: ACCEPTS_RASTER_OR_SPRITE,
+                optional: false,
+            });
+            connections.push(Connection {
+                port: "image".into(),
+                src: take_input_ref(fields, "image")?,
+            });
+        }
+    }
+    Ok((ports, connections))
 }
 
 pub(super) struct StampFactory;
@@ -508,16 +560,12 @@ impl NodeFactory for StampFactory {
         fields: &serde_json::Map<String, Value>,
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
-        let features = take_input_ref(fields, "features")?;
+        // `features`, then either the sheet the icons are named from or the
+        // single `image`.
+        let mut icon = read_icon_name_expr(fields, ctx)?;
+        let (mut ports, mut connections) = image_ports(fields, &mut icon)?;
 
-        let (icon_sprite, icon_name_expr, icon_name_expr_src) = read_icon_name_expr(fields, ctx)?;
-        // The single-image input, present only when not in icon mode.
-        let image = match icon_name_expr {
-            Some(_) => None,
-            None => Some(take_input_ref(fields, "image")?),
-        };
-
-        let mut r = InReader::new(fields, ctx, if image.is_some() { 2 } else { 1 });
+        let mut r = InReader::new(fields, ctx, ports.len());
         let scale = r.number_or("scale", 1.0)?;
         let rotation_deg = r.number_or("rotation-deg", 0.0)?;
         let rotation_jitter_deg = r.number_or("rotation-jitter-deg", 0.0)?;
@@ -537,28 +585,12 @@ impl NodeFactory for StampFactory {
             parse_expr_field(fields, "anchor-expr", &maplibre_expr::Type::String)?;
         let offset = read_xy(fields, "offset", ctx, [0.0, 0.0])?;
 
-        let mut ports = vec![PortSpec {
-            name: "features",
-            accepts: &[PortKind::Features],
-            optional: false,
-        }];
-        let mut connections = vec![Connection {
-            port: "features".into(),
-            src: features,
-        }];
-        if let Some(image) = image {
-            ports.push(PortSpec {
-                name: "image",
-                accepts: ACCEPTS_RASTER_OR_SPRITE,
-                optional: false,
-            });
-            connections.push(Connection {
-                port: "image".into(),
-                src: image,
-            });
-        }
         ports.extend(parts.ports);
         connections.extend(parts.connections);
+        let (icon_sheet, icon_name_expr, icon_name_expr_src) = match icon {
+            Some(i) => (Some(i.sheet), Some(i.expr), Some(i.expr_src)),
+            None => (None, None, None),
+        };
 
         Ok(BuiltNode {
             node: Box::new(StampNode {
@@ -574,7 +606,7 @@ impl NodeFactory for StampFactory {
                 scale_expr_src,
                 rotation_deg_expr_src,
                 opacity_expr_src,
-                icon_sprite,
+                icon_sheet,
                 icon_name_expr,
                 icon_name_expr_src,
                 icon_crops: IconCrops::default(),
@@ -591,13 +623,15 @@ impl NodeFactory for StampFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Stamp a sprite at every input point. Lines and polygons are ignored. Rotation, scale and position jitter are world-deterministic — a given point gets the same jitter no matter which tile renders it, and the three do not correlate. Provide either an `image` input (one sprite for every point) or, for a data-driven `icon-image`, a `sprite` atlas ref plus a `name-expr` that names each feature's icon.",
+            "description": "Stamp a sprite at every input point. Lines and polygons are ignored. Rotation, scale and position jitter are world-deterministic — a given point gets the same jitter no matter which tile renders it, and the three do not correlate. Provide either an `image` input (one sprite for every point) or, for a data-driven `icon-image`, a `sheet` input from a `sprite` node plus a `name-expr` that names each feature's icon.",
             "properties": {
                 "features": schema_frag::node_ref(),
                 "image": schema_frag::node_ref(),
-                "sprite": schema_frag::asset_ref(),
+                "sheet": sheet_schema("A `sprite` node: the sheet `name-expr` names icons from."),
+                "sprite": { "type": "string",
+                            "description": "Deprecated: load the sheet with a `sprite` node and wire it to `sheet`. An `@sprite-source` ref the node loads the sheet from itself; ignored when `sheet` is wired." },
                 "name-expr": {
-                    "description": "A MapLibre expression giving each feature's icon name (MapLibre data-driven `icon-image`), cropped per group from the `sprite` atlas. Used instead of an `image` input; any icon the bound sheet contains is croppable, so no enumeration is needed.",
+                    "description": "A MapLibre expression giving each feature's icon name (MapLibre data-driven `icon-image`), cropped per group from the `sheet`. Used instead of an `image` input; any icon the sheet contains is croppable, so no enumeration is needed. A name the sheet lacks stamps nothing.",
                 },
                 "scale": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0,
                            "description": "Uniform scale applied to the sprite. Default 1.0 (native size)." })),

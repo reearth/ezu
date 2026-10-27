@@ -71,7 +71,7 @@ use crate::nodes::common::{
     read_optional_string, read_optional_zoom, read_xy, FeatureGroup, FilteredFeatures,
     NeighborGroups, NeighbourLayer, ANCHOR_NAMES as TEXT_ANCHORS,
 };
-use crate::nodes::source::sprite::{load_sheet, sprite_atlas_key, IconCrops};
+use crate::nodes::source::sprite::{sheet_port, sheet_schema, IconCrops, SheetInput};
 use ezu_core::text::{
     clip_line,
     collide::{self, Aabb, LabelCandidate, Overlap, PlaceRank},
@@ -1080,8 +1080,9 @@ impl Placement {
 /// icon and text are placed as one unit (see [`symbol_variants`]), so the
 /// icon lives on the label node rather than on a separate `stamp`.
 struct IconConfig {
-    /// Sprite atlas asset key (the `sprite` source's `image`).
-    sprite: String,
+    /// Where the sprite sheet comes from: a `sprite` node on `icon-sheet`,
+    /// or the deprecated `icon-sprite` field.
+    sheet: SheetInput,
     /// Constant `icon-image`; `None` when `name_expr` names it per feature.
     name: Option<String>,
     name_expr: Option<maplibre_expr::Expr>,
@@ -2652,7 +2653,7 @@ impl TextNode {
         // everywhere costs nothing).
         let sheet = match &self.icon {
             Some(cfg) if preps.iter().any(|p| p.icon.is_some()) => {
-                Some(load_sheet(ctx, &cfg.sprite)?)
+                Some(cfg.sheet.get(ctx, inputs, "icon-sheet")?)
             }
             _ => None,
         };
@@ -3138,9 +3139,9 @@ impl Node for TextNode {
         for (_, asset_keys) in &self.font_stacks {
             keys.extend(asset_keys.iter().cloned());
         }
-        // The sprite sheet the icons are cropped from (wasm hosts pre-bind).
-        if let Some(cfg) = &self.icon {
-            keys.push(cfg.sprite.clone());
+        // The sprite sheet the deprecated `icon-sprite` loads here.
+        if let Some(key) = self.icon.as_ref().and_then(|cfg| cfg.sheet.asset_inputs()) {
+            keys.push(key);
         }
         keys.sort();
         keys.dedup();
@@ -3313,7 +3314,8 @@ impl Node for TextNode {
         // its hash (and its cache entries).
         if let Some(cfg) = &self.icon {
             h.update(b"icon");
-            h.update(cfg.sprite.as_bytes());
+            // A wired sheet is keyed by the node it comes from.
+            h.update(cfg.sheet.field_key().unwrap_or("").as_bytes());
             h.update(&[0]);
             if let Some(name) = &cfg.name {
                 h.update(name.as_bytes());
@@ -3494,14 +3496,22 @@ fn read_box_padding(
     Ok(out)
 }
 
+/// Whether the node names an icon, and so builds an [`IconConfig`].
+fn names_icon(fields: &serde_json::Map<String, Value>) -> bool {
+    fields.contains_key("icon-name") || fields.contains_key("icon-name-expr")
+}
+
 /// Build the [`IconConfig`] from a node's `icon-*` fields, or `None` when the
-/// node names no icon. `icon-sprite` plus either `icon-name` (constant) or
-/// `icon-name-expr` (MapLibre data-driven `icon-image`) turn it on.
+/// node names no icon. A sheet — a `sprite` node on `icon-sheet` (input
+/// `sheet_ix`), or the deprecated `icon-sprite` — plus either `icon-name`
+/// (constant) or `icon-name-expr` (MapLibre data-driven `icon-image`) turn it
+/// on. Also returns the connection wiring `icon-sheet`, when it is.
 fn build_icon_config(
     fields: &serde_json::Map<String, Value>,
     ctx: &FactoryCtx<'_>,
     r: &mut InReader<'_, '_>,
-) -> Result<Option<IconConfig>, FactoryError> {
+    sheet_ix: usize,
+) -> Result<(Option<IconConfig>, Option<Connection>), FactoryError> {
     let name = read_optional_string(fields, "icon-name")?;
     let (name_expr, name_expr_src) = match fields.get("icon-name-expr") {
         Some(v) => {
@@ -3522,13 +3532,10 @@ fn build_icon_config(
         None => (None, None),
     };
     if name.is_none() && name_expr.is_none() {
-        return Ok(None);
+        return Ok((None, None));
     }
-    let sprite = fields
-        .get("icon-sprite")
-        .and_then(Value::as_str)
-        .ok_or_else(|| FactoryError::MissingField("icon-sprite".into()))?;
-    let sprite = sprite_atlas_key("icon-sprite", sprite, ctx)?;
+    let (sheet, connection) = SheetInput::read(fields, ctx, "icon-sheet", "icon-sprite", sheet_ix)?
+        .ok_or_else(|| FactoryError::MissingField("icon-sheet".into()))?;
 
     let anchor = r.enum_or("icon-anchor", Anchor::Center, TEXT_ANCHORS)?;
     let (size_expr, size_expr_src) =
@@ -3541,8 +3548,8 @@ fn build_icon_config(
         parse_expr_field(fields, "icon-padding-expr", &maplibre_expr::Type::Number)?;
     let text_fit = r.enum_or("icon-text-fit", IconTextFit::None, ICON_TEXT_FITS)?;
     let text_fit_padding = read_box_padding(fields, "icon-text-fit-padding", ctx)?;
-    Ok(Some(IconConfig {
-        sprite,
+    let cfg = IconConfig {
+        sheet,
         name,
         name_expr,
         name_expr_src,
@@ -3566,7 +3573,8 @@ fn build_icon_config(
         optional: read_bool_or(fields, "icon-optional", ctx, false)?,
         text_fit,
         text_fit_padding,
-    }))
+    };
+    Ok((Some(cfg), connection))
 }
 
 /// Build a [`TextNode`] for either stage: the fields, ports and connections
@@ -3578,10 +3586,29 @@ fn build_text_node(
 ) -> Result<BuiltNode, FactoryError> {
     let features = take_input_ref(fields, "features")?;
 
+    // The fixed inputs: `features`, then `icon-sheet` when the node names
+    // icons from a wired sheet. The scalar ports follow them.
+    let mut ports = vec![PortSpec {
+        name: "features",
+        accepts: &[PortKind::Features],
+        optional: false,
+    }];
+    let mut connections = vec![Connection {
+        port: "features".into(),
+        src: features,
+    }];
+    let sheet_ix = ports.len();
+    let fixed = ports.len() + usize::from(names_icon(fields) && fields.contains_key("icon-sheet"));
+
     // MapLibre's `icon-image` half. A symbol may be icon-only, so its
     // presence makes `font` / `text` optional.
-    let mut r = InReader::new(fields, ctx, 1);
-    let icon = build_icon_config(fields, ctx, &mut r)?;
+    let mut r = InReader::new(fields, ctx, fixed);
+    let (icon, sheet_connection) = build_icon_config(fields, ctx, &mut r, sheet_ix)?;
+    if let Some(c) = sheet_connection {
+        ports.push(sheet_port("icon-sheet"));
+        connections.push(c);
+    }
+    debug_assert_eq!(ports.len(), fixed);
 
     // `font`: an ordered array of `font` / `glyphs` source names —
     // the fallback stack. Each resolves to its source's asset key
@@ -4082,16 +4109,7 @@ fn build_text_node(
         );
     }
 
-    let mut ports = vec![PortSpec {
-        name: "features",
-        accepts: &[PortKind::Features],
-        optional: false,
-    }];
     ports.extend(parts.ports);
-    let mut connections = vec![Connection {
-        port: "features".into(),
-        src: features,
-    }];
     connections.extend(parts.connections);
 
     Ok(BuiltNode {
@@ -4338,11 +4356,13 @@ fn text_schema(stage: Stage) -> Value {
                               "description": "Style layer zoom gate: draw nothing below this zoom, neighbour tiles' labels included." },
                 "max-zoom": { "type": "integer", "minimum": 0, "maximum": 24,
                               "description": "Style layer zoom gate: draw nothing above this zoom, neighbour tiles' labels included." },
-                "icon-sprite": schema_frag::asset_ref(),
+                "icon-sheet": sheet_schema("A `sprite` node: the sheet `icon-name` / `icon-name-expr` crop the icon from."),
+                "icon-sprite": { "type": "string",
+                                 "description": "Deprecated: load the sheet with a `sprite` node and wire it to `icon-sheet`. An `@sprite-source` ref the node loads the sheet from itself; ignored when `icon-sheet` is wired." },
                 "icon-name": { "type": "string",
-                               "description": "Constant MapLibre `icon-image`: the sprite to draw at each point, cropped from `icon-sprite`. Needs `icon-sprite`." },
+                               "description": "Constant MapLibre `icon-image`: the sprite to draw at each point, cropped from `icon-sheet`. Needs `icon-sheet`." },
                 "icon-name-expr": {
-                    "description": "A MapLibre expression naming each feature's icon (data-driven `icon-image`), cropped from `icon-sprite`; overrides `icon-name`. A group resolving to an empty/unknown name draws no icon and places as a text-only symbol.",
+                    "description": "A MapLibre expression naming each feature's icon (data-driven `icon-image`), cropped from `icon-sheet`; overrides `icon-name`. A group resolving to an empty/unknown name draws no icon and places as a text-only symbol.",
                 },
                 "icon-size": { "type": "number", "minimum": 0.0,
                                "description": "MapLibre `icon-size`: multiplier on the sprite's authored display size (atlas pixels over its pixel ratio). Default 1." },

@@ -22,20 +22,22 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
-    FactoryError, In, InReader, InfluenceCtx, Node, NodeFactory, PortKind, PortSpec, PortValue,
+    schema_frag, BuiltNode, CoordSpace, EvalCtx, EvalError, FactoryCtx, FactoryError, In, InReader,
+    InfluenceCtx, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use tiny_skia::{PixmapPaint, Transform};
 use xxhash_rust::xxh3::Xxh3;
 
-use super::stamp::{eval_icon_name, eval_number, eval_px, parse_expr_field, read_icon_name_expr};
+use super::stamp::{
+    eval_icon_name, eval_number, eval_px, image_ports, parse_expr_field, read_icon_name_expr,
+};
 use super::stroke::{offset_lines, OFFSET_MITER_LIMIT};
 use crate::nodes::common::{
     canvas_into_raster, downcast_features, empty_raster, make_canvas, unwrap_raster_or_sprite,
-    FramedImage, ACCEPTS_RASTER_OR_SPRITE,
+    FramedImage,
 };
-use crate::nodes::source::sprite::{load_sheet, IconCrops};
+use crate::nodes::source::sprite::{sheet_schema, IconCrops, SheetInput};
 
 struct LineStampNode {
     /// Stroke width in px. When > 0 the image is scaled so its height
@@ -62,11 +64,11 @@ struct LineStampNode {
     width_expr_src: Option<String>,
     opacity_expr_src: Option<String>,
     offset_expr_src: Option<String>,
-    /// Data-driven pattern: instead of the `image` port, the sprite atlas key
-    /// plus a MapLibre expression naming each feature's pattern icon, cropped
-    /// per group from the bound sheet. Absent → the node repeats its single
-    /// `image` input.
-    pattern_sprite: Option<String>,
+    /// Data-driven pattern: instead of the `image` port, a sprite sheet plus
+    /// a MapLibre expression naming each feature's pattern icon, cropped per
+    /// group from the sheet. Absent → the node repeats its single `image`
+    /// input.
+    pattern_sheet: Option<SheetInput>,
     pattern_name_expr: Option<maplibre_expr::Expr>,
     pattern_name_expr_src: Option<String>,
     /// Crops the patterns `pattern_name_expr` names out of the sheet.
@@ -247,10 +249,13 @@ impl Node for LineStampNode {
         if let Some(name_expr) = &self.pattern_name_expr {
             // Data-driven pattern: crop each group's icon from the bound
             // sprite sheet, caching the crops by name.
-            let key = self.pattern_sprite.as_deref().ok_or_else(|| {
-                EvalError::Other("line-stamp: pattern by name without a sprite".into())
-            })?;
-            let sheet = load_sheet(ctx, key)?;
+            let sheet = self
+                .pattern_sheet
+                .as_ref()
+                .ok_or_else(|| {
+                    EvalError::Other("line-stamp: pattern by name without a sheet".into())
+                })?
+                .get(ctx, inputs, "sheet")?;
             let mut crops: HashMap<String, Option<FramedImage>> = HashMap::new();
             for group in &feats.groups {
                 if group.lines.is_empty() {
@@ -305,9 +310,11 @@ impl Node for LineStampNode {
         Ok(PortValue::Raster(Arc::new(canvas_into_raster(canvas))))
     }
     fn asset_inputs(&self) -> Vec<String> {
-        // With a pattern named per group the sprite sheet is bound here
-        // (wasm hosts pre-bind).
-        self.pattern_sprite.iter().cloned().collect()
+        // The deprecated `sprite` field loads the sheet here.
+        self.pattern_sheet
+            .iter()
+            .filter_map(SheetInput::asset_inputs)
+            .collect()
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"line-stamp");
@@ -330,7 +337,7 @@ impl Node for LineStampNode {
                 h.update(s.as_bytes());
             }
         }
-        if let Some(sprite) = &self.pattern_sprite {
+        if let Some(sprite) = self.pattern_sheet.as_ref().and_then(SheetInput::field_key) {
             h.update(b"sprite");
             h.update(sprite.as_bytes());
         }
@@ -350,15 +357,11 @@ impl NodeFactory for LineStampFactory {
         fields: &serde_json::Map<String, Value>,
         ctx: &FactoryCtx<'_>,
     ) -> Result<BuiltNode, FactoryError> {
-        let features = take_input_ref(fields, "features")?;
-        let (pattern_sprite, pattern_name_expr, pattern_name_expr_src) =
-            read_icon_name_expr(fields, ctx)?;
-        // The single-image input, present only when no pattern is named.
-        let image = match pattern_name_expr {
-            Some(_) => None,
-            None => Some(take_input_ref(fields, "image")?),
-        };
-        let mut r = InReader::new(fields, ctx, if image.is_some() { 2 } else { 1 });
+        // `features`, then either the sheet the patterns are named from or
+        // the single `image`.
+        let mut pattern = read_icon_name_expr(fields, ctx)?;
+        let (mut ports, mut connections) = image_ports(fields, &mut pattern)?;
+        let mut r = InReader::new(fields, ctx, ports.len());
         let width_px = r.number_or("width-px", 0.0)?;
         let spacing_px = r.number_or("spacing-px", 0.0)?;
         let scale = r.number_or("scale", 1.0)?;
@@ -374,28 +377,12 @@ impl NodeFactory for LineStampFactory {
         let (offset_expr, offset_expr_src) =
             parse_expr_field(fields, "offset-expr", &maplibre_expr::Type::Number)?;
 
-        let mut ports = vec![PortSpec {
-            name: "features",
-            accepts: &[PortKind::Features],
-            optional: false,
-        }];
-        let mut connections = vec![Connection {
-            port: "features".into(),
-            src: features,
-        }];
-        if let Some(image) = image {
-            ports.push(PortSpec {
-                name: "image",
-                accepts: ACCEPTS_RASTER_OR_SPRITE,
-                optional: false,
-            });
-            connections.push(Connection {
-                port: "image".into(),
-                src: image,
-            });
-        }
         ports.extend(parts.ports);
         connections.extend(parts.connections);
+        let (pattern_sheet, pattern_name_expr, pattern_name_expr_src) = match pattern {
+            Some(p) => (Some(p.sheet), Some(p.expr), Some(p.expr_src)),
+            None => (None, None, None),
+        };
 
         Ok(BuiltNode {
             node: Box::new(LineStampNode {
@@ -411,7 +398,7 @@ impl NodeFactory for LineStampFactory {
                 width_expr_src,
                 opacity_expr_src,
                 offset_expr_src,
-                pattern_sprite,
+                pattern_sheet,
                 pattern_name_expr,
                 pattern_name_expr_src,
                 icon_crops: IconCrops::default(),
@@ -423,13 +410,15 @@ impl NodeFactory for LineStampFactory {
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Repeat a sprite along each polyline, rotated to the line's tangent (MapLibre `line-pattern`). Points/polygons ignored. `width-px` scales the image height to the stroke width; `spacing-px` sets the advance (0 = the scaled image width, seamless). Provide either an `image` input (one pattern for every line) or, for a data-driven `line-pattern`, a `sprite` atlas ref plus a `name-expr` that names each feature's pattern.",
+            "description": "Repeat a sprite along each polyline, rotated to the line's tangent (MapLibre `line-pattern`). Points/polygons ignored. `width-px` scales the image height to the stroke width; `spacing-px` sets the advance (0 = the scaled image width, seamless). Provide either an `image` input (one pattern for every line) or, for a data-driven `line-pattern`, a `sheet` input from a `sprite` node plus a `name-expr` that names each feature's pattern.",
             "properties": {
                 "features": schema_frag::node_ref(),
                 "image": schema_frag::node_ref(),
-                "sprite": schema_frag::asset_ref(),
+                "sheet": sheet_schema("A `sprite` node: the sheet `name-expr` names patterns from."),
+                "sprite": { "type": "string",
+                            "description": "Deprecated: load the sheet with a `sprite` node and wire it to `sheet`. An `@sprite-source` ref the node loads the sheet from itself; ignored when `sheet` is wired." },
                 "name-expr": {
-                    "description": "A MapLibre expression giving each feature's pattern icon name (MapLibre data-driven `line-pattern`), cropped per group from the `sprite` atlas. Used instead of an `image` input; a group whose name doesn't resolve to an icon in the sheet is not drawn.",
+                    "description": "A MapLibre expression giving each feature's pattern icon name (MapLibre data-driven `line-pattern`), cropped per group from the `sheet`. Used instead of an `image` input; a group whose name doesn't resolve to an icon in the sheet is not drawn.",
                 },
                 "width-px": schema_frag::in_number(serde_json::json!({ "type": "number", "minimum": 0.0,
                               "description": "Stroke width; the image height is fit to it. 0 = native height." })),

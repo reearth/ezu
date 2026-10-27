@@ -530,6 +530,12 @@ pub fn describe_value(v: &PortValue) -> String {
     match v {
         PortValue::Raster(r) => format!("raster {}x{}", r.width, r.height),
         PortValue::Sprite(s) => format!("sprite {}x{}", s.width, s.height),
+        PortValue::SpriteSheet(s) => format!(
+            "sprite-sheet {}x{} ({} icons)",
+            s.atlas.width,
+            s.atlas.height,
+            s.icons.len()
+        ),
         PortValue::ScalarField(f) => format!(
             "scalar-field {}x{} (mpp~{:.2})",
             f.width,

@@ -110,6 +110,8 @@ mod segment_to;
 mod sharpen_field;
 #[path = "paint/sprite_icon_edges.rs"]
 mod sprite_icon_edges;
+#[path = "paint/sprite_sheet.rs"]
+mod sprite_sheet;
 #[path = "paint/stamp_position_jitter.rs"]
 mod stamp_position_jitter;
 #[path = "paint/string_params.rs"]

@@ -94,6 +94,16 @@ impl Collector {
                 detail = Some(format!("{}×{} px, source size", s.width, s.height));
                 self.encode(s, s.width, s.height, 0)
             }
+            // A sheet shows its atlas, whole.
+            PortValue::SpriteSheet(s) => {
+                detail = Some(format!(
+                    "{}×{} px atlas, {} icons",
+                    s.atlas.width,
+                    s.atlas.height,
+                    s.icons.len()
+                ));
+                self.encode(&s.atlas, s.atlas.width, s.atlas.height, 0)
+            }
             PortValue::ScalarField(f) => {
                 let (gray, range) = scalar_field_to_gray(f);
                 detail = Some(range);
@@ -288,6 +298,7 @@ fn kind_name(kind: PortKind) -> &'static str {
         PortKind::Features => "features",
         PortKind::Raster => "raster",
         PortKind::Sprite => "sprite",
+        PortKind::SpriteSheet => "sprite-sheet",
         PortKind::Brush => "brush",
         PortKind::Labels => "labels",
         PortKind::Scalar => "scalar",

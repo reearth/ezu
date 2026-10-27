@@ -100,6 +100,7 @@ fn doc(params: &str, fields: &str) -> String {
       }},
       "nodes": {{
         "feats": {{ "op": "features", "source": "src", "layer": "pts" }},
+        "icons": {{ "op": "sprite", "sprite": "@sheet" }},
         "out":   {{ "op": "text", "features": "@feats",
                     "font": ["body"], "text": ["get", "name"], "size": 12,
                     "color": "#000000" {fields} }}
@@ -144,7 +145,7 @@ fn param(default: &str) -> String {
 
 /// Each field, its default, another value that draws differently, and any
 /// fields that value needs to show.
-const ICON: &str = r#", "icon-sprite": "@sheet", "icon-name": "dot""#;
+const ICON: &str = r#", "icon-sheet": "@icons", "icon-name": "dot""#;
 const CASES: &[(&str, &str, &str, &str)] = &[
     ("placement", "point", "line", ""),
     ("placement", "point", "line-center", ""),

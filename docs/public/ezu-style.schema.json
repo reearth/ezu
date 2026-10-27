@@ -3647,7 +3647,7 @@
             "type": "object"
           },
           {
-            "description": "Crop one named icon from a `sprite` source's atlas. `sprite` is an `@sprite-source` ref (or literal atlas key); `name` is the icon's index key. Output is a Sprite at the icon's atlas pixel size.",
+            "description": "Crop one named icon from a `sprite` source's atlas. `sprite` is an `@sprite-source` ref (or literal atlas key); `name` is the icon's index key. Output is a Sprite at the icon's atlas pixel size; a name the sheet lacks gives a transparent 1×1 sprite, which draws nothing. To pick an icon per feature, wire a `sprite` node's sheet into `stamp`, `line-stamp` or `text` instead.",
             "properties": {
               "name": {
                 "type": "string"
@@ -4125,7 +4125,7 @@
             "type": "object"
           },
           {
-            "description": "Repeat a sprite along each polyline, rotated to the line's tangent (MapLibre `line-pattern`). Points/polygons ignored. `width-px` scales the image height to the stroke width; `spacing-px` sets the advance (0 = the scaled image width, seamless). Provide either an `image` input (one pattern for every line) or, for a data-driven `line-pattern`, a `sprite` atlas ref plus a `name-expr` that names each feature's pattern.",
+            "description": "Repeat a sprite along each polyline, rotated to the line's tangent (MapLibre `line-pattern`). Points/polygons ignored. `width-px` scales the image height to the stroke width; `spacing-px` sets the advance (0 = the scaled image width, seamless). Provide either an `image` input (one pattern for every line) or, for a data-driven `line-pattern`, a `sheet` input from a `sprite` node plus a `name-expr` that names each feature's pattern.",
             "properties": {
               "features": {
                 "description": "Reference to another node (`@name`).",
@@ -4138,7 +4138,7 @@
                 "type": "string"
               },
               "name-expr": {
-                "description": "A MapLibre expression giving each feature's pattern icon name (MapLibre data-driven `line-pattern`), cropped per group from the `sprite` atlas. Used instead of an `image` input; a group whose name doesn't resolve to an icon in the sheet is not drawn."
+                "description": "A MapLibre expression giving each feature's pattern icon name (MapLibre data-driven `line-pattern`), cropped per group from the `sheet`. Used instead of an `image` input; a group whose name doesn't resolve to an icon in the sheet is not drawn."
               },
               "offset-expr": {
                 "description": "A MapLibre number expression (px) giving the offset, evaluated per feature group; overrides the constant `offset-px`. A group whose expression doesn't resolve to a number falls back to `offset-px`."
@@ -4192,6 +4192,11 @@
                   }
                 ]
               },
+              "sheet": {
+                "description": "A `sprite` node: the sheet `name-expr` names patterns from.",
+                "pattern": "^@?[A-Za-z_][A-Za-z0-9_-]*$",
+                "type": "string"
+              },
               "spacing-px": {
                 "oneOf": [
                   {
@@ -4207,7 +4212,7 @@
                 ]
               },
               "sprite": {
-                "description": "Asset reference (`@name`) or literal path.",
+                "description": "Deprecated: load the sheet with a `sprite` node and wire it to `sheet`. An `@sprite-source` ref the node loads the sheet from itself; ignored when `sheet` is wired.",
                 "type": "string"
               },
               "width-expr": {
@@ -5806,6 +5811,25 @@
             "type": "object"
           },
           {
+            "description": "A `sprite` source's whole sheet — its atlas and name → rect index — for the ops that pick an icon per feature by name: `stamp` and `line-stamp` take it on `sheet`, `text` and `text-labels` on `icon-sheet`. `sprite` is an `@sprite-source` ref (or literal atlas key). To place one named icon, use `icon` instead.",
+            "properties": {
+              "op": {
+                "const": "sprite",
+                "description": "Selects the `sprite` operation."
+              },
+              "sprite": {
+                "description": "Asset reference (`@name`) or literal path.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "op",
+              "sprite"
+            ],
+            "title": "op: sprite",
+            "type": "object"
+          },
+          {
             "description": "Composite an ordered list of raster `layers` bottom-to-top with plain source-over (equivalent to a chain of `blend` nodes with `mode: normal`, `composite: over`, `opacity: 1`), folded into one pass over a single accumulator. Fully-transparent layers are skipped. For per-layer opacity, blend modes, clipping, masks, or the eraser composite, use `blend`.",
             "properties": {
               "layers": {
@@ -5831,7 +5855,7 @@
             "type": "object"
           },
           {
-            "description": "Stamp a sprite at every input point. Lines and polygons are ignored. Rotation, scale and position jitter are world-deterministic — a given point gets the same jitter no matter which tile renders it, and the three do not correlate. Provide either an `image` input (one sprite for every point) or, for a data-driven `icon-image`, a `sprite` atlas ref plus a `name-expr` that names each feature's icon.",
+            "description": "Stamp a sprite at every input point. Lines and polygons are ignored. Rotation, scale and position jitter are world-deterministic — a given point gets the same jitter no matter which tile renders it, and the three do not correlate. Provide either an `image` input (one sprite for every point) or, for a data-driven `icon-image`, a `sheet` input from a `sprite` node plus a `name-expr` that names each feature's icon.",
             "properties": {
               "anchor": {
                 "oneOf": [
@@ -5871,7 +5895,7 @@
                 "type": "string"
               },
               "name-expr": {
-                "description": "A MapLibre expression giving each feature's icon name (MapLibre data-driven `icon-image`), cropped per group from the `sprite` atlas. Used instead of an `image` input; any icon the bound sheet contains is croppable, so no enumeration is needed."
+                "description": "A MapLibre expression giving each feature's icon name (MapLibre data-driven `icon-image`), cropped per group from the `sheet`. Used instead of an `image` input; any icon the sheet contains is croppable, so no enumeration is needed. A name the sheet lacks stamps nothing."
               },
               "offset": {
                 "description": "Shift [x, y] in px from the anchored position, right and down positive (MapLibre `icon-offset`). Like the sprite it is scaled by `scale` and turned by the rotation. Default [0, 0].",
@@ -5978,8 +6002,13 @@
                   }
                 ]
               },
+              "sheet": {
+                "description": "A `sprite` node: the sheet `name-expr` names icons from.",
+                "pattern": "^@?[A-Za-z_][A-Za-z0-9_-]*$",
+                "type": "string"
+              },
               "sprite": {
-                "description": "Asset reference (`@name`) or literal path.",
+                "description": "Deprecated: load the sheet with a `sprite` node and wire it to `sheet`. An `@sprite-source` ref the node loads the sheet from itself; ignored when `sheet` is wired.",
                 "type": "string"
               }
             },
@@ -6504,11 +6533,11 @@
                 "type": "boolean"
               },
               "icon-name": {
-                "description": "Constant MapLibre `icon-image`: the sprite to draw at each point, cropped from `icon-sprite`. Needs `icon-sprite`.",
+                "description": "Constant MapLibre `icon-image`: the sprite to draw at each point, cropped from `icon-sheet`. Needs `icon-sheet`.",
                 "type": "string"
               },
               "icon-name-expr": {
-                "description": "A MapLibre expression naming each feature's icon (data-driven `icon-image`), cropped from `icon-sprite`; overrides `icon-name`. A group resolving to an empty/unknown name draws no icon and places as a text-only symbol."
+                "description": "A MapLibre expression naming each feature's icon (data-driven `icon-image`), cropped from `icon-sheet`; overrides `icon-name`. A group resolving to an empty/unknown name draws no icon and places as a text-only symbol."
               },
               "icon-offset": {
                 "description": "MapLibre `icon-offset`: shift [x, y] in px, itself scaled by `icon-size`. Default [0, 0].",
@@ -6555,6 +6584,11 @@
               "icon-rotate-deg-expr": {
                 "description": "A MapLibre number expression (degrees clockwise); overrides `icon-rotate-deg`."
               },
+              "icon-sheet": {
+                "description": "A `sprite` node: the sheet `icon-name` / `icon-name-expr` crop the icon from.",
+                "pattern": "^@?[A-Za-z_][A-Za-z0-9_-]*$",
+                "type": "string"
+              },
               "icon-size": {
                 "description": "MapLibre `icon-size`: multiplier on the sprite's authored display size (atlas pixels over its pixel ratio). Default 1.",
                 "minimum": 0.0,
@@ -6564,7 +6598,7 @@
                 "description": "A MapLibre number expression, evaluated per feature group; overrides `icon-size`."
               },
               "icon-sprite": {
-                "description": "Asset reference (`@name`) or literal path.",
+                "description": "Deprecated: load the sheet with a `sprite` node and wire it to `icon-sheet`. An `@sprite-source` ref the node loads the sheet from itself; ignored when `icon-sheet` is wired.",
                 "type": "string"
               },
               "icon-text-fit": {
@@ -7119,11 +7153,11 @@
                 "type": "boolean"
               },
               "icon-name": {
-                "description": "Constant MapLibre `icon-image`: the sprite to draw at each point, cropped from `icon-sprite`. Needs `icon-sprite`.",
+                "description": "Constant MapLibre `icon-image`: the sprite to draw at each point, cropped from `icon-sheet`. Needs `icon-sheet`.",
                 "type": "string"
               },
               "icon-name-expr": {
-                "description": "A MapLibre expression naming each feature's icon (data-driven `icon-image`), cropped from `icon-sprite`; overrides `icon-name`. A group resolving to an empty/unknown name draws no icon and places as a text-only symbol."
+                "description": "A MapLibre expression naming each feature's icon (data-driven `icon-image`), cropped from `icon-sheet`; overrides `icon-name`. A group resolving to an empty/unknown name draws no icon and places as a text-only symbol."
               },
               "icon-offset": {
                 "description": "MapLibre `icon-offset`: shift [x, y] in px, itself scaled by `icon-size`. Default [0, 0].",
@@ -7170,6 +7204,11 @@
               "icon-rotate-deg-expr": {
                 "description": "A MapLibre number expression (degrees clockwise); overrides `icon-rotate-deg`."
               },
+              "icon-sheet": {
+                "description": "A `sprite` node: the sheet `icon-name` / `icon-name-expr` crop the icon from.",
+                "pattern": "^@?[A-Za-z_][A-Za-z0-9_-]*$",
+                "type": "string"
+              },
               "icon-size": {
                 "description": "MapLibre `icon-size`: multiplier on the sprite's authored display size (atlas pixels over its pixel ratio). Default 1.",
                 "minimum": 0.0,
@@ -7179,7 +7218,7 @@
                 "description": "A MapLibre number expression, evaluated per feature group; overrides `icon-size`."
               },
               "icon-sprite": {
-                "description": "Asset reference (`@name`) or literal path.",
+                "description": "Deprecated: load the sheet with a `sprite` node and wire it to `icon-sheet`. An `@sprite-source` ref the node loads the sheet from itself; ignored when `icon-sheet` is wired.",
                 "type": "string"
               },
               "icon-text-fit": {

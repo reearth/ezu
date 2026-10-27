@@ -9,7 +9,7 @@ sidebar:
 
 Ops with no upstream input: features bound by the host, synthesized geometry, images, DEM and raster tiles.
 
-10 ops: `dem`, `features`, `graticule`, `icon`, `image`, `literal-geometry`, `point-grid`, `point-scatter`, `raster`, `tile-bounds`.
+11 ops: `dem`, `features`, `graticule`, `icon`, `image`, `literal-geometry`, `point-grid`, `point-scatter`, `raster`, `sprite`, `tile-bounds`.
 
 Ops with no demo image below produce no visible result on their own — they feed other nodes rather than paint.
 
@@ -65,7 +65,7 @@ Parallels and meridians crossing the tile, as labelled polylines.
 
 ### `icon`
 
-Crop one named icon from a `sprite` source's atlas. `sprite` is an `@sprite-source` ref (or literal atlas key); `name` is the icon's index key. Output is a Sprite at the icon's atlas pixel size.
+Crop one named icon from a `sprite` source's atlas. `sprite` is an `@sprite-source` ref (or literal atlas key); `name` is the icon's index key. Output is a Sprite at the icon's atlas pixel size; a name the sheet lacks gives a transparent 1×1 sprite, which draws nothing. To pick an icon per feature, wire a `sprite` node's sheet into `stamp`, `line-stamp` or `text` instead.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -141,6 +141,14 @@ Sample a host-bound RGBA tile pyramid (satellite imagery, pre-rendered basemaps)
 | `opacity` | number (0…1) \| `$param` \| `@node` | no | Multiplies the imagery's alpha (MapLibre's `raster-opacity`). |
 | `saturation` | number (-1…1) \| `$param` \| `@node` | no | Moves each channel towards (below 0) or away from (above 0) the mean of the pixel's channels. -1 is grey; towards 1 the push grows without bound (MapLibre's `raster-saturation`). |
 | `source` | string | no | Name of a `raster` source in the document's `sources` block. Omitting it resolves to the only such source and warns at build time. |
+
+### `sprite`
+
+A `sprite` source's whole sheet — its atlas and name → rect index — for the ops that pick an icon per feature by name: `stamp` and `line-stamp` take it on `sheet`, `text` and `text-labels` on `icon-sheet`. `sprite` is an `@sprite-source` ref (or literal atlas key). To place one named icon, use `icon` instead.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `sprite` | string | yes | Asset reference (`@name`) or literal path. |
 
 ### `tile-bounds`
 

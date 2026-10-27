@@ -23,6 +23,11 @@ pub enum PortKind {
     /// the canvas. Sprites cannot be wired directly into raster
     /// transforms or the document `output` — those expect `Raster`.
     Sprite,
+    /// A whole sprite sheet: the atlas plus its name → rect index, as a
+    /// `sprite` source declares it. Consumers that pick an icon per
+    /// feature (`stamp`, `line-stamp`, `text`) crop from it themselves;
+    /// `icon` crops one named icon into a [`PortKind::Sprite`].
+    SpriteSheet,
     /// hokusai brush handle plus overrides.
     Brush,
     /// Constant value (color, number, bool). Cheap to fan out.
@@ -52,6 +57,7 @@ impl fmt::Display for PortKind {
             PortKind::Features => "features",
             PortKind::Raster => "raster",
             PortKind::Sprite => "sprite",
+            PortKind::SpriteSheet => "sprite-sheet",
             PortKind::Brush => "brush",
             PortKind::Labels => "labels",
             PortKind::Scalar => "scalar",

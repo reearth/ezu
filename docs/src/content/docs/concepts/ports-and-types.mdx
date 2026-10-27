@@ -1,11 +1,11 @@
 ---
 title: Ports and types
-description: The seven port kinds every edge carries, and what static typing buys you.
+description: The eight port kinds every edge carries, and what static typing buys you.
 sidebar:
   order: 2
 ---
 
-Every edge in the graph carries exactly one of seven kinds. Types are checked
+Every edge in the graph carries exactly one of eight kinds. Types are checked
 when the graph is built, not when it renders.
 
 | Kind | Carries |
@@ -13,6 +13,7 @@ when the graph is built, not when it renders.
 | `Features` | Vector features — geometry plus properties, already filtered. Format-agnostic: MVT, GeoJSON, or synthesized in-node. |
 | `Raster` | RGBA8 buffer, sRGB premultiplied, **padded canvas-sized**. The document's `output` must be this kind. |
 | `Sprite` | RGBA8 buffer at the **asset's native size**, not canvas-sized. The carrier for sprite and texture sources. |
+| `SpriteSheet` | A whole sprite sheet: the atlas plus its name → rect index, as the `sprite` node loads it. |
 | `Brush` | A `hokusai` brush handle plus overrides. |
 | `Scalar` | A constant colour, number, or bool. |
 | `Labels` | Label placement candidates, or the decisions a shared placement stage reached over them. |
@@ -27,6 +28,11 @@ an asset at its own size — a 32×32 icon is 32×32.
 That distinction matters because of what each is for. `Sprite` flows from `image`
 and `icon` into placement ops (`place`, `tiling`, `stamp`), which sample it at its
 native size and produce a `Raster`. It cannot be the document `output`.
+
+A `SpriteSheet` is the whole sheet a `sprite` source declares. `icon` crops one
+named icon out of it as a `Sprite`; the ops that pick an icon per feature by name
+— `stamp` and `line-stamp` on `sheet`, `text` on `icon-sheet` — take the sheet
+from a `sprite` node and crop what each feature names.
 
 The polymorphic filter ops — `blur`, `hsl`, `brightness-contrast`, `invert`,
 `color-to-alpha`, `displace`, `warp`, `blend` — accept either and pass the input

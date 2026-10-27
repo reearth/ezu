@@ -23,6 +23,15 @@ mean is spelled out in
   `#[non_exhaustive]`. Build one with `FilteredFeatures::new(extent,
   groups)`, adding `with_overzoom` and `with_neighbours` as needed. Code
   that reads `groups` sees only the tile's own features, as before.
+- `PortKind` and `PortValue` have a `SpriteSheet` variant, for the new
+  `sprite` node's output. Code matching on them exhaustively adds an arm.
+
+### Added
+
+- A `sprite` source node, which loads a `sprite` source's whole sheet. The
+  ops that name an icon per feature take it on an input: `stamp` and
+  `line-stamp` on `sheet` (with `name-expr`), `text` and `text-labels` on
+  `icon-sheet` (with `icon-name` / `icon-name-expr`).
 
 ### Changed
 
@@ -61,6 +70,11 @@ mean is spelled out in
   neighbour tiles' copies of that layer itself and draws as before, with a
   build warning; otherwise they are ignored. Remove them: the neighbours come
   from the `features` input.
+- `sprite` on `stamp` and `line-stamp`, and `icon-sprite` on `text` and
+  `text-labels`. They still load the sheet and draw as before, with a build
+  warning; with the sheet input wired as well, they are ignored. Load the
+  sheet with a `sprite` node, `{ "op": "sprite", "sprite": "@icons" }`, and
+  wire it to `sheet` (or `icon-sheet`) instead.
 
 ### Fixed
 

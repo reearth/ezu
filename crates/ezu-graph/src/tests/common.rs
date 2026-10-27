@@ -147,6 +147,7 @@ pub(super) fn passthrough(input: PortKind, output: PortKind) -> Box<dyn Node> {
         PortKind::Features => &[PortKind::Features],
         PortKind::Raster => &[PortKind::Raster],
         PortKind::Sprite => &[PortKind::Sprite],
+        PortKind::SpriteSheet => &[PortKind::SpriteSheet],
         PortKind::Brush => &[PortKind::Brush],
         PortKind::Labels => &[PortKind::Labels],
         PortKind::Scalar => &[PortKind::Scalar],

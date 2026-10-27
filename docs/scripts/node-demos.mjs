@@ -534,6 +534,7 @@ export const NO_IMAGE = new Set([
   'brush-solid',
   'image',
   'icon',
+  'sprite',
   'literal-geometry',
   'resample',
 ]);
