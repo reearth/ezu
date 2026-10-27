@@ -13,11 +13,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use ezu_graph::{
-    enum_names, schema_frag, take_input_ref, Asset, BuiltNode, Connection, CoordSpace, EvalCtx,
-    EvalError, FactoryCtx, FactoryError, In, InEnum, InReader, InfluenceCtx, Node, NodeFactory,
-    PortKind, PortSpec, PortValue,
+    enum_names, schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError,
+    FactoryCtx, FactoryError, In, InEnum, InReader, InfluenceCtx, Node, NodeFactory, PortKind,
+    PortSpec, PortValue,
 };
-use ezu_style as spec;
 use serde_json::Value;
 use tiny_skia::{PixmapPaint, Transform};
 use xxhash_rust::xxh3::Xxh3;
@@ -33,6 +32,7 @@ use crate::nodes::common::{
     canvas_into_raster, core_tile, downcast_features, empty_raster, make_canvas, read_xy,
     unwrap_raster_or_sprite, FramedImage, ACCEPTS_RASTER_OR_SPRITE,
 };
+use crate::nodes::source::sprite::{load_sheet, sprite_atlas_key, IconCrops};
 
 const STAMP_SALT: u32 = 0x5354_4d50; // 'STMP'
 /// Position jitter draws from its own salt, so moving a point around is
@@ -159,6 +159,8 @@ struct StampNode {
     icon_sprite: Option<String>,
     icon_name_expr: Option<maplibre_expr::Expr>,
     icon_name_expr_src: Option<String>,
+    /// Crops the icons `icon_name_expr` names out of the sheet.
+    icon_crops: IconCrops,
     /// Which part of the image sits on the point (MapLibre `icon-anchor`).
     anchor: InEnum<Anchor>,
     /// Data-driven `anchor`: a MapLibre string expression naming the anchor
@@ -341,21 +343,19 @@ impl Node for StampNode {
                 .icon_sprite
                 .as_deref()
                 .ok_or_else(|| EvalError::Other("stamp: icon mode without a sprite".into()))?;
-            let Asset::Sprite(sheet) = ctx.assets.load(key)? else {
-                return Err(EvalError::Other(format!(
-                    "asset `{key}` is not a sprite sheet"
-                )));
-            };
+            let sheet = load_sheet(ctx, key)?;
             let mut crops: HashMap<String, Option<FramedImage>> = HashMap::new();
             for group in &feats.groups {
                 let ectx = crate::render::group_expr_context(group, z);
                 let Some(name) = eval_icon_name(name_expr, &ectx) else {
                     continue;
                 };
-                let Some(img) = crops
-                    .entry(name.clone())
-                    .or_insert_with(|| sheet.crop(&name).as_ref().and_then(FramedImage::new))
-                else {
+                let Some(img) = crops.entry(name.clone()).or_insert_with(|| {
+                    self.icon_crops
+                        .crop("stamp", &sheet, &name)
+                        .as_ref()
+                        .and_then(FramedImage::new)
+                }) else {
                     continue;
                 };
                 let scale = eval_number(&self.scale_expr, &ectx, const_scale).max(0.0);
@@ -465,34 +465,6 @@ impl Node for StampNode {
     }
 }
 
-/// Resolve a `sprite` field (`@sprite-source` ref or literal atlas key) to the
-/// atlas asset key, matching the `icon` source node.
-pub(super) fn resolve_sprite_atlas(
-    raw: &str,
-    ctx: &FactoryCtx<'_>,
-) -> Result<String, FactoryError> {
-    match spec::FieldRef::classify(raw) {
-        spec::FieldRef::Node(name) => {
-            let source = ctx
-                .sources
-                .get(name)
-                .ok_or_else(|| FactoryError::UnknownAsset(name.to_string()))?;
-            let spec::SourceDecl::Sprite(sprite) = source else {
-                return Err(FactoryError::BadField {
-                    field: "sprite".into(),
-                    msg: format!("source `{name}` is not a sprite"),
-                });
-            };
-            Ok(sprite.image.clone())
-        }
-        spec::FieldRef::Literal(s) => Ok(s.to_string()),
-        spec::FieldRef::Param(_) => Err(FactoryError::BadField {
-            field: "sprite".into(),
-            msg: "param refs not allowed for the stamp sprite".into(),
-        }),
-    }
-}
-
 /// Read a data-driven icon: a `name-expr` (the MapLibre expression naming
 /// each feature's icon) plus the `sprite` atlas it crops from. The two replace
 /// an `image` input — the sheet is bound once and any icon in it is cropped
@@ -510,7 +482,7 @@ pub(super) fn read_icon_name_expr(
         .get("sprite")
         .and_then(Value::as_str)
         .ok_or_else(|| FactoryError::MissingField("sprite".into()))?;
-    let atlas = resolve_sprite_atlas(raw, ctx)?;
+    let atlas = sprite_atlas_key("sprite", raw, ctx)?;
     let expr = maplibre_expr::parse(v).map_err(|e| FactoryError::BadField {
         field: "name-expr".into(),
         msg: e.to_string(),
@@ -605,6 +577,7 @@ impl NodeFactory for StampFactory {
                 icon_sprite,
                 icon_name_expr,
                 icon_name_expr_src,
+                icon_crops: IconCrops::default(),
                 anchor,
                 anchor_expr,
                 anchor_expr_src,

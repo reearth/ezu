@@ -71,6 +71,7 @@ use crate::nodes::common::{
     read_optional_string, read_optional_zoom, read_xy, FeatureGroup, FilteredFeatures,
     NeighborGroups, NeighbourLayer, ANCHOR_NAMES as TEXT_ANCHORS,
 };
+use crate::nodes::source::sprite::{load_sheet, sprite_atlas_key, IconCrops};
 use ezu_core::text::{
     clip_line,
     collide::{self, Aabb, LabelCandidate, Overlap, PlaceRank},
@@ -1445,6 +1446,8 @@ struct TextNode {
     /// only: a line-placed icon has no ezu equivalent, so line labels ignore
     /// it. The icon shares its symbol's collision decision with the text.
     icon: Option<IconConfig>,
+    /// Crops the icons `icon` names out of the sheet.
+    icon_crops: IconCrops,
     /// MapLibre `text-optional`: the icon may place without the text.
     text_optional: bool,
     /// MapLibre `symbol-placement`. Point placement uses each group's
@@ -2649,13 +2652,7 @@ impl TextNode {
         // everywhere costs nothing).
         let sheet = match &self.icon {
             Some(cfg) if preps.iter().any(|p| p.icon.is_some()) => {
-                let Asset::Sprite(sheet) = ctx.assets.load(&cfg.sprite)? else {
-                    return Err(EvalError::Other(format!(
-                        "asset `{}` is not a sprite sheet",
-                        cfg.sprite
-                    )));
-                };
-                Some(sheet)
+                Some(load_sheet(ctx, &cfg.sprite)?)
             }
             _ => None,
         };
@@ -2824,7 +2821,9 @@ impl TextNode {
                             .icons
                             .get(&gi.name)
                             .map_or(1.0, |r| r.pixel_ratio.max(f32::EPSILON));
-                        sheet.crop(&gi.name).map(|img| (Arc::new(img), ratio))
+                        self.icon_crops
+                            .crop(self.op_name(), sheet, &gi.name)
+                            .map(|img| (Arc::new(img), ratio))
                     })
                     .clone(),
                 _ => None,
@@ -3529,7 +3528,7 @@ fn build_icon_config(
         .get("icon-sprite")
         .and_then(Value::as_str)
         .ok_or_else(|| FactoryError::MissingField("icon-sprite".into()))?;
-    let sprite = super::stamp::resolve_sprite_atlas(sprite, ctx)?;
+    let sprite = sprite_atlas_key("icon-sprite", sprite, ctx)?;
 
     let anchor = r.enum_or("icon-anchor", Anchor::Center, TEXT_ANCHORS)?;
     let (size_expr, size_expr_src) =
@@ -4130,6 +4129,7 @@ fn build_text_node(
             background_padding,
             background_radius,
             icon,
+            icon_crops: IconCrops::default(),
             text_optional,
             placement,
             polygon_anchor,

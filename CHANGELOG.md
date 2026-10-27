@@ -49,6 +49,10 @@ mean is spelled out in
 - `Graph::asset_inputs` lists the assets `image`, `icon` and `brush-file`
   read, as it lists every other source's, and their hashes key those nodes'
   cache entries. Nothing draws differently.
+- `icon`, `stamp`, `line-stamp`, `text` and `text-labels` look an icon up
+  and crop it the same way. An icon name the sprite sheet lacks still draws
+  no icon (a label keeps its text, `icon` gives a transparent 1×1 sprite),
+  and is now logged as a warning, once per node and name.
 
 ### Deprecated
 

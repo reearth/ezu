@@ -5,26 +5,30 @@
 //! `image` returns a whole image, `icon` returns a single named
 //! sub-rectangle. The cropped buffer is returned at its atlas pixel
 //! size; downstream `stamp` (icons) / `tiling` (`fill-pattern`) place
-//! it onto the canvas.
+//! it onto the canvas. To pick an icon per feature instead, wire a
+//! [`sprite`](super::sprite) node's whole sheet into the op that draws.
 //!
-//! A missing icon name yields a 1×1 transparent sprite (an invisible
-//! no-op) rather than failing the tile, so one bad name in a large
-//! symbol layer doesn't blank the render.
+//! A name the sheet lacks yields a 1×1 transparent sprite, which draws
+//! nothing, rather than failing the tile, so one bad name in a large
+//! symbol layer doesn't blank the render. It is reported once, as every
+//! reader of a sheet reports one (see [`super::sprite::IconCrops`]).
 
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, Asset, BuiltNode, EvalCtx, EvalError, FactoryCtx, FactoryError, Node, NodeFactory,
+    schema_frag, BuiltNode, EvalCtx, EvalError, FactoryCtx, FactoryError, Node, NodeFactory,
     PortKind, PortSpec, PortValue, RasterBuf,
 };
-use ezu_style as spec;
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
+
+use super::sprite::{load_sheet, sprite_atlas_key, IconCrops};
 
 struct IconNode {
     /// The sprite atlas asset key (the source's `image` src).
     sprite: String,
     name: String,
+    crops: IconCrops,
 }
 
 impl Node for IconNode {
@@ -38,15 +42,10 @@ impl Node for IconNode {
         PortKind::Sprite
     }
     fn eval(&self, ctx: &EvalCtx<'_>, _: &[Option<PortValue>]) -> Result<PortValue, EvalError> {
-        let asset = ctx.assets.load(&self.sprite)?;
-        let Asset::Sprite(sheet) = asset else {
-            return Err(EvalError::Other(format!(
-                "asset `{}` is not a sprite sheet",
-                self.sprite
-            )));
-        };
-        let cropped = sheet
-            .crop(&self.name)
+        let sheet = load_sheet(ctx, &self.sprite)?;
+        let cropped = self
+            .crops
+            .crop("icon", &sheet, &self.name)
             .unwrap_or_else(|| RasterBuf::new(1, 1));
         Ok(PortValue::Sprite(Arc::new(cropped)))
     }
@@ -75,43 +74,24 @@ impl NodeFactory for IconFactory {
             .get("sprite")
             .and_then(Value::as_str)
             .ok_or_else(|| FactoryError::MissingField("sprite".into()))?;
-        // `@name` -> resolve to the sprite source's atlas `image` key; a
-        // literal is treated as that key directly.
-        let sprite = match spec::FieldRef::classify(raw) {
-            spec::FieldRef::Node(name) => {
-                let source = ctx
-                    .sources
-                    .get(name)
-                    .ok_or_else(|| FactoryError::UnknownAsset(name.to_string()))?;
-                let spec::SourceDecl::Sprite(sprite) = source else {
-                    return Err(FactoryError::BadField {
-                        field: "sprite".into(),
-                        msg: format!("source `{name}` is not a sprite"),
-                    });
-                };
-                sprite.image.clone()
-            }
-            spec::FieldRef::Literal(s) => s.to_string(),
-            spec::FieldRef::Param(_) => {
-                return Err(FactoryError::BadField {
-                    field: "sprite".into(),
-                    msg: "param refs not allowed for icon sprite".into(),
-                });
-            }
-        };
+        let sprite = sprite_atlas_key("sprite", raw, ctx)?;
         let name = fields
             .get("name")
             .and_then(Value::as_str)
             .ok_or_else(|| FactoryError::MissingField("name".into()))?
             .to_string();
         Ok(BuiltNode {
-            node: Box::new(IconNode { sprite, name }),
+            node: Box::new(IconNode {
+                sprite,
+                name,
+                crops: IconCrops::default(),
+            }),
             connections: vec![],
         })
     }
     fn schema(&self) -> Value {
         serde_json::json!({
-            "description": "Crop one named icon from a `sprite` source's atlas. `sprite` is an `@sprite-source` ref (or literal atlas key); `name` is the icon's index key. Output is a Sprite at the icon's atlas pixel size.",
+            "description": "Crop one named icon from a `sprite` source's atlas. `sprite` is an `@sprite-source` ref (or literal atlas key); `name` is the icon's index key. Output is a Sprite at the icon's atlas pixel size; a name the sheet lacks gives a transparent 1×1 sprite, which draws nothing. To pick an icon per feature, wire a `sprite` node's sheet into `stamp`, `line-stamp` or `text` instead.",
             "properties": {
                 "sprite": schema_frag::asset_ref(),
                 "name": { "type": "string" },

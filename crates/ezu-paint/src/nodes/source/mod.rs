@@ -11,6 +11,7 @@ mod literal_geometry;
 mod point_grid;
 mod point_scatter;
 mod raster;
+pub(crate) mod sprite;
 mod tile_bounds;
 
 use ezu_graph::{FactoryError, In, InReader};

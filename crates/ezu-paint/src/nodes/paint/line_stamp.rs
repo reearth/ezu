@@ -22,9 +22,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ezu_graph::{
-    schema_frag, take_input_ref, Asset, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError,
-    FactoryCtx, FactoryError, In, InReader, InfluenceCtx, Node, NodeFactory, PortKind, PortSpec,
-    PortValue,
+    schema_frag, take_input_ref, BuiltNode, Connection, CoordSpace, EvalCtx, EvalError, FactoryCtx,
+    FactoryError, In, InReader, InfluenceCtx, Node, NodeFactory, PortKind, PortSpec, PortValue,
 };
 use serde_json::Value;
 use tiny_skia::{PixmapPaint, Transform};
@@ -36,6 +35,7 @@ use crate::nodes::common::{
     canvas_into_raster, downcast_features, empty_raster, make_canvas, unwrap_raster_or_sprite,
     FramedImage, ACCEPTS_RASTER_OR_SPRITE,
 };
+use crate::nodes::source::sprite::{load_sheet, IconCrops};
 
 struct LineStampNode {
     /// Stroke width in px. When > 0 the image is scaled so its height
@@ -69,6 +69,8 @@ struct LineStampNode {
     pattern_sprite: Option<String>,
     pattern_name_expr: Option<maplibre_expr::Expr>,
     pattern_name_expr_src: Option<String>,
+    /// Crops the patterns `pattern_name_expr` names out of the sheet.
+    icon_crops: IconCrops,
     ports: Vec<PortSpec>,
     param_refs: Vec<String>,
 }
@@ -248,11 +250,7 @@ impl Node for LineStampNode {
             let key = self.pattern_sprite.as_deref().ok_or_else(|| {
                 EvalError::Other("line-stamp: pattern by name without a sprite".into())
             })?;
-            let Asset::Sprite(sheet) = ctx.assets.load(key)? else {
-                return Err(EvalError::Other(format!(
-                    "asset `{key}` is not a sprite sheet"
-                )));
-            };
+            let sheet = load_sheet(ctx, key)?;
             let mut crops: HashMap<String, Option<FramedImage>> = HashMap::new();
             for group in &feats.groups {
                 if group.lines.is_empty() {
@@ -262,10 +260,12 @@ impl Node for LineStampNode {
                 let Some(name) = eval_icon_name(name_expr, &ectx) else {
                     continue;
                 };
-                let Some(img) = crops
-                    .entry(name.clone())
-                    .or_insert_with(|| sheet.crop(&name).as_ref().and_then(FramedImage::new))
-                else {
+                let Some(img) = crops.entry(name.clone()).or_insert_with(|| {
+                    self.icon_crops
+                        .crop("line-stamp", &sheet, &name)
+                        .as_ref()
+                        .and_then(FramedImage::new)
+                }) else {
                     continue;
                 };
                 let width_px = eval_px(&self.width_expr, &ectx, const_width_px, ctx);
@@ -414,6 +414,7 @@ impl NodeFactory for LineStampFactory {
                 pattern_sprite,
                 pattern_name_expr,
                 pattern_name_expr_src,
+                icon_crops: IconCrops::default(),
                 ports,
                 param_refs: parts.param_refs,
             }),

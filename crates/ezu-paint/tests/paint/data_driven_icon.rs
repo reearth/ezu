@@ -191,3 +191,82 @@ fn unknown_icon_name_is_skipped() {
         "known-icon feature should still paint"
     );
 }
+
+/// Opaque pixels in `r`, and how many of them read as label ink (black).
+fn opaque_and_ink(r: &RasterBuf) -> (usize, usize) {
+    let (mut opaque, mut ink) = (0, 0);
+    for y in 0..r.height {
+        for x in 0..r.width {
+            let p = r.pixel(x, y);
+            if p[3] > 100 {
+                opaque += 1;
+                if p[0] < 80 && p[1] < 80 && p[2] < 80 {
+                    ink += 1;
+                }
+            }
+        }
+    }
+    (opaque, ink)
+}
+
+fn font_url() -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../ezu-core/tests/fonts/NotoSans-Regular.latin.ttf");
+    format!("file:{}", path.display()).replace('\\', "/")
+}
+
+/// A name the sheet lacks draws no icon in every op that crops one: `icon`
+/// hands on a sprite that draws nothing, and a label keeps its text.
+#[test]
+fn an_icon_the_sheet_lacks_draws_nothing_everywhere() {
+    let layer = || FeatureLayer {
+        name: "pts".to_string(),
+        extent: 4096,
+        features: vec![point_feature("missing", 2048, 2048)],
+    };
+    let style = |nodes: &str| {
+        format!(
+            r##"{{
+      "name": "missing-icon", "tile-size": 64,
+      "sources": {{
+        "src": {{ "type": "mvt", "url": "http://example.invalid/{{z}}/{{x}}/{{y}}" }},
+        "body": {{ "type": "font", "url": "{font}" }},
+        "sheet": {{ "type": "sprite", "image": "builtin:atlas",
+                   "index": {{ "red": {{"x":0,"y":0,"width":8,"height":8}} }} }}
+      }},
+      "nodes": {{
+        "feats": {{ "op": "features", "source": "src", "layer": "pts" }},
+        {nodes}
+      }},
+      "output": "@out"
+    }}"##,
+            font = font_url()
+        )
+    };
+    let render = |nodes: &str| {
+        render_with_features_and_sprite(
+            &style(nodes),
+            64,
+            0,
+            TileId { z: 0, x: 0, y: 0 },
+            &[("src.pts", layer())],
+            "atlas",
+            two_icon_sheet(),
+        )
+    };
+
+    let icon = render(
+        r#""img": { "op": "icon", "sprite": "@sheet", "name": "missing" },
+           "out": { "op": "stamp", "features": "@feats", "image": "@img" }"#,
+    );
+    assert_eq!(opaque_and_ink(&icon).0, 0, "`icon` drew something");
+
+    let label = render(
+        r##""out": { "op": "text", "features": "@feats", "font": ["body"], "text": "W",
+                     "size": 20, "color": "#000000", "collide": false,
+                     "icon-sprite": "@sheet", "icon-name-expr": ["get", "kind"] }"##,
+    );
+    let (opaque, ink) = opaque_and_ink(&label);
+    assert!(ink > 0, "the label lost its text");
+    assert_eq!(opaque, ink, "the label drew an icon");
+}
