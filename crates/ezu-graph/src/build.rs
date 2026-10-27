@@ -134,7 +134,7 @@ pub fn build_graph(
 
     gb.set_output(doc.output.as_str().to_string());
     let mut graph = gb.build()?;
-    graph.set_warnings(warnings.into_vec());
+    graph.prepend_warnings(warnings.into_vec());
 
     // Verify each call site's declared kinds against the resolved port
     // kinds. Argument sources and the call's output node are plain

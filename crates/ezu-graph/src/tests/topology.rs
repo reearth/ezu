@@ -464,3 +464,114 @@ fn a_brushs_reach_scales_with_the_radius_it_is_used_at() {
     // reaches — the jitters do not shrink with it.
     assert_eq!(ink.at_radius(1.0), 40.0);
 }
+
+/// `src` → `op` → `label` → `out`, where `label` wants neighbour tiles,
+/// `src` loads them from two bindings and `op` is the given node.
+fn neighbour_chain(op: Mock) -> crate::Graph {
+    let features = &[PortKind::Features];
+    let mut b = GraphBuilder::new();
+    b.add_node(
+        "src",
+        Mock::new("src", vec![], PortKind::Features)
+            .loading_neighbours(&["s.l@1,0", "s.l@-1,0"])
+            .boxed(),
+    )
+    .add_node("op", op.boxed())
+    .add_node(
+        "label",
+        Mock::new(
+            "label",
+            vec![PortSpec::new("input", features)],
+            PortKind::Raster,
+        )
+        .wanting_neighbours()
+        .boxed(),
+    )
+    .connect("src", "op", "input")
+    .connect("op", "label", "input")
+    .set_output("label");
+    b.build().unwrap()
+}
+
+fn demanded(g: &crate::Graph) -> Vec<&str> {
+    (0..g.len())
+        .filter(|&ix| g.wants_neighbours(ix))
+        .map(|ix| g.node_id(ix))
+        .collect()
+}
+
+#[test]
+fn a_demand_for_neighbours_runs_up_through_ops_that_pass_it_on() {
+    let op = Mock::new(
+        "per-feature",
+        vec![PortSpec::new("input", &[PortKind::Features])],
+        PortKind::Features,
+    )
+    .forwarding_neighbours();
+    let g = neighbour_chain(op);
+    assert_eq!(demanded(&g), vec!["src", "op"]);
+    assert!(g.warnings().is_empty(), "{:?}", g.warnings());
+    // The source's neighbour bindings join what the graph reads.
+    let names = g.asset_inputs();
+    assert!(
+        names.contains("s.l@1,0") && names.contains("s.l@-1,0"),
+        "{names:?}"
+    );
+}
+
+#[test]
+fn a_demand_for_neighbours_stops_at_an_op_that_cannot_pass_it_on() {
+    let op = Mock::new(
+        "merge",
+        vec![PortSpec::new("input", &[PortKind::Features])],
+        PortKind::Features,
+    );
+    let g = neighbour_chain(op);
+    // The op itself is asked, but asks nothing further up.
+    assert_eq!(demanded(&g), vec!["op"]);
+    assert!(g.asset_inputs().is_empty(), "{:?}", g.asset_inputs());
+    assert_eq!(g.warnings().len(), 1, "{:?}", g.warnings());
+    let w = &g.warnings()[0];
+    assert!(w.contains("`label`") && w.contains("`op` (`merge`)"), "{w}");
+}
+
+/// Nothing upstream could have loaded neighbours, so nothing is lost and
+/// nothing is said.
+#[test]
+fn a_demand_with_no_source_of_neighbours_is_not_warned_about() {
+    let mut b = GraphBuilder::new();
+    b.add_node("src", src(PortKind::Features))
+        .add_node(
+            "label",
+            Mock::new(
+                "label",
+                vec![PortSpec::new("input", &[PortKind::Features])],
+                PortKind::Raster,
+            )
+            .wanting_neighbours()
+            .boxed(),
+        )
+        .connect("src", "label", "input")
+        .set_output("label");
+    let g = b.build().unwrap();
+    assert_eq!(demanded(&g), vec!["src"]);
+    assert!(g.warnings().is_empty(), "{:?}", g.warnings());
+}
+
+/// A source no one asks for neighbours reads only its own tile.
+#[test]
+fn a_source_nobody_asks_reads_no_neighbours() {
+    let mut b = GraphBuilder::new();
+    b.add_node(
+        "src",
+        Mock::new("src", vec![], PortKind::Features)
+            .loading_neighbours(&["s.l@1,0"])
+            .boxed(),
+    )
+    .add_node("draw", passthrough(PortKind::Features, PortKind::Raster))
+    .connect("src", "draw", "input")
+    .set_output("draw");
+    let g = b.build().unwrap();
+    assert!(demanded(&g).is_empty());
+    assert!(g.asset_inputs().is_empty(), "{:?}", g.asset_inputs());
+}

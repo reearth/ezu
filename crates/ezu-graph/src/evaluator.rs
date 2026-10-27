@@ -79,6 +79,7 @@ impl<'a> Evaluator<'a> {
             // Replaced per node in `eval_one`; the graph-wide value is
             // the most permissive one.
             influence_pad: u32::MAX,
+            neighbours: false,
         };
         if crate::mem::enabled() {
             crate::mem::reset();
@@ -165,6 +166,7 @@ impl<'a> Evaluator<'a> {
                 // Replaced per node in `eval_one`; the graph-wide value
                 // is the most permissive one.
                 influence_pad: u32::MAX,
+                neighbours: false,
             };
             let influence = self.graph.influence_pads(self.assets);
             if crate::mem::enabled() {
@@ -371,16 +373,25 @@ impl<'a> Evaluator<'a> {
         // whose parameters are not otherwise part of its key.
         // Reaches are worked out from the style's px fields, so they are
         // style pixels; the cull compares them against the canvas.
+        // Whether it delivers neighbour tiles likewise depends on what
+        // downstream asks of it.
         let ctx = &EvalCtx {
             influence_pad: ctx.canvas.px_ceil(influence[ix]),
+            neighbours: self.graph.wants_neighbours(ix),
             ..*ctx
         };
 
-        // Hash this node's own params, plus any asset bindings it samples.
+        // Hash this node's own params, plus any asset bindings it samples
+        // — the neighbour tiles' too, when it is asked for them.
         let mut h = Xxh3::new();
         node.param_hash(&mut h);
         h.update(&ctx.influence_pad.to_le_bytes());
-        for name in node.asset_inputs() {
+        h.update(&[ctx.neighbours as u8]);
+        for name in node
+            .asset_inputs()
+            .into_iter()
+            .chain(self.graph.neighbour_asset_inputs(ix))
+        {
             h.update(name.as_bytes());
             h.update(&ctx.assets.hash(&name).to_le_bytes());
         }

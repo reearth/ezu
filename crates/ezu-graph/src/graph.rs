@@ -98,12 +98,15 @@ pub struct Graph {
     /// `Sprite`) have their actual output kind decided here at build
     /// time based on their connected inputs.
     output_kinds: Vec<PortKind>,
-    /// Build-time warnings collected by node factories — legal but
-    /// ill-advised things the document does, such as relying on a
-    /// field's implicit default. Set by
-    /// [`build_graph`](crate::build_graph); empty for graphs assembled
-    /// through [`GraphBuilder`] directly.
+    /// Build-time warnings — legal but ill-advised things the document
+    /// does, such as relying on a field's implicit default. The node
+    /// factories' come from [`build_graph`](crate::build_graph); the
+    /// builder adds its own about the wiring, such as a request for
+    /// neighbour tiles that an op on the way cannot pass on.
     warnings: Vec<String>,
+    /// Per node, whether something downstream wants its output to carry
+    /// neighbour tiles — see [`Node::wants_neighbours`].
+    neighbours: Vec<bool>,
 }
 
 /// Maximum allowed pad propagated to any node, in pixels. Prevents
@@ -290,6 +293,8 @@ impl GraphBuilder {
             })
             .collect();
 
+        let (neighbours, warnings) = neighbour_demand(&self.nodes, &incoming, &topo);
+
         Ok(Graph {
             nodes: self.nodes,
             incoming,
@@ -299,9 +304,93 @@ impl GraphBuilder {
             output: output_ix,
             topo,
             output_kinds,
-            warnings: Vec::new(),
+            warnings,
+            neighbours,
         })
     }
+}
+
+/// Which nodes must deliver neighbour tiles, and a warning for each node
+/// that wants them but cannot get them.
+///
+/// Walks the graph from the output back, as [`Graph::compute_pad`] does:
+/// a node's source must deliver neighbours when the node wants them on
+/// that port ([`Node::wants_neighbours`]), or when the node must deliver
+/// them itself and passes the demand on through that port
+/// ([`Node::forwards_neighbours`]).
+fn neighbour_demand(
+    nodes: &IndexMap<NodeId, Box<dyn Node>>,
+    incoming: &[Vec<Option<NodeIx>>],
+    topo: &[NodeIx],
+) -> (Vec<bool>, Vec<String>) {
+    let node = |ix: NodeIx| nodes.get_index(ix).expect("ix is within nodes").1;
+    let id = |ix: NodeIx| nodes.get_index(ix).expect("ix is within nodes").0;
+    let mut demand = vec![false; nodes.len()];
+    for &ix in topo.iter().rev() {
+        let n = node(ix);
+        for (port, src) in incoming[ix].iter().enumerate() {
+            if let Some(src) = *src {
+                if n.wants_neighbours(port) || (demand[ix] && n.forwards_neighbours(port)) {
+                    demand[src] = true;
+                }
+            }
+        }
+    }
+
+    // A node that loads neighbours, or one fed by such a node however
+    // indirectly: a request reaching no such node has nothing to lose.
+    let mut reaches_source = vec![false; nodes.len()];
+    for &ix in topo {
+        reaches_source[ix] = !node(ix).neighbour_asset_inputs().is_empty()
+            || incoming[ix]
+                .iter()
+                .flatten()
+                .any(|&src| reaches_source[src]);
+    }
+    // The first node, walking up from `src`, that neither loads nor passes
+    // on neighbours although a source lies further up.
+    fn blocker(
+        src: NodeIx,
+        nodes: &IndexMap<NodeId, Box<dyn Node>>,
+        incoming: &[Vec<Option<NodeIx>>],
+        reaches_source: &[bool],
+    ) -> Option<NodeIx> {
+        let n = nodes.get_index(src).expect("src is within nodes").1;
+        if !reaches_source[src] || !n.neighbour_asset_inputs().is_empty() {
+            return None;
+        }
+        let mut forwards = incoming[src]
+            .iter()
+            .enumerate()
+            .filter_map(|(port, up)| up.filter(|_| n.forwards_neighbours(port)))
+            .peekable();
+        if forwards.peek().is_none() {
+            return Some(src);
+        }
+        forwards.find_map(|up| blocker(up, nodes, incoming, reaches_source))
+    }
+    let mut warnings = Vec::new();
+    for (ix, ports) in incoming.iter().enumerate() {
+        let n = node(ix);
+        for (port, src) in ports.iter().enumerate() {
+            let Some(src) = *src else { continue };
+            if !n.wants_neighbours(port) {
+                continue;
+            }
+            if let Some(b) = blocker(src, nodes, incoming, &reaches_source) {
+                warnings.push(format!(
+                    "node `{}`: the neighbour tiles' features cannot reach it through \
+                     `{}` (`{}`), which does not pass them on, so it works from this \
+                     tile's features alone and may decide differently from the \
+                     neighbouring tile near the edge",
+                    id(ix),
+                    id(b),
+                    node(b).op_name(),
+                ));
+            }
+        }
+    }
+    (demand, warnings)
 }
 
 impl Default for GraphBuilder {
@@ -441,8 +530,29 @@ impl Graph {
         &self.warnings
     }
 
-    pub(crate) fn set_warnings(&mut self, warnings: Vec<String>) {
+    /// Put the node factories' warnings ahead of the builder's own.
+    pub(crate) fn prepend_warnings(&mut self, mut warnings: Vec<String>) {
+        warnings.append(&mut self.warnings);
         self.warnings = warnings;
+    }
+
+    /// Whether something downstream wants node `ix`'s output to carry the
+    /// neighbour tiles' copies of its data — see [`Node::wants_neighbours`].
+    /// The evaluator hands this to the node as
+    /// [`EvalCtx::neighbours`](crate::EvalCtx::neighbours).
+    pub fn wants_neighbours(&self, ix: NodeIx) -> bool {
+        self.neighbours[ix]
+    }
+
+    /// The neighbour bindings node `ix` reads this graph: its
+    /// [`Node::neighbour_asset_inputs`] when something downstream wants
+    /// neighbours from it, else none.
+    pub fn neighbour_asset_inputs(&self, ix: NodeIx) -> Vec<String> {
+        if self.neighbours[ix] {
+            self.node(ix).neighbour_asset_inputs()
+        } else {
+            Vec::new()
+        }
     }
 
     /// Number of nodes.
@@ -466,11 +576,18 @@ impl Graph {
     /// The union of every node's [`Node::asset_inputs`], deduplicated and
     /// ordered. A host consults this to learn which named bindings the
     /// document's graph samples — including the `@<dx>,<dy>` neighbour
-    /// names (see [`crate::neighbor`]) a cross-tile node requests, so it
-    /// can fetch and bind exactly the neighbour tiles the graph needs
-    /// rather than the whole 3×3 window unconditionally.
+    /// names (see [`crate::neighbor`]) that the sources asked for
+    /// neighbours load ([`Graph::neighbour_asset_inputs`]), so it can
+    /// fetch and bind exactly the neighbour tiles the graph needs rather
+    /// than the whole 3×3 window unconditionally.
     pub fn asset_inputs(&self) -> std::collections::BTreeSet<String> {
-        self.nodes.values().flat_map(|n| n.asset_inputs()).collect()
+        (0..self.len())
+            .flat_map(|ix| {
+                let mut names = self.node(ix).asset_inputs();
+                names.extend(self.neighbour_asset_inputs(ix));
+                names
+            })
+            .collect()
     }
 
     pub fn node(&self, ix: NodeIx) -> &dyn Node {

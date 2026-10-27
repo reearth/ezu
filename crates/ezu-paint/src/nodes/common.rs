@@ -1310,6 +1310,7 @@ mod cull_tests {
             params: &params,
             rng_seed: 0,
             influence_pad,
+            neighbours: false,
         };
         let PortValue::Features(p) = features_value_culled(&ctx, EXTENT, 0, groups) else {
             panic!("not a features port")

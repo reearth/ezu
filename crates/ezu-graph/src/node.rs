@@ -71,6 +71,26 @@ impl InfluenceCtx<'_> {
 
 /// One operation in the DAG. Stored as `Box<dyn Node>` inside
 /// [`crate::Graph`]; the graph never mutates a node after construction.
+///
+/// # Sources read, processors process
+///
+/// Only source nodes (`features`, `raster`, `dem`, …) read a document
+/// source. They own its `source`/`layer` fields and everything about
+/// loading it: which binding to ask the host for, how to decode and
+/// filter it, what to do when it is missing. Every other node works only
+/// from the values arriving on its ports.
+///
+/// The tempting shortcut is for a processor that needs a little more than
+/// its input carries — a label node wanting the neighbour tiles' copies of
+/// its layer, say — to name the source itself and load it. Don't. The
+/// node then repeats the source node's loading logic, and drifts from it:
+/// it reads the layer raw, while its own input went through filters and
+/// geometry ops it knows nothing about. When a processor needs something
+/// only the source can provide, the value carries it, and the processor
+/// asks for it upstream: neighbour tiles are requested with
+/// [`Node::wants_neighbours`], passed along by the ops that answer
+/// [`Node::forwards_neighbours`], and loaded by the source that lists
+/// them in [`Node::neighbour_asset_inputs`].
 pub trait Node: Send + Sync {
     /// Stable identifier for the operation (e.g. `"blur"`,
     /// `"scatter-dabs"`). Matches the `op` field in the style JSON.
@@ -206,5 +226,54 @@ pub trait Node: Send + Sync {
     /// Default: every input is read.
     fn reads_input(&self, _port: usize, _ctx: &EvalCtx<'_>) -> bool {
         true
+    }
+
+    /// Whether this node wants the value on input `port` to carry the
+    /// neighbour tiles' copies of its data as well as this tile's own.
+    ///
+    /// A label node answers `true` on its features port while collision is
+    /// on: a label anchored next door can still reach into this tile, and
+    /// both tiles must decide it the same way. The graph then asks the
+    /// chain feeding that port to deliver neighbours — see
+    /// [`Node::forwards_neighbours`] — and evaluates each node on it with
+    /// [`EvalCtx::neighbours`](crate::EvalCtx::neighbours) set.
+    ///
+    /// Decided when the graph is built, so it rests on the node's fields
+    /// alone. Default: no port wants neighbours.
+    fn wants_neighbours(&self, _port: usize) -> bool {
+        false
+    }
+
+    /// Whether this node passes a demand for neighbours on to input
+    /// `port`: when something downstream wants this node's output to carry
+    /// neighbours, the node can produce them from neighbours arriving on
+    /// `port`.
+    ///
+    /// An op that works feature by feature answers `true` on its features
+    /// port, and when evaluated with
+    /// [`EvalCtx::neighbours`](crate::EvalCtx::neighbours) set applies
+    /// itself to each neighbour as well, as that neighbour's own tile would.
+    /// `switch` answers `true` on its branches, since it hands one through
+    /// unchanged. An op that merges features, or combines several inputs,
+    /// cannot say what a neighbour tile would make of them, so it answers
+    /// `false` (the default) and the demand stops there: the graph warns,
+    /// and the node wanting neighbours works from this tile alone.
+    fn forwards_neighbours(&self, _port: usize) -> bool {
+        false
+    }
+
+    /// The asset bindings this node reads for the neighbour tiles, when
+    /// something downstream wants neighbours from it. Only a source node
+    /// answers; for a feature layer that is the eight `@dx,dy` names of
+    /// [`crate::neighbor_bindings`].
+    ///
+    /// They are kept apart from [`Node::asset_inputs`] because they are
+    /// read only on demand: [`crate::Graph::asset_inputs`] lists them, and
+    /// the evaluator folds them into the node's cache key, only for a node
+    /// the graph has asked for neighbours.
+    ///
+    /// Default: none.
+    fn neighbour_asset_inputs(&self) -> Vec<String> {
+        Vec::new()
     }
 }

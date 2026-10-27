@@ -17,6 +17,10 @@ mean is spelled out in
   expanded, so a factory can read the node feeding one of its inputs. Code
   that builds a `FactoryCtx` itself, as a custom op's unit test may, sets it
   (an empty map will do).
+- `EvalCtx` has a `neighbours` field: whether something downstream wants
+  the node's output to carry the neighbour tiles' data. Code that builds an
+  `EvalCtx` itself, as a custom op's unit test may, sets it (`false` will
+  do).
 
 ### Fixed
 

@@ -87,6 +87,7 @@ pub(crate) mod ratio_test {
             params: &params,
             rng_seed: 0,
             influence_pad: u32::MAX,
+            neighbours: false,
         };
         downcast_features(&node.eval(&ctx, inputs).expect("node evaluates")).expect("features")
     }

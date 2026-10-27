@@ -234,6 +234,12 @@ pub struct EvalCtx<'a> {
     /// may drop geometry that lies further out than this; `u32::MAX`
     /// means the reach is unbounded and nothing may be dropped.
     pub influence_pad: u32,
+    /// Whether something downstream wants *this* node's output to carry
+    /// the neighbour tiles' copies of its data — see
+    /// [`crate::Node::wants_neighbours`]. A source then loads them, and an
+    /// op that forwards them produces its own. `false` for every node no
+    /// such demand reaches, which then costs nothing extra.
+    pub neighbours: bool,
 }
 
 impl EvalCtx<'_> {

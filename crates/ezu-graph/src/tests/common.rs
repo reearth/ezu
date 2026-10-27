@@ -20,6 +20,9 @@ pub(super) struct Mock {
     ink: Option<crate::InkReach>,
     space: CoordSpace,
     fill: [u8; 4],
+    wants_neighbours: bool,
+    forwards_neighbours: bool,
+    neighbour_assets: Vec<String>,
 }
 
 impl Mock {
@@ -33,7 +36,25 @@ impl Mock {
             ink: None,
             space: CoordSpace::Inherit,
             fill: [0, 0, 0, 255],
+            wants_neighbours: false,
+            forwards_neighbours: false,
+            neighbour_assets: Vec::new(),
         }
+    }
+    /// Want neighbour tiles on every input port.
+    pub(super) fn wanting_neighbours(mut self) -> Self {
+        self.wants_neighbours = true;
+        self
+    }
+    /// Pass a demand for neighbour tiles on through every input port.
+    pub(super) fn forwarding_neighbours(mut self) -> Self {
+        self.forwards_neighbours = true;
+        self
+    }
+    /// Load neighbour tiles from these bindings when asked to.
+    pub(super) fn loading_neighbours(mut self, names: &[&str]) -> Self {
+        self.neighbour_assets = names.iter().map(|n| n.to_string()).collect();
+        self
     }
     pub(super) fn with_pad_grow(mut self, g: u32) -> Self {
         self.pad_grow = g;
@@ -105,6 +126,15 @@ impl Node for Mock {
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(self.op.as_bytes());
         h.update(&self.pad_grow.to_le_bytes());
+    }
+    fn wants_neighbours(&self, _port: usize) -> bool {
+        self.wants_neighbours
+    }
+    fn forwards_neighbours(&self, _port: usize) -> bool {
+        self.forwards_neighbours
+    }
+    fn neighbour_asset_inputs(&self) -> Vec<String> {
+        self.neighbour_assets.clone()
     }
 }
 
