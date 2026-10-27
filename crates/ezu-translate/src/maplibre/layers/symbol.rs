@@ -121,9 +121,6 @@ pub(crate) fn convert_symbol(
             source_defs,
             fonts,
             glyphs_url,
-            &source,
-            &source_layer,
-            base_filter_expr.clone(),
             &mut ensure_feat,
             report,
         );
@@ -135,9 +132,6 @@ pub(crate) fn convert_symbol(
             nodes,
             outputs,
             label_layers,
-            &source,
-            &source_layer,
-            base_filter_expr.clone(),
             &mut ensure_feat,
         );
     }
@@ -287,9 +281,6 @@ fn convert_icon_only(
     nodes: &mut Map<String, Value>,
     outputs: &mut Vec<String>,
     label_layers: Option<&mut Vec<String>>,
-    source: &str,
-    source_layer: &str,
-    base_filter_expr: Option<Value>,
     ensure_feat: &mut impl FnMut(&mut Map<String, Value>) -> String,
 ) {
     let feat_ref = ensure_feat(nodes);
@@ -297,37 +288,20 @@ fn convert_icon_only(
     for (k, v) in icon_fields {
         spec[k] = v;
     }
-    set_placement_context(
-        &mut spec,
-        source,
-        source_layer,
-        zoom_range,
-        base_filter_expr,
-    );
+    set_zoom_band(&mut spec, zoom_range);
     emit_label_nodes(id, spec, nodes, outputs, label_layers);
 }
 
-/// Thread the origin source/layer, the style layer's zoom band and its
-/// filter onto a label spec: the node gathers neighbour candidates straight
-/// from the source, so it has to reproduce the `features` node's gates.
-fn set_placement_context(
-    spec: &mut Value,
-    source: &str,
-    source_layer: &str,
-    zoom_range: ZoomRange,
-    base_filter_expr: Option<Value>,
-) {
-    spec["source"] = Value::from(source);
-    spec["layer"] = Value::from(source_layer);
+/// Put the style layer's zoom band on a label spec. Its `features` node
+/// carries the same band, and the neighbour tiles' candidates come through
+/// that node, so outside it the layer draws nothing either way.
+fn set_zoom_band(spec: &mut Value, zoom_range: ZoomRange) {
     let (min_zoom, max_zoom) = zoom_range;
     if let Some(z) = min_zoom {
         spec["min-zoom"] = Value::from(z);
     }
     if let Some(z) = max_zoom {
         spec["max-zoom"] = Value::from(z);
-    }
-    if let Some(f) = base_filter_expr {
-        spec["filter-expr"] = f;
     }
 }
 
@@ -496,9 +470,6 @@ fn convert_text(
     source_defs: &mut Map<String, Value>,
     fonts: &HashMap<String, String>,
     glyphs_url: Option<&str>,
-    source: &str,
-    source_layer: &str,
-    base_filter_expr: Option<Value>,
     ensure_feat: &mut impl FnMut(&mut Map<String, Value>) -> String,
     report: &mut Report,
 ) {
@@ -796,17 +767,10 @@ fn convert_text(
         }
     }
 
-    // Collision (deterministic cross-tile placement). Always thread the
-    // origin source/layer (+ the layer filter) through so the `text` node
-    // gathers neighbour candidates and filters them exactly like its own
-    // features; collision itself is on by default in the `text` node.
-    set_placement_context(
-        &mut spec,
-        source,
-        source_layer,
-        zoom_range,
-        base_filter_expr,
-    );
+    // Collision (deterministic cross-tile placement) is on by default in the
+    // `text` node, which takes the neighbour tiles' candidates from its
+    // `features` node, filtered exactly like its own.
+    set_zoom_band(&mut spec, zoom_range);
 
     // `text-allow-overlap` (bool), superseded by the newer `text-overlap`
     // enum when present: `always` → `overlap: always`, `never`/absent → collide,

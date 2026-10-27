@@ -387,12 +387,17 @@ fn collision_properties_route_to_the_text_node() {
     let (recipe, _) = convert(&style, &opts).unwrap();
 
     let text = &recipe["nodes"]["places__labels"];
-    // Neighbour-gathering wiring: origin source/layer + the layer filter,
-    // reproduced so neighbour candidates filter identically.
-    assert_eq!(text["source"], "s");
-    assert_eq!(text["layer"], "place");
+    // The neighbour candidates come through the `features` node, which
+    // carries the source, layer and filter; the label node repeats none.
+    for field in ["source", "layer", "filter-expr"] {
+        assert!(text.get(field).is_none(), "{field}: {text}");
+    }
+    let feat_ref = text["features"].as_str().expect("a node ref");
+    let feat = &recipe["nodes"][feat_ref.trim_start_matches('@')];
+    assert_eq!(feat["source"], "s");
+    assert_eq!(feat["layer"], "place");
     assert_eq!(
-        text["filter-expr"],
+        feat["filter-expr"],
         serde_json::json!(["==", ["get", "class"], "city"])
     );
     // Overlap knobs.

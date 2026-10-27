@@ -44,6 +44,8 @@ mean is spelled out in
   feature itself, so the polygon gets one label rather than one per tile.
 - Hosts need no change: `Graph::asset_inputs` lists the neighbour bindings
   the asked `features` nodes read, as it listed the label nodes' own.
+- `ezu translate` no longer writes `source`, `layer` or `filter-expr` on the
+  label nodes it emits; their `features` node carries them.
 
 ### Deprecated
 
