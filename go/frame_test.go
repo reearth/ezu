@@ -683,8 +683,9 @@ func TestRenderFrameDrawsAPolygonLabelAcrossASeam(t *testing.T) {
 			"nodes": {
 				"bg": { "op": "solid", "color": "#ffffff" },
 				"f": { "op": "features", "source": "shapes", "layer": "shapes" },
+				"sheet": { "op": "sprite", "sprite": "@sprite" },
 				"l": { "op": "text-labels", "features": "@f", ` + layer + `
-				       "icon-sprite": "@sprite", "icon-name": "mark",
+				       "icon-sheet": "@sheet", "icon-name": "mark",
 				       "overlap": "always", "icon-allow-overlap": true,
 				       "polygon-anchor": "` + anchor + `" },
 				"p": { "op": "label-placement", "labels": ["@l"] },

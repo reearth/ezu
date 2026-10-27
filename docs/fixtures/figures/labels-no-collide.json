@@ -63,9 +63,18 @@
       "source": "basemap",
       "layer": "places"
     },
+    "fonts": {
+      "op": "fonts",
+      "font-stacks": {
+        "sans": [
+          "sans"
+        ]
+      }
+    },
     "labels": {
       "op": "text",
       "features": "@places_f",
+      "fonts": "@fonts",
       "font": [
         "sans"
       ],

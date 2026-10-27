@@ -27,9 +27,18 @@
       "source": "basemap",
       "layer": "roads"
     },
+    "fonts": {
+      "op": "fonts",
+      "font-stacks": {
+        "sans": [
+          "sans"
+        ]
+      }
+    },
     "places_l": {
       "op": "text-labels",
       "features": "@places_f",
+      "fonts": "@fonts",
       "font": [
         "sans"
       ],
@@ -42,6 +51,7 @@
     "roads_l": {
       "op": "text-labels",
       "features": "@roads_f",
+      "fonts": "@fonts",
       "font": [
         "sans"
       ],

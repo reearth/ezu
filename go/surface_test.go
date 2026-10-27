@@ -443,7 +443,8 @@ func TestRenderStringParamOnALabel(t *testing.T) {
 				"fontstack":"Noto Sans Regular"}},
 		"nodes":{
 			"pins":{"op":"features","source":"pins","layer":"pins"},
-			"out":{"op":"text","features":"@pins","font":["noto"],"text":["get","name"],
+			"fonts":{"op":"fonts","font-stacks":{"noto":["noto"]}},
+			"out":{"op":"text","features":"@pins","fonts":"@fonts","font":["noto"],"text":["get","name"],
 				"size":16,"color":"#000000","transform":` + transform + `}},
 		"output":"@out"}`)
 	}

@@ -73,9 +73,11 @@ const labelStyle = (transform) =>
     },
     nodes: {
       pins: { op: "features", source: "pins", layer: "pins" },
+      fonts: { op: "fonts", "font-stacks": { noto: ["noto"] } },
       out: {
         op: "text",
         features: "@pins",
+        fonts: "@fonts",
         font: ["noto"],
         text: ["get", "name"],
         size: 16,

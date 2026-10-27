@@ -149,9 +149,11 @@ const FIGURES = {
       {
         ...BASE_NODES,
         places_f: { op: 'features', source: 'basemap', layer: 'places' },
+        fonts: { op: 'fonts', 'font-stacks': { sans: ['sans'] } },
         labels: {
           op: 'text',
           features: '@places_f',
+          fonts: '@fonts',
           font: ['sans'],
           text: ['coalesce', ['get', 'name:en'], ['get', 'name']],
           size: 13,
@@ -171,9 +173,11 @@ const FIGURES = {
       {
         ...BASE_NODES,
         places_f: { op: 'features', source: 'basemap', layer: 'places' },
+        fonts: { op: 'fonts', 'font-stacks': { sans: ['sans'] } },
         labels: {
           op: 'text',
           features: '@places_f',
+          fonts: '@fonts',
           font: ['sans'],
           text: ['coalesce', ['get', 'name:en'], ['get', 'name']],
           size: 13,

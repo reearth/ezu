@@ -12,9 +12,11 @@
   "nodes": {
     "bg": { "op": "solid", "color": "#ffffff" },
     "places": { "op": "features", "source": "basemap", "layer": "places" },
+    "fonts": { "op": "fonts", "font-stacks": { "noto": ["noto"] } },
     "labels": {
       "op": "text-labels",
       "features": "@places",
+      "fonts": "@fonts",
       "font": ["noto"],
       "text": ["get", "name"],
       "size": 12,
