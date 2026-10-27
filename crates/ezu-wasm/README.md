@@ -434,7 +434,9 @@ const png = r.renderTile(z, x, y);
 any feature in a text layer carries that codepoint in a property the
 layer's `text` expression reads (`["get", "name"]` and friends), without
 evaluating filters, zoom ranges, or the expression itself, and it lists
-it for every fontstack in that layer's fallback chain. It never omits a
+it for every fontstack the layer can draw with: the stack its `font` names
+on the `fonts` node wired to it, or every stack that node declares when
+`font-expr` or a `format` section may pick another. It never omits a
 range a label needs; it may name a few that go unused. A `text` built
 from something other than a property read contributes only its literal
 strings.

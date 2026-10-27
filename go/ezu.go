@@ -1378,9 +1378,10 @@ func (r *Renderer) RequestedNeighborOffsets(ctx context.Context, source string) 
 // It is an over-approximation, deliberately: a codepoint is listed if any
 // feature in a text layer carries it in a property the layer's text
 // expression reads, without evaluating filters, zoom ranges, or the
-// expression itself, and for every fontstack in that layer's fallback
-// chain. So it never omits something a label needs, and may name a few that
-// go unused.
+// expression itself, and for every fontstack the layer can draw with: the
+// stack its font names on the fonts node wired to it, or every stack that
+// node declares when font-expr or a format section may pick another. So it
+// never omits something a label needs, and may name a few that go unused.
 func (r *Renderer) NeededCodepoints(ctx context.Context) (map[string][]uint32, error) {
 	return r.glyphUnits(ctx, "ezu_needed_codepoints")
 }

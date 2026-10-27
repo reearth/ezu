@@ -882,11 +882,14 @@ impl Renderer {
     /// *any* feature in a text layer carries the codepoint in a property
     /// the layer's `text` expression reads, without evaluating filters,
     /// zoom ranges, or the expression itself, and it is listed for every
-    /// fontstack in that layer's fallback chain. So it never omits a
-    /// range a label needs, and it may name a few that go unused. Text
-    /// layers that build their string from something other than a `get`
-    /// of a feature property (a literal, a `concat` of formatted values)
-    /// contribute their literal text where it is a plain string.
+    /// fontstack the layer can draw with: the stack its `font` names on
+    /// the `fonts` node wired to it, or every stack that node declares
+    /// when `font-expr` or a `format` section may pick another. So it
+    /// never omits a range a label needs, and it may name a few that go
+    /// unused. Text layers that build their string from something other
+    /// than a `get` of a feature property (a literal, a `concat` of
+    /// formatted values) contribute their literal text where it is a
+    /// plain string.
     ///
     /// An Arabic letter contributes the presentation-form ranges as
     /// well as its own: it is drawn as whichever of its joined shapes

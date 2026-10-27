@@ -721,8 +721,11 @@ impl Renderer {
     /// if *any* feature in a text layer carries it in a property the
     /// layer's `text` expression reads, without evaluating filters, zoom
     /// ranges, or the expression itself, and it is listed for every
-    /// fontstack in that layer's fallback chain. So it never omits
-    /// something a label needs, and it may name a few that go unused.
+    /// fontstack the layer can draw with: the stack its `font` names on
+    /// the `fonts` node wired to it, or every stack that node declares
+    /// when `font-expr` or a `format` section may pick another. So it
+    /// never omits something a label needs, and it may name a few that
+    /// go unused.
     ///
     /// An Arabic letter contributes the presentation-form codepoints as
     /// well as its own: it is drawn as whichever of its joined shapes
@@ -1680,34 +1683,90 @@ fn tile_seed(z: u8, x: u32, y: u32) -> u64 {
     s
 }
 
-/// The `glyphs` source names a node's `font` stack resolves to, or
-/// `None` when the node has no font stack (so it is not a text node).
+/// The `glyphs` source names a label node's fonts resolve to, or `None`
+/// when the node has no fonts (so it is not a text node).
 ///
-/// A `font` entry names a source; only the ones declared as `glyphs`
-/// have ranges to bind, and their *source* name is what `bind_source`
-/// takes.
+/// A label node wired to a `fonts` node takes its stacks from there: the
+/// one its `font` names, and every one the node declares when `font-expr`
+/// or a `format` section may pick another. A node without one names its
+/// sources in `font` itself, the deprecated way. Either way only the
+/// sources declared as `glyphs` have ranges to bind, and their *source*
+/// name is what `bind_source` takes.
 fn glyph_source_names<'a>(
     doc: &'a Document,
-    fields: &serde_json::Map<String, serde_json::Value>,
+    fields: &'a serde_json::Map<String, serde_json::Value>,
 ) -> Option<Vec<&'a str>> {
-    let font = fields.get("font")?;
-    let names: Vec<&str> = match font {
-        serde_json::Value::String(s) => vec![s.as_str()],
-        serde_json::Value::Array(a) => a.iter().filter_map(|v| v.as_str()).collect(),
-        _ => return None,
+    let names: Vec<&str> = match wired_font_stacks(doc, fields) {
+        Some(stacks) => {
+            let wanted = fields.get("font").map(|f| match f {
+                serde_json::Value::String(s) => stack_name(std::iter::once(s.as_str())),
+                serde_json::Value::Array(a) => stack_name(a.iter().filter_map(|v| v.as_str())),
+                _ => String::new(),
+            });
+            let every = fields.contains_key("font-expr")
+                || fields.get("text").is_some_and(has_format_section);
+            let mut names = Vec::new();
+            for (name, sources) in stacks {
+                if every || wanted.as_deref() == Some(stack_name(name.split(',')).as_str()) {
+                    if let Some(a) = sources.as_array() {
+                        names.extend(a.iter().filter_map(|v| v.as_str()));
+                    }
+                }
+            }
+            names
+        }
+        None => match fields.get("font")? {
+            serde_json::Value::String(s) => vec![s.as_str()],
+            serde_json::Value::Array(a) => a.iter().filter_map(|v| v.as_str()).collect(),
+            _ => return None,
+        },
     };
-    Some(
-        names
-            .into_iter()
-            .filter_map(|n| {
-                let n = n.strip_prefix('@').unwrap_or(n);
-                doc.sources
-                    .get_key_value(n)
-                    .filter(|(_, decl)| matches!(decl, SourceDecl::Glyphs(_)))
-                    .map(|(k, _)| k.as_str())
-            })
-            .collect(),
-    )
+    let mut out: Vec<&str> = Vec::new();
+    for n in names {
+        let n = n.strip_prefix('@').unwrap_or(n);
+        if let Some((k, _)) = doc
+            .sources
+            .get_key_value(n)
+            .filter(|(_, decl)| matches!(decl, SourceDecl::Glyphs(_)))
+        {
+            if !out.contains(&k.as_str()) {
+                out.push(k.as_str());
+            }
+        }
+    }
+    Some(out)
+}
+
+/// The `font-stacks` of the `fonts` node a label node's `fonts` field
+/// wires in, or `None` when it wires none.
+fn wired_font_stacks<'a>(
+    doc: &'a Document,
+    fields: &serde_json::Map<String, serde_json::Value>,
+) -> Option<&'a serde_json::Map<String, serde_json::Value>> {
+    let id = fields.get("fonts")?.as_str()?;
+    let node = doc.nodes.get(id.strip_prefix('@').unwrap_or(id))?;
+    if node.op != "fonts" {
+        return None;
+    }
+    node.fields.get("font-stacks")?.as_object()
+}
+
+/// A font stack's name as the `fonts` node and the label nodes compare it:
+/// font names trimmed and joined with `,`.
+fn stack_name<'a>(names: impl Iterator<Item = &'a str>) -> String {
+    names.map(str::trim).collect::<Vec<_>>().join(",")
+}
+
+/// Whether a `text` expression holds a `format` section, which may name
+/// a stack of its own.
+fn has_format_section(v: &serde_json::Value) -> bool {
+    match v {
+        serde_json::Value::Array(items) => {
+            items.first().and_then(|h| h.as_str()) == Some("format")
+                || items.iter().any(has_format_section)
+        }
+        _ => false,
+    }
 }
 
 /// Feature property names a `text` expression reads, i.e. every

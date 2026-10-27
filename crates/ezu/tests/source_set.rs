@@ -613,6 +613,54 @@ fn the_glyphs_a_style_needs_include_its_inline_geojson_labels() {
     assert!(bound["g"].contains(&0x91CD), "{bound:?}");
 }
 
+/// [`geojson_labels`] with the label's fonts wired from a `fonts` node that
+/// declares a second stack on another glyphs source, `h`. `label` holds the
+/// label node's font fields.
+fn geojson_labels_with_fonts(label: &str) -> String {
+    format!(
+        r##"{{
+        "name": "names", "tile-size": 64,
+        "sources": {{
+            "g": {{ "type": "glyphs", "url": "https://example.invalid/{{fontstack}}/{{range}}.pbf", "fontstack": "Sans" }},
+            "h": {{ "type": "glyphs", "url": "https://example.invalid/{{fontstack}}/{{range}}.pbf", "fontstack": "Serif" }},
+            "names": {{ "type": "geojson", "data": {NAMES_DOC} }}
+        }},
+        "nodes": {{
+            "fonts": {{ "op": "fonts", "font-stacks": {{ "Sans": ["g"], "Serif": ["h"] }} }},
+            "f": {{ "op": "features", "source": "names", "layer": "names" }},
+            "l": {{ "op": "text-labels", "features": "@f", "fonts": "@fonts", {label},
+                    "text": ["get", "name"], "size": 16, "color": "#000000" }},
+            "p": {{ "op": "label-placement", "labels": ["@l"] }},
+            "out": {{ "op": "text-draw", "labels": "@l", "placement": "@p" }}
+        }},
+        "output": "@out"
+    }}"##
+    )
+}
+
+#[test]
+fn the_glyphs_a_label_needs_follow_its_fonts_input() {
+    // The stack `font` names, and only that one …
+    let r = Renderer::new(&geojson_labels_with_fonts(r#""font": ["Sans"]"#)).expect("builds");
+    let codepoints = r.needed_codepoints_in(&SourceSet::new());
+    assert_eq!(
+        codepoints.keys().copied().collect::<Vec<_>>(),
+        ["g"],
+        "{codepoints:?}"
+    );
+    assert!(codepoints["g"].contains(&0x91CD), "{codepoints:?}");
+    let ranges = r.needed_glyph_ranges().expect("lists");
+    assert!(ranges["g"].contains(&0x9100), "{ranges:?}");
+    // … unless `font-expr` may pick any of them.
+    let r = Renderer::new(&geojson_labels_with_fonts(
+        r#""font": ["Sans"], "font-expr": ["literal", ["Serif"]]"#,
+    ))
+    .expect("builds");
+    let codepoints = r.needed_codepoints_in(&SourceSet::new());
+    assert!(codepoints["g"].contains(&0x91CD), "{codepoints:?}");
+    assert!(codepoints["h"].contains(&0x91CD), "{codepoints:?}");
+}
+
 /// A label on a geojson source, with `label-boxes` beside it so the
 /// placement can be read back. `anchor` is the `polygon-anchor`; `named`
 /// gives the label node the deprecated `source`/`layer`, with which it reads

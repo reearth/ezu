@@ -66,6 +66,12 @@ mean is spelled out in
 - `Graph::asset_inputs` lists the assets `image`, `icon` and `brush-file`
   read, as it lists every other source's, and their hashes key those nodes'
   cache entries. Nothing draws differently.
+- `needed_codepoints` / `needed_glyph_ranges` and their `_in` forms
+  (`NeededCodepoints` … in Go, `neededCodepoints` … in JS) follow a label
+  node's `fonts` input to the `fonts` node: they list the glyphs sources of
+  the stack its `font` names, or of every stack that node declares when
+  `font-expr` or a `format` section may pick another. A label node naming
+  its sources in `font` is read as before.
 - `icon`, `stamp`, `line-stamp`, `text` and `text-labels` look an icon up
   and crop it the same way. An icon name the sprite sheet lacks still draws
   no icon (a label keeps its text, `icon` gives a transparent 1×1 sprite),
