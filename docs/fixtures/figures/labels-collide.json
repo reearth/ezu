@@ -84,9 +84,7 @@
       "color": "#3b2f24",
       "halo-color": "#fbf6e6dd",
       "halo-width": 1.6,
-      "collide": true,
-      "source": "basemap",
-      "layer": "places"
+      "collide": true
     },
     "out": {
       "op": "blend",

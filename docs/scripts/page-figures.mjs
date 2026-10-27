@@ -159,8 +159,6 @@ const FIGURES = {
           'halo-color': '#fbf6e6dd',
           'halo-width': 1.6,
           collide: true,
-          source: 'basemap',
-          layer: 'places',
         },
         out: { op: 'blend', base: '@base', over: '@labels' },
       },

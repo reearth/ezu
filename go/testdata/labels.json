@@ -15,8 +15,6 @@
     "labels": {
       "op": "text-labels",
       "features": "@places",
-      "source": "basemap",
-      "layer": "places",
       "font": ["noto"],
       "text": ["get", "name"],
       "size": 12,
