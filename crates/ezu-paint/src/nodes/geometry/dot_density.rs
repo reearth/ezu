@@ -41,7 +41,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value, FeatureGroup};
+use crate::nodes::common::{downcast_features, map_with_neighbours, FeatureGroup};
 
 /// Default lattice salt. Constant rather than `EvalCtx::rng_seed` so the
 /// world-anchored scatter is the same function on every tile.
@@ -123,7 +123,41 @@ impl Node for DotDensityNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
-        let extent = feats.extent.max(1) as f64;
+        map_with_neighbours(ctx, &feats, |ctx, extent, groups| {
+            self.scatter(ctx, inputs, extent, groups)
+        })
+    }
+    fn forwards_neighbours(&self, port: usize) -> bool {
+        port == 0
+    }
+    fn param_hash(&self, h: &mut Xxh3) {
+        h.update(b"dot-density");
+        self.density.param_hash(h);
+        self.dot_value.param_hash(h);
+        self.spacing_px.param_hash(h);
+        self.jitter.param_hash(h);
+        h.update(&self.seed.to_le_bytes());
+        if let Some(s) = &self.density_expr_src {
+            h.update(b"densityexpr");
+            h.update(s.as_bytes());
+        }
+    }
+    fn param_refs(&self) -> Vec<String> {
+        self.param_refs.clone()
+    }
+}
+
+impl DotDensityNode {
+    /// Scatter the dots of `groups`, in a frame `extent` units across, for
+    /// the tile `ctx` names.
+    fn scatter(
+        &self,
+        ctx: &EvalCtx<'_>,
+        inputs: &[Option<PortValue>],
+        extent: u32,
+        groups: &[FeatureGroup],
+    ) -> Result<Vec<FeatureGroup>, EvalError> {
+        let extent = extent.max(1) as f64;
         // Style pixels to feature-extent units, as the other px-sized
         // geometry nodes do. The lattice pitch in extent units is the same
         // at every pixel ratio, so a retina tile scatters the same dots.
@@ -146,8 +180,8 @@ impl Node for DotDensityNode {
         };
         let z = ctx.tile.z;
 
-        let mut out_groups = Vec::with_capacity(feats.groups.len());
-        for g in &feats.groups {
+        let mut out_groups = Vec::with_capacity(groups.len());
+        for g in groups {
             let ectx = crate::render::group_expr_context(g, z);
             let density_km2 = eval_number(&self.density_expr, &ectx, const_density);
             // A non-positive dot value or density has no dots in it;
@@ -178,22 +212,7 @@ impl Node for DotDensityNode {
                 points,
             });
         }
-        Ok(features_value(feats.extent, out_groups))
-    }
-    fn param_hash(&self, h: &mut Xxh3) {
-        h.update(b"dot-density");
-        self.density.param_hash(h);
-        self.dot_value.param_hash(h);
-        self.spacing_px.param_hash(h);
-        self.jitter.param_hash(h);
-        h.update(&self.seed.to_le_bytes());
-        if let Some(s) = &self.density_expr_src {
-            h.update(b"densityexpr");
-            h.update(s.as_bytes());
-        }
-    }
-    fn param_refs(&self) -> Vec<String> {
-        self.param_refs.clone()
+        Ok(out_groups)
     }
 }
 

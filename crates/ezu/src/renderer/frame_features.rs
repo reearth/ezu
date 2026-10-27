@@ -545,11 +545,7 @@ mod tests {
     fn values(node: &str, groups: Vec<FeatureGroup>) -> Vec<NodeFeatures> {
         vec![NodeFeatures {
             node: node.into(),
-            features: Some(Arc::new(FilteredFeatures {
-                extent: 4096,
-                groups,
-                overzoom: 0,
-            })),
+            features: Some(Arc::new(FilteredFeatures::new(4096, groups))),
             tile: TileId::new(0, 0, 0),
             tile_size: 256,
         }]

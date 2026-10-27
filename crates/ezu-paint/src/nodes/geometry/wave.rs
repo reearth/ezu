@@ -24,7 +24,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value, read_number_or, FeatureGroup};
+use crate::nodes::common::{downcast_features, map_with_neighbours, read_number_or, FeatureGroup};
 
 struct WaveNode {
     amplitude_px: In<f64>,
@@ -87,54 +87,59 @@ impl Node for WaveNode {
         } else {
             wavelength_px.max(1.0)
         };
-        // Style pixels to device pixels to extent units. The extent-unit
-        // lengths come out the same at every pixel ratio, so the noise,
-        // sampled in world extent units, jitters a retina tile's line
-        // exactly as it does the plain one's.
-        let scale = feats.extent as f64 / ctx.canvas.tile_w.max(1) as f64;
-        let amp = ctx.px(amplitude_px) * scale;
-        let wavelen = ctx.px(wavelength_px) * scale;
-        let phase = ctx.px(phase_px) * scale;
-        let noise_amp = ctx.px(noise_amp_px) * scale;
-        let noise_scale = ctx.px(noise_scale_px) * scale;
         // Use a constant default seed so the world-anchored noise is
         // deterministic across tiles. Per-tile rng_seed would make the
         // noise pattern shift at every tile border.
         let seed = self.seed.unwrap_or(0xA17F_B91D);
-        // World origin of this tile in feature-extent units, so the
-        // noise field is the same global function across tiles.
-        let extent = feats.extent as f64;
-        let origin_x = ctx.tile.x as f64 * extent;
-        let origin_y = ctx.tile.y as f64 * extent;
+        map_with_neighbours(ctx, &feats, |ctx, extent, groups| {
+            // Style pixels to device pixels to extent units. The extent-unit
+            // lengths come out the same at every pixel ratio, so the noise,
+            // sampled in world extent units, jitters a retina tile's line
+            // exactly as it does the plain one's.
+            let scale = extent as f64 / ctx.canvas.tile_w.max(1) as f64;
+            let amp = ctx.px(amplitude_px) * scale;
+            let wavelen = ctx.px(wavelength_px) * scale;
+            let phase = ctx.px(phase_px) * scale;
+            let noise_amp = ctx.px(noise_amp_px) * scale;
+            let noise_scale = ctx.px(noise_scale_px) * scale;
+            // World origin of this tile in feature-extent units, so the
+            // noise field is the same global function across tiles.
+            let extent = extent as f64;
+            let origin_x = ctx.tile.x as f64 * extent;
+            let origin_y = ctx.tile.y as f64 * extent;
 
-        // Per group: displace each feature's polylines (polygons and points
-        // pass through), carrying properties.
-        let mut out_groups = Vec::with_capacity(feats.groups.len());
-        for g in &feats.groups {
-            let mut out_lines: Vec<Vec<(i32, i32)>> = Vec::with_capacity(g.lines.len());
-            for line in g.lines.iter() {
-                if let Some(displaced) = wave_polyline(
-                    line,
-                    amp,
-                    wavelen,
-                    phase,
-                    self.samples_per_wavelength,
-                    noise_amp,
-                    noise_scale,
-                    seed,
-                    (origin_x, origin_y),
-                ) {
-                    out_lines.push(displaced);
+            // Per group: displace each feature's polylines (polygons and
+            // points pass through), carrying properties.
+            let mut out_groups = Vec::with_capacity(groups.len());
+            for g in groups {
+                let mut out_lines: Vec<Vec<(i32, i32)>> = Vec::with_capacity(g.lines.len());
+                for line in g.lines.iter() {
+                    if let Some(displaced) = wave_polyline(
+                        line,
+                        amp,
+                        wavelen,
+                        phase,
+                        self.samples_per_wavelength,
+                        noise_amp,
+                        noise_scale,
+                        seed,
+                        (origin_x, origin_y),
+                    ) {
+                        out_lines.push(displaced);
+                    }
                 }
+                out_groups.push(FeatureGroup {
+                    properties: g.properties.clone(),
+                    polygons: g.polygons.clone(),
+                    lines: out_lines,
+                    points: g.points.clone(),
+                });
             }
-            out_groups.push(FeatureGroup {
-                properties: g.properties.clone(),
-                polygons: g.polygons.clone(),
-                lines: out_lines,
-                points: g.points.clone(),
-            });
-        }
-        Ok(features_value(feats.extent, out_groups))
+            Ok(out_groups)
+        })
+    }
+    fn forwards_neighbours(&self, port: usize) -> bool {
+        port == 0
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"wave");

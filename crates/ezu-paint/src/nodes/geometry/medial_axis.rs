@@ -17,7 +17,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value, FeatureGroup};
+use crate::nodes::common::{downcast_features, map_with_neighbours, FeatureGroup};
 
 struct MedialAxisNode {
     densify_px: In<f64>,
@@ -49,25 +49,30 @@ impl Node for MedialAxisNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
-        let px = feats.extent as f64 / ctx.canvas.tile_w.max(1) as f64;
-        let densify = ctx.px(self.densify_px.get(ctx, inputs)?) * px;
-        let min_branch = ctx.px(self.min_branch_px.get(ctx, inputs)?) * px;
-        // Per group: skeletonise each feature's polygons into polylines,
-        // carrying properties.
-        let mut out_groups = Vec::with_capacity(feats.groups.len());
-        for g in &feats.groups {
-            let mut lines = Vec::new();
-            for polygon in &g.polygons {
-                lines.extend(medial_axis(polygon, densify, min_branch));
+        map_with_neighbours(ctx, &feats, |ctx, extent, groups| {
+            let px = extent as f64 / ctx.canvas.tile_w.max(1) as f64;
+            let densify = ctx.px(self.densify_px.get(ctx, inputs)?) * px;
+            let min_branch = ctx.px(self.min_branch_px.get(ctx, inputs)?) * px;
+            // Per group: skeletonise each feature's polygons into polylines,
+            // carrying properties.
+            let mut out_groups = Vec::with_capacity(groups.len());
+            for g in groups {
+                let mut lines = Vec::new();
+                for polygon in &g.polygons {
+                    lines.extend(medial_axis(polygon, densify, min_branch));
+                }
+                out_groups.push(FeatureGroup {
+                    properties: g.properties.clone(),
+                    polygons: vec![],
+                    lines,
+                    points: vec![],
+                });
             }
-            out_groups.push(FeatureGroup {
-                properties: g.properties.clone(),
-                polygons: vec![],
-                lines,
-                points: vec![],
-            });
-        }
-        Ok(features_value(feats.extent, out_groups))
+            Ok(out_groups)
+        })
+    }
+    fn forwards_neighbours(&self, port: usize) -> bool {
+        port == 0
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"medial-axis");

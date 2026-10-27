@@ -24,7 +24,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value, read_xy, FeatureGroup};
+use crate::nodes::common::{downcast_features, map_with_neighbours, read_xy, FeatureGroup};
 
 struct TransformNode {
     translate_x: In<f64>,
@@ -75,45 +75,50 @@ impl Node for TransformNode {
         // Style pixels to feature units: into device pixels by the pixel
         // ratio, then one tile spans `extent` units across `tile_w` device
         // px (and down `tile_h`).
-        let extent = feats.extent as f64;
-        let translate = (
-            self.translate_x.get(ctx, inputs)?
-                + ctx.px(self.translate_x_px.get(ctx, inputs)?) * extent
-                    / ctx.canvas.tile_w.max(1) as f64,
-            self.translate_y.get(ctx, inputs)?
-                + ctx.px(self.translate_y_px.get(ctx, inputs)?) * extent
-                    / ctx.canvas.tile_h.max(1) as f64,
-        );
-        let rotation_rad = self.rotation_deg.get(ctx, inputs)?.to_radians();
-        let uniform = self.scale.get(ctx, inputs)?;
-        let scale = (
-            uniform * self.scale_x.get(ctx, inputs)?,
-            uniform * self.scale_y.get(ctx, inputs)?,
-        );
-        // Per group: apply the affine to each feature's vertices, carrying
-        // properties.
-        let mut out_groups = Vec::with_capacity(feats.groups.len());
-        for g in &feats.groups {
-            let mut points = g.points.clone();
-            let mut lines = g.lines.clone();
-            let mut polygons = g.polygons.clone();
-            transform(
-                &mut points,
-                &mut lines,
-                &mut polygons,
-                scale,
-                rotation_rad,
-                self.pivot,
-                translate,
+        map_with_neighbours(ctx, &feats, |ctx, extent, groups| {
+            let extent = extent as f64;
+            let translate = (
+                self.translate_x.get(ctx, inputs)?
+                    + ctx.px(self.translate_x_px.get(ctx, inputs)?) * extent
+                        / ctx.canvas.tile_w.max(1) as f64,
+                self.translate_y.get(ctx, inputs)?
+                    + ctx.px(self.translate_y_px.get(ctx, inputs)?) * extent
+                        / ctx.canvas.tile_h.max(1) as f64,
             );
-            out_groups.push(FeatureGroup {
-                properties: g.properties.clone(),
-                polygons,
-                lines,
-                points,
-            });
-        }
-        Ok(features_value(feats.extent, out_groups))
+            let rotation_rad = self.rotation_deg.get(ctx, inputs)?.to_radians();
+            let uniform = self.scale.get(ctx, inputs)?;
+            let scale = (
+                uniform * self.scale_x.get(ctx, inputs)?,
+                uniform * self.scale_y.get(ctx, inputs)?,
+            );
+            // Per group: apply the affine to each feature's vertices,
+            // carrying properties.
+            let mut out_groups = Vec::with_capacity(groups.len());
+            for g in groups {
+                let mut points = g.points.clone();
+                let mut lines = g.lines.clone();
+                let mut polygons = g.polygons.clone();
+                transform(
+                    &mut points,
+                    &mut lines,
+                    &mut polygons,
+                    scale,
+                    rotation_rad,
+                    self.pivot,
+                    translate,
+                );
+                out_groups.push(FeatureGroup {
+                    properties: g.properties.clone(),
+                    polygons,
+                    lines,
+                    points,
+                });
+            }
+            Ok(out_groups)
+        })
+    }
+    fn forwards_neighbours(&self, port: usize) -> bool {
+        port == 0
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"transform");

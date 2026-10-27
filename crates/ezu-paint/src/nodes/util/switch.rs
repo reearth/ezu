@@ -227,6 +227,10 @@ impl Node for SwitchNode {
     fn reads_input(&self, port: usize, ctx: &EvalCtx<'_>) -> bool {
         port >= self.branches || self.live_branches(ctx)[port]
     }
+    /// A branch is handed through as it is, neighbours included.
+    fn forwards_neighbours(&self, port: usize) -> bool {
+        port < self.branches
+    }
     fn eval(
         &self,
         ctx: &EvalCtx<'_>,

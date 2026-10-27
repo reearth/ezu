@@ -58,6 +58,9 @@ The `Node` your factory returns implements the interesting parts:
 | `param_hash(h)` | everything that affects the output, folded into the cache key |
 | `param_refs()` | the `$param` names this node reads |
 | `asset_inputs()` | the bindings this node samples, for automatic cache invalidation |
+| `wants_neighbours(port)` | whether this node needs the neighbour tiles' features on a port as well as this tile's |
+| `forwards_neighbours(port)` | whether a feature-by-feature op passes that request on to its input, and applies itself to the neighbours it receives |
+| `neighbour_asset_inputs()` | for a source node: the neighbour bindings it loads when asked |
 
 ## Registering
 
@@ -113,6 +116,33 @@ anything.
 - **Use `In<T>` for numeric fields** (via `InReader`) so they accept literals,
   `$param`s, and `@node` ports like every built-in op. If the field determines
   padding, require a static bound and say so in the error message.
+- **Don't read a source from a processor.** See below.
+
+## Sources read, processors process
+
+Only source nodes (`features`, `raster`, `dem`, …) read a document source. They
+own `source` and `layer` and everything about loading: which binding to ask the
+host for, how to decode and filter it, what a missing tile means. Every other op
+works only from the values on its ports.
+
+The temptation comes when an op needs a little more than its input carries — a
+label op wanting the neighbour tiles' copies of its layer, say. Giving the op its
+own `source`/`layer` and loading them there looks cheap, but it duplicates the
+source's loading logic and quietly diverges from it: the op reads the layer raw,
+while its input went through a filter and whatever geometry ops sit in between.
+Don't.
+
+Ask upstream instead. An op that needs neighbour tiles answers
+`wants_neighbours(port)`; the graph carries the request up through every op that
+answers `forwards_neighbours(port)` to the source, which loads the bindings it
+lists in `neighbour_asset_inputs()`. Each node on the way is evaluated with
+`EvalCtx::neighbours` set, and the neighbours travel inside the value — for
+features, `FilteredFeatures::neighbours`, each in its own tile's frame. A
+feature-by-feature op that forwards the request applies itself to every
+neighbour too, with `ctx.tile` set to that neighbour, so it produces exactly what
+the neighbour's own render would. An op that merges features or combines several
+inputs cannot, so it leaves `forwards_neighbours` at `false` and the graph warns
+the op that asked.
 
 Reading a built-in is the fastest way in — `crates/ezu-paint/src/nodes/raster/blur.rs`
 is short and exercises pad propagation, `In<f64>`, and kind pass-through.

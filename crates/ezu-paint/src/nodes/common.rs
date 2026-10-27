@@ -64,16 +64,90 @@ impl FeatureGroup {
 /// [`points`](Self::points) / [`lines`](Self::lines) /
 /// [`polygons`](Self::polygons) iterators (or collect locally where a
 /// contiguous `Vec` is genuinely required).
+///
+/// [`neighbours`](Self::neighbours) is empty unless a node downstream asked
+/// for the neighbour tiles' copies (see [`ezu_graph::Node::wants_neighbours`]).
+/// They are kept apart from `groups` so that every op drawing or exporting
+/// features keeps working from this tile's own geometry alone.
+#[non_exhaustive]
 pub struct FilteredFeatures {
+    /// The units one tile spans across. `0` when this tile has no copy of
+    /// the layer at all, as a vector tile leaves out a layer with nothing
+    /// in it; the neighbours then carry their own.
     pub extent: u32,
     pub groups: Vec<FeatureGroup>,
     /// How many zoom levels the geometry was scaled up from the tile it was
     /// encoded for, when it came straight from an overzoomed source tile
     /// (see [`SharedLayer::overzoom`]); 0 otherwise.
     pub overzoom: u8,
+    /// The neighbour tiles' copies, when something downstream asked for
+    /// them: each in its own tile's frame, processed as that tile's own
+    /// render would process it. Row by row from the north-west, as
+    /// [`ezu_graph::neighbor_bindings`] orders them; a neighbour the host
+    /// did not provide is absent.
+    pub neighbours: Vec<NeighbourLayer>,
+}
+
+/// One neighbour tile's features, carried in [`FilteredFeatures::neighbours`].
+#[non_exhaustive]
+pub struct NeighbourLayer {
+    /// Tile offset from this tile: `+x` east, `+y` south, each in `-1..=1`.
+    pub dx: i8,
+    pub dy: i8,
+    /// The neighbour layer's [`FilteredFeatures::overzoom`].
+    pub overzoom: u8,
+    /// The units the neighbour tile spans across; its geometry lies in
+    /// `[0, extent]` like a tile's own.
+    pub extent: u32,
+    pub groups: Vec<FeatureGroup>,
+}
+
+impl NeighbourLayer {
+    /// The neighbour `(dx, dy)` tiles away, its `groups` in its own
+    /// `[0, extent]` frame. `overzoom` starts at 0.
+    pub fn new(dx: i8, dy: i8, extent: u32, groups: Vec<FeatureGroup>) -> Self {
+        Self {
+            dx,
+            dy,
+            overzoom: 0,
+            extent,
+            groups,
+        }
+    }
+
+    /// The same neighbour, scaled up `overzoom` zoom levels from the tile
+    /// it was encoded for.
+    pub fn with_overzoom(mut self, overzoom: u8) -> Self {
+        self.overzoom = overzoom;
+        self
+    }
 }
 
 impl FilteredFeatures {
+    /// This tile's `groups` in a `[0, extent]` frame, with no overzoom and
+    /// no neighbours.
+    pub fn new(extent: u32, groups: Vec<FeatureGroup>) -> Self {
+        Self {
+            extent,
+            groups,
+            overzoom: 0,
+            neighbours: Vec::new(),
+        }
+    }
+
+    /// The same features, scaled up `overzoom` zoom levels from the tile
+    /// they were encoded for.
+    pub fn with_overzoom(mut self, overzoom: u8) -> Self {
+        self.overzoom = overzoom;
+        self
+    }
+
+    /// The same features, carrying the neighbour tiles' copies.
+    pub fn with_neighbours(mut self, neighbours: Vec<NeighbourLayer>) -> Self {
+        self.neighbours = neighbours;
+        self
+    }
+
     /// Every group's points, in group order (= the old flat concatenation).
     pub fn points(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
         self.groups.iter().flat_map(|g| g.points.iter().copied())
@@ -869,6 +943,60 @@ pub(super) struct NeighborGroups {
     pub overzoom: u8,
 }
 
+/// The tile `(dx, dy)` away from `tile`, wrapping east–west around the
+/// world as the map does; `None` past a pole, where there is no tile.
+pub(super) fn neighbour_tile(
+    tile: ezu_graph::TileId,
+    dx: i64,
+    dy: i64,
+) -> Option<ezu_graph::TileId> {
+    let n = 1i64 << tile.z.min(31);
+    let y = i64::from(tile.y) + dy;
+    if !(0..n).contains(&y) {
+        return None;
+    }
+    Some(ezu_graph::TileId {
+        z: tile.z,
+        x: (i64::from(tile.x) + dx).rem_euclid(n) as u32,
+        y: y as u32,
+    })
+}
+
+/// Run a feature-by-feature op over `feats`, and over each of its
+/// neighbours when the op was asked for them (see
+/// [`ezu_graph::Node::forwards_neighbours`]).
+///
+/// `op` receives the context to work in, the extent of the frame its
+/// groups are in, and the groups, and returns what it makes of them. For a
+/// neighbour the context's `tile` is the neighbour's, so an op anchored to
+/// the world grid (a dash phase, a hatch, a scatter) lays the neighbour out
+/// exactly as the neighbour's own render does. The result carries no
+/// overzoom, as a geometry op's output never does.
+pub(super) fn map_with_neighbours(
+    ctx: &EvalCtx<'_>,
+    feats: &FilteredFeatures,
+    mut op: impl FnMut(&EvalCtx<'_>, u32, &[FeatureGroup]) -> Result<Vec<FeatureGroup>, EvalError>,
+) -> Result<PortValue, EvalError> {
+    let groups = op(ctx, feats.extent, &feats.groups)?;
+    let mut out = FilteredFeatures::new(feats.extent, groups);
+    if ctx.neighbours {
+        for n in &feats.neighbours {
+            let Some(tile) = neighbour_tile(ctx.tile, n.dx.into(), n.dy.into()) else {
+                continue;
+            };
+            let nctx = EvalCtx {
+                tile,
+                neighbours: false,
+                ..*ctx
+            };
+            let groups = op(&nctx, n.extent, &n.groups)?;
+            out.neighbours
+                .push(NeighbourLayer::new(n.dx, n.dy, n.extent, groups));
+        }
+    }
+    Ok(features_port(out))
+}
+
 // ---------------------------------------------------------------------------
 // Color conversions
 
@@ -1011,11 +1139,11 @@ pub(super) fn features_value(extent: u32, groups: Vec<FeatureGroup>) -> PortValu
 }
 
 fn features_payload(extent: u32, overzoom: u8, groups: Vec<FeatureGroup>) -> PortValue {
-    let payload = FilteredFeatures {
-        extent,
-        groups,
-        overzoom,
-    };
+    features_port(FilteredFeatures::new(extent, groups).with_overzoom(overzoom))
+}
+
+/// Wrap a payload as a `Features` port value.
+pub(super) fn features_port(payload: FilteredFeatures) -> PortValue {
     PortValue::Features(Arc::new(payload) as Arc<dyn Any + Send + Sync>)
 }
 
@@ -1044,7 +1172,18 @@ pub(super) fn features_value_culled(
     overzoom: u8,
     groups: Vec<FeatureGroup>,
 ) -> PortValue {
-    features_payload(extent, overzoom, cull_groups(ctx, extent, groups))
+    features_port(culled_features(ctx, extent, overzoom, groups))
+}
+
+/// The payload [`features_value_culled`] wraps, for a caller with more to
+/// add to it.
+pub(super) fn culled_features(
+    ctx: &EvalCtx<'_>,
+    extent: u32,
+    overzoom: u8,
+    groups: Vec<FeatureGroup>,
+) -> FilteredFeatures {
+    FilteredFeatures::new(extent, cull_groups(ctx, extent, groups)).with_overzoom(overzoom)
 }
 
 /// The culling step of [`features_value_culled`] on its own, for a caller

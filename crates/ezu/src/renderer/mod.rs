@@ -93,7 +93,9 @@ mod source_set;
 mod sources;
 
 pub use error::{Error, ErrorKind};
-pub use features::{FeatureGroup, FilteredFeatures, NodeFeatures, TileFeatureCoords};
+pub use features::{
+    FeatureGroup, FilteredFeatures, NeighbourLayer, NodeFeatures, TileFeatureCoords,
+};
 pub use frame::{FrameBinder, RenderFrameError};
 pub use frame_features::{
     FeatureCoords, FrameFeatureCollector, FrameFeatureNode, FrameFeatures, PageFeatures,

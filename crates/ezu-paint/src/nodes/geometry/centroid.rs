@@ -11,7 +11,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value, FeatureGroup};
+use crate::nodes::common::{downcast_features, map_with_neighbours, FeatureGroup};
 
 struct CentroidNode {
     include_polygons: bool,
@@ -36,9 +36,12 @@ impl Node for CentroidNode {
     fn coord_space(&self) -> CoordSpace {
         CoordSpace::Tile
     }
+    fn forwards_neighbours(&self, port: usize) -> bool {
+        port == 0
+    }
     fn eval(
         &self,
-        _ctx: &EvalCtx<'_>,
+        ctx: &EvalCtx<'_>,
         inputs: &[Option<PortValue>],
     ) -> Result<PortValue, EvalError> {
         let feats = downcast_features(
@@ -46,25 +49,27 @@ impl Node for CentroidNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
-        // Per group: replace each feature's polygons/lines with their
-        // centroids, carrying the feature's properties through.
-        let mut out_groups = Vec::with_capacity(feats.groups.len());
-        for g in &feats.groups {
-            let mut points = Vec::new();
-            if self.include_polygons {
-                points.extend(g.polygons.iter().filter_map(polygon_centroid));
+        map_with_neighbours(ctx, &feats, |_, _, groups| {
+            // Per group: replace each feature's polygons/lines with their
+            // centroids, carrying the feature's properties through.
+            let mut out_groups = Vec::with_capacity(groups.len());
+            for g in groups {
+                let mut points = Vec::new();
+                if self.include_polygons {
+                    points.extend(g.polygons.iter().filter_map(polygon_centroid));
+                }
+                if self.include_lines {
+                    points.extend(g.lines.iter().filter_map(|l| linestring_centroid(l)));
+                }
+                out_groups.push(FeatureGroup {
+                    properties: g.properties.clone(),
+                    polygons: vec![],
+                    lines: vec![],
+                    points,
+                });
             }
-            if self.include_lines {
-                points.extend(g.lines.iter().filter_map(|l| linestring_centroid(l)));
-            }
-            out_groups.push(FeatureGroup {
-                properties: g.properties.clone(),
-                polygons: vec![],
-                lines: vec![],
-                points,
-            });
-        }
-        Ok(features_value(feats.extent, out_groups))
+            Ok(out_groups)
+        })
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"centroid");

@@ -49,8 +49,9 @@ use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::nodes::common::{
-    cull_groups, features_value, features_value_culled, neighbor_feature_groups,
-    read_optional_string, read_optional_zoom, resolve_source, FeatureGroup,
+    cull_groups, culled_features, features_port, features_value, neighbor_feature_groups,
+    neighbour_tile, read_optional_string, read_optional_zoom, resolve_source, FeatureGroup,
+    FilteredFeatures, NeighbourLayer,
 };
 use crate::render::{collect_groups, SharedLayer};
 
@@ -99,6 +100,9 @@ impl Node for FeaturesNode {
         }
         names
     }
+    fn neighbour_asset_inputs(&self) -> Vec<String> {
+        ezu_graph::neighbor_bindings(&self.name)
+    }
     fn eval(
         &self,
         ctx: &EvalCtx<'_>,
@@ -106,46 +110,82 @@ impl Node for FeaturesNode {
     ) -> Result<PortValue, EvalError> {
         let z = ctx.tile.z;
         // Style-level zoom gate: outside the [min_zoom, max_zoom] band,
-        // skip the asset lookup entirely and emit an empty layer.
+        // skip the asset lookup entirely and emit an empty layer — no
+        // neighbours either, since the layer is off at this zoom.
         if self.min_zoom.is_some_and(|mn| z < mn) || self.max_zoom.is_some_and(|mx| z > mx) {
             return Ok(features_value(0, vec![]));
         }
-        let asset = match ctx.assets.load(&self.name) {
-            Ok(a) => a,
-            // No binding for this tile -> emit an empty layer.
-            Err(AssetError::NotFound(_)) => return Ok(features_value(0, vec![])),
+        let fe = self.filter_expr.as_ref();
+        let shared = match ctx.assets.load(&self.name) {
+            Ok(Asset::Features(opq)) => Some(opq.downcast::<SharedLayer>().map_err(|_| {
+                EvalError::Other(format!("`{}` payload is not a feature layer", self.name))
+            })?),
+            Ok(_) => {
+                return Err(EvalError::Other(format!(
+                    "asset `{}` is not a feature layer",
+                    self.name
+                )))
+            }
+            // No binding for this tile: no features of its own. A
+            // neighbour's can still reach across, so they are read all
+            // the same when asked for.
+            Err(AssetError::NotFound(_)) => None,
             Err(e) => return Err(EvalError::Asset(e)),
         };
-        let Asset::Features(opq) = asset else {
-            return Err(EvalError::Other(format!(
-                "asset `{}` is not a feature layer",
-                self.name
-            )));
+        let extent = shared.as_ref().map_or(0, |s| s.layer.extent);
+        // The neighbours' copies, filtered as this tile's own, for stitching
+        // and for a node downstream that asked for them. Read once for both.
+        let neighbors = if ctx.neighbours || (self.stitch.is_some() && shared.is_some()) {
+            Some(neighbor_feature_groups(
+                ctx,
+                &self.name,
+                extent,
+                fe,
+                &self.min_zoom_field,
+                z,
+            ))
+        } else {
+            None
         };
-        let shared = opq.downcast::<SharedLayer>().map_err(|_| {
-            EvalError::Other(format!("`{}` payload is not a feature layer", self.name))
-        })?;
-        let fe = self.filter_expr.as_ref();
-        let extent = shared.layer.extent;
-        let mut groups = collect_groups(&shared, fe, &self.min_zoom_field, z);
-        if let Some(mode) = self.stitch {
-            let (e, neighbors) =
-                neighbor_feature_groups(ctx, &self.name, extent, fe, &self.min_zoom_field, z);
-            // With no neighbour bound there is nothing to join, and this
-            // tile's own data is exactly what an unstitched layer emits.
-            if !neighbors.is_empty() {
-                let neighbors = neighbors
-                    .into_iter()
-                    .map(|n| (n.groups, n.dx, n.dy))
-                    .collect();
-                groups = stitch_groups(groups, neighbors, e as i32);
-                if mode == Stitch::Merge {
-                    // Drop out-of-reach pieces before paying for the union.
-                    groups = merge_groups(cull_groups(ctx, extent, groups));
+        let own = match &shared {
+            Some(shared) => {
+                let mut groups = collect_groups(shared, fe, &self.min_zoom_field, z);
+                if let (Some(mode), Some((e, neighbors))) = (self.stitch, &neighbors) {
+                    // With no neighbour bound there is nothing to join, and
+                    // this tile's own data is exactly what an unstitched
+                    // layer emits.
+                    if !neighbors.is_empty() {
+                        let neighbors: Vec<(&[FeatureGroup], i64, i64)> = neighbors
+                            .iter()
+                            .map(|n| (n.groups.as_slice(), n.dx, n.dy))
+                            .collect();
+                        groups = stitch_groups(groups, &neighbors, *e as i32);
+                        if mode == Stitch::Merge {
+                            // Drop out-of-reach pieces before paying for the
+                            // union.
+                            groups = merge_groups(cull_groups(ctx, extent, groups));
+                        }
+                    }
                 }
+                culled_features(ctx, extent, shared.overzoom, groups)
             }
-        }
-        Ok(features_value_culled(ctx, extent, shared.overzoom, groups))
+            None => FilteredFeatures::new(0, Vec::new()),
+        };
+        // Passed on raw: not culled to this tile's reach, since the node
+        // gathering them measures how far they can reach itself, and not
+        // stitched, since each stands for its own tile.
+        let attached: Vec<NeighbourLayer> = match neighbors {
+            Some((frame, ns)) if ctx.neighbours => ns
+                .into_iter()
+                .filter(|n| neighbour_tile(ctx.tile, n.dx, n.dy).is_some())
+                .map(|n| {
+                    NeighbourLayer::new(n.dx as i8, n.dy as i8, frame as u32, n.groups)
+                        .with_overzoom(n.overzoom)
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        Ok(features_port(own.with_neighbours(attached)))
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"features");
@@ -237,7 +277,7 @@ fn clip_into(out: &mut FeatureGroup, g: &FeatureGroup, off: (i32, i32), r: &Clip
 /// belongs to when that tile is present, else from the centre's buffer.
 fn stitch_groups(
     centre: Vec<FeatureGroup>,
-    neighbors: Vec<(Vec<FeatureGroup>, i64, i64)>,
+    neighbors: &[(&[FeatureGroup], i64, i64)],
     e: i32,
 ) -> Vec<FeatureGroup> {
     let bound: Vec<(i64, i64)> = neighbors.iter().map(|&(_, dx, dy)| (dx, dy)).collect();
@@ -265,9 +305,9 @@ fn stitch_groups(
             out.push(piece);
         }
     }
-    for (groups, dx, dy) in &neighbors {
-        let r = cell(*dx, *dy, e);
-        let off = (*dx as i32 * e, *dy as i32 * e);
+    for &(groups, dx, dy) in neighbors {
+        let r = cell(dx, dy, e);
+        let off = (dx as i32 * e, dy as i32 * e);
         for g in groups {
             let mut piece = empty_like(g);
             clip_into(&mut piece, g, off, &r);
@@ -484,6 +524,20 @@ mod tests {
         (xs.clone().min().unwrap(), xs.max().unwrap())
     }
 
+    /// [`stitch_groups`] over neighbours held by value.
+    #[allow(clippy::type_complexity)]
+    fn stitch(
+        centre: Vec<FeatureGroup>,
+        neighbors: Vec<(Vec<FeatureGroup>, i64, i64)>,
+        e: i32,
+    ) -> Vec<FeatureGroup> {
+        let neighbors: Vec<(&[FeatureGroup], i64, i64)> = neighbors
+            .iter()
+            .map(|(g, dx, dy)| (g.as_slice(), *dx, *dy))
+            .collect();
+        stitch_groups(centre, &neighbors, e)
+    }
+
     /// One polygon running from the centre into the east neighbour, as the
     /// two tiles cut it: each copy reaches `BUF` past its own edge.
     #[allow(clippy::type_complexity)]
@@ -498,7 +552,7 @@ mod tests {
     #[test]
     fn pieces_split_at_the_seam_without_overlap() {
         let (c, n) = across_east_seam();
-        let out = stitch_groups(c, n, E);
+        let out = stitch(c, n, E);
         let ranges: Vec<_> = out.iter().flat_map(|g| &g.polygons).map(x_range).collect();
         assert_eq!(ranges, vec![(3000, E), (E, E + 1000)]);
     }
@@ -506,7 +560,7 @@ mod tests {
     #[test]
     fn merge_leaves_one_polygon_and_no_seam_edge() {
         let (c, n) = across_east_seam();
-        let out = merge_groups(stitch_groups(c, n, E));
+        let out = merge_groups(stitch(c, n, E));
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].polygons.len(), 1, "{:?}", out[0].polygons);
         let p = &out[0].polygons[0];
@@ -523,7 +577,7 @@ mod tests {
         let (mut c, mut n) = across_east_seam();
         n[0].0[0].properties = props("land");
         c[0].polygons.push(square(100, 100, 200, 200));
-        let out = merge_groups(stitch_groups(c, n, E));
+        let out = merge_groups(stitch(c, n, E));
         assert_eq!(out.len(), 2);
         // The centre group's two separate pieces stay two polygons.
         assert_eq!(out[0].polygons.len(), 2);
@@ -535,7 +589,7 @@ mod tests {
         // to the centre, whose buffer reaches past the edge.
         let (c, _) = across_east_seam();
         let north = vec![(vec![group("water")], 0, -1)];
-        let out = stitch_groups(c, north, E);
+        let out = stitch(c, north, E);
         let max_x = out
             .iter()
             .flat_map(|g| &g.polygons)
@@ -550,7 +604,7 @@ mod tests {
         c.lines.push(vec![(3000, 2000), (E + BUF, 2000)]);
         let mut n = group("coast");
         n.lines.push(vec![(-BUF, 2000), (1000, 2000)]);
-        let out = stitch_groups(vec![c], vec![(vec![n], 1, 0)], E);
+        let out = stitch(vec![c], vec![(vec![n], 1, 0)], E);
         let lines: Vec<_> = out.iter().flat_map(|g| g.lines.clone()).collect();
         assert_eq!(
             lines,
@@ -571,10 +625,114 @@ mod tests {
         east.points.push((0, 100));
         let mut west = group("poi");
         west.points.push((E, 300));
-        let out = stitch_groups(vec![c], vec![(vec![west], -1, 0), (vec![east], 1, 0)], E);
+        let out = stitch(vec![c], vec![(vec![west], -1, 0), (vec![east], 1, 0)], E);
         let mut pts: Vec<_> = out.iter().flat_map(|g| g.points.clone()).collect();
         pts.sort();
         assert_eq!(pts, vec![(0, 300), (E, 100)]);
+    }
+
+    /// A layer of single points, each with a `keep` property.
+    fn point_layer(points: &[((i32, i32), bool)]) -> ezu_features::FeatureLayer {
+        let features = points
+            .iter()
+            .map(|&(p, keep)| {
+                let mut geometry = ezu_features::Geometry::default();
+                geometry.points.push(p);
+                let mut properties = std::collections::HashMap::new();
+                properties.insert("keep".to_string(), ezu_features::Value::Bool(keep));
+                ezu_features::Feature {
+                    id: None,
+                    geometry,
+                    properties,
+                }
+            })
+            .collect();
+        ezu_features::FeatureLayer {
+            name: "l".into(),
+            extent: E as u32,
+            features,
+        }
+    }
+
+    /// Evaluate a `features` node reading `s.l` and keeping `keep` points,
+    /// with the given layers bound, asked for neighbours or not.
+    fn eval_features(
+        bound: &[(&str, ezu_features::FeatureLayer)],
+        neighbours: bool,
+    ) -> Arc<FilteredFeatures> {
+        use crate::host::TileLoader;
+        use ezu_graph::{CanvasInfo, NoAssets, ParamValues, TileId};
+        let filter = serde_json::json!(["get", "keep"]);
+        let node = FeaturesNode {
+            name: "s.l".into(),
+            filter_expr: Some(maplibre_expr::parse(&filter).unwrap()),
+            filter_expr_src: Some(filter.to_string()),
+            min_zoom_field: None,
+            min_zoom: None,
+            max_zoom: None,
+            stitch: None,
+        };
+        let tile = TileId { z: 4, x: 5, y: 6 };
+        let base = NoAssets;
+        let mut loader = TileLoader::new(&base, tile);
+        for (name, layer) in bound {
+            loader.bind_features(name.to_string(), layer.clone());
+        }
+        let params = ParamValues::new();
+        let ctx = EvalCtx {
+            tile,
+            canvas: CanvasInfo::square(256, 0),
+            assets: &loader,
+            params: &params,
+            rng_seed: 0,
+            // Tight, so the cull would show if it reached the neighbours.
+            influence_pad: 0,
+            neighbours,
+        };
+        crate::nodes::common::downcast_features(&node.eval(&ctx, &[]).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn neighbours_are_attached_only_when_asked_for_and_filtered_but_not_culled() {
+        let bound = [
+            ("s.l", point_layer(&[((100, 100), true)])),
+            (
+                "s.l@1,0",
+                point_layer(&[((100, 100), true), ((200, 200), false)]),
+            ),
+            // Far outside the neighbour's own tile: a cull would drop it.
+            ("s.l@0,-1", point_layer(&[((40_000, 40_000), true)])),
+        ];
+        let off = eval_features(&bound, false);
+        assert!(off.neighbours.is_empty());
+        let on = eval_features(&bound, true);
+        assert_eq!(on.groups.len(), 1);
+        let got: Vec<_> = on
+            .neighbours
+            .iter()
+            .map(|n| {
+                let pts: Vec<_> = n.groups.iter().flat_map(|g| g.points.clone()).collect();
+                (n.dx, n.dy, n.extent, pts)
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (0, -1, E as u32, vec![(40_000, 40_000)]),
+                (1, 0, E as u32, vec![(100, 100)]),
+            ]
+        );
+    }
+
+    #[test]
+    fn neighbours_are_attached_even_when_this_tile_has_no_copy_of_the_layer() {
+        let bound = [("s.l@-1,1", point_layer(&[((10, 20), true)]))];
+        let on = eval_features(&bound, true);
+        assert_eq!(on.extent, 0, "this tile has no layer of its own");
+        assert!(on.groups.is_empty());
+        assert_eq!(on.neighbours.len(), 1);
+        assert_eq!((on.neighbours[0].dx, on.neighbours[0].dy), (-1, 1));
+        assert_eq!(on.neighbours[0].extent, E as u32);
     }
 
     #[test]

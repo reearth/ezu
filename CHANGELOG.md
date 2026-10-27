@@ -21,6 +21,12 @@ mean is spelled out in
   the node's output to carry the neighbour tiles' data. Code that builds an
   `EvalCtx` itself, as a custom op's unit test may, sets it (`false` will
   do).
+- `FilteredFeatures` has a `neighbours` field, the neighbour tiles' copies
+  of the features when a node downstream asked for them (each a
+  `NeighbourLayer`, also re-exported by `ezu::renderer`), and is now
+  `#[non_exhaustive]`. Build one with `FilteredFeatures::new(extent,
+  groups)`, adding `with_overzoom` and `with_neighbours` as needed. Code
+  that reads `groups` sees only the tile's own features, as before.
 
 ### Fixed
 

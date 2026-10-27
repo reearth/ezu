@@ -10,7 +10,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value, FeatureGroup};
+use crate::nodes::common::{downcast_features, map_with_neighbours, FeatureGroup};
 
 struct HatchNode {
     angle_deg: In<f64>,
@@ -46,31 +46,36 @@ impl Node for HatchNode {
         // World origin of this tile, in feature-extent units, so the
         // line family is laid out on a global grid and adjacent tiles
         // agree at the seam.
-        let extent = feats.extent as f64;
-        let origin = (ctx.tile.x as f64 * extent, ctx.tile.y as f64 * extent);
-        // `spacing` is in style pixels: in device pixels first, then in
-        // extent units, which come out the same at every pixel ratio so a
-        // retina tile hatches the very same world lines.
-        let px = extent / ctx.canvas.tile_w.max(1) as f64;
-        let opts = HatchOpts {
-            angle_deg: self.angle_deg.get(ctx, inputs)?,
-            spacing: ctx.px(self.spacing.get(ctx, inputs)?) * px,
-            phase: self.phase.get(ctx, inputs)?,
-            origin,
-        };
-        // Per group: hatch each feature's polygons into polylines, carrying
-        // properties.
-        let mut out_groups = Vec::with_capacity(feats.groups.len());
-        for g in &feats.groups {
-            let lines = hatch_polygons(&g.polygons, &opts);
-            out_groups.push(FeatureGroup {
-                properties: g.properties.clone(),
-                polygons: vec![],
-                lines,
-                points: vec![],
-            });
-        }
-        Ok(features_value(feats.extent, out_groups))
+        map_with_neighbours(ctx, &feats, |ctx, extent, groups| {
+            let extent = extent as f64;
+            let origin = (ctx.tile.x as f64 * extent, ctx.tile.y as f64 * extent);
+            // `spacing` is in style pixels: in device pixels first, then in
+            // extent units, which come out the same at every pixel ratio so a
+            // retina tile hatches the very same world lines.
+            let px = extent / ctx.canvas.tile_w.max(1) as f64;
+            let opts = HatchOpts {
+                angle_deg: self.angle_deg.get(ctx, inputs)?,
+                spacing: ctx.px(self.spacing.get(ctx, inputs)?) * px,
+                phase: self.phase.get(ctx, inputs)?,
+                origin,
+            };
+            // Per group: hatch each feature's polygons into polylines,
+            // carrying properties.
+            let mut out_groups = Vec::with_capacity(groups.len());
+            for g in groups {
+                let lines = hatch_polygons(&g.polygons, &opts);
+                out_groups.push(FeatureGroup {
+                    properties: g.properties.clone(),
+                    polygons: vec![],
+                    lines,
+                    points: vec![],
+                });
+            }
+            Ok(out_groups)
+        })
+    }
+    fn forwards_neighbours(&self, port: usize) -> bool {
+        port == 0
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"hatch");

@@ -9,7 +9,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value, FeatureGroup};
+use crate::nodes::common::{downcast_features, map_with_neighbours, FeatureGroup};
 
 struct SimplifyNode {
     epsilon: In<f64>,
@@ -40,30 +40,35 @@ impl Node for SimplifyNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
-        let px = feats.extent as f64 / ctx.canvas.tile_w.max(1) as f64;
-        let epsilon = ctx.px(self.epsilon.get(ctx, inputs)?) * px;
-        // Per group: simplify each feature's lines and polygon rings (points
-        // pass through), carrying properties.
-        let mut out_groups = Vec::with_capacity(feats.groups.len());
-        for g in &feats.groups {
-            let lines: Vec<_> = g
-                .lines
-                .iter()
-                .filter_map(|l| simplify_line(l, epsilon))
-                .collect();
-            let polygons: Vec<_> = g
-                .polygons
-                .iter()
-                .filter_map(|p| simplify_polygon(p, epsilon))
-                .collect();
-            out_groups.push(FeatureGroup {
-                properties: g.properties.clone(),
-                polygons,
-                lines,
-                points: g.points.clone(),
-            });
-        }
-        Ok(features_value(feats.extent, out_groups))
+        map_with_neighbours(ctx, &feats, |ctx, extent, groups| {
+            let px = extent as f64 / ctx.canvas.tile_w.max(1) as f64;
+            let epsilon = ctx.px(self.epsilon.get(ctx, inputs)?) * px;
+            // Per group: simplify each feature's lines and polygon rings
+            // (points pass through), carrying properties.
+            let mut out_groups = Vec::with_capacity(groups.len());
+            for g in groups {
+                let lines: Vec<_> = g
+                    .lines
+                    .iter()
+                    .filter_map(|l| simplify_line(l, epsilon))
+                    .collect();
+                let polygons: Vec<_> = g
+                    .polygons
+                    .iter()
+                    .filter_map(|p| simplify_polygon(p, epsilon))
+                    .collect();
+                out_groups.push(FeatureGroup {
+                    properties: g.properties.clone(),
+                    polygons,
+                    lines,
+                    points: g.points.clone(),
+                });
+            }
+            Ok(out_groups)
+        })
+    }
+    fn forwards_neighbours(&self, port: usize) -> bool {
+        port == 0
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"simplify");

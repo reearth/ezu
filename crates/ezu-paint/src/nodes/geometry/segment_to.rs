@@ -38,7 +38,9 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value, read_optional_string, FeatureGroup};
+use crate::nodes::common::{
+    downcast_features, map_with_neighbours, read_optional_string, FeatureGroup,
+};
 
 /// Furthest from the tile origin, in extent units, an end may land.
 /// Anything further is no connector worth drawing, and staying well inside
@@ -80,37 +82,42 @@ impl Node for SegmentToNode {
                 .as_ref()
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
-        let scale = f64::from(feats.extent) / f64::from(ctx.canvas.tile_w.max(1));
-        // `max` also turns a NaN from a port into no gap.
-        let gap = ctx.px(self.gap_px.get(ctx, inputs)?.max(0.0)) * scale;
-        let mut out_groups = Vec::new();
-        for g in &feats.groups {
-            let Some(target) = target_of(g, &self.lng_field, &self.lat_field)
-                .and_then(|(lng, lat)| project(ctx.tile, feats.extent, lng, lat))
-            else {
-                continue;
-            };
-            let to_points = g.points.iter().filter_map(|&(x, y)| {
-                let end = pull_back(target, (f64::from(x), f64::from(y)), gap)?;
-                Some(vec![target, end])
-            });
-            let to_polygons = g.polygons.iter().filter_map(|p| {
-                let edge = edge_towards_centroid(target, p)?;
-                let end = pull_back(target, edge, gap)?;
-                Some(vec![target, end])
-            });
-            let lines: Vec<Vec<(i32, i32)>> = to_points.chain(to_polygons).collect();
-            if lines.is_empty() {
-                continue;
+        map_with_neighbours(ctx, &feats, |ctx, extent, groups| {
+            let scale = f64::from(extent) / f64::from(ctx.canvas.tile_w.max(1));
+            // `max` also turns a NaN from a port into no gap.
+            let gap = ctx.px(self.gap_px.get(ctx, inputs)?.max(0.0)) * scale;
+            let mut out_groups = Vec::new();
+            for g in groups {
+                let Some(target) = target_of(g, &self.lng_field, &self.lat_field)
+                    .and_then(|(lng, lat)| project(ctx.tile, extent, lng, lat))
+                else {
+                    continue;
+                };
+                let to_points = g.points.iter().filter_map(|&(x, y)| {
+                    let end = pull_back(target, (f64::from(x), f64::from(y)), gap)?;
+                    Some(vec![target, end])
+                });
+                let to_polygons = g.polygons.iter().filter_map(|p| {
+                    let edge = edge_towards_centroid(target, p)?;
+                    let end = pull_back(target, edge, gap)?;
+                    Some(vec![target, end])
+                });
+                let lines: Vec<Vec<(i32, i32)>> = to_points.chain(to_polygons).collect();
+                if lines.is_empty() {
+                    continue;
+                }
+                out_groups.push(FeatureGroup {
+                    properties: g.properties.clone(),
+                    polygons: vec![],
+                    lines,
+                    points: vec![],
+                });
             }
-            out_groups.push(FeatureGroup {
-                properties: g.properties.clone(),
-                polygons: vec![],
-                lines,
-                points: vec![],
-            });
-        }
-        Ok(features_value(feats.extent, out_groups))
+            Ok(out_groups)
+        })
+    }
+    fn forwards_neighbours(&self, port: usize) -> bool {
+        port == 0
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"segment-to");

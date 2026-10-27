@@ -18,7 +18,7 @@ use ezu_graph::{
 use serde_json::Value;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::nodes::common::{downcast_features, features_value, FeatureGroup};
+use crate::nodes::common::{downcast_features, map_with_neighbours, FeatureGroup};
 
 /// `clip-edges`: whether to drop the edges a tile's clip added.
 const CLIP_EDGES: EnumTable<bool> = &[("keep", false), ("drop", true)];
@@ -57,26 +57,32 @@ impl Node for BoundaryNode {
                 .ok_or_else(|| EvalError::MissingInput("features".into()))?,
         )?;
         let drop_clip_edges = self.drop_clip_edges.get(ctx)?;
-        // Per group: convert each feature's polygons to boundary polylines
-        // (existing lines and points pass through), carrying properties.
-        let mut out_groups = Vec::with_capacity(feats.groups.len());
-        for g in &feats.groups {
-            let mut lines = g.lines.clone();
-            for p in &g.polygons {
-                if drop_clip_edges {
-                    lines.extend(polygon_boundary_without_clip_edges(p, feats.extent));
-                } else {
-                    lines.extend(polygon_boundary(p));
+        map_with_neighbours(ctx, &feats, |_, extent, groups| {
+            // Per group: convert each feature's polygons to boundary
+            // polylines (existing lines and points pass through), carrying
+            // properties.
+            let mut out_groups = Vec::with_capacity(groups.len());
+            for g in groups {
+                let mut lines = g.lines.clone();
+                for p in &g.polygons {
+                    if drop_clip_edges {
+                        lines.extend(polygon_boundary_without_clip_edges(p, extent));
+                    } else {
+                        lines.extend(polygon_boundary(p));
+                    }
                 }
+                out_groups.push(FeatureGroup {
+                    properties: g.properties.clone(),
+                    polygons: vec![],
+                    lines,
+                    points: g.points.clone(),
+                });
             }
-            out_groups.push(FeatureGroup {
-                properties: g.properties.clone(),
-                polygons: vec![],
-                lines,
-                points: g.points.clone(),
-            });
-        }
-        Ok(features_value(feats.extent, out_groups))
+            Ok(out_groups)
+        })
+    }
+    fn forwards_neighbours(&self, port: usize) -> bool {
+        port == 0
     }
     fn param_hash(&self, h: &mut Xxh3) {
         h.update(b"boundary");

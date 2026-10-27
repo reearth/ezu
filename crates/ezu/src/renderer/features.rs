@@ -18,7 +18,7 @@ use super::TileId;
 /// The value a `Features` port carries: one [`FeatureGroup`] per feature,
 /// in tile units. Re-exported so a shell reading
 /// [`NodeFeatures::features`] needs this crate and nothing under it.
-pub use ezu_paint::nodes::{FeatureGroup, FilteredFeatures};
+pub use ezu_paint::nodes::{FeatureGroup, FilteredFeatures, NeighbourLayer};
 
 /// The coordinates [`NodeFeatures::to_geojson_in`] writes one tile's
 /// features in.
@@ -399,9 +399,9 @@ mod tests {
             exterior: vec![(0, 0), (10, 0), (10, 10), (0, 10)],
             holes: vec![],
         };
-        let features = FilteredFeatures {
-            extent: 4096,
-            groups: vec![
+        let features = FilteredFeatures::new(
+            4096,
+            vec![
                 group(
                     &[
                         ("id", Value::Number(12.0)),
@@ -414,8 +414,7 @@ mod tests {
                 group(&[], vec![square], vec![vec![(1, 2), (3, 4)]], vec![]),
                 group(&[], vec![], vec![], vec![]),
             ],
-            overzoom: 0,
-        };
+        );
         let nf = NodeFeatures {
             node: "boxes".into(),
             features: Some(Arc::new(features)),
@@ -454,11 +453,10 @@ mod tests {
     /// the tile's own corner, whatever size it was drawn at.
     #[test]
     fn a_tile_writes_in_its_pixels_or_on_the_globe() {
-        let features = Arc::new(FilteredFeatures {
-            extent: 4096,
-            groups: vec![group(&[], vec![], vec![], vec![(0, 0), (2048, 4096)])],
-            overzoom: 0,
-        });
+        let features = Arc::new(FilteredFeatures::new(
+            4096,
+            vec![group(&[], vec![], vec![], vec![(0, 0), (2048, 4096)])],
+        ));
         let nf = |tile_size| NodeFeatures {
             node: "pts".into(),
             features: Some(Arc::clone(&features)),
