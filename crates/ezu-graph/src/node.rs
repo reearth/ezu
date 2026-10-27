@@ -74,11 +74,13 @@ impl InfluenceCtx<'_> {
 ///
 /// # Sources read, processors process
 ///
-/// Only source nodes (`features`, `raster`, `dem`, …) read a document
-/// source. They own its `source`/`layer` fields and everything about
-/// loading it: which binding to ask the host for, how to decode and
+/// Only source nodes (`features`, `raster`, `dem`, `sprite`, `fonts`, …)
+/// read a document source. They own the fields naming it and everything
+/// about loading it: which binding to ask the host for, how to decode and
 /// filter it, what to do when it is missing. Every other node works only
-/// from the values arriving on its ports.
+/// from the values arriving on its ports — a whole sprite sheet arrives on
+/// a [`PortKind::SpriteSheet`] port, font stacks on a [`PortKind::Fonts`]
+/// one.
 ///
 /// The tempting shortcut is for a processor that needs a little more than
 /// its input carries — a label node wanting the neighbour tiles' copies of

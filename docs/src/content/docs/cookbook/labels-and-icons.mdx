@@ -17,11 +17,13 @@ tile boundaries.
   "sans": { "type": "font", "url": "https://example.com/NotoSans-Regular.ttf" }
 },
 "nodes": {
+  "fonts": { "op": "fonts", "font-stacks": { "sans": ["sans"] } },
   "places_f": { "op": "features", "source": "basemap", "layer": "places",
                 "filter-expr": ["==", ["get", "kind"], "city"] },
   "places": {
     "op": "text",
     "features": "@places_f",
+    "fonts": "@fonts",
     "font": ["sans"],
     "text": ["get", "name"],
     "size": 13,
@@ -33,8 +35,33 @@ tile boundaries.
 ```
 
 `text` is a literal string or a MapLibre string expression evaluated per feature.
-`font` is an ordered fallback stack of `font` and/or `glyphs` source names — outline
-fonts and SDF stacks mix freely, and the first entry covering a character shapes it.
+
+**Fonts.** The `fonts` node loads the style's `font` and `glyphs` sources into
+named stacks. Each stack is an ordered fallback chain — outline fonts and SDF
+glyph stacks mix freely, and the first entry covering a character shapes it —
+and glyph ranges are fetched as the labels need them. A label node takes the
+stacks on `fonts` and names the one its labels use in `font`, as MapLibre's
+`text-font` does: an array of font names, joined with `,` to form the stack's
+name. `font-expr` picks a stack per feature, and a `format` section's
+`text-font` picks one per section, from the same stacks:
+
+```json
+"fonts": { "op": "fonts", "font-stacks": {
+  "Noto Sans Regular": ["noto"],
+  "Noto Sans Bold":    ["noto-bold", "noto"]
+} },
+"places": { "op": "text", "features": "@places_f", "fonts": "@fonts",
+            "font": ["Noto Sans Regular"],
+            "font-expr": ["case", ["get", "capital"], ["literal", ["Noto Sans Bold"]],
+                                  ["literal", ["Noto Sans Regular"]]],
+            "text": ["get", "name"] }
+```
+
+One `fonts` node serves every label layer of a style. Label nodes used to name
+their `font` / `glyphs` sources in `font`, with `font-stacks` for the stacks
+`font-expr` could pick, and load the fonts themselves. Those uses are
+deprecated: such a style still draws as it did, and the build warning spells out
+the `fonts` node that replaces them.
 
 **Neighbour tiles.** Collision also places the neighbour tiles' labels, so a
 label on a tile edge is decided the same way on both sides. The label node asks
@@ -71,7 +98,7 @@ too:
 
 ```json
 "lots_label": {
-  "op": "text", "features": "@lots", "font": ["sans"], "text": ["get", "number"],
+  "op": "text", "features": "@lots", "fonts": "@fonts", "font": ["sans"], "text": ["get", "number"],
   "size": 13, "halo-color": "#ffffffcc", "halo-width": 1.5,
   "color-expr": ["case", ["get", "abolished"], "#8a8a8a", "#222222"],
   "strikethrough-expr": ["get", "abolished"]
@@ -92,7 +119,7 @@ box. `background-color` draws one behind each label, as big as the laid-out text
 
 ```json
 "page_badge": {
-  "op": "text", "features": "@pages", "font": ["sans"], "text": ["get", "page"],
+  "op": "text", "features": "@pages", "fonts": "@fonts", "font": ["sans"], "text": ["get", "page"],
   "size": 12, "color": "#ffffff",
   "anchor": "top-left", "offset-em": [0.4, 0.3],
   "background-color": "#2f6fe0", "background-padding": [3, 6, 3, 6],
@@ -115,7 +142,7 @@ anything else drawn around the box, take the box itself from `label-boxes` (see
 
 ```json
 "roads_label": {
-  "op": "text", "features": "@roads_f", "font": ["sans"], "text": ["get", "name"],
+  "op": "text", "features": "@roads_f", "fonts": "@fonts", "font": ["sans"], "text": ["get", "name"],
   "placement": "line",
   "spacing-px": 250,
   "max-angle-deg": 45,
@@ -182,7 +209,7 @@ the shape (an L or a U).
 
 ```json
 "block_number": {
-  "op": "text", "features": "@blocks", "font": ["sans"],
+  "op": "text", "features": "@blocks", "fonts": "@fonts", "font": ["sans"],
   "text": ["get", "block_number"],
   "polygon-anchor": "centroid"
 }
@@ -209,14 +236,23 @@ An icon and its text place as **one unit** against the same collision index, so 
 symbol shows both or neither:
 
 ```json
+"icons": { "op": "sprite", "sprite": "@sheet" },
 "poi": {
-  "op": "text", "features": "@poi_f", "font": ["sans"], "text": ["get", "name"],
-  "icon-sprite": "@sheet",
+  "op": "text", "features": "@poi_f", "fonts": "@fonts", "font": ["sans"], "text": ["get", "name"],
+  "icon-sheet": "@icons",
   "icon-name-expr": ["get", "icon"],
   "icon-size": 1, "icon-anchor": "center", "icon-offset": [0, -8],
   "text-optional": true
 }
 ```
+
+The `sprite` node loads the sheet the `sheet` source declares, and `icon-sheet`
+takes it in; `icon-name-expr` names each feature's icon in it (`icon-name` names
+one for every feature). A name the sheet lacks draws no icon, and the label keeps
+its text. `stamp` and `line-stamp` take a sheet the same way, on `sheet`, when
+their `name-expr` names an icon per feature. Label nodes used to name the sprite
+source in `icon-sprite` and load the sheet themselves; that field is deprecated,
+and a style using it draws as before, with a warning.
 
 `text-optional` lets the icon place when the text is blocked; `icon-optional` does
 the reverse. Without either, one blocked half drops the whole symbol — which is the
@@ -281,7 +317,7 @@ key, and once a label has placed, later labels in the same layer with an equal
 key whose anchor is within `dedupe-distance-px` of it are dropped:
 
 ```json
-"names": { "op": "text-labels", "features": "@buildings", "font": ["sans"],
+"names": { "op": "text-labels", "features": "@buildings", "fonts": "@fonts", "font": ["sans"],
            "text": ["get", "name"],
            "dedupe-key-expr": ["get", "name"], "dedupe-distance-px": 120 }
 ```
@@ -322,7 +358,7 @@ box, measured, anchored and collided as usual, while `text-draw` leaves it
 unpainted:
 
 ```json
-"pages_l":  { "op": "text-labels", "features": "@pages", "font": ["sans"],
+"pages_l":  { "op": "text-labels", "features": "@pages", "fonts": "@fonts", "font": ["sans"],
               "text": ["get", "page"], "size": 12, "color": "#2f6fe0",
               "anchor": "top-left", "offset-em": [0.4, 0.3],
               "background-padding": [3, 6, 3, 6], "padding-px": 4 },
@@ -370,7 +406,7 @@ properties. A placed label's boxes also carry `variant-index`, 0 at the first
 position, so `filter-expr` on `label-boxes` keeps only the labels that moved:
 
 ```json
-"names":   { "op": "text-labels", "features": "@shops", "font": ["sans"],
+"names":   { "op": "text-labels", "features": "@shops", "fonts": "@fonts", "font": ["sans"],
              "text": ["get", "name"],
              "anchor-offsets": [
                { "anchor": "bottom", "offset-em": [0, -0.8] },
@@ -404,7 +440,9 @@ Instead of a `font` source, point at a MapLibre glyph endpoint:
   "gl": { "type": "glyphs", "url": "https://example.com/fonts/{fontstack}/{range}.pbf" }
 },
 "nodes": {
-  "labels": { "op": "text", "features": "@f", "font": ["gl"], "text": ["get", "name"] }
+  "fonts":  { "op": "fonts", "font-stacks": { "Noto Sans Regular": ["gl"] } },
+  "labels": { "op": "text", "features": "@f", "fonts": "@fonts",
+              "font": ["Noto Sans Regular"], "text": ["get", "name"] }
 }
 ```
 

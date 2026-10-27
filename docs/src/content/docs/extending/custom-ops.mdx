@@ -120,7 +120,8 @@ anything.
 
 ## Sources read, processors process
 
-Only source nodes (`features`, `raster`, `dem`, …) read a document source. They
+Only source nodes (`features`, `raster`, `dem`, `sprite`, `fonts`, …) read a
+document source. They
 own `source` and `layer` and everything about loading: which binding to ask the
 host for, how to decode and filter it, what a missing tile means. Every other op
 works only from the values on its ports.
@@ -143,6 +144,18 @@ neighbour too, with `ctx.tile` set to that neighbour, so it produces exactly wha
 the neighbour's own render would. An op that merges features or combines several
 inputs cannot, so it leaves `forwards_neighbours` at `false` and the graph warns
 the op that asked.
+
+The same goes for assets. An op that needs a whole sprite sheet or a set of font
+stacks takes it on a port: the `sprite` source node loads a sheet onto a
+`SpriteSheet` port, and the `fonts` source node loads font stacks onto a `Fonts`
+port, glyph stacks still fetching their ranges as labels need them. `stamp`,
+`line-stamp` and `text` read those ports instead of naming a sprite or font
+source in a field.
+
+A node that does load an asset lists it in `asset_inputs()`. The evaluator folds
+the asset's hash into the node's cache key, and `Graph::asset_inputs()` — what a
+host binding assets up front, such as a wasm one, binds from — is the union of
+these lists.
 
 Reading a built-in is the fastest way in — `crates/ezu-paint/src/nodes/raster/blur.rs`
 is short and exercises pad propagation, `In<f64>`, and kind pass-through.

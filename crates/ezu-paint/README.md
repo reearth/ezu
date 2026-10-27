@@ -192,6 +192,8 @@ Example: ink-style taper (thin → fat → thin, faster in the middle):
 | `raster` | `() → Raster` | Samples a host-bound RGBA imagery mosaic (satellite photos, pre-rendered basemaps). `source` (optional, matches a `raster` entry in `sources`; defaults to the single such entry) — looked up by bare source name. The host fetches PNG/WebP/JPEG tiles (XYZ / TileJSON / PMTiles), stitches the 3×3 neighbourhood onto the padded canvas (sampled as the source's `resampling` says), and binds it per render; unbound tiles (`on-missing: empty`) emit transparent pixels. `opacity`, `hue-rotate-deg`, `saturation`, `contrast` and `brightness-min` / `-max` adjust the imagery with MapLibre's raster layer formulas |
 | `image` | `() → Sprite` | Load a PNG / WebP asset from the document's `sources` block at its native dimensions |
 | `icon` | `() → Sprite` | Crop one named icon out of a `sprite` atlas — the feed for `stamp` (symbol icons), `tiling` (`fill-pattern`) and `line-stamp` (`line-pattern`) |
+| `sprite` | `() → SpriteSheet` | A `sprite` source's whole sheet, for the ops that name an icon per feature: `stamp` / `line-stamp` (`sheet`, with `name-expr`) and `text` (`icon-sheet`) |
+| `fonts` | `() → Fonts` | The style's `font` / `glyphs` sources as named font stacks (`font-stacks`), for `text` / `text-labels` (`fonts`); glyph ranges are fetched as labels need them |
 | `literal-geometry` | `() → Features` | Inline points / lines / polygons from style fields |
 | `tile-bounds` | `() → Features` | Polygon covering the current tile |
 | `point-grid` | `() → Features` | Regular grid of points across the tile |
@@ -344,8 +346,9 @@ reproducible recipe.
   "nodes": {
     "bg":        { "op": "solid", "color": "#f7f4ee" },
     "places":    { "op": "features", "source": "basemap", "layer": "places" },
+    "fonts":     { "op": "fonts", "font-stacks": { "sans": ["sans"] } },
     "place_lbl": { "op": "text", "features": "@places",
-                   "font": ["sans"],
+                   "fonts": "@fonts", "font": ["sans"],
                    "text": ["get", "name"],
                    "size": 14,
                    "color": "#333333",
