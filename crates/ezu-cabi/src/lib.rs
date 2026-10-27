@@ -699,10 +699,25 @@ pub extern "C" fn ezu_source_tile(
 /// Neighbour tile offsets the active style actually asks for from `name`,
 /// as JSON `[[dx, dy], …]` (never including the centre `[0, 0]`).
 ///
+/// Cross-tile label collision and edge-continuous DEM/raster shading are the
+/// only things that read neighbours, and only for the sources they name.
 /// Bind each offset listed here and the render gets exactly what the recipe
 /// needs — neither a blind 3×3 per source nor, more costly, a window short
 /// of what a stitched source wanted. An empty array means the centre tile
 /// is enough.
+///
+/// What comes back depends on the source's kind. A vector source answers
+/// from the graph: a node that wants a neighbour names it, and cross-tile
+/// label collision is usually the only thing that does, so the list is
+/// often empty. A `dem` or `raster` source answers from its own
+/// `neighbor-fetch`, which defaults to on and means the whole 3×3 — those
+/// bind as one stitched canvas, and a neighbour left unbound is not a
+/// missing collision candidate but a pad filled by clamping the tile's own
+/// edge, which shows up as a seam in whatever samples it. A `geojson`
+/// document covers every tile, so the one bound at the centre also serves
+/// each offset listed for it; binding it there as well changes nothing.
+///
+/// Fails with `-13` (`UnknownSource`) if `name` is not declared.
 #[unsafe(no_mangle)]
 pub extern "C" fn ezu_requested_neighbor_offsets(
     handle: u32,
