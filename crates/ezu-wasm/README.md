@@ -26,6 +26,17 @@ function threadsEnabled(): boolean;
 // Present only in `threads` builds. Spins up the Web Worker pool; await
 // it once after `init()`, then pass `{ parallel: true }` to `renderTile`.
 function initThreadPool(numThreads: number): Promise<void>;
+// Translate a MapLibre GL style into an ezu style, as `ezu translate`
+// does. Throws InvalidStyle for a style that is not JSON or that the
+// translator refuses. Render the recipe with
+// `new Renderer(JSON.stringify(recipe))`.
+function translateMapLibre(styleJson: string, options?: {
+  tileSize?: number;                  // default 512
+  pad?: number;                       // default 16
+  keepHidden?: boolean;               // the CLI's --keep-hidden
+  migrate?: boolean;                  // the CLI's --migrate
+  fonts?: Record<string, string>;     // the CLI's --font NAME=SOURCE
+}): { recipe: object; warnings: string[] };
 
 class Renderer {
   constructor(styleJson: string);

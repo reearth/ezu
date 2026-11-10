@@ -854,6 +854,7 @@ dependencies = [
  "console_error_panic_hook",
  "ezu",
  "js-sys",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
  "wasm-bindgen",

@@ -2054,6 +2054,115 @@ fn parse_source_zoom_opt(obj: Option<&js_sys::Object>) -> Result<Option<u8>, JsV
     Ok(Some(z as u8))
 }
 
+#[wasm_bindgen(typescript_custom_section)]
+const TRANSLATE_TYPES: &'static str = r#"
+/** How `translateMapLibre` lowers a MapLibre style. Every field is optional. */
+export interface TranslateOptions {
+  /** The translated style's `tile-size`. Defaults to 512, MapLibre's own. */
+  tileSize?: number;
+  /** The translated style's `pad`, for strokes painted past a tile's edge. Defaults to 16. */
+  pad?: number;
+  /** Keep `visibility: "none"` layers, switched off, instead of dropping them. */
+  keepHidden?: boolean;
+  /** Convert legacy forms (`stops` functions, `{token}` strings) to expressions first. */
+  migrate?: boolean;
+  /** `text-font` stack entry name → font source (`system:Helvetica`, a font URL). */
+  fonts?: Record<string, string>;
+}
+
+/** What `translateMapLibre` answers with. */
+export interface Translation {
+  /** The ezu style: `new Renderer(JSON.stringify(recipe))` renders it. */
+  recipe: Record<string, unknown>;
+  /** What the translator skipped or approximated, one line each. */
+  warnings: string[];
+}
+"#;
+
+/// Translate a MapLibre GL style into an ezu style, as `ezu translate`
+/// does. Throws `InvalidStyle` for a style that is not JSON or that the
+/// translator refuses, and for malformed options. The Go package's
+/// `Runtime.TranslateMapLibre`; a Rust host calls
+/// `ezu::translate::maplibre::convert`.
+#[wasm_bindgen(js_name = translateMapLibre, unchecked_return_type = "Translation")]
+pub fn translate_maplibre(
+    style_json: &str,
+    #[wasm_bindgen(unchecked_param_type = "TranslateOptions")] options: Option<js_sys::Object>,
+) -> Result<JsValue, JsValue> {
+    let opts = parse_translate_options(options.as_ref())?;
+    let style: serde_json::Value =
+        serde_json::from_str(style_json).map_err(|e| named_err(ErrorKind::InvalidStyle, e))?;
+    let (recipe, report) = ezu::translate::maplibre::convert(&style, &opts)
+        .map_err(|e| named_err(ErrorKind::InvalidStyle, e))?;
+    let reply = serde_json::json!({ "recipe": recipe, "warnings": report.warnings });
+    js_sys::JSON::parse(&reply.to_string())
+}
+
+/// Parse the `translateMapLibre` options object. Unknown keys are ignored,
+/// as for every other options object; every refusal is `InvalidStyle`.
+fn parse_translate_options(
+    obj: Option<&js_sys::Object>,
+) -> Result<ezu::translate::maplibre::ConvertOptions, JsValue> {
+    let mut out = ezu::translate::maplibre::ConvertOptions::default();
+    let Some(obj) = obj else {
+        return Ok(out);
+    };
+    if let Some(n) = number_field(obj, "tileSize")? {
+        let n = whole_pixels(n, "tileSize")?;
+        if n == 0 {
+            return Err(named_err(
+                ErrorKind::InvalidStyle,
+                "tileSize must be at least 1",
+            ));
+        }
+        out.tile_size = n;
+    }
+    if let Some(n) = number_field(obj, "pad")? {
+        out.pad = whole_pixels(n, "pad")?;
+    }
+    let flag = |key: &str| -> Result<Option<bool>, JsValue> {
+        let value = js_sys::Reflect::get(obj, &key.into())?;
+        if value.is_undefined() || value.is_null() {
+            return Ok(None);
+        }
+        value
+            .as_bool()
+            .map(Some)
+            .ok_or_else(|| named_err(ErrorKind::InvalidStyle, format!("{key} must be a boolean")))
+    };
+    if let Some(b) = flag("keepHidden")? {
+        out.keep_hidden = b;
+    }
+    if let Some(b) = flag("migrate")? {
+        out.migrate = b;
+    }
+    let fonts = js_sys::Reflect::get(obj, &"fonts".into())?;
+    if !fonts.is_undefined() && !fonts.is_null() {
+        let not_a_map = || {
+            named_err(
+                ErrorKind::InvalidStyle,
+                "fonts must be an object of stack entry name to font source",
+            )
+        };
+        let fonts: js_sys::Object = fonts.dyn_into().map_err(|_| not_a_map())?;
+        if js_sys::Array::is_array(&fonts) {
+            return Err(not_a_map());
+        }
+        for entry in js_sys::Object::entries(&fonts).iter() {
+            let pair: js_sys::Array = entry.unchecked_into();
+            let name = pair.get(0).as_string().unwrap_or_default();
+            let source = pair.get(1).as_string().ok_or_else(|| {
+                named_err(
+                    ErrorKind::InvalidStyle,
+                    format!("fonts.{name} must be a string naming a font source"),
+                )
+            })?;
+            out.fonts.insert(name, source);
+        }
+    }
+    Ok(out)
+}
+
 /// The number of node ops registered in this module. It is the smoke test
 /// for the module's life-before-main constructors: zero means they never
 /// ran, and every style is about to fail with "unknown op". The Go

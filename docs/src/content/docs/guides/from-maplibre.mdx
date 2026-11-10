@@ -74,6 +74,32 @@ endpoint, that layer's text is skipped, with a warning.
 | `--pretty` | pretty-print the emitted JSON — do this if you intend to read it |
 | `--font NAME=SOURCE` | map a fontstack entry to a font source (repeatable) |
 
+## From JavaScript or Go
+
+The npm package and the Go package carry the same translator, so a host that
+holds a MapLibre style can render it without the CLI. The options are the flags
+above, and the warnings come back beside the recipe instead of on stderr.
+
+```js
+import { translateMapLibre, Renderer } from "@reearth/ezu";
+
+const { recipe, warnings } = translateMapLibre(styleJson, {
+  migrate: true,
+  fonts: { "Noto Sans Regular": "https://example.com/NotoSans-Regular.ttf" },
+});
+const renderer = new Renderer(JSON.stringify(recipe));
+```
+
+```go
+t, err := rt.TranslateMapLibre(ctx, styleJSON,
+	ezu.TranslateMigrate(),
+	ezu.TranslateFont("Noto Sans Regular", "https://example.com/NotoSans-Regular.ttf"))
+renderer, err := rt.NewRenderer(ctx, t.Recipe)
+```
+
+A style that is not JSON, or that the translator cannot lower at all (no
+`layers`, no vector source), fails with `InvalidStyle` in both.
+
 ## Then make it yours
 
 The recipe is a normal ezu document, so the interesting move is to convert once

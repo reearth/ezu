@@ -18,10 +18,11 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# The embedding renderer only: the default features would pull the MapLibre
-# translator into the module, which this shell has no use for. A path rather
-# than the workspace entry, which keeps the umbrella crate's defaults on.
-ezu = { path = "../ezu", default-features = false, features = ["renderer"] }
+# The embedding renderer and the MapLibre translator behind
+# `ezu_translate_maplibre`, and nothing else the defaults would bring. A
+# path rather than the workspace entry, which keeps the umbrella crate's
+# defaults on.
+ezu = { path = "../ezu", default-features = false, features = ["renderer", "translate"] }
 # For the node registry `ezu_op_count` and `ezu_op_names` report on, which
 # is a diagnostic about the linked module rather than anything the renderer
 # exposes.

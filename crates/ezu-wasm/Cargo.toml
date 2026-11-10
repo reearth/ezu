@@ -14,10 +14,14 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# The embedding renderer only: the default features would pull the MapLibre
-# translator into the module, which this shell has no use for. A path rather
-# than the workspace entry, which keeps the umbrella crate's defaults on.
-ezu = { path = "../ezu", default-features = false, features = ["renderer"] }
+# The embedding renderer and the MapLibre translator behind
+# `translateMapLibre`, and nothing else the defaults would bring. A path
+# rather than the workspace entry, which keeps the umbrella crate's
+# defaults on.
+ezu = { path = "../ezu", default-features = false, features = ["renderer", "translate"] }
+# The value `translateMapLibre` hands the translator and reads its answer
+# from. The renderer links it already.
+serde_json = { workspace = true }
 wasm-bindgen = "0.2"
 js-sys = "0.3"
 # `renderFrame` awaits the host's per-tile bind, which is usually a fetch.

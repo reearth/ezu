@@ -57,7 +57,7 @@ use ezu::renderer::{Error, ErrorKind, FrameFeatureCollector, Renderer, SourceDat
 /// code's meaning, or an export appearing or leaving. The Go package
 /// checks it at instantiation, which is what catches a committed module
 /// that was not rebuilt.
-pub const ABI_VERSION: u32 = 9;
+pub const ABI_VERSION: u32 = 10;
 
 /// Every function this shell exports, in one list, so a test can compare
 /// it with what the committed module actually carries. The linker's own
@@ -75,6 +75,7 @@ pub const EXPORTS: &[&str] = &[
     "ezu_heap_bytes",
     "ezu_log_init",
     "ezu_drain_logs",
+    "ezu_translate_maplibre",
     "ezu_renderer_new",
     "ezu_renderer_free",
     "ezu_set_style",
@@ -385,6 +386,46 @@ pub extern "C" fn ezu_log_init(level: u32) -> i64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn ezu_drain_logs(out_ptr: u32, out_len: u32) {
     unsafe { reply(out_ptr, out_len, log::drain().into_bytes()) };
+}
+
+// --- translation -----------------------------------------------------------
+
+/// Translate a MapLibre GL style into an ezu style, as `ezu translate` does.
+/// Needs no renderer: the answer is a document to build one from.
+///
+/// The options are `{"tileSize", "pad", "keepHidden", "migrate", "fonts"}`
+/// as JSON text, each optional (see `options::parse_translate`); an empty
+/// buffer takes every default. The reply is
+/// `{"recipe": <style>, "warnings": [<string>, …]}`, the warnings being what
+/// the translator skipped or approximated. A style that is not JSON, or that
+/// the translator refuses, fails with `InvalidStyle`.
+#[unsafe(no_mangle)]
+pub extern "C" fn ezu_translate_maplibre(
+    style_ptr: u32,
+    style_len: u32,
+    opts_ptr: u32,
+    opts_len: u32,
+    out_ptr: u32,
+    out_len: u32,
+) -> i64 {
+    let text = match unsafe { input_str(style_ptr, style_len, "MapLibre style") } {
+        Ok(t) => t,
+        Err(code) => return code,
+    };
+    let opts = match options::parse_translate(unsafe { input(opts_ptr, opts_len) }) {
+        Ok(o) => o,
+        Err(e) => return fail_err(e),
+    };
+    let style: serde_json::Value = match serde_json::from_str(text) {
+        Ok(v) => v,
+        Err(e) => return fail(ErrorKind::InvalidStyle, e),
+    };
+    let (recipe, report) = match ezu::translate::maplibre::convert(&style, &opts) {
+        Ok(r) => r,
+        Err(e) => return fail(ErrorKind::InvalidStyle, e),
+    };
+    let reply = serde_json::json!({ "recipe": recipe, "warnings": report.warnings });
+    unsafe { reply_json(out_ptr, out_len, reply.to_string()) }
 }
 
 // --- renderer lifecycle ----------------------------------------------------

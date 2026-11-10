@@ -51,7 +51,9 @@ fn every_error_kind_has_its_own_code() {
 }
 
 mod options {
-    use crate::options::{parse_bind, parse_frame, parse_nodes, parse_render, parse_set};
+    use crate::options::{
+        parse_bind, parse_frame, parse_nodes, parse_render, parse_set, parse_translate,
+    };
     use ezu::renderer::{OutputFormat, PngCompression};
 
     #[test]
@@ -314,6 +316,52 @@ mod options {
                   "width":1,"height":1,"zoom":-1}"#[..],
         ] {
             let e = parse_frame(payload, 512).expect_err("refused");
+            assert_eq!(
+                e.name(),
+                "InvalidStyle",
+                "for {}",
+                String::from_utf8_lossy(payload)
+            );
+        }
+    }
+
+    #[test]
+    fn translate_options_default_to_the_translators() {
+        let o = parse_translate(b"").expect("empty is {}");
+        let d = ezu::translate::maplibre::ConvertOptions::default();
+        assert_eq!(
+            (o.tile_size, o.pad, o.keep_hidden, o.migrate),
+            (d.tile_size, d.pad, d.keep_hidden, d.migrate)
+        );
+        assert!(o.fonts.is_empty());
+
+        let o = parse_translate(
+            br#"{"tileSize":256,"pad":0,"keepHidden":true,"migrate":true,
+                 "fonts":{"Noto Sans Regular":"system:Helvetica"},"newerField":1}"#,
+        )
+        .expect("parses");
+        assert_eq!(
+            (o.tile_size, o.pad, o.keep_hidden, o.migrate),
+            (256, 0, true, true)
+        );
+        assert_eq!(
+            o.fonts.get("Noto Sans Regular").map(String::as_str),
+            Some("system:Helvetica")
+        );
+    }
+
+    #[test]
+    fn refused_translate_options_are_invalid_style() {
+        for payload in [
+            &br#"{"tileSize":0}"#[..],
+            &br#"{"tileSize":1.5}"#[..],
+            &br#"{"pad":-1}"#[..],
+            &br#"{"migrate":"yes"}"#[..],
+            &br#"{"fonts":["a"]}"#[..],
+            &br#"{"fonts":{"a":1}}"#[..],
+            &br#"[]"#[..],
+        ] {
+            let e = parse_translate(payload).expect_err("refused");
             assert_eq!(
                 e.name(),
                 "InvalidStyle",

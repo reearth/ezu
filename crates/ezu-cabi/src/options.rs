@@ -467,3 +467,60 @@ pub fn parse_frame(raw: &[u8], style_tile_size: u32) -> Result<FrameRequest, Err
             .unwrap_or(style_tile_size),
     })
 }
+
+/// `{"tileSize": …, "pad": …, "keepHidden": …, "migrate": …, "fonts": {…}}`,
+/// the options `ezu_translate_maplibre` lowers a MapLibre style with. Every
+/// field is optional and absent keeps the translator's default — 512, 16,
+/// `false`, `false`, no fonts. `fonts` maps a `text-font` stack entry to the
+/// font source that replaces it, as the CLI's `--font NAME=SOURCE` does.
+/// Every refusal is `InvalidStyle`.
+pub fn parse_translate(raw: &[u8]) -> Result<ezu::translate::maplibre::ConvertOptions, Error> {
+    let obj = object(raw, "the translate options")?;
+    let mut out = ezu::translate::maplibre::ConvertOptions::default();
+    if let Some(n) = parse_u32(obj.get("tileSize"), "tileSize")? {
+        if n == 0 {
+            return Err(err(ErrorKind::InvalidStyle, "tileSize must be at least 1"));
+        }
+        out.tile_size = n;
+    }
+    if let Some(n) = parse_u32(obj.get("pad"), "pad")? {
+        out.pad = n;
+    }
+    let flag = |label: &str| -> Result<Option<bool>, Error> {
+        match obj.get(label).filter(|v| !v.is_null()) {
+            None => Ok(None),
+            Some(Value::Bool(b)) => Ok(Some(*b)),
+            Some(other) => Err(err(
+                ErrorKind::InvalidStyle,
+                format!("{label} must be a boolean, got {other}"),
+            )),
+        }
+    };
+    if let Some(b) = flag("keepHidden")? {
+        out.keep_hidden = b;
+    }
+    if let Some(b) = flag("migrate")? {
+        out.migrate = b;
+    }
+    match obj.get("fonts").filter(|v| !v.is_null()) {
+        None => {}
+        Some(Value::Object(fonts)) => {
+            for (name, source) in fonts {
+                let source = source.as_str().ok_or_else(|| {
+                    err(
+                        ErrorKind::InvalidStyle,
+                        format!("fonts.{name} must be a string naming a font source, got {source}"),
+                    )
+                })?;
+                out.fonts.insert(name.clone(), source.to_string());
+            }
+        }
+        Some(other) => {
+            return Err(err(
+                ErrorKind::InvalidStyle,
+                format!("fonts must be an object of stack entry name to font source, got {other}"),
+            ))
+        }
+    }
+    Ok(out)
+}
