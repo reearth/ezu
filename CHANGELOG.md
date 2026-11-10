@@ -9,6 +9,19 @@ ezu is pre-1.0, so a minor bump may carry a breaking change. What the numbers
 mean is spelled out in
 [versioning](https://reearth.github.io/ezu/reference/changelog/).
 
+## 0.15.0 — 2026-11-10
+
+### Added
+
+- The npm and Go packages translate MapLibre GL styles, as
+  `ezu translate` does: `translateMapLibre(styleJson, options)` in
+  JavaScript and `Runtime.TranslateMapLibre(ctx, styleJSON, opts...)` in
+  Go. Each returns the ezu style together with the translator's warnings,
+  and the style can be passed straight to a renderer. The options are the
+  CLI's flags (tile size, pad, keep hidden, migrate, fonts). A style that
+  is not JSON, or that the translator refuses, fails with `InvalidStyle`.
+  The Go package's wasm module grows by about 300 kB.
+
 ## 0.14.0 — 2026-10-28
 
 ### Breaking
