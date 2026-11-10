@@ -20,7 +20,7 @@ mean is spelled out in
   and the style can be passed straight to a renderer. The options are the
   CLI's flags (tile size, pad, keep hidden, migrate, fonts). A style that
   is not JSON, or that the translator refuses, fails with `InvalidStyle`.
-  The wasm modules grow by about 300 kB.
+  The Go package's wasm module grows by about 300 kB.
 
 ## 0.14.0 — 2026-10-28
 
